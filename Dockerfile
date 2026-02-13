@@ -10,17 +10,19 @@ ENV LOG_LEVEL=INFO
 WORKDIR /app
 EXPOSE ${PORT}
 
+COPY requirements.txt .
+
 RUN apt update && apt install -y --no-install-recommends build-essential \
+    && pip install --no-cache-dir -r requirements.txt \
     && apt remove -y build-essential \
     && apt autoremove -y \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd -r luceit && adduser --system --no-create-home luceit \
     && chown -R luceit:luceit /app
 
-COPY --chown=luceit:luceit --chmod=755 requirements.txt main.py .
-RUN pip install --no-cache-dir -r requirements.txt 
-
-COPY --chown=luceit:luceit app /app/app
+COPY main.py ./
+COPY app ./app
+RUN chown -R luceit:luceit /app
 
 USER luceit
 
