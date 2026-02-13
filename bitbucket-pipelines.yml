@@ -1,0 +1,24 @@
+image: mcr.microsoft.com/azure-cli:latest
+
+definitions:
+  steps:
+    - step: &docker-build-push
+        name: Docker Build & Push
+        runs-on:
+          - self.hosted
+          - linux
+          - retech
+        script:
+          - VERSION=$(cat VERSION)
+          - DOCKER_IMAGE_VERSION=${DOCKER_IMAGE_NAME}:${VERSION}
+          - echo "Construimos imagen ${DOCKER_IMAGE_VERSION}"
+          - az login --service-principal --username ${AZURE_APP_ID}  --password ${AZURE_APP_SECRET} --tenant ${AZURE_TENANT_ID}
+          - az acr build -r ${DOCKER_REGISTRY_SERVER} -t ${DOCKER_IMAGE_VERSION} .
+
+pipelines:
+  custom:
+    docker-build-push:
+      - stage:
+          name: docker-build-push
+          steps:
+            - step: *docker-build-push
