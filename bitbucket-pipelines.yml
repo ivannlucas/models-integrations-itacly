@@ -7,7 +7,7 @@ definitions:
         runs-on:
           - self.hosted
           - linux
-          - retech
+          - luceit
         script:
           - VERSION=$(cat VERSION)
           - DOCKER_IMAGE_VERSION=${DOCKER_IMAGE_NAME}:${VERSION}
