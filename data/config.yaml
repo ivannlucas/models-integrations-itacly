@@ -1,0 +1,6 @@
+token: <some_token>
+HOST: 127.0.0.1
+PORT: 8080
+APP_ENV: "pro"
+LOG_LEVEL: "INFO"
+LOG_TIMEZONE: "Europe/Madrid"
