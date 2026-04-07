@@ -64,3 +64,8 @@ coverage.xml
 pylint-report.txt
 pytest-report.xml
 tests/output*
+
+.venv/
+__pycache__/
+*.pyc
+.env

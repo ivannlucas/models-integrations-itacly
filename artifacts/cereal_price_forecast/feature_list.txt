@@ -1,0 +1,74 @@
+Year
+Month
+Quarter
+Week_of_Year
+prec
+tmed
+tmin
+tmax
+Fertilizers index
+Seeds index
+prec_lag_1w
+prec_lag_2w
+prec_lag_4w
+prec_lag_8w
+tmin_lag_1w
+tmin_lag_2w
+tmin_lag_4w
+tmin_lag_8w
+tmed_lag_1w
+tmed_lag_2w
+tmed_lag_4w
+tmed_lag_8w
+tmax_lag_1w
+tmax_lag_2w
+tmax_lag_4w
+tmax_lag_8w
+prec_rolling_mean_4w
+prec_rolling_mean_12w
+tmin_rolling_mean_4w
+tmin_rolling_mean_12w
+tmed_rolling_mean_4w
+tmed_rolling_mean_12w
+tmax_rolling_mean_4w
+tmax_rolling_mean_12w
+prec_rolling_sum_4w
+prec_rolling_sum_12w
+prec_anomaly
+tmed_anomaly
+fertilizers_lag_0w
+fertilizers_lag_4w
+fertilizers_lag_8w
+fertilizers_lag_12w
+seeds_lag_0w
+seeds_lag_4w
+seeds_lag_8w
+seeds_lag_12w
+fertilizers_rolling_mean_12w
+fertilizers_rolling_mean_26w
+seeds_rolling_mean_12w
+seeds_rolling_mean_26w
+fertilizers_x_product_Durum wheat
+fertilizers_x_product_Feed barley
+fertilizers_x_product_Feed maize
+fertilizers_x_product_Feed wheat
+fertilizers_x_product_Malting barley
+fertilizers_x_product_Milling wheat
+seeds_x_product_Durum wheat
+seeds_x_product_Feed barley
+seeds_x_product_Feed maize
+seeds_x_product_Feed wheat
+seeds_x_product_Malting barley
+seeds_x_product_Milling wheat
+week_index
+month_sin
+month_cos
+week_sin
+week_cos
+price_lag_1w
+price_lag_2w
+price_lag_4w
+price_lag_8w
+price_rolling_mean_4w
+price_rolling_mean_12w
+price_rolling_std_4w

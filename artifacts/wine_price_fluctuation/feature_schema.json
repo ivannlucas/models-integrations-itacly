@@ -1,0 +1,10 @@
+{
+  "feature_columns": [
+    "logret",
+    "distsma12",
+    "rsi14",
+    "bollingerpos",
+    "weeksin",
+    "weekcos"
+  ]
+}
