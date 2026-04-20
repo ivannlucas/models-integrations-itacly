@@ -1,7 +1,8 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 
 class StatsResponse(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
     model_name: str
     model_type: str
     framework: str

@@ -1,26 +1,30 @@
 from typing import Annotated, Any, Dict, List, Literal, Union
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 
 
 class PredictBatchRequest(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
     mode: Literal["batch"] = "batch"
     data_path: str = Field(..., description="Path to directory or .zip with images inside the container")
 
 
 class PredictBatchResponse(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
     model_id: str
     predictions: List[Dict[str, Any]]
     output_path: str | None = None
 
 
 class PredictInlineRequest(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
     mode: Literal["inline"] = "inline"
     image_path: str = Field(..., description="Absolute path to a JPEG/PNG/BMP image file")
     threshold: float | None = None
 
 
 class PredictInlineResponse(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
     model_id: str
     threshold: float | None = None
     prediction: str

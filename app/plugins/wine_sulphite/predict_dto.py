@@ -1,9 +1,10 @@
 from typing import Annotated, Any, Literal, Union
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 
 
 class PredictBatchRequest(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
     mode: Literal["batch"] = "batch"
     data_path: str = Field(
         ...,
@@ -12,12 +13,14 @@ class PredictBatchRequest(BaseModel):
 
 
 class PredictBatchResponse(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
     model_id: str
     predictions: list[dict[str, Any]]
     output_path: str | None = None
 
 
 class PredictInlineRequest(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
     mode: Literal["inline"] = "inline"
     model_key: str | None = None
     threshold: float | None = None
@@ -57,6 +60,7 @@ class PredictInlineRequest(BaseModel):
 
 
 class PredictInlineResponse(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
     model_id: str
     threshold: float | None = None
     prediction: Any = Field(

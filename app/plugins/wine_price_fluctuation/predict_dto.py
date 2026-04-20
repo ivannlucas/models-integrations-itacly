@@ -1,9 +1,10 @@
 from typing import Annotated, Any, Literal, Union
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 
 
 class WeeklyPriceRecord(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
     campaign: str = Field(
         ...,
         description="Viticulture campaign in 'YYYY/YYYY+1' format, e.g. '2023/2024'",
@@ -13,6 +14,7 @@ class WeeklyPriceRecord(BaseModel):
 
 
 class PredictBatchRequest(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
     mode: Literal["batch"] = "batch"
     data_path: str = Field(
         ..., description="Path to CSV file with weekly price records inside the container"
@@ -20,12 +22,14 @@ class PredictBatchRequest(BaseModel):
 
 
 class PredictBatchResponse(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
     model_id: str
     predictions: list[dict[str, Any]]
     output_path: str | None = None
 
 
 class PredictInlineRequest(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
     mode: Literal["inline"] = "inline"
     model_key: str | None = None
     threshold: float | None = None
@@ -40,6 +44,7 @@ class PredictInlineRequest(BaseModel):
 
 
 class PredictInlineResponse(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
     model_id: str
     threshold: float | None = None
     prediction: Any = Field(

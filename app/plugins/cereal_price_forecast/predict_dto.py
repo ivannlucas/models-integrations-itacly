@@ -1,6 +1,6 @@
 from typing import Annotated, Any, Literal, Union
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 
 VALID_PRODUCTS = frozenset(
     ["Durum wheat", "Milling wheat", "Feed barley", "Malting barley", "Feed maize"]
@@ -9,6 +9,7 @@ VALID_PRODUCTS = frozenset(
 
 class PredictBatchRequest(BaseModel):
     mode: Literal["batch"] = "batch"
+    model_config = ConfigDict(protected_namespaces=())
     data_path: str = Field(
         ...,
         description="Path to CSV file with pre-computed cereal price features inside the container",
@@ -17,12 +18,14 @@ class PredictBatchRequest(BaseModel):
 
 class PredictBatchResponse(BaseModel):
     model_id: str
+    model_config = ConfigDict(protected_namespaces=())
     predictions: list[dict[str, Any]]
     output_path: str | None = None
 
 
 class PredictInlineRequest(BaseModel):
     mode: Literal["inline"] = "inline"
+    model_config = ConfigDict(protected_namespaces=())
     model_key: str | None = None
     threshold: float | None = None
     product_name: str = Field(
@@ -113,6 +116,7 @@ class PredictInlineRequest(BaseModel):
 
 class PredictInlineResponse(BaseModel):
     model_id: str
+    model_config = ConfigDict(protected_namespaces=())
     threshold: float | None = None
     prediction: Any = Field(..., description="Predicted market price (EUR/tonne)")
     confidence: float | None = None

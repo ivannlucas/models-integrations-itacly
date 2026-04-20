@@ -15,7 +15,7 @@ _store = ArtifactStore("cnn_fungal_detection")
 ARTIFACT_FILENAME = "leafcnn_best.pth"
 CLASSES = ["black_rot", "downy_mildew", "healthy", "powdery_mildew", "trunk_disease"]
 NUM_CLASSES = len(CLASSES)
-
+ARTIFACT_PATH = _store.path(ARTIFACT_FILENAME)
 
 class LeafCNN(nn.Module):
     def __init__(self, num_classes: int) -> None:

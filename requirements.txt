@@ -19,3 +19,8 @@ pytest-cov>=4.1.0
 fastapi==0.115.6
 uvicorn[standard]==0.30.6
 pydantic==2.9.2
+torch
+torchvision
+opencv-python
+lightgbm
+timm
