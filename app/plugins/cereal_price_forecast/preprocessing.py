@@ -53,5 +53,6 @@ def prepare_features(
                 col_median = df[col].median()
                 df[col] = df[col].fillna(col_median if not pd.isna(col_median) else 0.0)
     df = df.fillna(0.0)
+    df = df.apply(pd.to_numeric, errors="coerce").fillna(0.0)
 
     return df

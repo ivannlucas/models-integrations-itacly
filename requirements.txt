@@ -19,8 +19,15 @@ pytest-cov>=4.1.0
 fastapi==0.115.6
 uvicorn[standard]==0.30.6
 pydantic==2.9.2
-torch
-torchvision
+
+torch==2.3.0
+torchvision==0.18.0
+
+# Detectron2 — must be installed from source after torch is available:
+#   python -m pip install --no-build-isolation \
+#     'git+https://github.com/facebookresearch/detectron2.git'
+
 opencv-python
 lightgbm
 timm
+albumentations
