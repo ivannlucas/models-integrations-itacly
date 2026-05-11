@@ -152,3 +152,4 @@ class ArtifactStore:
                 raise  # bubble up so the app doesn't start with missing artifacts
 
         logger.info("Artifact download complete for model '%s'.", self._model_name)
+        

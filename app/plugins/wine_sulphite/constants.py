@@ -9,6 +9,3 @@ METADATA_FILENAME = "metadata.json"
 BOUND_XGB_JSON_FILENAME = "bound_xgb.json"
 QUALITY_XGB_JSON_FILENAME = "quality_xgb.json"
 ARTIFACT_FOLDER_NAME = "wine_sulphite"
-SCRIPT_DIR = Path(__file__).parent.resolve()
-ARTIFACTS_DIR = Path("artifacts")
-LOCAL_BASE_DIR = SCRIPT_DIR / ARTIFACTS_DIR
