@@ -5,16 +5,25 @@ from typing import Any
 import joblib
 
 from app.infrastructure.artifact_store import ArtifactStore
+from app.plugins.wine_sulphite.constants import (
+    ARTIFACT_FOLDER_NAME,
+    QUALITY_RF_MODEL_FILENAME,
+    BOUND_RF_MODEL_FILENAME,
+    METADATA_FILENAME,
+)
 
 logger = logging.getLogger(__name__)
 
-_store = ArtifactStore("wine_sulphite")
+_store = ArtifactStore(ARTIFACT_FOLDER_NAME)
 
 
 def load_artifacts() -> tuple[Any, Any, dict]:
-    quality_path = _store.path("quality_rf.pkl")
-    bound_path = _store.path("bound_rf.pkl")
-    metadata_path = _store.path("metadata.json")
+
+    _store.download_all_if_needed()  # ensure all artifacts are local before loading
+    
+    quality_path = _store.path(QUALITY_RF_MODEL_FILENAME)
+    bound_path = _store.path(BOUND_RF_MODEL_FILENAME)
+    metadata_path = _store.path(METADATA_FILENAME)
 
     logger.info("Loading quality model from %s", quality_path)
     model_qual = joblib.load(quality_path)

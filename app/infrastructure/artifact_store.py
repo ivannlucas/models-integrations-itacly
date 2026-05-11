@@ -1,35 +1,63 @@
 """Central artifact resolution for all model plugins.
 
-Local layout (current)
+Local layout
 ----------------------
 artifacts/
   <model_name>/
     <filename>
 
-S3 layout (future, activated when S3_BUCKET env-var is set)
+S3 layout (activated when STORAGE_BUCKET env-var is set)
 ------------------------------------------------------------
-s3://<S3_BUCKET>/<S3_PREFIX>/<model_name>/<filename>
-                              ^^^^^^^^^^^^^^^^^^^^^^^^^
-                              default prefix: "artifacts"
+s3://<STORAGE_BUCKET>/artifacts/fixed/<model_name>/<filename>
 
-When S3_BUCKET is set and a file is missing locally, ArtifactStore downloads
-it to the local cache directory before returning the path.  The rest of the
-codebase (every model_loader.py) stays unchanged.
+When STORAGE_BUCKET is set and files are missing or stale locally,
+ArtifactStore downloads them before returning the path.
 """
 
 import logging
 import os
 from pathlib import Path
 
+from botocore.client import Config
+from dotenv import find_dotenv, load_dotenv
+
 logger = logging.getLogger(__name__)
 
-# app/infrastructure/artifact_store.py  →  parents[0]=infrastructure, [1]=app, [2]=repo root
+# Load .env if present
+_env_path = find_dotenv()
+if _env_path:
+    logger.info("Fetching .env from: %s", _env_path)
+    load_dotenv(_env_path)
+else:
+    logger.warning("No .env file found in this directory or parent directories.")
+
+# app/infrastructure/artifact_store.py → parents[0]=infrastructure, [1]=app, [2]=repo root
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 ARTIFACTS_ROOT = _REPO_ROOT / "artifacts"
 
 
+def _build_s3_client():
+    import boto3  # type: ignore[import]
+
+    return boto3.client(
+        "s3",
+        endpoint_url=os.getenv("CUSTOM_S3_ENDPOINT"),
+        aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
+        aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_ID"),
+        config=Config(signature_version="s3v4"),
+        region_name=os.getenv("CUSTOM_REGION"),
+    )
+
+
+def _file_needs_download(local_path: Path, remote_size: int) -> bool:
+    """Return True if the local file is missing or its size differs from S3."""
+    if not local_path.exists():
+        return True
+    return local_path.stat().st_size != remote_size
+
+
 class ArtifactStore:
-    """Resolves artifact file paths for a single model.
+    """Resolves and downloads artifact files for a single model.
 
     Usage::
 
@@ -48,30 +76,79 @@ class ArtifactStore:
         """
         local = self._local_dir / filename
         if not local.exists():
-            if os.environ.get("S3_BUCKET"):
-                self._download(filename, local)
+            if os.environ.get("STORAGE_BUCKET"):
+                self._download_all()
             else:
                 raise FileNotFoundError(
                     f"Artifact not found: {local}\n"
-                    f"Either place the file there or set S3_BUCKET to enable "
-                    f"automatic download from S3."
+                    f"Either place the file there or set STORAGE_BUCKET to "
+                    f"enable automatic download from S3."
                 )
         return local
 
-    # ── S3 download (activated when S3_BUCKET is set) ────────────────────────
+    def download_all_if_needed(self) -> None:
+        """Download every file under the model's S3 prefix, skipping up-to-date files."""
+        if not os.environ.get("STORAGE_BUCKET"):
+            raise EnvironmentError(
+                "STORAGE_BUCKET is not set. Cannot download artifacts from S3."
+            )
+        self._download_all()
 
-    def _download(self, filename: str, dest: Path) -> None:
-        bucket = os.environ["S3_BUCKET"]
-        prefix = os.environ.get("S3_PREFIX", "artifacts")
-        key = f"{prefix}/{self._model_name}/{filename}"
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        logger.info("Downloading s3://%s/%s → %s", bucket, key, dest)
+    # ── S3 download ───────────────────────────────────────────────────────────
+
+    def _download_all(self) -> None:
+        """Download all files for this model from S3, skipping unchanged ones."""
         try:
-            import boto3  # type: ignore[import]
-        except ImportError as exc:
-            raise ImportError(
-                "boto3 is required for S3 artifact download. "
-                "Install it with: pip install boto3"
-            ) from exc
-        boto3.client("s3").download_file(bucket, key, str(dest))
-        logger.info("Downloaded %s (%s)", filename, dest)
+            from tqdm import tqdm  # type: ignore[import]
+        except ImportError:
+            tqdm = None
+
+        bucket = os.environ["STORAGE_BUCKET"]
+        s3 = _build_s3_client()
+        remote_prefix = f"artifacts/fixed/{self._model_name}/"
+        self._local_dir.mkdir(parents=True, exist_ok=True)
+
+        # Collect all remote objects under the model prefix
+        paginator = s3.get_paginator("list_objects_v2")
+        remote_files = []
+        for page in paginator.paginate(Bucket=bucket, Prefix=remote_prefix):
+            for obj in page.get("Contents", []):
+                if not obj["Key"].endswith("/"):  # skip directory markers
+                    remote_files.append(obj)
+
+        if not remote_files:
+            logger.warning("No files found in S3 for model: %s", self._model_name)
+            return
+
+        # Filter to only files that need downloading
+        pending = []
+        for obj in remote_files:
+            relative_path = obj["Key"][len(remote_prefix):]
+            local_path = self._local_dir / relative_path
+            if _file_needs_download(local_path, obj["Size"]):
+                pending.append((obj["Key"], local_path))
+            else:
+                logger.info("Skipping (unchanged): %s", relative_path)
+
+        if not pending:
+            logger.info("All artifact files are up-to-date. No download needed.")
+            return
+
+        logger.info(
+            "Downloading %d file(s) for model '%s' to %s ...\n%s",
+            len(pending),
+            self._model_name,
+            self._local_dir.resolve(),
+            "\n".join(local_path.name for _, local_path in pending),
+        )
+
+        iterator = tqdm(pending, desc="Downloading", unit="file") if tqdm else pending
+        for remote_key, local_path in iterator:
+            local_path.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                s3.download_file(bucket, remote_key, str(local_path))
+            except Exception as exc:
+                logger.error("Failed to download %s: %s", remote_key, exc)
+                raise  # bubble up so the app doesn't start with missing artifacts
+
+        logger.info("Artifact download complete for model '%s'.", self._model_name)

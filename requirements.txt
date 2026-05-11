@@ -31,3 +31,5 @@ opencv-python
 lightgbm
 timm
 albumentations
+boto3>=1.36.17
+python-dotenv>=1.0.1
