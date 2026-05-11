@@ -190,7 +190,7 @@ class WineSulphitePlugin(ModelPluginPort):
             model_name=MODEL_NAME,
             model_type="RandomForestRegressor (dual: quality + bound SO2)",
             framework="sklearn",
-            artifact_path=f"model-runtime-wine_sulphite/artifacts/",
+            artifact_path="model-runtime-wine_sulphite/artifacts/",
             input_schema={
                 "mode=inline": {
                     "fixed_acidity": "float (g/dm³)",

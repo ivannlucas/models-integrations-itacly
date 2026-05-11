@@ -2,7 +2,6 @@ import logging
 
 from app.application.dto.stats_dto import StatsResponse
 from app.domain.ports.model_plugin_port import ModelPluginPort
-from app.domain.services.exceptions import ModelNotLoadedError
 
 logger = logging.getLogger(__name__)
 

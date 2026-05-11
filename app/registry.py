@@ -8,15 +8,7 @@ To add a new model:
 from dataclasses import dataclass, field
 from typing import Any
 
-from app.domain.services.exceptions import (
-    InsufficientDataError,
-    InsufficientFramesError,
-    InsufficientRowsError,
-    InvalidImageError,
-    InvalidVideoError,
-    NoValidSimulationPointError,
-    UnsupportedProductError,
-)
+from app.domain.services.exceptions import NoValidSimulationPointError
 
 # ── Plugin imports ────────────────────────────────────────────────────────────
 

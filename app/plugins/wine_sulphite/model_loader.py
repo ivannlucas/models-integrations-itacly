@@ -18,8 +18,8 @@ _store = ArtifactStore(ARTIFACT_FOLDER_NAME)
 
 
 def load_artifacts() -> tuple[Any, Any, dict]:
-    _store.download_all_if_needed()# ensure all artifacts are local before loading
-    
+    _store.download_all_if_needed()  # ensure all artifacts are local before loading
+
     quality_path = _store.path(QUALITY_RF_MODEL_FILENAME)
     bound_path = _store.path(BOUND_RF_MODEL_FILENAME)
     metadata_path = _store.path(METADATA_FILENAME)

@@ -1,6 +1,3 @@
-from pathlib import Path
-
-
 BOUND_RF_MODEL_FILENAME = "bound_rf.pkl"
 BOUND_XGB_MODEL_FILENAME = "bound_xgb.pkl"
 QUALITY_RF_MODEL_FILENAME = "quality_rf.pkl"
