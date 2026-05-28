@@ -1,4 +1,5 @@
 import logging
+import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -13,12 +14,19 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# When MODEL is set (e.g. by Kubernetes via configmap), only that plugin is loaded.
+# Without MODEL, all registry entries are loaded (useful for local development).
+_model_filter = os.getenv("MODEL")
+if _model_filter:
+    logger.info("MODEL env var set — loading only '%s'.", _model_filter)
+_active_entries = [e for e in REGISTRY if not _model_filter or e.model_id == _model_filter]
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.info("Starting up — loading %d model(s)...", len(REGISTRY))
+    logger.info("Starting up — loading %d model(s)...", len(_active_entries))
     app.state.containers = {}
-    for entry in REGISTRY:
+    for entry in _active_entries:
         try:
             container = ModelContainer(
                 plugin=entry.plugin_class(),
@@ -30,7 +38,7 @@ async def lifespan(app: FastAPI):
             logger.info("Model '%s' loaded successfully.", entry.model_id)
         except Exception:
             logger.exception("Failed to load model '%s' — it will be unavailable.", entry.model_id)
-    logger.info("Startup complete. %d/%d models ready.", len(app.state.containers), len(REGISTRY))
+    logger.info("Startup complete. %d/%d models ready.", len(app.state.containers), len(_active_entries))
     yield
     logger.info("Shutting down.")
 
@@ -45,7 +53,7 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-for _entry in REGISTRY:
+for _entry in _active_entries:
     _router = make_model_router(
         model_id=_entry.model_id,
         version=_entry.version,
