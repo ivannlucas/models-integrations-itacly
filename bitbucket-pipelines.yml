@@ -55,6 +55,7 @@ pipelines:
     '{feature/*,fix/*}':
       - step:
           name: Docker Build & Push
+          image: mcr.microsoft.com/azure-cli:latest
           runs-on:
             - self.hosted
             - linux
