@@ -60,7 +60,7 @@ pipelines:
             - linux
             - luceit
           script:
-            - VERSION=$(cat VERSION)
+            - VERSION=$(cat .VERSION)
             - DOCKER_IMAGE_VERSION=${DOCKER_IMAGE_NAME}:${VERSION}
             - echo "Construimos imagen ${DOCKER_IMAGE_VERSION}"
             - az login --service-principal --username ${AZURE_APP_ID} --password ${AZURE_APP_SECRET} --tenant ${AZURE_TENANT_ID}
