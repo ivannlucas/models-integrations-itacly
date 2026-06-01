@@ -298,14 +298,20 @@ class WineSulphitePlugin(ModelPluginPort):
                 InputField(name="total_sulfur_dioxide", type="float", description="Current total SO2 (mg/L)"),
                 InputField(name="min_molecular", type="float", default=0.6, description="Minimum molecular SO2 (mg/L)"),
                 InputField(name="max_total", type="float", default=200.0, description="Maximum legal total SO2 (mg/L)"),
-                InputField(name="delta_max", type="float", default=40.0, description="Maximum free SO2 increment (mg/L)"),
+                InputField(
+                    name="delta_max", type="float", default=40.0,
+                    description="Maximum free SO2 increment (mg/L)",
+                ),
             ],
             outputs=[
                 OutputField(name="recommended_free_so2", type="float", description="Recommended free SO2 dose (mg/L)"),
                 OutputField(name="recommended_total_so2", type="float", description="Estimated total SO2 (mg/L)"),
                 OutputField(name="recommended_molecular_so2", type="float", description="Molecular SO2 (mg/L)"),
                 OutputField(name="predicted_quality", type="float", description="Predicted sensory quality (0–10)"),
-                OutputField(name="intervention_recommended", type="bool", description="True if sulphite intervention is recommended"),
+                OutputField(
+                    name="intervention_recommended", type="bool",
+                    description="True if sulphite intervention is recommended",
+                ),
             ],
             metrics={
                 "mae_quality": self._metadata.get("metrics", {}).get("quality_cv", {}).get("mae_mean", 0.427),
