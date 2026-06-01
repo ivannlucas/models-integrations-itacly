@@ -4,7 +4,17 @@ from app.plugins.wine_sulphite.preprocessing import PKA_SO2
 
 
 def decode_bound_predictions(raw_bound: np.ndarray, free_targets: np.ndarray) -> np.ndarray:
-    """Undo log1p transform and enforce physical monotonicity of bound SO2."""
+    """Undo log1p transform and enforce physical monotonicity of bound SO2.
+
+    Bound SO2 must be non-decreasing as free SO2 increases (physico-chemical law).
+
+    Args:
+        raw_bound: Raw model output in log1p space.
+        free_targets: Corresponding free SO2 values (used to determine sort order).
+
+    Returns:
+        Array of bound SO2 values (mg/L), monotonically non-decreasing.
+    """
     pred_bounds = np.maximum(np.expm1(raw_bound), 0.0)
 
     order = np.argsort(free_targets)
@@ -14,7 +24,17 @@ def decode_bound_predictions(raw_bound: np.ndarray, free_targets: np.ndarray) ->
 
 
 def compute_molecular_so2(free_targets: np.ndarray, pH: float) -> np.ndarray:
-    """Calculate molecular SO2 concentration from free SO2 and wine pH."""
+    """Calculate molecular SO2 concentration from free SO2 and wine pH.
+
+    Formula: [SO2 molecular] = free_SO2 / (1 + 10^(pH - pKa))
+
+    Args:
+        free_targets: Array of free SO2 values (mg/L).
+        pH: Wine pH.
+
+    Returns:
+        Array of molecular SO2 values (mg/L).
+    """
     return free_targets / (1.0 + 10.0 ** (pH - PKA_SO2))
 
 
@@ -27,7 +47,23 @@ def apply_operational_constraints(
     min_molecular: float,
     max_total: float,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """Filter simulation points to those satisfying operational constraints."""
+    """Filter simulation points to those satisfying operational constraints.
+
+    Args:
+        free_targets: Candidate free SO2 values (mg/L).
+        pred_bounds: Predicted bound SO2 values (mg/L).
+        pred_totals: Predicted total SO2 values (mg/L).
+        molecular_so2: Molecular SO2 values (mg/L).
+        pred_qualities: Predicted sensory quality scores.
+        min_molecular: Minimum molecular SO2 for microbial protection (mg/L).
+        max_total: Maximum legal total SO2 (mg/L).
+
+    Returns:
+        Tuple of filtered arrays: (free, bound, total, molecular, quality).
+
+    Raises:
+        ValueError: If no simulation point satisfies the constraints.
+    """
     valid_mask = (molecular_so2 >= min_molecular) & (pred_totals <= max_total)
     if not valid_mask.any():
         raise ValueError(
@@ -53,7 +89,23 @@ def select_recommendation(
     baseline_quality: float,
     mae_quality: float,
 ) -> tuple[int, str, bool]:
-    """Select the recommended simulation point using the 1×MAE threshold rule."""
+    """Select the recommended simulation point using the 1×MAE threshold rule.
+
+    If the best reachable quality improvement exceeds 1×MAE, recommend that point.
+    Otherwise, recommend the minimum safe intervention (lowest valid free SO2).
+
+    Args:
+        valid_free: Filtered free SO2 values satisfying constraints.
+        valid_bounds: Filtered bound SO2 values.
+        valid_totals: Filtered total SO2 values.
+        valid_moleculars: Filtered molecular SO2 values.
+        valid_qualities: Filtered predicted quality scores.
+        baseline_quality: Predicted quality at the current (unmodified) free SO2.
+        mae_quality: Cross-validated MAE of the quality model (used as threshold).
+
+    Returns:
+        tuple: (rec_idx, reason, intervention_recommended)
+    """
     best_idx = int(np.argmax(valid_qualities))
     best_quality = float(valid_qualities[best_idx])
     gain = best_quality - baseline_quality

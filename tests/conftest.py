@@ -20,7 +20,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.application.dto.stats_dto import StatsResponse
+from app.application.dto.stats_dto import InputField, OutputField, RuntimeStats, StatsResponse
 from app.application.use_cases.get_stats_use_case import GetStatsUseCase
 from app.application.use_cases.predict_model_use_case import PredictModelUseCase
 from app.application.use_cases.train_model_use_case import TrainModelUseCase
@@ -92,13 +92,17 @@ class FakePlugin(ModelPluginPort):
     def stats(self) -> StatsResponse:
         return StatsResponse(
             model_name=self._model_id,
-            model_type="fake",
+            version="0.0.0",
+            description="Fake plugin for testing",
+            task_type="fake",
             framework="fake",
-            artifact_path=f"/fake/{self._model_id}",
-            input_schema={"fake": "input"},
-            output_schema={"fake": "output"},
-            predict_count=self._predict_count,
-            last_predict_at=self._last_predict_at,
+            inputs=[InputField(name="fake_input", type="float", description="Fake input field")],
+            outputs=[OutputField(name="fake_output", type="float", description="Fake output field")],
+            metrics={},
+            runtime_stats=RuntimeStats(
+                total_predictions=self._predict_count,
+                avg_latency_ms=None,
+            ),
         )
 
 
@@ -320,7 +324,7 @@ def _build_container(plugin: FakePlugin, entry) -> Any:
         plugin, entry.batch_response_class, entry.inline_response_class
     )
     container.stats_use_case = GetStatsUseCase(plugin)
-    container.train_use_case = TrainModelUseCase()
+    container.train_use_case = TrainModelUseCase(plugin)
     return container
 
 

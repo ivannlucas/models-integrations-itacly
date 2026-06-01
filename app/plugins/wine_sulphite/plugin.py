@@ -1,4 +1,5 @@
 import logging
+import time
 import types
 from datetime import datetime, timezone
 from typing import Any
@@ -6,7 +7,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from app.application.dto.stats_dto import StatsResponse
+from app.application.dto.stats_dto import InputField, OutputField, RuntimeStats, StatsResponse
 from app.domain.ports.model_plugin_port import ModelPluginPort
 from app.domain.services.exceptions import NoValidSimulationPointError
 from app.plugins.wine_sulphite.model_loader import load_artifacts
@@ -17,6 +18,7 @@ from app.plugins.wine_sulphite.postprocessing import (
     select_recommendation,
 )
 from app.plugins.wine_sulphite.preprocessing import (
+    FEATURES_BOUND,
     FEATURES_QUAL,
     build_simulation_grid,
     map_request_to_wine_dict,
@@ -36,6 +38,7 @@ class WineSulphitePlugin(ModelPluginPort):
         self._loaded: bool = False
         self._predict_count: int = 0
         self._last_predict_at: str | None = None
+        self._total_latency_ms: float = 0.0
 
     def load(self) -> None:
         self._model_qual, self._model_bound, self._metadata = load_artifacts()
@@ -115,6 +118,7 @@ class WineSulphitePlugin(ModelPluginPort):
         df.columns = [c.strip().replace(" ", "_") for c in df.columns]
 
         predictions = []
+        t0 = time.perf_counter()
         for idx, row in df.iterrows():
             row_dict = row.to_dict()
             row_dict.setdefault("min_molecular", 0.6)
@@ -128,6 +132,9 @@ class WineSulphitePlugin(ModelPluginPort):
                         "row": int(idx),
                         "intervention_recommended": res["intervention"],
                         "recommended_free_so2": float(res["valid_free"][i]),
+                        "recommended_bound_so2": float(res["valid_bounds"][i]),
+                        "recommended_total_so2": float(res["valid_totals"][i]),
+                        "recommended_molecular_so2": float(res["valid_moleculars"][i]),
                         "predicted_quality": float(res["valid_qualities"][i]),
                         "recommendation_reason": res["reason"],
                     }
@@ -135,6 +142,7 @@ class WineSulphitePlugin(ModelPluginPort):
             except Exception as exc:
                 predictions.append({"row": int(idx), "error": str(exc)})
 
+        self._total_latency_ms += (time.perf_counter() - t0) * 1000
         self._predict_count += 1
         self._last_predict_at = datetime.now(tz=timezone.utc).isoformat()
         logger.info(
@@ -154,7 +162,9 @@ class WineSulphitePlugin(ModelPluginPort):
         model_key: str | None = None,
         threshold: float | None = None,
     ) -> dict:
+        t0 = time.perf_counter()
         res = self._run_inference(features)
+        self._total_latency_ms += (time.perf_counter() - t0) * 1000
         i = res["rec_idx"]
 
         self._predict_count += 1
@@ -185,48 +195,118 @@ class WineSulphitePlugin(ModelPluginPort):
             "mae_bound": res["mae_bound"],
         }
 
+    def train(self, *, data_path: str) -> dict:
+        import json
+        import joblib
+        from sklearn.ensemble import RandomForestRegressor
+        from sklearn.metrics import mean_absolute_error
+        from app.plugins.wine_sulphite.model_loader import get_artifacts_dir, upload_artifact
+        from app.plugins.wine_sulphite.constants import (
+            QUALITY_RF_MODEL_FILENAME,
+            BOUND_RF_MODEL_FILENAME,
+            METADATA_FILENAME,
+        )
+
+        t0 = time.perf_counter()
+        df = pd.read_csv(data_path, sep=None, engine="python")
+        df.columns = [c.strip() for c in df.columns]
+
+        X_qual = df[FEATURES_QUAL]
+        y_qual = df["quality"].astype(float)
+
+        bound_so2 = (df["total sulfur dioxide"] - df["free sulfur dioxide"]).clip(lower=0)
+        X_bound = df[FEATURES_BOUND]
+        y_bound = np.log1p(bound_so2)
+
+        split = int(len(df) * 0.8)
+        X_qtrain, X_qtest = X_qual.iloc[:split], X_qual.iloc[split:]
+        y_qtrain, y_qtest = y_qual.iloc[:split], y_qual.iloc[split:]
+        X_btrain, X_btest = X_bound.iloc[:split], X_bound.iloc[split:]
+        y_btrain, y_btest = y_bound.iloc[:split], y_bound.iloc[split:]
+
+        model_qual = RandomForestRegressor(n_estimators=200, random_state=42, n_jobs=-1)
+        model_qual.fit(X_qtrain, y_qtrain)
+        mae_qual = float(mean_absolute_error(y_qtest, model_qual.predict(X_qtest)))
+
+        model_bound = RandomForestRegressor(n_estimators=200, random_state=42, n_jobs=-1)
+        model_bound.fit(X_btrain, y_btrain)
+        mae_bound = float(mean_absolute_error(np.expm1(y_btest), np.expm1(model_bound.predict(X_btest))))
+
+        metadata = {
+            "metrics": {
+                "quality_cv": {"mae_mean": round(mae_qual, 4)},
+                "bound_cv": {"mae_mean": round(mae_bound, 4)},
+            },
+            "n_train": int(split),
+            "n_test": int(len(df) - split),
+            "features_qual": list(FEATURES_QUAL),
+            "features_bound": list(FEATURES_BOUND),
+        }
+
+        artifacts_dir = get_artifacts_dir()
+        artifacts_dir.mkdir(parents=True, exist_ok=True)
+        joblib.dump(model_qual, artifacts_dir / QUALITY_RF_MODEL_FILENAME)
+        joblib.dump(model_bound, artifacts_dir / BOUND_RF_MODEL_FILENAME)
+        with open(artifacts_dir / METADATA_FILENAME, "w") as fh:
+            json.dump(metadata, fh)
+
+        for fname in [QUALITY_RF_MODEL_FILENAME, BOUND_RF_MODEL_FILENAME, METADATA_FILENAME]:
+            upload_artifact(fname)
+
+        elapsed = time.perf_counter() - t0
+        logger.info("train() done — mae_qual=%.4f mae_bound=%.4f elapsed=%.1fs", mae_qual, mae_bound, elapsed)
+
+        self.load()
+
+        return {
+            "detail": "Training completed",
+            "mae_quality": round(mae_qual, 4),
+            "mae_bound_so2": round(mae_bound, 4),
+            "n_train": int(split),
+            "n_test": int(len(df) - split),
+            "training_time_s": round(elapsed, 1),
+        }
+
     def stats(self) -> StatsResponse:
+        avg = self._total_latency_ms / self._predict_count if self._predict_count > 0 else None
         return StatsResponse(
             model_name=MODEL_NAME,
-            model_type="RandomForestRegressor (dual: quality + bound SO2)",
+            version=MODEL_VERSION,
+            description=(
+                "Recomendación de dosis óptima de SO2 libre en vinos mediante "
+                "RandomForestRegressor dual (calidad + SO2 combinado)"
+            ),
+            task_type="regression",
             framework="sklearn",
-            artifact_path="model-runtime-wine_sulphite/artifacts/",
-            input_schema={
-                "mode=inline": {
-                    "fixed_acidity": "float (g/dm³)",
-                    "volatile_acidity": "float (g/dm³)",
-                    "citric_acid": "float (g/dm³)",
-                    "residual_sugar": "float (g/dm³)",
-                    "chlorides": "float (g/dm³)",
-                    "density": "float (g/cm³)",
-                    "pH": "float",
-                    "sulphates": "float (g/dm³)",
-                    "alcohol": "float (% vol.)",
-                    "free_sulfur_dioxide": "float (mg/L)",
-                    "total_sulfur_dioxide": "float (mg/L)",
-                    "min_molecular": "float (mg/L, default 0.6)",
-                    "max_total": "float (mg/L, default 200.0)",
-                    "delta_max": "float (mg/L, default 40.0)",
-                },
-                "mode=batch": {
-                    "data_path": "str — path to CSV with wine physicochemical properties"
-                },
+            inputs=[
+                InputField(name="fixed_acidity", type="float", description="Fixed acidity (g/dm³)"),
+                InputField(name="volatile_acidity", type="float", description="Volatile acidity (g/dm³)"),
+                InputField(name="citric_acid", type="float", description="Citric acid (g/dm³)"),
+                InputField(name="residual_sugar", type="float", description="Residual sugar (g/dm³)"),
+                InputField(name="chlorides", type="float", description="Chlorides (g/dm³)"),
+                InputField(name="density", type="float", description="Density (g/cm³)"),
+                InputField(name="pH", type="float", description="pH"),
+                InputField(name="sulphates", type="float", description="Sulphates (g/dm³)"),
+                InputField(name="alcohol", type="float", description="Alcohol (% vol.)"),
+                InputField(name="free_sulfur_dioxide", type="float", description="Current free SO2 (mg/L)"),
+                InputField(name="total_sulfur_dioxide", type="float", description="Current total SO2 (mg/L)"),
+                InputField(name="min_molecular", type="float", default=0.6, description="Minimum molecular SO2 (mg/L)"),
+                InputField(name="max_total", type="float", default=200.0, description="Maximum legal total SO2 (mg/L)"),
+                InputField(name="delta_max", type="float", default=40.0, description="Maximum free SO2 increment (mg/L)"),
+            ],
+            outputs=[
+                OutputField(name="recommended_free_so2", type="float", description="Recommended free SO2 dose (mg/L)"),
+                OutputField(name="recommended_total_so2", type="float", description="Estimated total SO2 (mg/L)"),
+                OutputField(name="recommended_molecular_so2", type="float", description="Molecular SO2 (mg/L)"),
+                OutputField(name="predicted_quality", type="float", description="Predicted sensory quality (0–10)"),
+                OutputField(name="intervention_recommended", type="bool", description="True if sulphite intervention is recommended"),
+            ],
+            metrics={
+                "mae_quality": self._metadata.get("metrics", {}).get("quality_cv", {}).get("mae_mean", 0.427),
+                "mae_bound_so2_mg_l": self._metadata.get("metrics", {}).get("bound_cv", {}).get("mae_mean", 14.5),
             },
-            output_schema={
-                "batch": {"predictions": "list[dict] — per-wine recommendations"},
-                "inline": {
-                    "recommended_free_so2": "float (mg/L)",
-                    "recommended_bound_so2": "float (mg/L)",
-                    "recommended_total_so2": "float (mg/L)",
-                    "recommended_molecular_so2": "float (mg/L)",
-                    "predicted_quality": "float (0–10)",
-                    "baseline_predicted_quality": "float (0–10)",
-                    "recommendation_reason": "str",
-                    "intervention_recommended": "bool",
-                    "mae_quality": "float (~0.427)",
-                    "mae_bound": "float (~14.5 mg/L)",
-                },
-            },
-            predict_count=self._predict_count,
-            last_predict_at=self._last_predict_at,
+            runtime_stats=RuntimeStats(
+                total_predictions=self._predict_count,
+                avg_latency_ms=round(avg, 1) if avg is not None else None,
+            ),
         )

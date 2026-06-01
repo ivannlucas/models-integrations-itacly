@@ -17,9 +17,15 @@ logger = logging.getLogger(__name__)
 _store = ArtifactStore(ARTIFACT_FOLDER_NAME)
 
 
-def load_artifacts() -> tuple[Any, Any, dict]:
-    _store.download_all_if_needed()  # ensure all artifacts are local before loading
+def get_artifacts_dir():
+    return _store.local_dir
 
+
+def upload_artifact(filename: str) -> None:
+    _store.upload(filename)
+
+
+def load_artifacts() -> tuple[Any, Any, dict]:
     quality_path = _store.path(QUALITY_RF_MODEL_FILENAME)
     bound_path = _store.path(BOUND_RF_MODEL_FILENAME)
     metadata_path = _store.path(METADATA_FILENAME)

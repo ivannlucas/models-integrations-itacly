@@ -69,6 +69,11 @@ class ArtifactStore:
         self._model_name = model_name
         self._local_dir = ARTIFACTS_ROOT / model_name
 
+    @property
+    def local_dir(self) -> Path:
+        """Return the local directory for this model's artifacts."""
+        return self._local_dir
+
     def path(self, filename: str) -> Path:
         """Return the local path to *filename*, downloading from S3 if needed.
 
@@ -152,3 +157,21 @@ class ArtifactStore:
                 raise  # bubble up so the app doesn't start with missing artifacts
 
         logger.info("Artifact download complete for model '%s'.", self._model_name)
+
+    def upload(self, filename: str) -> None:
+        """Upload a single local artifact file to S3.
+
+        No-op with a warning if STORAGE_BUCKET is not configured.
+        """
+        if not os.environ.get("STORAGE_BUCKET"):
+            logger.warning(
+                "STORAGE_BUCKET not set — skipping S3 upload for '%s'", filename
+            )
+            return
+        bucket = os.environ["STORAGE_BUCKET"]
+        s3 = _build_s3_client()
+        local_path = self._local_dir / filename
+        remote_key = f"artifacts/fixed/{self._model_name}/{filename}"
+        logger.info("Uploading '%s' to s3://%s/%s ...", filename, bucket, remote_key)
+        s3.upload_file(str(local_path), bucket, remote_key)
+        logger.info("Upload complete: %s", filename)

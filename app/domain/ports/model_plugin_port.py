@@ -1,6 +1,7 @@
 from abc import ABC, abstractmethod
 
 from app.application.dto.stats_dto import StatsResponse
+from app.domain.services.exceptions import TrainingNotSupportedError
 
 
 class ModelPluginPort(ABC):
@@ -29,3 +30,9 @@ class ModelPluginPort(ABC):
     @abstractmethod
     def stats(self) -> StatsResponse:
         """Return model metadata and runtime statistics."""
+
+    def train(self, *, data_path: str) -> dict:
+        """Train the model on a CSV file and persist artifacts. Override to support training."""
+        raise TrainingNotSupportedError(
+            "Training is not supported by this model. Use the data science pipeline instead."
+        )

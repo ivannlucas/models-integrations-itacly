@@ -4,6 +4,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request, status
 
 from app.application.dto.stats_dto import StatsResponse
+from app.application.dto.train_dto import TrainRequest
 from app.domain.services.exceptions import TrainingNotSupportedError
 
 logger = logging.getLogger(__name__)
@@ -57,15 +58,19 @@ def make_model_router(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)
             )
 
-    @router.post("/train", status_code=status.HTTP_501_NOT_IMPLEMENTED)
-    async def train(request: Request) -> dict:
+    @router.post("/train")
+    async def train(request: Request, body: TrainRequest) -> dict:
         container = request.app.state.containers[model_id]
         try:
-            container.train_use_case.execute()
+            return container.train_use_case.execute(data_path=body.data_path)
         except TrainingNotSupportedError as exc:
             raise HTTPException(
                 status_code=status.HTTP_501_NOT_IMPLEMENTED, detail=str(exc)
             )
-        return {"message": "Not implemented"}
+        except Exception as exc:
+            logger.exception("Unexpected error during training for model '%s'", model_id)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)
+            )
 
     return router

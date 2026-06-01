@@ -1,8 +1,9 @@
-from app.domain.services.exceptions import TrainingNotSupportedError
+from app.domain.ports.model_plugin_port import ModelPluginPort
 
 
 class TrainModelUseCase:
-    def execute(self) -> None:
-        raise TrainingNotSupportedError(
-            "Training is not supported by this runtime. Use the data science pipeline instead."
-        )
+    def __init__(self, plugin: ModelPluginPort) -> None:
+        self._plugin = plugin
+
+    def execute(self, *, data_path: str) -> dict:
+        return self._plugin.train(data_path=data_path)

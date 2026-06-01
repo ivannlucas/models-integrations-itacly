@@ -1,9 +1,8 @@
 """Model registry.
 
 To add a new model:
-1. Create model-runtime-<name>/ with the standard structure (standalone deployment).
-2. Create app/plugins/<name>/ with the plugin code (imports adjusted for the central app).
-3. Add a ModelEntry below — that's all.
+1. Create app/plugins/<name>/ implementing ModelPluginPort.
+2. Add a ModelEntry below — the router and DI are wired automatically.
 """
 from dataclasses import dataclass, field
 from typing import Any

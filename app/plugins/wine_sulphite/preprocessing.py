@@ -1,7 +1,9 @@
+from __future__ import annotations
+
+from typing import Any
+
 import numpy as np
 import pandas as pd
-
-from app.plugins.wine_sulphite.predict_dto import PredictInlineRequest
 
 # Feature sets — order is mandatory (matches training column order)
 FEATURES_PHYS = [
@@ -22,8 +24,11 @@ FEATURES_BOUND = FEATURES_PHYS + ["free sulfur dioxide"]
 PKA_SO2 = 1.81
 
 
-def map_request_to_wine_dict(request: PredictInlineRequest) -> dict:
-    """Map snake_case API fields to the space-separated column names used at training time."""
+def map_request_to_wine_dict(request: Any) -> dict:
+    """Map snake_case API fields to the space-separated column names used at training time.
+
+    Accepts any object with the expected attributes (Pydantic model, SimpleNamespace, etc.).
+    """
     return {
         "fixed acidity": request.fixed_acidity,
         "volatile acidity": request.volatile_acidity,
@@ -43,7 +48,18 @@ def build_simulation_grid(
     base_wine: dict,
     delta_max: float,
 ) -> tuple[np.ndarray, pd.DataFrame, pd.DataFrame]:
-    """Build simulation grid from current free SO2 up to current + delta_max."""
+    """Build simulation grid from current free SO2 up to current + delta_max.
+
+    Args:
+        base_wine: Wine properties dict with space-separated keys.
+        delta_max: Maximum free SO2 increment to explore (mg/L).
+
+    Returns:
+        tuple: (free_targets, qual_rows, bound_rows)
+            - free_targets: 1-D array of candidate free SO2 values
+            - qual_rows: DataFrame with FEATURES_QUAL columns for quality model
+            - bound_rows: DataFrame with FEATURES_BOUND columns for bound model
+    """
     current_free = float(base_wine["free sulfur dioxide"])
     free_targets = np.arange(current_free, current_free + delta_max + 1e-9, 1.0)
     n = len(free_targets)
