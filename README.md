@@ -274,6 +274,7 @@ https://sites.google.com/luceit.es/luceit/otros/devops/devops-politica_de_versio
 
 | Version | Date (last change) |  Developer   | Changes                      |
 |:-------:|:-------------------|:------------:|:-----------------------------|
+| v0.1.1  | 01/06/2026         |  Pablo       | Add wine-sulphite model deployment   |
 | v0.1.0  | 28/05/2026         |  Ivan Lucas  | Plugin architecture, ML-25 wine-sulphite model, S3 artifact store, MODEL env var filtering |
 | v0.0.1  | 17/02/2026         | javier.perez | Luce IT repository structure |
 | v0.0.0  | 15/02/2026         |  Ivan Lucas  | Base project                 |
