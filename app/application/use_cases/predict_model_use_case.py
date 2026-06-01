@@ -29,12 +29,11 @@ class PredictModelUseCase:
             logger.info("Executing batch prediction, data_path=%s", request.data_path)
             result = self._plugin.predict_batch(data_path=request.data_path)
             return self._batch_cls(**result)
-        else:
-            logger.info("Executing inline prediction")
-            features = request.model_dump(exclude={"mode", "model_key", "threshold"})
-            result = self._plugin.predict_inline(
-                features=features,
-                model_key=getattr(request, "model_key", None),
-                threshold=getattr(request, "threshold", None),
-            )
-            return self._inline_cls(**result)
+        logger.info("Executing inline prediction")
+        features = request.model_dump(exclude={"mode", "model_key", "threshold"})
+        result = self._plugin.predict_inline(
+            features=features,
+            model_key=getattr(request, "model_key", None),
+            threshold=getattr(request, "threshold", None),
+        )
+        return self._inline_cls(**result)

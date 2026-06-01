@@ -37,7 +37,7 @@ def load_artifacts() -> tuple[Any, Any, dict]:
     model_bound = joblib.load(bound_path)
 
     logger.info("Loading metadata from %s", metadata_path)
-    with open(metadata_path) as f:
+    with open(metadata_path, encoding="utf-8") as f:
         metadata = json.load(f)
 
     logger.info(

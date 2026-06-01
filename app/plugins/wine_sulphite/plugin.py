@@ -139,7 +139,7 @@ class WineSulphitePlugin(ModelPluginPort):
                         "recommendation_reason": res["reason"],
                     }
                 )
-            except Exception as exc:
+            except Exception as exc:  # pylint: disable=broad-exception-caught
                 predictions.append({"row": int(idx), "error": str(exc)})
 
         self._total_latency_ms += (time.perf_counter() - t0) * 1000
@@ -195,7 +195,8 @@ class WineSulphitePlugin(ModelPluginPort):
             "mae_bound": res["mae_bound"],
         }
 
-    def train(self, *, data_path: str) -> dict:
+    def train(self, *, data_path: str) -> dict:  # pylint: disable=too-many-locals
+        # pylint: disable=import-outside-toplevel
         import json
         import joblib
         from sklearn.ensemble import RandomForestRegressor
@@ -206,11 +207,13 @@ class WineSulphitePlugin(ModelPluginPort):
             BOUND_RF_MODEL_FILENAME,
             METADATA_FILENAME,
         )
+        # pylint: enable=import-outside-toplevel
 
         t0 = time.perf_counter()
         df = pd.read_csv(data_path, sep=None, engine="python")
         df.columns = [c.strip() for c in df.columns]
 
+        # pylint: disable=invalid-name
         X_qual = df[FEATURES_QUAL]
         y_qual = df["quality"].astype(float)
 
@@ -223,6 +226,7 @@ class WineSulphitePlugin(ModelPluginPort):
         y_qtrain, y_qtest = y_qual.iloc[:split], y_qual.iloc[split:]
         X_btrain, X_btest = X_bound.iloc[:split], X_bound.iloc[split:]
         y_btrain, y_btest = y_bound.iloc[:split], y_bound.iloc[split:]
+        # pylint: enable=invalid-name
 
         model_qual = RandomForestRegressor(n_estimators=200, random_state=42, n_jobs=-1)
         model_qual.fit(X_qtrain, y_qtrain)
@@ -230,7 +234,9 @@ class WineSulphitePlugin(ModelPluginPort):
 
         model_bound = RandomForestRegressor(n_estimators=200, random_state=42, n_jobs=-1)
         model_bound.fit(X_btrain, y_btrain)
-        mae_bound = float(mean_absolute_error(np.expm1(y_btest), np.expm1(model_bound.predict(X_btest))))
+        mae_bound = float(
+            mean_absolute_error(np.expm1(y_btest), np.expm1(model_bound.predict(X_btest)))
+        )
 
         metadata = {
             "metrics": {
@@ -247,7 +253,7 @@ class WineSulphitePlugin(ModelPluginPort):
         artifacts_dir.mkdir(parents=True, exist_ok=True)
         joblib.dump(model_qual, artifacts_dir / QUALITY_RF_MODEL_FILENAME)
         joblib.dump(model_bound, artifacts_dir / BOUND_RF_MODEL_FILENAME)
-        with open(artifacts_dir / METADATA_FILENAME, "w") as fh:
+        with open(artifacts_dir / METADATA_FILENAME, "w", encoding="utf-8") as fh:
             json.dump(metadata, fh)
 
         for fname in [QUALITY_RF_MODEL_FILENAME, BOUND_RF_MODEL_FILENAME, METADATA_FILENAME]:

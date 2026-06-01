@@ -81,10 +81,10 @@ def apply_operational_constraints(
 
 
 def select_recommendation(
-    valid_free: np.ndarray,
-    valid_bounds: np.ndarray,
-    valid_totals: np.ndarray,
-    valid_moleculars: np.ndarray,
+    _valid_free: np.ndarray,
+    _valid_bounds: np.ndarray,
+    _valid_totals: np.ndarray,
+    _valid_moleculars: np.ndarray,
     valid_qualities: np.ndarray,
     baseline_quality: float,
     mae_quality: float,
@@ -118,9 +118,8 @@ def select_recommendation(
             "Recommending maximum-benefit dose."
         )
         return best_idx, reason, True
-    else:
-        reason = (
-            f"Improvement not significant (gain {gain:.3f} <= threshold {threshold:.3f}). "
-            "Recommending minimum safe intervention."
-        )
-        return 0, reason, False
+    reason = (
+        f"Improvement not significant (gain {gain:.3f} <= threshold {threshold:.3f}). "
+        "Recommending minimum safe intervention."
+    )
+    return 0, reason, False

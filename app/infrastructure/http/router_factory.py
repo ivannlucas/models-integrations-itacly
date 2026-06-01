@@ -52,11 +52,11 @@ def make_model_router(
             if extra_predict_exceptions and isinstance(exc, extra_predict_exceptions):
                 raise HTTPException(
                     status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
-                )
+                ) from exc
             logger.exception("Unexpected error during prediction for model '%s'", model_id)
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)
-            )
+            ) from exc
 
     @router.post("/train")
     async def train(request: Request, body: TrainRequest) -> dict:
@@ -66,11 +66,11 @@ def make_model_router(
         except TrainingNotSupportedError as exc:
             raise HTTPException(
                 status_code=status.HTTP_501_NOT_IMPLEMENTED, detail=str(exc)
-            )
+            ) from exc
         except Exception as exc:
             logger.exception("Unexpected error during training for model '%s'", model_id)
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)
-            )
+            ) from exc
 
     return router
