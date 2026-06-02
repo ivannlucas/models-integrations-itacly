@@ -47,7 +47,7 @@ class ModelEntry:
 REGISTRY: list[ModelEntry] = [
     ModelEntry(
         model_id="wine-sulphite",
-        prefix="/models/wine-sulphite",
+        prefix="/models/ml25_wine_sulphites",
         version="1.2.0",
         plugin_class=WineSulphitePlugin,
         predict_request_type=WineSO2_Request,

@@ -360,6 +360,8 @@ def app(fake_plugins: dict[str, FakePlugin]) -> FastAPI:
                 predict_request_type=entry.predict_request_type,
                 predict_response_type=entry.predict_response_type,
                 extra_predict_exceptions=entry.extra_predict_exceptions,
+                train_request_type=entry.train_request_type,
+                train_response_type=entry.train_response_type,
             ),
             prefix=entry.prefix,
             tags=[entry.model_id],

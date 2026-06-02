@@ -43,10 +43,10 @@ def _train(csv_path: Path, artifacts_dir: Path) -> dict:
     plugin.load = MagicMock()
     with (
         patch(
-            "app.plugins.wine_sulphite.model_loader.get_artifacts_dir",
+            "app.plugins.ml25_wine_sulphites.model_loader.get_artifacts_dir",
             return_value=artifacts_dir,
         ),
-        patch("app.plugins.wine_sulphite.model_loader.upload_artifact"),
+        patch("app.plugins.ml25_wine_sulphites.model_loader.upload_artifact"),
     ):
         return plugin.train(data_path=str(csv_path))
 
@@ -96,11 +96,11 @@ def test_train_uploads_all_three_artifacts(wine_csv, tmp_path):
     plugin.load = MagicMock()
     with (
         patch(
-            "app.plugins.wine_sulphite.model_loader.get_artifacts_dir",
+            "app.plugins.ml25_wine_sulphites.model_loader.get_artifacts_dir",
             return_value=tmp_path,
         ),
         patch(
-            "app.plugins.wine_sulphite.model_loader.upload_artifact",
+            "app.plugins.ml25_wine_sulphites.model_loader.upload_artifact",
             side_effect=uploaded.append,
         ),
     ):
@@ -118,10 +118,10 @@ def test_train_calls_load_after_saving(wine_csv, tmp_path):
 
     with (
         patch(
-            "app.plugins.wine_sulphite.model_loader.get_artifacts_dir",
+            "app.plugins.ml25_wine_sulphites.model_loader.get_artifacts_dir",
             return_value=tmp_path,
         ),
-        patch("app.plugins.wine_sulphite.model_loader.upload_artifact"),
+        patch("app.plugins.ml25_wine_sulphites.model_loader.upload_artifact"),
     ):
         plugin.train(data_path=str(wine_csv))
 
@@ -138,6 +138,6 @@ def test_get_artifacts_dir_points_to_wine_sulphite():
 def test_upload_artifact_delegates_to_store():
     from app.plugins.ml25_wine_sulphites.model_loader import upload_artifact
     mock_store = MagicMock()
-    with patch("app.plugins.wine_sulphite.model_loader._store", mock_store):
+    with patch("app.plugins.ml25_wine_sulphites.model_loader._store", mock_store):
         upload_artifact("model.pkl")
     mock_store.upload.assert_called_once_with("model.pkl")

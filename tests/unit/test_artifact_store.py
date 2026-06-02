@@ -1,5 +1,5 @@
 """Unit tests for ArtifactStore — local_dir property and upload()."""
-from unittest.mock import MagicMock, patch
+from unittest.mock import ANY, MagicMock, patch
 
 from app.infrastructure.artifact_store import ARTIFACTS_ROOT, ArtifactStore
 
@@ -31,4 +31,5 @@ def test_upload_with_bucket_calls_s3(monkeypatch, tmp_path):
         str(tmp_path / "weights.pkl"),
         "test-bucket",
         "artifacts/fixed/my_model/weights.pkl",
+        Config=ANY,
     )
