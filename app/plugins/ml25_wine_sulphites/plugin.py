@@ -10,14 +10,14 @@ import pandas as pd
 from app.application.dto.stats_dto import InputField, OutputField, RuntimeStats, StatsResponse
 from app.domain.ports.model_plugin_port import ModelPluginPort
 from app.domain.services.exceptions import NoValidSimulationPointError
-from app.plugins.wine_sulphite.model_loader import load_artifacts
-from app.plugins.wine_sulphite.postprocessing import (
+from app.plugins.ml25_wine_sulphites.model_loader import load_artifacts
+from app.plugins.ml25_wine_sulphites.postprocessing import (
     apply_operational_constraints,
     compute_molecular_so2,
     decode_bound_predictions,
     select_recommendation,
 )
-from app.plugins.wine_sulphite.preprocessing import (
+from app.plugins.ml25_wine_sulphites.preprocessing import (
     FEATURES_BOUND,
     FEATURES_QUAL,
     build_simulation_grid,
@@ -201,8 +201,8 @@ class WineSulphitePlugin(ModelPluginPort):
         import joblib
         from sklearn.ensemble import RandomForestRegressor
         from sklearn.metrics import mean_absolute_error
-        from app.plugins.wine_sulphite.model_loader import get_artifacts_dir, upload_artifact
-        from app.plugins.wine_sulphite.constants import (
+        from app.plugins.ml25_wine_sulphites.model_loader import get_artifacts_dir, upload_artifact
+        from app.plugins.ml25_wine_sulphites.constants import (
             QUALITY_RF_MODEL_FILENAME,
             BOUND_RF_MODEL_FILENAME,
             METADATA_FILENAME,

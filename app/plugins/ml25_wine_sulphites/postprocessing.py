@@ -1,6 +1,6 @@
 import numpy as np
 
-from app.plugins.wine_sulphite.preprocessing import PKA_SO2
+from app.plugins.ml25_wine_sulphites.preprocessing import PKA_SO2
 
 
 def decode_bound_predictions(raw_bound: np.ndarray, free_targets: np.ndarray) -> np.ndarray:

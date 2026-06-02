@@ -1,7 +1,7 @@
 """Endpoint tests for the ``wine-sulphite`` model."""
 from app.domain.services.exceptions import NoValidSimulationPointError
 
-PREFIX = "/models/wine-sulphite"
+PREFIX = "/models/ml25_wine_sulphites"
 
 
 def test_health(client):

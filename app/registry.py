@@ -12,14 +12,14 @@ from app.domain.services.exceptions import NoValidSimulationPointError
 # ── Plugin imports ────────────────────────────────────────────────────────────
 
 
-from app.plugins.wine_sulphite.plugin import WineSulphitePlugin
-from app.plugins.wine_sulphite.predict_dto import (
+from app.plugins.ml25_wine_sulphites.plugin import WineSulphitePlugin
+from app.plugins.ml25_wine_sulphites.predict_dto import (
     PredictBatchResponse as WineSO2_BatchResp,
     PredictInlineResponse as WineSO2_InlineResp,
     PredictRequest as WineSO2_Request,
     PredictResponse as WineSO2_Response,
 )
-from app.plugins.wine_sulphite.train_dto import (
+from app.plugins.ml25_wine_sulphites.train_dto import (
     TrainRequest as WineSO2_TrainReq,
     TrainResponse as WineSO2_TrainResp,
 )

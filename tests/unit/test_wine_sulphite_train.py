@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from app.plugins.wine_sulphite.plugin import WineSulphitePlugin
+from app.plugins.ml25_wine_sulphites.plugin import WineSulphitePlugin
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
@@ -131,12 +131,12 @@ def test_train_calls_load_after_saving(wine_csv, tmp_path):
 # ── model_loader helpers ──────────────────────────────────────────────────────
 
 def test_get_artifacts_dir_points_to_wine_sulphite():
-    from app.plugins.wine_sulphite.model_loader import get_artifacts_dir
+    from app.plugins.ml25_wine_sulphites.model_loader import get_artifacts_dir
     assert get_artifacts_dir().name == "wine_sulphite"
 
 
 def test_upload_artifact_delegates_to_store():
-    from app.plugins.wine_sulphite.model_loader import upload_artifact
+    from app.plugins.ml25_wine_sulphites.model_loader import upload_artifact
     mock_store = MagicMock()
     with patch("app.plugins.wine_sulphite.model_loader._store", mock_store):
         upload_artifact("model.pkl")

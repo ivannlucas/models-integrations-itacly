@@ -5,7 +5,7 @@ from typing import Any
 import joblib
 
 from app.infrastructure.artifact_store import ArtifactStore
-from app.plugins.wine_sulphite.constants import (
+from app.plugins.ml25_wine_sulphites.constants import (
     ARTIFACT_FOLDER_NAME,
     QUALITY_RF_MODEL_FILENAME,
     BOUND_RF_MODEL_FILENAME,
