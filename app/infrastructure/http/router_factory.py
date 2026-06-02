@@ -4,7 +4,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request, status
 
 from app.application.dto.stats_dto import StatsResponse
-from app.application.dto.train_dto import TrainRequest
+from app.application.dto.train_dto import TrainRequest as _DefaultTrainRequest
 from app.domain.services.exceptions import TrainingNotSupportedError
 
 logger = logging.getLogger(__name__)
@@ -16,6 +16,8 @@ def make_model_router(
     predict_request_type: Any,
     predict_response_type: Any,
     extra_predict_exceptions: tuple[type[Exception], ...] = (),
+    train_request_type: Any = None,
+    train_response_type: Any = None,
 ) -> APIRouter:
     """Create a FastAPI router for a model plugin.
 
@@ -58,8 +60,11 @@ def make_model_router(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)
             ) from exc
 
-    @router.post("/train")
-    async def train(request: Request, body: TrainRequest) -> dict:
+    _train_req_type = train_request_type or _DefaultTrainRequest
+    _train_resp_type = train_response_type
+
+    @router.post("/train", response_model=_train_resp_type)
+    async def train(request: Request, body: _train_req_type) -> Any:
         container = request.app.state.containers[model_id]
         try:
             return container.train_use_case.execute(data_path=body.data_path)

@@ -256,8 +256,13 @@ class WineSulphitePlugin(ModelPluginPort):
         with open(artifacts_dir / METADATA_FILENAME, "w", encoding="utf-8") as fh:
             json.dump(metadata, fh)
 
-        for fname in [QUALITY_RF_MODEL_FILENAME, BOUND_RF_MODEL_FILENAME, METADATA_FILENAME]:
-            upload_artifact(fname)
+        upload_warning: str | None = None
+        try:
+            for fname in [QUALITY_RF_MODEL_FILENAME, BOUND_RF_MODEL_FILENAME, METADATA_FILENAME]:
+                upload_artifact(fname)
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            upload_warning = f"Artifacts saved locally but S3 upload failed: {exc}"
+            logger.warning(upload_warning)
 
         elapsed = time.perf_counter() - t0
         logger.info("train() done — mae_qual=%.4f mae_bound=%.4f elapsed=%.1fs", mae_qual, mae_bound, elapsed)
@@ -271,6 +276,7 @@ class WineSulphitePlugin(ModelPluginPort):
             "n_train": int(split),
             "n_test": int(len(df) - split),
             "training_time_s": round(elapsed, 1),
+            "upload_warning": upload_warning,
         }
 
     def stats(self) -> StatsResponse:

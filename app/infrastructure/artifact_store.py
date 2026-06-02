@@ -18,6 +18,7 @@ import logging
 import os
 from pathlib import Path
 
+from boto3.s3.transfer import TransferConfig
 from botocore.client import Config
 from dotenv import find_dotenv, load_dotenv
 
@@ -173,5 +174,7 @@ class ArtifactStore:
         local_path = self._local_dir / filename
         remote_key = f"artifacts/fixed/{self._model_name}/{filename}"
         logger.info("Uploading '%s' to s3://%s/%s ...", filename, bucket, remote_key)
-        s3.upload_file(str(local_path), bucket, remote_key)
+        # Force single-part (PutObject) — some S3-compatible endpoints fail on CreateMultipartUpload
+        transfer_cfg = TransferConfig(multipart_threshold=5 * 1024 ** 3, use_threads=False)
+        s3.upload_file(str(local_path), bucket, remote_key, Config=transfer_cfg)
         logger.info("Upload complete: %s", filename)

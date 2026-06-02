@@ -1,8 +1,5 @@
 """Unit tests for ArtifactStore — local_dir property and upload()."""
-from pathlib import Path
 from unittest.mock import MagicMock, patch
-
-import pytest
 
 from app.infrastructure.artifact_store import ARTIFACTS_ROOT, ArtifactStore
 

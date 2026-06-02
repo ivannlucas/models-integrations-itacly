@@ -19,6 +19,10 @@ from app.plugins.wine_sulphite.predict_dto import (
     PredictRequest as WineSO2_Request,
     PredictResponse as WineSO2_Response,
 )
+from app.plugins.wine_sulphite.train_dto import (
+    TrainRequest as WineSO2_TrainReq,
+    TrainResponse as WineSO2_TrainResp,
+)
 
 
 # ── Registry entry dataclass ──────────────────────────────────────────────────
@@ -34,6 +38,8 @@ class ModelEntry:
     batch_response_class: type
     inline_response_class: type
     extra_predict_exceptions: tuple[type[Exception], ...] = field(default_factory=tuple)
+    train_request_type: Any = None
+    train_response_type: Any = None
 
 
 # ── Registry ──────────────────────────────────────────────────────────────────
@@ -49,5 +55,7 @@ REGISTRY: list[ModelEntry] = [
         batch_response_class=WineSO2_BatchResp,
         inline_response_class=WineSO2_InlineResp,
         extra_predict_exceptions=(NoValidSimulationPointError,),
+        train_request_type=WineSO2_TrainReq,
+        train_response_type=WineSO2_TrainResp,
     ),
 ]
