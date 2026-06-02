@@ -1,3 +1,4 @@
+"""Funciones de preprocesamiento para el plugin Modelo10Lacteo."""
 from __future__ import annotations
 
 import base64

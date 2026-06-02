@@ -70,6 +70,10 @@ class ArtifactStore:
         self._model_name = model_name
         self._local_dir = ARTIFACTS_ROOT / model_name
 
+    def get_local_dir(self) -> Path:
+        """Return the local directory where this model's artifacts are stored."""
+        return self._local_dir
+
     def path(self, filename: str) -> Path:
         """Return the local path to *filename*, downloading from S3 if needed.
 

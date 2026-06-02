@@ -61,3 +61,27 @@ def test_predict_no_valid_simulation_point_maps_to_422(
 def test_train_returns_501(client):
     resp = client.post(f"{PREFIX}/train", json={})
     assert resp.status_code == 501
+
+
+def test_predict_unexpected_error_maps_to_500(
+    client, fake_plugins, wine_so2_inline_payload
+):
+    fake_plugins["wine-sulphite"].raise_on_inline = RuntimeError("unexpected failure")
+    resp = client.post(f"{PREFIX}/predict", json=wine_so2_inline_payload)
+    assert resp.status_code == 500
+
+
+def test_predict_invalid_mode_returns_422(client):
+    resp = client.post(
+        f"{PREFIX}/predict",
+        json={"mode": "invalid"},
+    )
+    assert resp.status_code == 422
+
+
+def test_predict_missing_mode_returns_422(client):
+    resp = client.post(
+        f"{PREFIX}/predict",
+        json={},
+    )
+    assert resp.status_code == 422

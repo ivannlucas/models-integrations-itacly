@@ -1,14 +1,20 @@
+"""Carga de modelos para el plugin Modelo10Lacteo."""
 from __future__ import annotations
 
 import json
 import logging
 
-from app.infrastructure.artifact_store import ArtifactStore
 import torch
-import torch.nn as nn
+from torch import nn
 from torchvision import models
 
-from app.plugins.modelo10_lacteo.constants import ARTIFACT_FOLDER_NAME, CLASSIFIER_FILENAME, CLASS_NAMES_FILENAME, DETECTOR_FILENAME
+from app.infrastructure.artifact_store import ArtifactStore
+from app.plugins.modelo10_lacteo.constants import (
+    ARTIFACT_FOLDER_NAME,
+    CLASSIFIER_FILENAME,
+    CLASS_NAMES_FILENAME,
+    DETECTOR_FILENAME
+)
 
 logger = logging.getLogger(__name__)
 

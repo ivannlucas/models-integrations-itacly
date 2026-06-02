@@ -1,3 +1,4 @@
+"""Plugin Modelo10Lacteo: Detección y clasificación de vectores en imágenes de ganado lechero."""
 from __future__ import annotations
 
 import csv
@@ -13,17 +14,17 @@ import zipfile
 from pathlib import Path
 from datetime import datetime, timezone
 
-from app.application.dto.stats_dto import StatsResponse
-from app.application.dto.train_dto import TrainResponse
-from app.infrastructure.artifact_store import ArtifactStore
 import torch
-import torch.nn as nn
-import torch.optim as optim
+from torch import nn
+from torch import optim
 from torch.utils.data import DataLoader
 from torchvision import datasets, models, transforms
 
+from app.application.dto.stats_dto import StatsResponse
+from app.application.dto.train_dto import TrainResponse
 from app.domain.ports.model_plugin_port import ModelPluginPort
 from app.domain.services.exceptions import InvalidImageError, ModelNotLoadedError
+from app.infrastructure.artifact_store import ArtifactStore
 from app.plugins.modelo10_lacteo.model_loader import load_detector_and_classifier
 from app.plugins.modelo10_lacteo.postprocessing import build_inline_result, classify_crop
 from app.plugins.modelo10_lacteo.preprocessing import (
@@ -31,7 +32,16 @@ from app.plugins.modelo10_lacteo.preprocessing import (
     image_base64_to_pil,
     image_path_to_pil,
 )
-from app.plugins.modelo10_lacteo.constants import ARTIFACT_FOLDER_NAME, CLASSIFIER_FILENAME, CLASS_NAMES_FILENAME
+from app.plugins.modelo10_lacteo.constants import (
+    ARTIFACT_FOLDER_NAME,
+    CLASSIFIER_FILENAME,
+    CLASS_NAMES_FILENAME,
+    DEFAULT_CLS_CONF,
+    DEFAULT_DET_CONF,
+    FRAMEWORK,
+    MODEL_ID,
+    VERSION,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -114,15 +124,15 @@ def _cls_validate(model, loader, criterion, device):
     return total_loss / max(total, 1), correct / max(total, 1)
 
 
-# Umbrales por defecto (coinciden con los del modelo fuente)
-DEFAULT_DET_CONF = 0.2
-DEFAULT_CLS_CONF = 0.5
-
-
 class Modelo10LacteoPlugin(ModelPluginPort):
-    MODEL_ID = "modelo10-lacteo"
-    FRAMEWORK = "pytorch+ultralytics"
-    VERSION = "1.0.0"
+    """Plugin para detección y clasificación de vectores en imágenes de ganado lechero.
+    Usa un pipeline de dos etapas: detección con un modelo YOLOv8 y clasificación con MobileNetV3.
+    Soporta predicción inline (una imagen) y batch (CSV/ZIP/directorio).
+    El entrenamiento solo afecta al clasificador MobileNetV3, que se guarda como artifact."""
+
+    MODEL_ID = MODEL_ID
+    FRAMEWORK = FRAMEWORK
+    VERSION = VERSION
 
     def __init__(self) -> None:
         self._detector = None
@@ -227,7 +237,7 @@ class Modelo10LacteoPlugin(ModelPluginPort):
             model_name=self.MODEL_ID,
             model_type="classification",
             framework=self.FRAMEWORK,
-            artifact_path=str(_store._local_dir),
+            artifact_path=str(_store.get_local_dir()),
             input_schema={
                 "type": "object",
                 "properties": {
@@ -375,7 +385,7 @@ class Modelo10LacteoPlugin(ModelPluginPort):
                 model.load_state_dict(best_state)
 
             # Save artifacts
-            torch.save(model.state_dict(), _store._local_dir/CLASSIFIER_FILENAME)
+            torch.save(model.state_dict(), _store.get_local_dir() / CLASSIFIER_FILENAME)  # Direct save to final location to avoid double disk usage
             with open(_store.path(CLASS_NAMES_FILENAME), "w") as fh:
                 json.dump(class_names, fh)
             logger.info("Clasificador guardado. Clases: %s", class_names)

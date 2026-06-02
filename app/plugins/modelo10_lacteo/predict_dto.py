@@ -1,3 +1,4 @@
+"""DTOs para las operaciones de predict del plugin Modelo10Lacteo."""
 from __future__ import annotations
 
 from typing import Annotated, Any, Dict, List, Literal, Union
@@ -6,12 +7,14 @@ from pydantic import BaseModel, Field, ConfigDict
 
 
 class PredictBatchRequest(BaseModel):
+    """DTO para petición de predicción en modo batch."""
     model_config = ConfigDict(protected_namespaces=())
     mode: Literal["batch"] = "batch"
     data_path: str  # ruta a CSV, ZIP o directorio dentro del contenedor
 
 
 class PredictBatchResponse(BaseModel):
+    """DTO para respuesta de predicción en modo batch."""
     model_config = ConfigDict(protected_namespaces=())
     model_id: str
     predictions: List[Dict[str, Any]]
@@ -19,6 +22,7 @@ class PredictBatchResponse(BaseModel):
 
 
 class PredictInlineRequest(BaseModel):
+    """DTO para petición de predicción en modo inline."""
     model_config = ConfigDict(protected_namespaces=())
     mode: Literal["inline"] = "inline"
     image_path: str | None = None     # ruta a imagen en disco (vía shared_data)
@@ -28,6 +32,7 @@ class PredictInlineRequest(BaseModel):
 
 
 class PredictInlineResponse(BaseModel):
+    """DTO para respuesta de predicción en modo inline."""
     model_config = ConfigDict(protected_namespaces=())
     model_id: str
     prediction: str        # especie dominante (fly | mos | tick | no_vectors)

@@ -1,3 +1,4 @@
+"""Funciones de postprocesamiento para el plugin Modelo10Lacteo."""
 from __future__ import annotations
 
 from typing import Any
