@@ -19,6 +19,7 @@ import os
 from pathlib import Path
 
 from botocore.client import Config
+from boto3.s3.transfer import TransferConfig
 from dotenv import find_dotenv, load_dotenv
 
 logger = logging.getLogger(__name__)
@@ -159,8 +160,17 @@ class ArtifactStore:
         if not bucket:
             logger.warning("STORAGE_BUCKET not set — skipping S3 upload of %s", local_path)
             return
+
         s3 = _build_s3_client()
         remote_key = f"artifacts/fixed/{self._model_name}/{local_path.name}"
         logger.info("Uploading %s → s3://%s/%s", local_path.name, bucket, remote_key)
-        s3.upload_file(str(local_path), bucket, remote_key)
+
+        config = TransferConfig(
+            multipart_threshold=1024 * 1024 * 1024 * 5,  # 5 GB threshold
+            max_concurrency=10,
+            use_threads=False                             # Simpler, single-threaded execution
+        )
+
+        # Pass the config to the upload_file method
+        s3.upload_file(str(local_path), bucket, remote_key, Config=config)
         logger.info("Upload complete: s3://%s/%s", bucket, remote_key)

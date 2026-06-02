@@ -27,7 +27,7 @@ class ModelContainer:
         self._service = ModelRuntimeService(plugin)
         self.predict_use_case = PredictModelUseCase(plugin, batch_response_cls, inline_response_cls)
         self.stats_use_case = GetStatsUseCase(plugin)
-        self.train_use_case = TrainModelUseCase()
+        self.train_use_case = TrainModelUseCase(plugin)
 
     def init(self) -> None:
         logger.info("Initializing container — loading plugin %s ...", type(self._plugin).__name__)

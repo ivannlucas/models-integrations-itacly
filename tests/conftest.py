@@ -25,6 +25,7 @@ from app.application.use_cases.get_stats_use_case import GetStatsUseCase
 from app.application.use_cases.predict_model_use_case import PredictModelUseCase
 from app.application.use_cases.train_model_use_case import TrainModelUseCase
 from app.domain.ports.model_plugin_port import ModelPluginPort
+from app.domain.services.exceptions import TrainingNotSupportedError
 from app.domain.services.model_runtime_service import ModelRuntimeService
 from app.infrastructure.http.router_factory import make_model_router
 from app.registry import REGISTRY
@@ -49,10 +50,12 @@ class FakePlugin(ModelPluginPort):
         model_id: str,
         inline_factory: Callable[..., dict],
         batch_factory: Callable[..., dict],
+        train_factory: Callable[..., dict] | None = None,
     ) -> None:
         self._model_id = model_id
         self._inline_factory = inline_factory
         self._batch_factory = batch_factory
+        self._train_factory = train_factory
         self._loaded = False
         self._predict_count = 0
         self._last_predict_at: str | None = None
@@ -100,6 +103,13 @@ class FakePlugin(ModelPluginPort):
             predict_count=self._predict_count,
             last_predict_at=self._last_predict_at,
         )
+
+    def train(self, *, data_path: str) -> dict:
+        if self._train_factory is None:
+            raise TrainingNotSupportedError(
+                "Training is not supported by this runtime. Use the data science pipeline instead."
+            )
+        return self._train_factory(self, data_path=data_path)
 
 
 # ── Fake response factories per model ──────────────────────────────────────
@@ -305,6 +315,7 @@ def _lacteo_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) 
         "species_summary": {"fly": 1},
     }
 
+
 def _lacteo_batch(plugin: FakePlugin, *, data_path: str) -> dict:
     return {
         "model_id": "modelo10-lacteo",
@@ -324,6 +335,21 @@ def _lacteo_batch(plugin: FakePlugin, *, data_path: str) -> dict:
         "output_path": None,
     }
 
+
+def _lacteo_train(plugin: FakePlugin, *, data_path: str) -> dict:
+    return {
+        "detail": "Training completed successfully",
+        "metrics": {
+            "train_samples": 100,
+            "val_samples": 20,
+            "classes": ["fly", "mos", "tick"],
+            "epochs_run": 5,
+            "best_val_acc": 95.0,
+            "time_min": 2.5,
+        },
+    }
+
+
 FAKE_FACTORIES: dict[str, tuple[Callable, Callable]] = {
     "wine-price-fluctuation": (_wine_pf_inline, _wine_pf_batch),
     "cereal-price-forecast": (_cereal_inline, _cereal_batch),
@@ -333,6 +359,10 @@ FAKE_FACTORIES: dict[str, tuple[Callable, Callable]] = {
     "cow-behavior": (_cow_inline, _cow_batch),
     "wine-sulphite": (_wine_so2_inline, _wine_so2_batch),
     "modelo10-lacteo": (_lacteo_inline, _lacteo_batch),
+}
+
+TRAIN_FACTORIES: dict[str, Callable] = {
+    "modelo10-lacteo": _lacteo_train,
 }
 
 
@@ -352,7 +382,7 @@ def _build_container(plugin: FakePlugin, entry) -> Any:
         plugin, entry.batch_response_class, entry.inline_response_class
     )
     container.stats_use_case = GetStatsUseCase(plugin)
-    container.train_use_case = TrainModelUseCase()
+    container.train_use_case = TrainModelUseCase(plugin)
     return container
 
 
@@ -362,10 +392,12 @@ def fake_plugins() -> dict[str, FakePlugin]:
     plugins: dict[str, FakePlugin] = {}
     for entry in REGISTRY:
         inline_factory, batch_factory = FAKE_FACTORIES[entry.model_id]
+        train_factory = TRAIN_FACTORIES.get(entry.model_id)
         plugin = FakePlugin(
             model_id=entry.model_id,
             inline_factory=inline_factory,
             batch_factory=batch_factory,
+            train_factory=train_factory,
         )
         plugin.load()
         plugins[entry.model_id] = plugin
@@ -387,6 +419,8 @@ def app(fake_plugins: dict[str, FakePlugin]) -> FastAPI:
                 version=entry.version,
                 predict_request_type=entry.predict_request_type,
                 predict_response_type=entry.predict_response_type,
+                train_request_type=entry.train_request_type,
+                train_response_type=entry.train_response_type,
                 extra_predict_exceptions=entry.extra_predict_exceptions,
             ),
             prefix=entry.prefix,

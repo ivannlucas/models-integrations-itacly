@@ -29,3 +29,7 @@ class ModelPluginPort(ABC):
     @abstractmethod
     def stats(self) -> StatsResponse:
         """Return model metadata and runtime statistics."""
+
+    @abstractmethod
+    def train(self, *, data_path: str) -> dict:
+        """Train the model with the provided data"""

@@ -230,3 +230,7 @@ class WineSulphitePlugin(ModelPluginPort):
             predict_count=self._predict_count,
             last_predict_at=self._last_predict_at,
         )
+
+    def train(self, *, data_path: str) -> dict:
+        from app.domain.services.exceptions import TrainingNotSupportedError
+        raise TrainingNotSupportedError("Training not supported for wine-sulphite plugin")

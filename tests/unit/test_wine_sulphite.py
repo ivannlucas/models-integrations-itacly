@@ -59,5 +59,5 @@ def test_predict_no_valid_simulation_point_maps_to_422(
 
 
 def test_train_returns_501(client):
-    resp = client.post(f"{PREFIX}/train")
+    resp = client.post(f"{PREFIX}/train", json={})
     assert resp.status_code == 501

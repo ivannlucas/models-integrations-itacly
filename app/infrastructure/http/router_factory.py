@@ -14,6 +14,8 @@ def make_model_router(
     version: str,
     predict_request_type: Any,
     predict_response_type: Any,
+    train_request_type: Any,
+    train_response_type: Any,
     extra_predict_exceptions: tuple[type[Exception], ...] = (),
 ) -> APIRouter:
     """Create a FastAPI router for a model plugin.
@@ -57,15 +59,14 @@ def make_model_router(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)
             )
 
-    @router.post("/train", status_code=status.HTTP_501_NOT_IMPLEMENTED)
-    async def train(request: Request) -> dict:
+    @router.post("/train", response_model=train_response_type)
+    async def train(request: Request, body: train_request_type) -> train_response_type:
         container = request.app.state.containers[model_id]
         try:
-            container.train_use_case.execute()
+            return container.train_use_case.execute(body)
         except TrainingNotSupportedError as exc:
             raise HTTPException(
                 status_code=status.HTTP_501_NOT_IMPLEMENTED, detail=str(exc)
             )
-        return {"message": "Not implemented"}
 
     return router

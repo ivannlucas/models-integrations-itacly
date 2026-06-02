@@ -39,6 +39,13 @@ def test_predict_batch(client):
     assert len(body["predictions"]) > 0
 
 
-def test_train_returns_501(client):
-    resp = client.post(f"{PREFIX}/train")
-    assert resp.status_code == 501
+def test_train(client):
+    resp = client.post(
+        f"{PREFIX}/train",
+        json={"data_path": "/tmp/dataset.zip"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["detail"] == "Training completed successfully"
+    assert body["metrics"]["train_samples"] == 100
+    assert body["metrics"]["best_val_acc"] == 95.0

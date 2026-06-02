@@ -14,6 +14,7 @@ from pathlib import Path
 from datetime import datetime, timezone
 
 from app.application.dto.stats_dto import StatsResponse
+from app.application.dto.train_dto import TrainResponse
 from app.infrastructure.artifact_store import ArtifactStore
 import torch
 import torch.nn as nn
@@ -387,15 +388,17 @@ class Modelo10LacteoPlugin(ModelPluginPort):
 
             self._reload_classifier()
 
-            return {
-                "detail": "Entrenamiento del clasificador completado",
-                "train_samples": len(train_ds),
-                "val_samples": len(val_ds),
-                "classes": class_names,
-                "epochs_run": len(val_accs),
-                "best_val_acc": round(best_acc * 100, 1),
-                "time_min": round(elapsed / 60, 1),
-            }
+            return TrainResponse(
+                detail="Entrenamiento del clasificador completado",
+                metrics={
+                    "train_samples": len(train_ds),
+                    "val_samples": len(val_ds),
+                    "classes": class_names,
+                    "epochs_run": len(val_accs),
+                    "best_val_acc": round(best_acc * 100, 1),
+                    "time_min": round(elapsed / 60, 1),
+                }
+            )
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
             gc.collect()
