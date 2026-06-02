@@ -166,7 +166,7 @@ class TestArtifactStoreLocal:
     def test_path_returns_local_path(self):
         from app.infrastructure.artifact_store import ArtifactStore, ARTIFACTS_ROOT
         store = ArtifactStore("test_model")
-        with patch_unit.object(Path, "exists", return_value=True):
+        with patch_unit("pathlib.Path.exists", return_value=True):
             path = store.path("some_file.pkl")
         assert path == ARTIFACTS_ROOT / "test_model" / "some_file.pkl"
 
