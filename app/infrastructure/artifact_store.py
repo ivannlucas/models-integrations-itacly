@@ -152,3 +152,26 @@ class ArtifactStore:
                 raise  # bubble up so the app doesn't start with missing artifacts
 
         logger.info("Artifact download complete for model '%s'.", self._model_name)
+
+    def upload(self, filename: str) -> None:
+        """Upload a single artifact file to S3.
+
+        Raises EnvironmentError if STORAGE_BUCKET is not set.
+        Raises FileNotFoundError if the local file does not exist.
+        """
+        if not os.environ.get("STORAGE_BUCKET"):
+            raise EnvironmentError(
+                "STORAGE_BUCKET is not set. Cannot upload artifacts to S3."
+            )
+        local = self._local_dir / filename
+        if not local.exists():
+            raise FileNotFoundError(f"Local artifact not found: {local}")
+
+        bucket = os.environ["STORAGE_BUCKET"]
+        s3 = _build_s3_client()
+        remote_key = f"artifacts/fixed/{self._model_name}/{filename}"
+        from boto3.s3.transfer import TransferConfig
+        # Forzar single-part upload (threshold 1 GB) para evitar CreateMultipartUpload
+        config = TransferConfig(multipart_threshold=1024 * 1024 * 1024)
+        s3.upload_file(str(local), bucket, remote_key, Config=config)
+        logger.info("Uploaded %s to s3://%s/%s", filename, bucket, remote_key)

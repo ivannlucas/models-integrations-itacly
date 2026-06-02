@@ -64,5 +64,14 @@ def test_predict_inline_invalid_image_maps_to_422(client, fake_plugins):
     assert "imagen no decodificable" in resp.json()["detail"]
 
 
-def test_train_returns_501(client):
-    assert client.post(f"{PREFIX}/train").status_code == 501
+def test_train(client):
+    resp = client.post(
+        f"{PREFIX}/train",
+        json={"data_path": "/tmp/cereales_train.zip"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["detail"] == "Entrenamiento completado"
+    assert isinstance(body["train_samples"], int)
+    assert isinstance(body["best_val_acc_cat"], float)
+    assert isinstance(body["best_val_acc_cer"], float)

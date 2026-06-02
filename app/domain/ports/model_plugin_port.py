@@ -29,3 +29,10 @@ class ModelPluginPort(ABC):
     @abstractmethod
     def stats(self) -> StatsResponse:
         """Return model metadata and runtime statistics."""
+
+    def train(self, *, data_path: str) -> dict:
+        """Retrain the model. Override to support training; default raises TrainingNotSupportedError."""
+        from app.domain.services.exceptions import TrainingNotSupportedError
+        raise TrainingNotSupportedError(
+            "Training is not supported by this plugin. Use the data science pipeline instead."
+        )

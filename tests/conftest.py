@@ -49,10 +49,12 @@ class FakePlugin(ModelPluginPort):
         model_id: str,
         inline_factory: Callable[..., dict],
         batch_factory: Callable[..., dict],
+        train_factory: Callable[..., dict] | None = None,
     ) -> None:
         self._model_id = model_id
         self._inline_factory = inline_factory
         self._batch_factory = batch_factory
+        self._train_factory = train_factory
         self._loaded = False
         self._predict_count = 0
         self._last_predict_at: str | None = None
@@ -88,6 +90,12 @@ class FakePlugin(ModelPluginPort):
         self._predict_count += 1
         self._last_predict_at = datetime.now(tz=timezone.utc).isoformat()
         return self._batch_factory(self, data_path=data_path)
+
+    def train(self, *, data_path: str) -> dict:
+        if self._train_factory is None:
+            from app.domain.services.exceptions import TrainingNotSupportedError
+            raise TrainingNotSupportedError("Training is not supported by this plugin.")
+        return self._train_factory(self, data_path=data_path)
 
     def stats(self) -> StatsResponse:
         return StatsResponse(
@@ -284,6 +292,21 @@ def _ml8_cereals_img_anomaly_detector_batch(plugin: FakePlugin, *, data_path: st
     }
 
 
+def _ml8_cereals_train(plugin: FakePlugin, *, data_path: str) -> dict:
+    return {
+        "detail": "Entrenamiento completado",
+        "train_samples": 80,
+        "val_samples": 20,
+        "fase1_epochs": 3,
+        "fase2_epochs": 2,
+        "fase1_time_min": 0.5,
+        "fase2_time_min": 0.2,
+        "best_val_acc_cat": 91.2,
+        "best_val_acc_cer": 88.5,
+        "upload_warning": None,
+    }
+
+
 def _wine_so2_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> dict:
     return {
         "model_id": "wine-sulphite",
@@ -324,8 +347,12 @@ def _wine_so2_batch(plugin: FakePlugin, *, data_path: str) -> dict:
     }
 
 
+FAKE_TRAIN_FACTORIES: dict[str, Callable] = {
+    "ml8-cereals-img-anomaly-detector": _ml8_cereals_train,
+}
+
 FAKE_FACTORIES: dict[str, tuple[Callable, Callable]] = {
-    "ml8-cereals-img-anomaly-detector": (_ml8_cereals_img_anomaly_detector_inline, _ml8_cereals_img_anomaly_detector_batch),
+    "ml8-cereals-img-anomaly-detector": (_ml8_cereals_img_anomaly_detector_inline, _ml8_cereals_img_anomaly_detector_batch),  # noqa: E501
     "wine-price-fluctuation": (_wine_pf_inline, _wine_pf_batch),
     "cereal-price-forecast": (_cereal_inline, _cereal_batch),
     "meat-price-forecast": (_meat_inline, _meat_batch),
@@ -352,7 +379,7 @@ def _build_container(plugin: FakePlugin, entry) -> Any:
         plugin, entry.batch_response_class, entry.inline_response_class
     )
     container.stats_use_case = GetStatsUseCase(plugin)
-    container.train_use_case = TrainModelUseCase()
+    container.train_use_case = TrainModelUseCase(plugin)
     return container
 
 
@@ -366,6 +393,7 @@ def fake_plugins() -> dict[str, FakePlugin]:
             model_id=entry.model_id,
             inline_factory=inline_factory,
             batch_factory=batch_factory,
+            train_factory=FAKE_TRAIN_FACTORIES.get(entry.model_id),
         )
         plugin.load()
         plugins[entry.model_id] = plugin
@@ -388,6 +416,8 @@ def app(fake_plugins: dict[str, FakePlugin]) -> FastAPI:
                 predict_request_type=entry.predict_request_type,
                 predict_response_type=entry.predict_response_type,
                 extra_predict_exceptions=entry.extra_predict_exceptions,
+                train_request_type=entry.train_request_type,
+                train_response_type=entry.train_response_type,
             ),
             prefix=entry.prefix,
             tags=[entry.model_id],

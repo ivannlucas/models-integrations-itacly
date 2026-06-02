@@ -20,6 +20,10 @@ from app.plugins.ml8_cereals_img_anomaly_detector.predict_dto import (
     PredictRequest as Ml8CerealsImgAnomalyDetector_Request,
     PredictResponse as Ml8CerealsImgAnomalyDetector_Response,
 )
+from app.plugins.ml8_cereals_img_anomaly_detector.train_dto import (
+    TrainRequest as Ml8CerealsImgAnomalyDetector_TrainReq,
+    TrainResponse as Ml8CerealsImgAnomalyDetector_TrainResp,
+)
 from app.plugins.wine_sulphite.plugin import WineSulphitePlugin
 from app.plugins.wine_sulphite.predict_dto import (
     PredictBatchResponse as WineSO2_BatchResp,
@@ -42,6 +46,8 @@ class ModelEntry:
     batch_response_class: type
     inline_response_class: type
     extra_predict_exceptions: tuple[type[Exception], ...] = field(default_factory=tuple)
+    train_request_type: Any = None
+    train_response_type: Any = None
 
 
 # ── Registry ──────────────────────────────────────────────────────────────────
@@ -57,6 +63,8 @@ REGISTRY: list[ModelEntry] = [
         batch_response_class=Ml8CerealsImgAnomalyDetector_BatchResp,
         inline_response_class=Ml8CerealsImgAnomalyDetector_InlineResp,
         extra_predict_exceptions=(InvalidImageError,),
+        train_request_type=Ml8CerealsImgAnomalyDetector_TrainReq,
+        train_response_type=Ml8CerealsImgAnomalyDetector_TrainResp,
     ),
     ModelEntry(
         model_id="wine-sulphite",

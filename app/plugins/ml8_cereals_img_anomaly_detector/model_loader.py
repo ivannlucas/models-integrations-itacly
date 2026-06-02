@@ -18,10 +18,28 @@ logger = logging.getLogger(__name__)
 _store = ArtifactStore(ARTIFACT_FOLDER_NAME)
 
 
-class _MultiTaskMobileNetV3Large(nn.Module):
-    def __init__(self, num_classes: int, num_cereals: int) -> None:
+def _safe_device() -> torch.device:
+    """Return CUDA device only if it can actually execute model operations."""
+    if not torch.cuda.is_available():
+        return torch.device("cpu")
+    try:
+        torch.nn.Conv2d(1, 1, 1)(torch.zeros(1, 1, 4, 4).cuda())
+        return torch.device("cuda")
+    except Exception:
+        logger.warning("CUDA detectada pero no funcional para operaciones de red neuronal — usando CPU.")
+        return torch.device("cpu")
+
+
+class MultiTaskMobileNetV3Large(nn.Module):
+    """MobileNetV3-Large con dos cabezas de clasificación: categoría sanitaria y cereal.
+
+    Pasa ``base_model`` para usar pesos preentrenados (entrenamiento);
+    omítelo para inicializar sin pesos (carga desde checkpoint).
+    """
+
+    def __init__(self, num_classes: int, num_cereals: int, base_model=None) -> None:
         super().__init__()
-        base = models.mobilenet_v3_large(weights=None)
+        base = base_model if base_model is not None else models.mobilenet_v3_large(weights=None)
         self.features = base.features
         self.avgpool = base.avgpool
         self.neck = nn.Sequential(
@@ -78,7 +96,7 @@ class _MultiTaskResNet18(nn.Module):
 
 
 _ARCH_CLASSES = {
-    "mobilenet_v3_large": _MultiTaskMobileNetV3Large,
+    "mobilenet_v3_large": MultiTaskMobileNetV3Large,
     "efficientnet_b0": _MultiTaskEfficientNetB0,
     "resnet18": _MultiTaskResNet18,
 }
@@ -86,7 +104,7 @@ _ARCH_CLASSES = {
 
 def load_model_bundle() -> dict:
     """Load the PyTorch model from the checkpoint stored in ArtifactStore."""
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = _safe_device()
     model_path = _store.path(MODEL_FILENAME)
 
     checkpoint = torch.load(model_path, map_location=device, weights_only=False)

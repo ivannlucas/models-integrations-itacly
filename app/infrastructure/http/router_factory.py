@@ -15,6 +15,8 @@ def make_model_router(
     predict_request_type: Any,
     predict_response_type: Any,
     extra_predict_exceptions: tuple[type[Exception], ...] = (),
+    train_request_type: Any = None,
+    train_response_type: Any = None,
 ) -> APIRouter:
     """Create a FastAPI router for a model plugin.
 
@@ -57,15 +59,31 @@ def make_model_router(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)
             )
 
-    @router.post("/train", status_code=status.HTTP_501_NOT_IMPLEMENTED)
-    async def train(request: Request) -> dict:
-        container = request.app.state.containers[model_id]
-        try:
-            container.train_use_case.execute()
-        except TrainingNotSupportedError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_501_NOT_IMPLEMENTED, detail=str(exc)
-            )
-        return {"message": "Not implemented"}
+    if train_request_type is not None:
+        @router.post("/train", response_model=train_response_type)
+        async def train(request: Request, body: train_request_type) -> Any:
+            container = request.app.state.containers[model_id]
+            try:
+                return container.train_use_case.execute(data_path=body.data_path)
+            except TrainingNotSupportedError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_501_NOT_IMPLEMENTED, detail=str(exc)
+                )
+            except Exception as exc:
+                logger.exception("Unexpected error during training for model '%s'", model_id)
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)
+                )
+    else:
+        @router.post("/train", status_code=status.HTTP_501_NOT_IMPLEMENTED)
+        async def train(request: Request) -> dict:
+            container = request.app.state.containers[model_id]
+            try:
+                container.train_use_case.execute(data_path="")
+            except TrainingNotSupportedError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_501_NOT_IMPLEMENTED, detail=str(exc)
+                )
+            return {"message": "Not implemented"}
 
     return router
