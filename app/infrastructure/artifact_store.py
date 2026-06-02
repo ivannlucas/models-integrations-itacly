@@ -152,3 +152,15 @@ class ArtifactStore:
                 raise  # bubble up so the app doesn't start with missing artifacts
 
         logger.info("Artifact download complete for model '%s'.", self._model_name)
+
+    def upload_artifact(self, local_path: Path) -> None:
+        """Upload a single artifact file to S3 under the model's prefix."""
+        bucket = os.getenv("STORAGE_BUCKET")
+        if not bucket:
+            logger.warning("STORAGE_BUCKET not set — skipping S3 upload of %s", local_path)
+            return
+        s3 = _build_s3_client()
+        remote_key = f"artifacts/fixed/{self._model_name}/{local_path.name}"
+        logger.info("Uploading %s → s3://%s/%s", local_path.name, bucket, remote_key)
+        s3.upload_file(str(local_path), bucket, remote_key)
+        logger.info("Upload complete: s3://%s/%s", bucket, remote_key)

@@ -293,6 +293,37 @@ def _wine_so2_batch(plugin: FakePlugin, *, data_path: str) -> dict:
     }
 
 
+def _lacteo_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> dict:
+    return {
+        "model_id": "modelo10-lacteo",
+        "prediction": "fly",
+        "confidence": 0.91,
+        "vectors_count": 1,
+        "detections": [
+            {"species": "fly", "det_conf": 0.85, "cls_conf": 0.91, "bbox": {"x1": 30, "y1": 40, "x2": 80, "y2": 90}},
+        ],
+        "species_summary": {"fly": 1},
+    }
+
+def _lacteo_batch(plugin: FakePlugin, *, data_path: str) -> dict:
+    return {
+        "model_id": "modelo10-lacteo",
+        "predictions": [
+            {
+                "filename": "test_cow.jpg",
+                "prediction": "tick",
+                "confidence": 0.88,
+                "vectors_count": 2,
+                "detections": [
+                    {"species": "tick", "det_conf": 0.82, "cls_conf": 0.88, "bbox": {"x1": 10, "y1": 20, "x2": 50, "y2": 60}},
+                    {"species": "tick", "det_conf": 0.75, "cls_conf": 0.81, "bbox": {"x1": 100, "y1": 120, "x2": 150, "y2": 160}},
+                ],
+                "species_summary": {"tick": 2},
+            }
+        ],
+        "output_path": None,
+    }
+
 FAKE_FACTORIES: dict[str, tuple[Callable, Callable]] = {
     "wine-price-fluctuation": (_wine_pf_inline, _wine_pf_batch),
     "cereal-price-forecast": (_cereal_inline, _cereal_batch),
@@ -301,6 +332,7 @@ FAKE_FACTORIES: dict[str, tuple[Callable, Callable]] = {
     "cnn-thermal-scm": (_cnn_thermal_inline, _cnn_thermal_batch),
     "cow-behavior": (_cow_inline, _cow_batch),
     "wine-sulphite": (_wine_so2_inline, _wine_so2_batch),
+    "modelo10-lacteo": (_lacteo_inline, _lacteo_batch),
 }
 
 
@@ -445,3 +477,8 @@ def wine_so2_inline_payload() -> dict:
         "max_total": 200.0,
         "delta_max": 40.0,
     }
+
+
+@pytest.fixture
+def lacteo_inline_payload() -> dict:
+    return {"mode": "inline", "image_base64": "dGVzdC1pbWFnZQ=="}

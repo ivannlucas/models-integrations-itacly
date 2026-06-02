@@ -21,6 +21,14 @@ from app.plugins.wine_sulphite.predict_dto import (
     PredictResponse as WineSO2_Response,
 )
 
+from app.plugins.modelo10_lacteo.plugin import Modelo10LacteoPlugin
+from app.plugins.modelo10_lacteo.predict_dto import (
+    PredictBatchResponse as Lacteo10_BatchResp,
+    PredictInlineResponse as Lacteo10_InlineResp,
+    PredictRequest as Lacteo10_Request,
+    PredictResponse as Lacteo10_Response,
+)
+
 
 # ── Registry entry dataclass ──────────────────────────────────────────────────
 
@@ -50,5 +58,16 @@ REGISTRY: list[ModelEntry] = [
         batch_response_class=WineSO2_BatchResp,
         inline_response_class=WineSO2_InlineResp,
         extra_predict_exceptions=(NoValidSimulationPointError,),
+    ),
+    ModelEntry(
+        model_id="modelo10-lacteo",
+        prefix="/models/modelo10-lacteo",
+        version="1.0.0",
+        plugin_class=Modelo10LacteoPlugin,
+        predict_request_type=Lacteo10_Request,
+        predict_response_type=Lacteo10_Response,
+        batch_response_class=Lacteo10_BatchResp,
+        inline_response_class=Lacteo10_InlineResp,
+        extra_predict_exceptions=(),
     ),
 ]
