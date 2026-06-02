@@ -7,7 +7,9 @@ and router_factory edge cases (exception mapping).
 from __future__ import annotations
 
 
+from anyio import Path
 import pytest
+from unittest.mock import patch as patch_unit
 
 from app.application.dto.stats_dto import StatsResponse
 from app.domain.ports.model_plugin_port import ModelPluginPort
@@ -164,8 +166,8 @@ class TestArtifactStoreLocal:
     def test_path_returns_local_path(self):
         from app.infrastructure.artifact_store import ArtifactStore, ARTIFACTS_ROOT
         store = ArtifactStore("test_model")
-        store._download_all = lambda: None  # Mock out download
-        path = store.path("some_file.pkl")
+        with patch_unit.object(Path, "exists", return_value=True):
+            path = store.path("some_file.pkl")
         assert path == ARTIFACTS_ROOT / "test_model" / "some_file.pkl"
 
     def test_path_raises_file_not_found_when_no_s3(self, monkeypatch):
