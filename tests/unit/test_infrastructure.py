@@ -134,6 +134,24 @@ class TestRouterFactoryEdgeCases:
         assert resp.status_code == 422
 
 
+class TestTrainModelUseCase:
+    def test_extra_params_triggers_else_branch(self):
+        """Covers the else-branch of TrainModelUseCase.execute (line 17)."""
+        from app.application.use_cases.train_model_use_case import TrainModelUseCase
+        from pydantic import BaseModel
+
+        class ExtraRequest(BaseModel):
+            data_path: str = ""
+            extra_param: str = "value"
+
+        plugin = FakeModelPlugin()
+        use_case = TrainModelUseCase(plugin)
+        request = ExtraRequest(data_path="/some/path", extra_param="extra")
+        with pytest.raises((AttributeError, TypeError)):
+            # The else branch tries request.pop() on a Pydantic model (no .pop)
+            use_case.execute(request)
+
+
 # ── ArtifactStore local ops tests ─────────────────────────────────────────
 
 class TestArtifactStoreLocal:

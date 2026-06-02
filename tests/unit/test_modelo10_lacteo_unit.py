@@ -20,6 +20,16 @@ from PIL import Image
 
 from app.plugins.modelo10_lacteo.postprocessing import build_inline_result, classify_crop
 from app.plugins.modelo10_lacteo.preprocessing import CLASSIFIER_TRANSFORM, crop_to_tensor, image_base64_to_pil
+from app.plugins.modelo10_lacteo.plugin import Modelo10LacteoPlugin
+
+
+def _make_mock_classifier(class_idx=0, confidence=0.9):
+    classifier = MagicMock()
+    probs = [0.1, 0.1, 0.1]
+    probs[class_idx] = confidence
+    logits = torch.tensor(probs).unsqueeze(0)
+    classifier.return_value = logits
+    return classifier
 
 
 # ── preprocessing tests ───────────────────────────────────────────────────
@@ -310,7 +320,8 @@ class TestCreateSplits:
             (data_root / "tick" / "img_000.jpg").touch()
 
             with tempfile.TemporaryDirectory() as tmp2:
-                splits = _create_splits(data_root, ["fly", "mos", "tick"], tmp2)
+                # 'bee' class has no directory → triggers continue at line 82
+                splits = _create_splits(data_root, ["fly", "mos", "tick", "bee"], tmp2)
                 assert (splits / "train" / "fly").exists()
                 assert (splits / "train" / "mos").exists()
                 assert (splits / "train" / "tick").exists()
@@ -357,21 +368,13 @@ class TestPredictInlineWithMocks:
         mock_detector.predict.return_value = [mock_box_container]
         return mock_detector
 
-    def _make_mock_classifier(self, class_idx=0, confidence=0.9):
-        classifier = MagicMock()
-        probs = [0.1, 0.1, 0.1]
-        probs[class_idx] = confidence
-        logits = torch.tensor(probs).unsqueeze(0)
-        classifier.return_value = logits
-        return classifier
-
     def test_predict_inline_with_base64(self):
         img = Image.new("RGB", (100, 100), color="red")
         buf = io.BytesIO()
         img.save(buf, format="PNG")
         b64 = base64.b64encode(buf.getvalue()).decode()
 
-        classifier = self._make_mock_classifier(class_idx=0, confidence=0.95)
+        classifier = _make_mock_classifier(class_idx=0, confidence=0.95)
         detector = self._make_mock_detector()
         plugin = self._make_plugin(detector, classifier)
 
@@ -390,7 +393,7 @@ class TestPredictInlineWithMocks:
             (0.85, [10, 20, 50, 60]),
             (0.75, [70, 80, 120, 140]),
         ]
-        classifier = self._make_mock_classifier(class_idx=1, confidence=0.88)
+        classifier = _make_mock_classifier(class_idx=1, confidence=0.88)
         detector = self._make_mock_detector(boxes_data)
         plugin = self._make_plugin(detector, classifier)
 
@@ -411,6 +414,19 @@ class TestPredictInlineWithMocks:
         result = plugin.predict_inline(features={"image_base64": b64})
         assert result["prediction"] == "no_vectors"
         assert result["vectors_count"] == 0
+
+    def test_predict_inline_with_image_path(self):
+        import tempfile
+        from pathlib import Path
+        detector = self._make_mock_detector()
+        classifier = _make_mock_classifier()
+        plugin = self._make_plugin(detector, classifier)
+        with tempfile.TemporaryDirectory() as tmp:
+            img_path = Path(tmp) / "test.jpg"
+            Image.new("RGB", (50, 50), color="red").save(str(img_path))
+            result = plugin.predict_inline(features={"image_path": str(img_path)})
+            assert result["model_id"] == "modelo10-lacteo"
+            assert result["vectors_count"] == 1
 
     def test_predict_inline_no_image_field_raises(self):
         plugin = self._make_plugin()
@@ -434,6 +450,28 @@ class TestPredictInlineWithMocks:
         assert plugin._predict_count == 0
         plugin.predict_inline(features={"image_base64": b64})
         assert plugin._predict_count == 1
+
+    def test_predict_inline_skips_zero_area_detection(self):
+        """Box with zero area is skipped (continue at line 281)."""
+        img = Image.new("RGB", (100, 100), color="cyan")
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        b64 = base64.b64encode(buf.getvalue()).decode()
+
+        box_mocks = []
+        b = MagicMock()
+        b.conf = torch.tensor([0.8])
+        b.xyxy = torch.tensor([[50, 50, 50, 50]])  # zero area: x2==x1, y2==y1
+        box_mocks.append(b)
+        c = MagicMock()
+        c.boxes = box_mocks
+        d = MagicMock()
+        d.predict.return_value = [c]
+
+        classifier = _make_mock_classifier()
+        plugin = self._make_plugin(d, classifier)
+        result = plugin.predict_inline(features={"image_base64": b64})
+        assert result["vectors_count"] == 0  # zero-area box skipped
 
 
 # ── Predict batch with mocked models ─────────────────────────────────────
@@ -459,9 +497,10 @@ class TestPredictBatchWithMocks:
         from pathlib import Path
 
         mock_detector = self._make_mock_detector()
+        mock_classifier = _make_mock_classifier()
 
         with patch("app.plugins.modelo10_lacteo.plugin.load_detector_and_classifier") as mock_load:
-            mock_load.return_value = (mock_detector, MagicMock(), ["fly", "mos", "tick"])
+            mock_load.return_value = (mock_detector, mock_classifier, ["fly", "mos", "tick"])
             from app.plugins.modelo10_lacteo.plugin import Modelo10LacteoPlugin
             plugin = Modelo10LacteoPlugin()
             plugin.load()
@@ -475,21 +514,27 @@ class TestPredictBatchWithMocks:
                 assert plugin._predict_count == 1
 
     def test_predict_batch_with_csv(self):
+        mock_detector = self._make_mock_detector([(0.9, [10, 20, 50, 60])])
+        mock_classifier = _make_mock_classifier()
         with patch("app.plugins.modelo10_lacteo.plugin.load_detector_and_classifier") as mock_load:
-            mock_load.return_value = (MagicMock(), MagicMock(), ["fly", "mos", "tick"])
-            from app.plugins.modelo10_lacteo.plugin import Modelo10LacteoPlugin
-            plugin = Modelo10LacteoPlugin()
+            mock_load.return_value = (mock_detector, mock_classifier, ["fly", "mos", "tick"])
 
-            with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False) as f:
-                writer = csv.writer(f)
-                writer.writerow(["image_path"])
-                writer.writerow(["/fake/path/img.jpg"])
-                csv_path = f.name
-            try:
-                with pytest.raises(Exception):
-                    plugin.predict_batch(data_path=csv_path)
-            finally:
-                os.unlink(csv_path)
+            plugin = Modelo10LacteoPlugin()
+            plugin.load()
+
+            with tempfile.TemporaryDirectory() as tmp:
+                # Create a real image for the CSV to reference
+                img_path = Path(tmp) / "test.jpg"
+                Image.new("RGB", (50, 50), color="red").save(str(img_path))
+                csv_path = Path(tmp) / "images.csv"
+                with open(str(csv_path), "w", newline="") as f:
+                    writer = csv.writer(f)
+                    writer.writerow(["image_path"])
+                    writer.writerow([str(img_path)])
+                result = plugin.predict_batch(data_path=str(csv_path))
+                assert result["model_id"] == "modelo10-lacteo"
+                assert len(result["predictions"]) == 1
+                assert plugin._predict_count == 1
 
     def test_predict_batch_empty_directory_raises(self):
         import tempfile
@@ -504,25 +549,63 @@ class TestPredictBatchWithMocks:
                 with pytest.raises(ValueError, match="No se encontraron imágenes"):
                     plugin.predict_batch(data_path=tmp)
 
+    def test_predict_batch_unsupported_type_raises(self):
+        with patch("app.plugins.modelo10_lacteo.plugin.load_detector_and_classifier") as mock_load:
+            mock_load.return_value = (MagicMock(), MagicMock(), ["fly", "mos", "tick"])
+            from app.plugins.modelo10_lacteo.plugin import Modelo10LacteoPlugin
+            plugin = Modelo10LacteoPlugin()
+            plugin.load()
+            with pytest.raises(ValueError, match="data_path debe ser CSV, ZIP o directorio"):
+                plugin.predict_batch(data_path="/fake/path/not_a_dir")
+
+    def test_predict_batch_csv_image_not_found(self):
+        """Covers the except handler (lines 223-225) when an image can't be loaded."""
+        mock_detector = self._make_mock_detector()
+        mock_classifier = _make_mock_classifier()
+        with patch("app.plugins.modelo10_lacteo.plugin.load_detector_and_classifier") as mock_load:
+            mock_load.return_value = (mock_detector, mock_classifier, ["fly", "mos", "tick"])
+            plugin = Modelo10LacteoPlugin()
+            plugin.load()
+
+            with tempfile.TemporaryDirectory() as tmp:
+                csv_path = Path(tmp) / "bad.csv"
+                with open(str(csv_path), "w", newline="") as f:
+                    writer = csv.writer(f)
+                    writer.writerow(["image_path"])
+                    writer.writerow([str(Path(tmp) / "nonexistent.jpg")])
+                result = plugin.predict_batch(data_path=str(csv_path))
+                assert len(result["predictions"]) == 1
+                assert result["predictions"][0]["status"] == "error"
+
 
 # ── Predict batch zip mode ──────────────────────────────────────────────
 
 class TestPredictBatchZip:
+    def _make_mock_detector(self, boxes_data=None):
+        if boxes_data is None:
+            boxes_data = [(0.9, [10, 20, 50, 60])]
+        box_mocks = []
+        for conf, xyxy in boxes_data:
+            b = MagicMock()
+            b.conf = torch.tensor([conf])
+            b.xyxy = torch.tensor([xyxy])
+            box_mocks.append(b)
+        c = MagicMock()
+        c.boxes = box_mocks
+        d = MagicMock()
+        d.predict.return_value = [c]
+        return d
+
     def test_predict_batch_with_zip(self):
         import zipfile
         import tempfile
         from pathlib import Path
 
-        mock_detector = MagicMock()
-        mock_boxes = MagicMock()
-        mock_boxes.conf = torch.tensor([[0.9]])
-        mock_boxes.xyxy = torch.tensor([[[10, 20, 50, 60]]])
-        mock_box_container = MagicMock()
-        mock_box_container.boxes = mock_boxes
-        mock_detector.predict.return_value = [mock_box_container]
+        mock_detector = self._make_mock_detector()
+        mock_classifier = _make_mock_classifier()
 
         with patch("app.plugins.modelo10_lacteo.plugin.load_detector_and_classifier") as mock_load:
-            mock_load.return_value = (mock_detector, MagicMock(), ["fly", "mos", "tick"])
+            mock_load.return_value = (mock_detector, mock_classifier, ["fly", "mos", "tick"])
             from app.plugins.modelo10_lacteo.plugin import Modelo10LacteoPlugin
             plugin = Modelo10LacteoPlugin()
             plugin.load()
@@ -560,6 +643,49 @@ class TestPredictBatchZip:
 
 
 # ── Training error paths ────────────────────────────────────────────────
+
+class TestTrainHelpers:
+    def test_cls_train_epoch(self):
+        """Covers _cls_train_epoch (lines 98-111)."""
+        import torch
+        import torch.nn as nn
+        from torch.utils.data import DataLoader, TensorDataset
+        from app.plugins.modelo10_lacteo.plugin import _cls_train_epoch
+        from app.plugins.modelo10_lacteo.model_loader import _build_mobilenetv3_classifier
+
+        model = _build_mobilenetv3_classifier(3)
+        model.train()
+        X = torch.randn(16, 3, 224, 224)
+        y = torch.randint(0, 3, (16,))
+        loader = DataLoader(TensorDataset(X, y), batch_size=8)
+        optimizer = torch.optim.SGD(model.parameters(), lr=0.01)
+        criterion = nn.CrossEntropyLoss()
+
+        loss, acc = _cls_train_epoch(model, loader, optimizer, criterion, "cpu")
+        assert isinstance(loss, float)
+        assert isinstance(acc, float)
+        assert loss >= 0.0
+
+    def test_cls_validate(self):
+        """Covers _cls_validate (lines 114-124)."""
+        import torch
+        import torch.nn as nn
+        from torch.utils.data import DataLoader, TensorDataset
+        from app.plugins.modelo10_lacteo.plugin import _cls_validate
+        from app.plugins.modelo10_lacteo.model_loader import _build_mobilenetv3_classifier
+
+        model = _build_mobilenetv3_classifier(3)
+        model.eval()
+        X = torch.randn(16, 3, 224, 224)
+        y = torch.randint(0, 3, (16,))
+        loader = DataLoader(TensorDataset(X, y), batch_size=8)
+        criterion = nn.CrossEntropyLoss()
+
+        loss, acc = _cls_validate(model, loader, criterion, "cpu")
+        assert isinstance(loss, float)
+        assert isinstance(acc, float)
+        assert loss >= 0.0
+
 
 class TestTrainErrorPaths:
     @patch("app.plugins.modelo10_lacteo.plugin.load_detector_and_classifier")

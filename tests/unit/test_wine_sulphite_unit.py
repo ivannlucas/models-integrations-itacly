@@ -265,3 +265,152 @@ class TestWineSulphitePluginDirect:
         plugin.load()
         with pytest.raises(TrainingNotSupportedError):
             plugin.train(data_path="/some/path.zip")
+
+    @patch("app.plugins.wine_sulphite.plugin.load_artifacts")
+    def test_predict_inline_with_mocked_models(self, mock_load):
+        """Covers _run_inference body and predict_inline with proper model mocks."""
+        import numpy as np
+        from app.plugins.wine_sulphite.plugin import WineSulphitePlugin
+
+        # Build a range of free SO2 values matching expected grid
+        base_free = 11.0
+        delta_max = 40.0
+        n_grid = int(delta_max) + 1  # 41 points
+
+        mock_bound = MagicMock()
+        mock_bound.predict.return_value = np.log1p(np.full(n_grid, 5.0))
+        mock_qual = MagicMock()
+        # Quality predictions: start low, go high
+        qual_vals = np.linspace(6.0, 7.5, n_grid)
+        mock_qual.predict.return_value = qual_vals
+
+        mock_load.return_value = (mock_qual, mock_bound, {
+            "metrics": {
+                "quality_cv": {"mae_mean": 0.5},
+                "bound_cv": {"mae_mean": 15.0},
+            }
+        })
+        plugin = WineSulphitePlugin()
+        plugin.load()
+
+        features = {
+            "mode": "inline",
+            "fixed_acidity": 7.4,
+            "volatile_acidity": 0.66,
+            "citric_acid": 0.0,
+            "residual_sugar": 1.8,
+            "chlorides": 0.075,
+            "density": 0.9978,
+            "pH": 3.51,
+            "sulphates": 0.56,
+            "alcohol": 9.4,
+            "free_sulfur_dioxide": base_free,
+            "total_sulfur_dioxide": 34.0,
+            "min_molecular": 0.3,
+            "max_total": 200.0,
+            "delta_max": delta_max,
+        }
+        result = plugin.predict_inline(features=features)
+        assert result["model_id"] == "wine-sulphite"
+        assert "prediction" in result
+        assert "confidence" in result
+        assert "recommended_free_so2" in result
+        assert plugin._predict_count == 1
+
+    @patch("app.plugins.wine_sulphite.plugin.load_artifacts")
+    def test_predict_inline_no_valid_point_raises(self, mock_load):
+        """Covers the ValueError → NoValidSimulationPointError path (lines 86-87)."""
+        import numpy as np
+        from app.domain.services.exceptions import NoValidSimulationPointError
+        from app.plugins.wine_sulphite.plugin import WineSulphitePlugin
+
+        base_free = 11.0
+        n_grid = 41
+        mock_bound = MagicMock()
+        mock_bound.predict.return_value = np.log1p(np.full(n_grid, 5.0))
+        mock_qual = MagicMock()
+        mock_qual.predict.return_value = np.linspace(6.0, 7.5, n_grid)
+
+        mock_load.return_value = (mock_qual, mock_bound, {})
+        plugin = WineSulphitePlugin()
+        plugin.load()
+
+        features = {
+            "mode": "inline",
+            "fixed_acidity": 7.4,
+            "volatile_acidity": 0.66,
+            "citric_acid": 0.0,
+            "residual_sugar": 1.8,
+            "chlorides": 0.075,
+            "density": 0.9978,
+            "pH": 3.51,
+            "sulphates": 0.56,
+            "alcohol": 9.4,
+            "free_sulfur_dioxide": base_free,
+            "total_sulfur_dioxide": 34.0,
+            "min_molecular": 5.0,
+            "max_total": 10.0,
+            "delta_max": 40.0,
+        }
+        with pytest.raises(NoValidSimulationPointError):
+            plugin.predict_inline(features=features)
+
+    @patch("app.plugins.wine_sulphite.plugin.load_artifacts")
+    def test_predict_batch_with_mocked_models(self, mock_load):
+        """Covers predict_batch body (lines 114-144)."""
+        import numpy as np
+        import tempfile
+        from pathlib import Path
+        from app.plugins.wine_sulphite.plugin import WineSulphitePlugin
+
+        n_grid = 41
+        mock_bound = MagicMock()
+        mock_bound.predict.return_value = np.log1p(np.full(n_grid, 5.0))
+        mock_qual = MagicMock()
+        mock_qual.predict.return_value = np.linspace(6.0, 7.5, n_grid)
+
+        mock_load.return_value = (mock_qual, mock_bound, {})
+        plugin = WineSulphitePlugin()
+        plugin.load()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            csv_path = Path(tmp) / "test.csv"
+            csv_path.write_text(
+                "fixed acidity,volatile acidity,citric acid,residual sugar,"
+                "chlorides,density,pH,sulphates,alcohol,"
+                "free sulfur dioxide,total sulfur dioxide\n"
+                "7.4,0.66,0.0,1.8,0.075,0.9978,3.51,0.56,9.4,11.0,34.0\n"
+            )
+            result = plugin.predict_batch(data_path=str(csv_path))
+            assert "predictions" in result
+            assert len(result["predictions"]) == 1
+
+    @patch("app.plugins.wine_sulphite.plugin.load_artifacts")
+    def test_predict_batch_with_error(self, mock_load):
+        """Covers the except in predict_batch loop (lines 135-136)."""
+        import numpy as np
+        import tempfile
+        from pathlib import Path
+        from app.plugins.wine_sulphite.plugin import WineSulphitePlugin
+
+        # Model bound.predict returns non-numeric data, causing error in inference
+        mock_bound = MagicMock()
+        mock_bound.predict.return_value = "bad_data"
+        mock_qual = MagicMock()
+        mock_qual.predict.return_value = np.linspace(6.0, 7.5, 41)
+
+        mock_load.return_value = (mock_qual, mock_bound, {})
+        plugin = WineSulphitePlugin()
+        plugin.load()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            csv_path = Path(tmp) / "test.csv"
+            csv_path.write_text(
+                "fixed acidity,volatile acidity,citric acid,residual sugar,"
+                "chlorides,density,pH,sulphates,alcohol,"
+                "free sulfur dioxide,total sulfur dioxide\n"
+                "7.4,0.66,0.0,1.8,0.075,0.9978,3.51,0.56,9.4,11.0,34.0\n"
+            )
+            result = plugin.predict_batch(data_path=str(csv_path))
+            assert len(result["predictions"]) == 1
+            assert "error" in result["predictions"][0]
