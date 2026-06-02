@@ -146,6 +146,7 @@ class TestArtifactStoreLocal:
     def test_path_returns_local_path(self):
         from app.infrastructure.artifact_store import ArtifactStore, ARTIFACTS_ROOT
         store = ArtifactStore("test_model")
+        store._download_all = lambda: None  # Mock out download
         path = store.path("some_file.pkl")
         assert path == ARTIFACTS_ROOT / "test_model" / "some_file.pkl"
 
