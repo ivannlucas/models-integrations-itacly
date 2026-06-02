@@ -23,6 +23,7 @@ pydantic==2.9.2
 
 torch>=2.6.0
 torchvision==0.26.0
+Pillow>=10.0.0
 
 # Detectron2 — must be installed from source after torch is available:
 #   python -m pip install --no-build-isolation \

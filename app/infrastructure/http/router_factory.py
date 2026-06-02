@@ -50,7 +50,7 @@ def make_model_router(
         except Exception as exc:
             if extra_predict_exceptions and isinstance(exc, extra_predict_exceptions):
                 raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)
                 )
             logger.exception("Unexpected error during prediction for model '%s'", model_id)
             raise HTTPException(

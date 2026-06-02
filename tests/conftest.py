@@ -253,6 +253,37 @@ def _cow_batch(plugin: FakePlugin, *, data_path: str) -> dict:
     }
 
 
+def _ml8_cereals_img_anomaly_detector_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> dict:
+    return {
+        "model_id": "ml8-cereals-img-anomaly-detector",
+        "categoria": "sano",
+        "cereal": "trigo",
+        "confianza_categoria": 0.95,
+        "confianza_cereal": 0.91,
+        "probabilidades_categoria": {"sano": 0.95, "hongos": 0.02, "insectos": 0.02, "otros": 0.01},
+        "probabilidades_cereal": {"trigo": 0.91, "maiz": 0.04, "arroz": 0.03, "sorgo": 0.02},
+    }
+
+
+def _ml8_cereals_img_anomaly_detector_batch(plugin: FakePlugin, *, data_path: str) -> dict:
+    return {
+        "model_id": "ml8-cereals-img-anomaly-detector",
+        "predictions": [
+            {
+                "filename": "img_001.jpg",
+                "model_id": "ml8-cereals-img-anomaly-detector",
+                "categoria": "sano",
+                "cereal": "trigo",
+                "confianza_categoria": 0.95,
+                "confianza_cereal": 0.91,
+                "probabilidades_categoria": {"sano": 0.95, "hongos": 0.02, "insectos": 0.02, "otros": 0.01},
+                "probabilidades_cereal": {"trigo": 0.91, "maiz": 0.04, "arroz": 0.03, "sorgo": 0.02},
+            }
+        ],
+        "output_path": None,
+    }
+
+
 def _wine_so2_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> dict:
     return {
         "model_id": "wine-sulphite",
@@ -294,6 +325,7 @@ def _wine_so2_batch(plugin: FakePlugin, *, data_path: str) -> dict:
 
 
 FAKE_FACTORIES: dict[str, tuple[Callable, Callable]] = {
+    "ml8-cereals-img-anomaly-detector": (_ml8_cereals_img_anomaly_detector_inline, _ml8_cereals_img_anomaly_detector_batch),
     "wine-price-fluctuation": (_wine_pf_inline, _wine_pf_batch),
     "cereal-price-forecast": (_cereal_inline, _cereal_batch),
     "meat-price-forecast": (_meat_inline, _meat_batch),

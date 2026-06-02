@@ -8,11 +8,18 @@ To add a new model:
 from dataclasses import dataclass, field
 from typing import Any
 
-from app.domain.services.exceptions import NoValidSimulationPointError
+from app.domain.services.exceptions import InvalidImageError, NoValidSimulationPointError
 
 # ── Plugin imports ────────────────────────────────────────────────────────────
 
 
+from app.plugins.ml8_cereals_img_anomaly_detector.plugin import Ml8CerealsImgAnomalyDetectorPlugin
+from app.plugins.ml8_cereals_img_anomaly_detector.predict_dto import (
+    PredictBatchResponse as Ml8CerealsImgAnomalyDetector_BatchResp,
+    PredictInlineResponse as Ml8CerealsImgAnomalyDetector_InlineResp,
+    PredictRequest as Ml8CerealsImgAnomalyDetector_Request,
+    PredictResponse as Ml8CerealsImgAnomalyDetector_Response,
+)
 from app.plugins.wine_sulphite.plugin import WineSulphitePlugin
 from app.plugins.wine_sulphite.predict_dto import (
     PredictBatchResponse as WineSO2_BatchResp,
@@ -40,6 +47,17 @@ class ModelEntry:
 # ── Registry ──────────────────────────────────────────────────────────────────
 
 REGISTRY: list[ModelEntry] = [
+    ModelEntry(
+        model_id="ml8-cereals-img-anomaly-detector",
+        prefix="/models/ml8-cereals-img-anomaly-detector",
+        version="1.0.0",
+        plugin_class=Ml8CerealsImgAnomalyDetectorPlugin,
+        predict_request_type=Ml8CerealsImgAnomalyDetector_Request,
+        predict_response_type=Ml8CerealsImgAnomalyDetector_Response,
+        batch_response_class=Ml8CerealsImgAnomalyDetector_BatchResp,
+        inline_response_class=Ml8CerealsImgAnomalyDetector_InlineResp,
+        extra_predict_exceptions=(InvalidImageError,),
+    ),
     ModelEntry(
         model_id="wine-sulphite",
         prefix="/models/wine-sulphite",
