@@ -7,7 +7,6 @@ and router_factory edge cases (exception mapping).
 from __future__ import annotations
 
 
-from anyio import Path
 import pytest
 from unittest.mock import patch as patch_unit
 
