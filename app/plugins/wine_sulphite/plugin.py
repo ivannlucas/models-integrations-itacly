@@ -1,3 +1,4 @@
+"""Plugin for wine sulphite optimization model."""
 import logging
 import types
 from datetime import datetime, timezone
@@ -29,7 +30,9 @@ MODEL_VERSION = "1.2.0"
 
 
 class WineSulphitePlugin(ModelPluginPort):
+    """Plugin for wine sulphite optimization model."""
     def __init__(self) -> None:
+        """Initialize the plugin with no loaded models."""
         self._model_qual: Any = None
         self._model_bound: Any = None
         self._metadata: dict = {}
@@ -38,13 +41,16 @@ class WineSulphitePlugin(ModelPluginPort):
         self._last_predict_at: str | None = None
 
     def load(self) -> None:
+        """Load model artifacts from disk and prepare for inference."""
         self._model_qual, self._model_bound, self._metadata = load_artifacts()
         self._loaded = True
 
     def is_loaded(self) -> bool:
+        """Return True if the model is ready for inference."""
         return self._loaded
 
     def _run_inference(self, features: dict) -> dict:
+        """Run the inference logic for a single wine sample and return the results."""
         mae_quality: float = (
             self._metadata.get("metrics", {}).get("quality_cv", {}).get("mae_mean", 0.427)
         )
@@ -111,6 +117,7 @@ class WineSulphitePlugin(ModelPluginPort):
         }
 
     def predict_batch(self, *, data_path: str) -> dict:
+        """Run batch inference on a CSV file and return a predictions dict."""
         df = pd.read_csv(data_path, sep=None, engine="python")
         df.columns = [c.strip().replace(" ", "_") for c in df.columns]
 
@@ -154,6 +161,7 @@ class WineSulphitePlugin(ModelPluginPort):
         model_key: str | None = None,
         threshold: float | None = None,
     ) -> dict:
+        """Run inline inference on a single feature dict and return a prediction dict."""
         res = self._run_inference(features)
         i = res["rec_idx"]
 
@@ -186,6 +194,7 @@ class WineSulphitePlugin(ModelPluginPort):
         }
 
     def stats(self) -> StatsResponse:
+        """Return model metadata and runtime statistics."""
         return StatsResponse(
             model_name=MODEL_NAME,
             model_type="RandomForestRegressor (dual: quality + bound SO2)",
@@ -232,5 +241,6 @@ class WineSulphitePlugin(ModelPluginPort):
         )
 
     def train(self, *, data_path: str) -> dict:
+        """Train the model with the provided data."""
         from app.domain.services.exceptions import TrainingNotSupportedError
         raise TrainingNotSupportedError("Training not supported for wine-sulphite plugin")

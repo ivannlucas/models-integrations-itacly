@@ -1,7 +1,9 @@
+"""Data Transfer Objects for model statistics."""
 from pydantic import BaseModel, ConfigDict
 
 
 class StatsResponse(BaseModel):
+    """Response body for model statistics."""
     model_config = ConfigDict(protected_namespaces=())
     model_name: str
     model_type: str

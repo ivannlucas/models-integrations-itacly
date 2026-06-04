@@ -1,3 +1,4 @@
+"""Factory for creating FastAPI routers per model plugin."""
 import logging
 from typing import Any
 
@@ -32,6 +33,7 @@ def make_model_router(
 
     @router.get("/health")
     async def health(request: Request) -> dict:
+        """Return health status for the model, including load state and version."""
         container = request.app.state.containers[model_id]
         return {
             "status": "ok",
@@ -42,10 +44,12 @@ def make_model_router(
 
     @router.get("/stats", response_model=StatsResponse)
     async def stats(request: Request) -> StatsResponse:
+        """Return model metadata and runtime statistics."""
         return request.app.state.containers[model_id].stats_use_case.execute()
 
     @router.post("/predict", response_model=predict_response_type)
     async def predict(request: Request, body: predict_request_type) -> predict_response_type:
+        """Run prediction (inline or batch) and return typed response."""
         container = request.app.state.containers[model_id]
         try:
             return container.predict_use_case.execute(body)
@@ -61,6 +65,7 @@ def make_model_router(
 
     @router.post("/train", response_model=train_response_type)
     async def train(request: Request, body: train_request_type) -> train_response_type:
+        """Trigger model training with the provided data."""
         container = request.app.state.containers[model_id]
         try:
             return container.train_use_case.execute(body)

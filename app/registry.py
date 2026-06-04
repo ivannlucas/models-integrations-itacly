@@ -35,6 +35,7 @@ from app.plugins.modelo10_lacteo.predict_dto import (
 
 @dataclass
 class ModelEntry:
+    """Defines the metadata and types for a model plugin."""
     model_id: str
     prefix: str
     version: str

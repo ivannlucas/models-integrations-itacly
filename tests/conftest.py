@@ -52,6 +52,7 @@ class FakePlugin(ModelPluginPort):
         batch_factory: Callable[..., dict],
         train_factory: Callable[..., dict] | None = None,
     ) -> None:
+        """Initialize the fake plugin with the given model ID and factories."""
         self._model_id = model_id
         self._inline_factory = inline_factory
         self._batch_factory = batch_factory
@@ -63,9 +64,11 @@ class FakePlugin(ModelPluginPort):
         self.raise_on_batch: Exception | None = None
 
     def load(self) -> None:
+        """Simulate loading model artifacts from disk."""
         self._loaded = True
 
     def is_loaded(self) -> bool:
+        """Return True if the model is ready for inference."""
         return self._loaded
 
     def predict_inline(
@@ -75,6 +78,7 @@ class FakePlugin(ModelPluginPort):
         model_key: str | None = None,
         threshold: float | None = None,
     ) -> dict:
+        """Run inline inference on a single feature dict and return a prediction dict."""
         if self.raise_on_inline is not None:
             exc, self.raise_on_inline = self.raise_on_inline, None
             raise exc
@@ -85,6 +89,7 @@ class FakePlugin(ModelPluginPort):
         )
 
     def predict_batch(self, *, data_path: str) -> dict:
+        """Run batch inference on a CSV file and return a predictions dict."""
         if self.raise_on_batch is not None:
             exc, self.raise_on_batch = self.raise_on_batch, None
             raise exc
@@ -93,6 +98,7 @@ class FakePlugin(ModelPluginPort):
         return self._batch_factory(self, data_path=data_path)
 
     def stats(self) -> StatsResponse:
+        """Return model metadata and runtime statistics."""
         return StatsResponse(
             model_name=self._model_id,
             model_type="fake",
@@ -105,6 +111,7 @@ class FakePlugin(ModelPluginPort):
         )
 
     def train(self, *, data_path: str) -> dict:
+        """Train the model with the provided data."""
         if self._train_factory is None:
             raise TrainingNotSupportedError(
                 "Training is not supported by this runtime. Use the data science pipeline instead."
@@ -115,6 +122,7 @@ class FakePlugin(ModelPluginPort):
 # ── Fake response factories per model ──────────────────────────────────────
 
 def _wine_pf_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> dict:
+    """Return a fake inline prediction dict for the wine price fluctuation model."""
     return {
         "model_id": "wine-price-fluctuation",
         "threshold": threshold,
@@ -128,6 +136,7 @@ def _wine_pf_inline(plugin: FakePlugin, *, features: dict, model_key, threshold)
 
 
 def _wine_pf_batch(plugin: FakePlugin, *, data_path: str) -> dict:
+    """Return a fake batch prediction dict for the wine price fluctuation model."""
     return {
         "model_id": "wine-price-fluctuation",
         "predictions": [
@@ -139,6 +148,7 @@ def _wine_pf_batch(plugin: FakePlugin, *, data_path: str) -> dict:
 
 
 def _cereal_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> dict:
+    """Return a fake inline prediction dict for the cereal price forecast model."""
     return {
         "model_id": "cereal-price-forecast",
         "threshold": threshold,
@@ -154,6 +164,7 @@ def _cereal_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) 
 
 
 def _cereal_batch(plugin: FakePlugin, *, data_path: str) -> dict:
+    """Return a fake batch prediction dict for the cereal price forecast model."""
     return {
         "model_id": "cereal-price-forecast",
         "predictions": [
@@ -165,6 +176,7 @@ def _cereal_batch(plugin: FakePlugin, *, data_path: str) -> dict:
 
 
 def _meat_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> dict:
+    """Return a fake inline prediction dict for the meat price forecast model."""
     return {
         "model_id": "meat-price-forecast",
         "threshold": threshold,
@@ -184,6 +196,7 @@ def _meat_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) ->
 
 
 def _meat_batch(plugin: FakePlugin, *, data_path: str) -> dict:
+    """Return a fake batch prediction dict for the meat price forecast model."""
     return {
         "model_id": "meat-price-forecast",
         "predictions": [
@@ -195,6 +208,7 @@ def _meat_batch(plugin: FakePlugin, *, data_path: str) -> dict:
 
 
 def _cnn_fungal_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> dict:
+    """Return a fake inline prediction dict for the fungal detection model."""
     return {
         "model_id": "cnn-fungal-detection",
         "threshold": threshold,
@@ -206,6 +220,7 @@ def _cnn_fungal_inline(plugin: FakePlugin, *, features: dict, model_key, thresho
 
 
 def _cnn_fungal_batch(plugin: FakePlugin, *, data_path: str) -> dict:
+    """Return a fake batch prediction dict for the fungal detection model."""
     return {
         "model_id": "cnn-fungal-detection",
         "predictions": [
@@ -217,6 +232,7 @@ def _cnn_fungal_batch(plugin: FakePlugin, *, data_path: str) -> dict:
 
 
 def _cnn_thermal_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> dict:
+    """Return a fake inline prediction dict for the thermal SCM detection model."""
     return {
         "model_id": "cnn-thermal-scm",
         "threshold": threshold,
@@ -230,6 +246,7 @@ def _cnn_thermal_inline(plugin: FakePlugin, *, features: dict, model_key, thresh
 
 
 def _cnn_thermal_batch(plugin: FakePlugin, *, data_path: str) -> dict:
+    """Return a fake batch prediction dict for the thermal SCM detection model."""
     return {
         "model_id": "cnn-thermal-scm",
         "predictions": [
@@ -241,6 +258,7 @@ def _cnn_thermal_batch(plugin: FakePlugin, *, data_path: str) -> dict:
 
 
 def _cow_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> dict:
+    """Return a fake inline prediction dict for the cow behavior model."""
     return {
         "model_id": "cow-behavior",
         "threshold": threshold,
@@ -253,6 +271,7 @@ def _cow_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> 
 
 
 def _cow_batch(plugin: FakePlugin, *, data_path: str) -> dict:
+    """Return a fake batch prediction dict for the cow behavior model."""
     return {
         "model_id": "cow-behavior",
         "predictions": [
@@ -264,6 +283,7 @@ def _cow_batch(plugin: FakePlugin, *, data_path: str) -> dict:
 
 
 def _wine_so2_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> dict:
+    """Return a fake inline prediction dict for the wine sulphite intervention model."""
     return {
         "model_id": "wine-sulphite",
         "threshold": threshold,
@@ -288,6 +308,7 @@ def _wine_so2_inline(plugin: FakePlugin, *, features: dict, model_key, threshold
 
 
 def _wine_so2_batch(plugin: FakePlugin, *, data_path: str) -> dict:
+    """Return a fake batch prediction dict for the wine sulphite intervention model."""
     return {
         "model_id": "wine-sulphite",
         "predictions": [
@@ -304,6 +325,7 @@ def _wine_so2_batch(plugin: FakePlugin, *, data_path: str) -> dict:
 
 
 def _lacteo_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> dict:
+    """Return a fake inline prediction dict for the Modelo10Lacteo plugin."""
     return {
         "model_id": "modelo10-lacteo",
         "prediction": "fly",
@@ -317,6 +339,7 @@ def _lacteo_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) 
 
 
 def _lacteo_batch(plugin: FakePlugin, *, data_path: str) -> dict:
+    """Return a fake batch prediction dict for the Modelo10Lacteo plugin."""
     return {
         "model_id": "modelo10-lacteo",
         "predictions": [
@@ -337,6 +360,7 @@ def _lacteo_batch(plugin: FakePlugin, *, data_path: str) -> dict:
 
 
 def _lacteo_train(plugin: FakePlugin, *, data_path: str) -> dict:
+    """Return a fake training result dict for the Modelo10Lacteo plugin."""
     return {
         "detail": "Training completed successfully",
         "metrics": {
@@ -372,11 +396,13 @@ class _FakeContainer:
     """Lightweight stand-in for ModelContainer used only in tests."""
 
     def __init__(self, plugin: FakePlugin) -> None:
+        """Initialize the fake container with a plugin."""
         self._plugin = plugin
         self.service = ModelRuntimeService(plugin)
 
 
 def _build_container(plugin: FakePlugin, entry) -> Any:
+    """Build a fake container with the appropriate use cases for the given plugin and registry entry."""
     container = _FakeContainer(plugin)
     container.predict_use_case = PredictModelUseCase(
         plugin, entry.batch_response_class, entry.inline_response_class
@@ -431,6 +457,7 @@ def app(fake_plugins: dict[str, FakePlugin]) -> FastAPI:
 
 @pytest.fixture
 def client(app: FastAPI) -> TestClient:
+    """A TestClient for the app fixture."""
     return TestClient(app)
 
 
@@ -438,6 +465,7 @@ def client(app: FastAPI) -> TestClient:
 
 @pytest.fixture
 def wine_pf_inline_payload() -> dict:
+    """Return a sample inline payload for the wine price fluctuation model."""
     records = [
         {"campaign": "2023/2024", "week": w, "price_red": 40.0 + w * 0.1}
         for w in range(1, 25)
@@ -447,6 +475,7 @@ def wine_pf_inline_payload() -> dict:
 
 @pytest.fixture
 def cereal_inline_payload() -> dict:
+    """Return a sample inline payload for the cereal price forecast model."""
     return {
         "mode": "inline",
         "product_name": "Milling wheat",
@@ -461,6 +490,7 @@ def cereal_inline_payload() -> dict:
 
 @pytest.fixture
 def meat_inline_payload() -> dict:
+    """Return a sample inline payload for the meat price forecast model."""
     rows = [
         {
             "date": f"2024-01-{day:02d}",
@@ -477,16 +507,19 @@ def meat_inline_payload() -> dict:
 
 @pytest.fixture
 def cnn_fungal_inline_payload() -> dict:
+    """Return a sample inline payload for the fungal detection model."""
     return {"mode": "inline", "image_path": "/tmp/fake_image.jpg"}
 
 
 @pytest.fixture
 def cnn_thermal_inline_payload() -> dict:
+    """Return a sample inline payload for the thermal SCM detection model."""
     return {"mode": "inline", "image_path": "/tmp/fake_thermal.jpg"}
 
 
 @pytest.fixture
 def cow_inline_payload() -> dict:
+    """Return a sample inline payload for the cow behavior model."""
     # 32 frames is the minimum clip length
     frames = ["AAAA"] * 32
     return {"mode": "inline", "frames_base64": frames, "detection_threshold": 0.5}
@@ -494,6 +527,7 @@ def cow_inline_payload() -> dict:
 
 @pytest.fixture
 def wine_so2_inline_payload() -> dict:
+    """Return a sample inline payload for the wine sulphite intervention model."""
     return {
         "mode": "inline",
         "fixed_acidity": 7.4,
@@ -515,4 +549,5 @@ def wine_so2_inline_payload() -> dict:
 
 @pytest.fixture
 def lacteo_inline_payload() -> dict:
+    """Return a sample inline payload for the Modelo10Lacteo plugin."""
     return {"mode": "inline", "image_base64": "dGVzdC1pbWFnZQ=="}

@@ -54,6 +54,7 @@ _store = ArtifactStore(ARTIFACT_FOLDER_NAME)
 
 
 def _cls_transforms(imgsz: int = 224):
+    """Build train/eval transforms for the MobileNetV3 classifier."""
     train_tfm = transforms.Compose([
         transforms.Resize((imgsz, imgsz)),
         transforms.RandomHorizontalFlip(),
@@ -96,6 +97,7 @@ def _create_splits(data_root: Path, classes: list, tmp_base: str) -> Path:
 
 
 def _cls_train_epoch(model, loader, optimizer, criterion, device):
+    """Run one training epoch and return average loss and accuracy."""
     model.train()
     total_loss = correct = total = 0
     for inputs, labels in loader:
@@ -112,6 +114,7 @@ def _cls_train_epoch(model, loader, optimizer, criterion, device):
 
 
 def _cls_validate(model, loader, criterion, device):
+    """Run one validation pass and return average loss and accuracy."""
     model.eval()
     total_loss = correct = total = 0
     with torch.no_grad():
@@ -135,6 +138,7 @@ class Modelo10LacteoPlugin(ModelPluginPort):
     VERSION = VERSION
 
     def __init__(self) -> None:
+        """Initialize plugin with no loaded models and zero stats."""
         self._detector = None
         self._classifier = None
         self._class_names: list[str] = []
@@ -144,10 +148,12 @@ class Modelo10LacteoPlugin(ModelPluginPort):
         self._last_predict_at: str | None = None
 
     def load(self) -> None:
+        """Carga los modelos desde artifacts/ y los prepara para inferencia."""
         self._detector, self._classifier, self._class_names = load_detector_and_classifier(self._device)
         logger.info("Plugin Modelo10Lacteo listo en device=%s, clases=%s", self._device, self._class_names)
 
     def is_loaded(self) -> bool:
+        """Devuelve True si el detector y el clasificador están cargados."""
         return self._detector is not None and self._classifier is not None
 
     # ── predict_inline ────────────────────────────────────────────────────────
@@ -159,6 +165,7 @@ class Modelo10LacteoPlugin(ModelPluginPort):
         model_key: str | None = None,
         threshold: float | None = None,
     ) -> dict:
+        """Ejecuta inferencia en una sola imagen (base64 o path) y devuelve la predicción."""
         self._assert_loaded()
 
         if features.get("image_path"):
@@ -184,6 +191,7 @@ class Modelo10LacteoPlugin(ModelPluginPort):
     # ── predict_batch ─────────────────────────────────────────────────────────
 
     def predict_batch(self, *, data_path: str) -> dict:
+        """Ejecuta inferencia en batch sobre un CSV/ZIP/directorio de imágenes y devuelve las predicciones."""
         self._assert_loaded()
 
         temp_dir: str | None = None
@@ -233,6 +241,7 @@ class Modelo10LacteoPlugin(ModelPluginPort):
     # ── get_stats ─────────────────────────────────────────────────────────────
 
     def stats(self) -> StatsResponse:
+        """Devuelve estadísticas de uso y metadata del modelo."""
         return StatsResponse(
             model_name=self.MODEL_ID,
             model_type="classification",
@@ -430,10 +439,12 @@ class Modelo10LacteoPlugin(ModelPluginPort):
         logger.info("Clasificador recargado. Clases: %s", self._class_names)
 
     def _assert_loaded(self) -> None:
+        """Lanza un error si el modelo no está cargado."""
         if not self.is_loaded():
             raise ModelNotLoadedError("El modelo no está cargado.")
 
     def _update_stats(self, latency_ms: float = 0.0) -> None:
+        """Actualiza las estadísticas de uso del modelo después de una predicción."""
         self._predict_count += 1
         self._total_latency_ms += latency_ms
         self._last_predict_at = datetime.now(tz=timezone.utc).isoformat()

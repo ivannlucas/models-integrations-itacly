@@ -1,3 +1,4 @@
+"""Preprocessing functions for the wine sulphite plugin."""
 import numpy as np
 import pandas as pd
 

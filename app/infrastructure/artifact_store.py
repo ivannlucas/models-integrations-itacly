@@ -38,6 +38,7 @@ ARTIFACTS_ROOT = _REPO_ROOT / "artifacts"
 
 
 def _build_s3_client():
+    """Build and return an S3 client configured from environment variables."""
     import boto3  # type: ignore[import]
 
     return boto3.client(
@@ -67,6 +68,7 @@ class ArtifactStore:
     """
 
     def __init__(self, model_name: str) -> None:
+        """Initialize the store for the given model name."""
         self._model_name = model_name
         self._local_dir = ARTIFACTS_ROOT / model_name
 
