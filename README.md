@@ -275,6 +275,7 @@ https://sites.google.com/luceit.es/luceit/otros/devops/devops-politica_de_versio
 | Version | Date (last change) |  Developer   | Changes                      |
 |:-------:|:-------------------|:------------:|
 :-----------------------------|
+| v0.1.35 | 05/06/2026         | Alejandro Flores | Enable sonar.verbose=true (temporary) to debug SonarQube quality gate failure in CI |
 | v0.1.34 | 05/06/2026         | Alejandro Flores | Fix duplicate train kwargs SyntaxError in main.py, refresh CLAUDE.md, wrap long lines in train_dto |
 | v0.1.33 | 05/06/2026         | Alejandro Flores | Fix missing module docstrings, misplaced docstring in stats_dto, rename pH param, remove no-else-return |
 | v0.1.32 | 05/06/2026         | Alejandro Flores | Delete dead wine_sulphite plugin files to fix SonarQube broken import bugs and 0% coverage |
