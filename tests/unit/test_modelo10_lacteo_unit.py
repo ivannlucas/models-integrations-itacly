@@ -867,3 +867,30 @@ class TestLoadDetectorAndClassifier:
             from app.plugins.modelo10_lacteo.model_loader import load_detector_and_classifier
             with pytest.raises(FileNotFoundError):
                 load_detector_and_classifier(torch.device("cpu"))
+
+
+class TestReloadClassifier:
+    """Tests for Modelo10LacteoPlugin._reload_classifier()."""
+
+    @patch("app.plugins.modelo10_lacteo.plugin.load_detector_and_classifier")
+    def test_reload_classifier_updates_model_and_class_names(self, mock_load):
+        """Verify _reload_classifier() reloads class names and rebuilds the classifier in-place."""
+        import json
+        from unittest.mock import mock_open
+
+        mock_load.return_value = (MagicMock(), MagicMock(), ["fly", "mos", "tick"])
+        plugin = Modelo10LacteoPlugin()
+        plugin.load()
+
+        class_names = ["fly", "mos"]
+        mock_model = MagicMock()
+        mock_model.classifier.__getitem__.return_value.in_features = 1280
+
+        with patch("app.plugins.modelo10_lacteo.plugin._store.path", return_value=Path("/fake")), \
+             patch("builtins.open", mock_open(read_data=json.dumps(class_names))), \
+             patch("app.plugins.modelo10_lacteo.plugin.models.mobilenet_v3_large", return_value=mock_model), \
+             patch("app.plugins.modelo10_lacteo.plugin.torch.load", return_value={}):
+            plugin._reload_classifier()
+
+        assert plugin._class_names == class_names
+        assert plugin._classifier is mock_model
