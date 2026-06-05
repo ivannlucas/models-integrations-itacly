@@ -94,11 +94,15 @@ class ArtifactStore:
         return local
 
     def download_all_if_needed(self) -> None:
-        """Download every file under the model's S3 prefix, skipping up-to-date files."""
+        """Download every file under the model's S3 prefix, skipping up-to-date files.
+
+        No-op when STORAGE_BUCKET is not set (assumes artifacts are already local).
+        """
         if not os.environ.get("STORAGE_BUCKET"):
-            raise EnvironmentError(
-                "STORAGE_BUCKET is not set. Cannot download artifacts from S3."
+            logger.debug(
+                "STORAGE_BUCKET not set — skipping S3 sync for '%s'", self._model_name
             )
+            return
         self._download_all()
 
     # ── S3 download ───────────────────────────────────────────────────────────

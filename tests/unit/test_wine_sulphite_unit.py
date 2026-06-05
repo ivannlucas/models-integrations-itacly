@@ -76,6 +76,47 @@ class TestMapRequestToWineDict:
         assert set(result.keys()) == expected_keys
 
 
+class TestBuildSimulationGridErrorPaths:
+    """Tests for the error-handling branches added to build_simulation_grid."""
+
+    _BASE = {
+        "fixed acidity": 7.4, "volatile acidity": 0.66,
+        "citric acid": 0.0, "residual sugar": 1.8,
+        "chlorides": 0.075, "density": 0.9978, "pH": 3.51,
+        "sulphates": 0.56, "alcohol": 9.4,
+        "free sulfur dioxide": 11.0, "total sulfur dioxide": 34.0,
+    }
+
+    def test_missing_free_sulfur_dioxide_raises(self):
+        """Verify ValueError when 'free sulfur dioxide' key is absent."""
+        base = {k: v for k, v in self._BASE.items() if k != "free sulfur dioxide"}
+        with pytest.raises(ValueError, match="free sulfur dioxide"):
+            build_simulation_grid(base, delta_max=10.0)
+
+    def test_non_numeric_free_sulfur_dioxide_raises(self):
+        """Verify ValueError when 'free sulfur dioxide' cannot be cast to float."""
+        base = {**self._BASE, "free sulfur dioxide": "not-a-number"}
+        with pytest.raises(ValueError, match="numeric"):
+            build_simulation_grid(base, delta_max=10.0)
+
+    def test_negative_delta_max_raises(self):
+        """Verify ValueError when delta_max is negative."""
+        with pytest.raises(ValueError, match="non-negative"):
+            build_simulation_grid(self._BASE, delta_max=-1.0)
+
+    def test_missing_phys_feature_raises(self):
+        """Verify ValueError when a required physical feature key is absent."""
+        base = {k: v for k, v in self._BASE.items() if k != "fixed acidity"}
+        with pytest.raises(ValueError, match="missing required key"):
+            build_simulation_grid(base, delta_max=10.0)
+
+    def test_missing_total_sulfur_dioxide_raises(self):
+        """Verify ValueError when 'total sulfur dioxide' key is absent."""
+        base = {k: v for k, v in self._BASE.items() if k != "total sulfur dioxide"}
+        with pytest.raises(ValueError, match="total sulfur dioxide"):
+            build_simulation_grid(base, delta_max=10.0)
+
+
 class TestBuildSimulationGrid:
     """Tests for build_simulation_grid with various delta_max values."""
 
@@ -249,6 +290,33 @@ class TestSelectRecommendation:
         # gain is 0, which is ≤ threshold
         assert intervention is False
         assert idx == 0
+
+
+# ── model_loader tests ────────────────────────────────────────────────────
+
+class TestLoadArtifacts:
+    """Tests for load_artifacts() with mocked external I/O."""
+
+    def test_returns_models_and_metadata(self, tmp_path):
+        """Verify load_artifacts returns both models and the metadata dict."""
+        import json
+        meta = {"metrics": {"quality_cv": {"mae_mean": 0.4}, "bound_cv": {"mae_mean": 1.2}}}
+        (tmp_path / "metadata.json").write_text(json.dumps(meta))
+
+        mock_qual = MagicMock()
+        mock_bound = MagicMock()
+
+        with patch("app.plugins.wine_sulphite.model_loader._store.download_all_if_needed"), \
+             patch("app.plugins.wine_sulphite.model_loader._store.path",
+                   side_effect=lambda f: tmp_path / f), \
+             patch("app.plugins.wine_sulphite.model_loader.joblib.load",
+                   side_effect=[mock_qual, mock_bound]):
+            from app.plugins.wine_sulphite.model_loader import load_artifacts
+            qual, bound, metadata = load_artifacts()
+
+        assert qual is mock_qual
+        assert bound is mock_bound
+        assert metadata["metrics"]["quality_cv"]["mae_mean"] == 0.4
 
 
 # ── Real plugin unit tests (mocked model loading) ─────────────────────────

@@ -18,6 +18,7 @@ import pytest
 import torch
 from PIL import Image
 
+from app.domain.services.exceptions import InvalidImageError
 from app.plugins.modelo10_lacteo.postprocessing import build_inline_result, classify_crop
 from app.plugins.modelo10_lacteo.preprocessing import CLASSIFIER_TRANSFORM, crop_to_tensor, image_base64_to_pil
 from app.plugins.modelo10_lacteo.plugin import Modelo10LacteoPlugin
@@ -54,6 +55,12 @@ class TestImageBase64ToPil:
         with pytest.raises(Exception):
             image_base64_to_pil("not-valid-base64!!")
 
+    def test_valid_base64_non_image_bytes_raises(self):
+        """Verify InvalidImageError when base64 is valid but bytes are not an image."""
+        b64 = base64.b64encode(b"these are definitely not image bytes").decode()
+        with pytest.raises(InvalidImageError, match="Failed to decode image from base64"):
+            image_base64_to_pil(b64)
+
 
 class TestCropToTensor:
     """Tests for crop_to_tensor shape and edge cases."""
@@ -76,6 +83,13 @@ class TestCropToTensor:
         img = Image.new("RGB", (224, 224), color="white")
         tensor = crop_to_tensor(img, 0, 0, 224, 224)
         assert tensor.shape == (1, 3, 224, 224)
+
+    def test_crop_raises_on_os_error(self):
+        """Verify InvalidImageError is raised when the crop operation raises OSError."""
+        mock_img = MagicMock(spec=Image.Image)
+        mock_img.crop.side_effect = OSError("simulated disk error")
+        with pytest.raises(InvalidImageError, match="Failed to crop image"):
+            crop_to_tensor(mock_img, 0, 0, 100, 100)
 
 
 class TestClassifierTransform:
@@ -799,3 +813,58 @@ class TestTrainErrorPaths:
                 plugin.train(data_path=zip_path)
         finally:
             os.unlink(zip_path)
+
+
+# ── model_loader tests ────────────────────────────────────────────────────
+
+class TestLoadDetectorAndClassifier:
+    """Tests for load_detector_and_classifier() with mocked external I/O."""
+
+    def test_loads_successfully(self, tmp_path):
+        """Verify load_detector_and_classifier returns detector, classifier and class names."""
+        import json
+        import sys
+        import torch
+
+        class_names = ["fly", "mos", "tick"]
+        (tmp_path / "class_names.json").write_text(json.dumps(class_names))
+        (tmp_path / "detector_best.pt").write_bytes(b"fake detector")
+        (tmp_path / "best_classifier.pth").write_bytes(b"fake classifier")
+
+        mock_detector = MagicMock()
+        mock_classifier = MagicMock()
+        mock_state_dict = MagicMock()
+
+        mock_ultralytics = MagicMock()
+        mock_ultralytics.YOLO.return_value = mock_detector
+
+        with patch("app.plugins.modelo10_lacteo.model_loader._store.download_all_if_needed"), \
+             patch("app.plugins.modelo10_lacteo.model_loader._store.path",
+                   side_effect=lambda f: tmp_path / f), \
+             patch("app.plugins.modelo10_lacteo.model_loader._build_mobilenetv3_classifier",
+                   return_value=mock_classifier), \
+             patch("app.plugins.modelo10_lacteo.model_loader.torch.load",
+                   return_value=mock_state_dict), \
+             patch.dict(sys.modules, {"ultralytics": mock_ultralytics}):
+            from app.plugins.modelo10_lacteo.model_loader import load_detector_and_classifier
+            det, clf, names = load_detector_and_classifier(torch.device("cpu"))
+
+        assert names == class_names
+        assert det is mock_detector
+        mock_classifier.load_state_dict.assert_called_once_with(mock_state_dict)
+        mock_classifier.eval.assert_called_once()
+
+    def test_raises_when_artifact_file_missing(self, tmp_path):
+        """Verify FileNotFoundError when an artifact path does not exist on disk."""
+        import json
+        import torch
+
+        (tmp_path / "class_names.json").write_text(json.dumps(["fly"]))
+        # detector_best.pt and best_classifier.pth deliberately absent
+
+        with patch("app.plugins.modelo10_lacteo.model_loader._store.download_all_if_needed"), \
+             patch("app.plugins.modelo10_lacteo.model_loader._store.path",
+                   side_effect=lambda f: tmp_path / f):
+            from app.plugins.modelo10_lacteo.model_loader import load_detector_and_classifier
+            with pytest.raises(FileNotFoundError):
+                load_detector_and_classifier(torch.device("cpu"))

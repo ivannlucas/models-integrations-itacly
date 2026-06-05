@@ -8,7 +8,7 @@ from __future__ import annotations
 
 
 import pytest
-from unittest.mock import patch as patch_unit
+from unittest.mock import MagicMock, patch as patch_unit
 
 from app.application.dto.stats_dto import StatsResponse
 from app.domain.ports.model_plugin_port import ModelPluginPort
@@ -202,13 +202,166 @@ class TestArtifactStoreLocal:
         with pytest.raises(FileNotFoundError):
             store.path("not_existing.pkl")
 
-    def test_download_all_raises_when_no_bucket(self, monkeypatch):
-        """Verify download_all_if_needed raises when STORAGE_BUCKET is not set."""
+    def test_download_all_is_noop_when_no_bucket(self, monkeypatch):
+        """Verify download_all_if_needed is a no-op (no error) when STORAGE_BUCKET is not set."""
         monkeypatch.delenv("STORAGE_BUCKET", raising=False)
         from app.infrastructure.artifact_store import ArtifactStore
         store = ArtifactStore("test_model")
-        with pytest.raises(EnvironmentError, match="STORAGE_BUCKET"):
-            store.download_all_if_needed()
+        store.download_all_if_needed()  # should return silently
+
+
+# ── _file_needs_download tests ───────────────────────────────────────────────
+
+class TestFileNeedsDownload:
+    """Tests for the _file_needs_download helper."""
+
+    def test_missing_file_returns_true(self, tmp_path):
+        """Verify True when the local file does not exist."""
+        from app.infrastructure.artifact_store import _file_needs_download
+        assert _file_needs_download(tmp_path / "missing.pkl", 100) is True
+
+    def test_matching_size_returns_false(self, tmp_path):
+        """Verify False when local file size matches the remote size."""
+        from app.infrastructure.artifact_store import _file_needs_download
+        p = tmp_path / "file.pkl"
+        p.write_bytes(b"x" * 50)
+        assert _file_needs_download(p, 50) is False
+
+    def test_size_mismatch_returns_true(self, tmp_path):
+        """Verify True when local file size differs from the remote size."""
+        from app.infrastructure.artifact_store import _file_needs_download
+        p = tmp_path / "file.pkl"
+        p.write_bytes(b"x" * 50)
+        assert _file_needs_download(p, 99) is True
+
+
+# ── ArtifactStore S3 tests ────────────────────────────────────────────────────
+
+class TestArtifactStoreS3:
+    """Tests for ArtifactStore S3 download and upload operations."""
+
+    def test_download_all_if_needed_with_bucket_triggers_download(self, monkeypatch):
+        """Verify download_all_if_needed calls _download_all when STORAGE_BUCKET is set."""
+        monkeypatch.setenv("STORAGE_BUCKET", "test-bucket")
+        from app.infrastructure.artifact_store import ArtifactStore
+        with patch_unit("app.infrastructure.artifact_store.ArtifactStore._download_all") as mock_dl:
+            ArtifactStore("test_model").download_all_if_needed()
+            mock_dl.assert_called_once()
+
+    def test_path_triggers_download_when_file_missing_and_bucket_set(self, monkeypatch, tmp_path):
+        """Verify path() calls _download_all when the file is absent and STORAGE_BUCKET is set."""
+        monkeypatch.setenv("STORAGE_BUCKET", "test-bucket")
+        from app.infrastructure.artifact_store import ArtifactStore
+        with patch_unit("app.infrastructure.artifact_store.ArtifactStore._download_all") as mock_dl:
+            store = ArtifactStore("test_model")
+            store._local_dir = tmp_path / "missing_dir"
+            result = store.path("model.pkl")
+            mock_dl.assert_called_once()
+            assert result == tmp_path / "missing_dir" / "model.pkl"
+
+    def test_build_s3_client_reads_env_vars(self, monkeypatch):
+        """Verify _build_s3_client passes environment credentials to boto3."""
+        monkeypatch.setenv("CUSTOM_S3_ENDPOINT", "http://minio:9000")
+        monkeypatch.setenv("AWS_ACCESS_KEY_ID", "testkey")
+        monkeypatch.setenv("AWS_SECRET_ACCESS_ID", "testsecret")
+        monkeypatch.setenv("CUSTOM_REGION", "eu-west-1")
+        with patch_unit("boto3.client") as mock_boto3:
+            from app.infrastructure.artifact_store import _build_s3_client
+            _build_s3_client()
+            mock_boto3.assert_called_once()
+            kwargs = mock_boto3.call_args[1]
+            assert kwargs["endpoint_url"] == "http://minio:9000"
+            assert kwargs["aws_access_key_id"] == "testkey"
+            assert kwargs["region_name"] == "eu-west-1"
+
+    def test_download_all_empty_s3_prefix(self, monkeypatch, tmp_path):
+        """Verify _download_all is a no-op when S3 returns no objects."""
+        monkeypatch.setenv("STORAGE_BUCKET", "test-bucket")
+        mock_s3 = MagicMock()
+        mock_paginator = MagicMock()
+        mock_paginator.paginate.return_value = [{}]  # page with no Contents key
+        mock_s3.get_paginator.return_value = mock_paginator
+        with patch_unit("app.infrastructure.artifact_store._build_s3_client", return_value=mock_s3):
+            from app.infrastructure.artifact_store import ArtifactStore
+            store = ArtifactStore("test_model")
+            store._local_dir = tmp_path
+            store._download_all()
+        mock_s3.download_file.assert_not_called()
+
+    def test_download_all_skips_unchanged_files(self, monkeypatch, tmp_path):
+        """Verify _download_all skips files whose local size already matches S3."""
+        monkeypatch.setenv("STORAGE_BUCKET", "test-bucket")
+        (tmp_path / "model.pkl").write_bytes(b"x" * 100)
+        mock_s3 = MagicMock()
+        mock_paginator = MagicMock()
+        mock_paginator.paginate.return_value = [{
+            "Contents": [{"Key": "artifacts/fixed/test_model/model.pkl", "Size": 100}]
+        }]
+        mock_s3.get_paginator.return_value = mock_paginator
+        with patch_unit("app.infrastructure.artifact_store._build_s3_client", return_value=mock_s3):
+            from app.infrastructure.artifact_store import ArtifactStore
+            store = ArtifactStore("test_model")
+            store._local_dir = tmp_path
+            store._download_all()
+        mock_s3.download_file.assert_not_called()
+
+    def test_download_all_downloads_missing_file(self, monkeypatch, tmp_path):
+        """Verify _download_all calls download_file for artifacts absent locally."""
+        monkeypatch.setenv("STORAGE_BUCKET", "test-bucket")
+        remote_key = "artifacts/fixed/test_model/model.pkl"
+        mock_s3 = MagicMock()
+        mock_paginator = MagicMock()
+        mock_paginator.paginate.return_value = [{
+            "Contents": [{"Key": remote_key, "Size": 500}]
+        }]
+        mock_s3.get_paginator.return_value = mock_paginator
+        with patch_unit("app.infrastructure.artifact_store._build_s3_client", return_value=mock_s3):
+            from app.infrastructure.artifact_store import ArtifactStore
+            store = ArtifactStore("test_model")
+            store._local_dir = tmp_path
+            store._download_all()
+        mock_s3.download_file.assert_called_once_with(
+            "test-bucket", remote_key, str(tmp_path / "model.pkl")
+        )
+
+    def test_download_all_raises_on_s3_error(self, monkeypatch, tmp_path):
+        """Verify _download_all re-raises exceptions from S3."""
+        monkeypatch.setenv("STORAGE_BUCKET", "test-bucket")
+        mock_s3 = MagicMock()
+        mock_paginator = MagicMock()
+        mock_paginator.paginate.return_value = [{
+            "Contents": [{"Key": "artifacts/fixed/test_model/model.pkl", "Size": 500}]
+        }]
+        mock_s3.get_paginator.return_value = mock_paginator
+        mock_s3.download_file.side_effect = RuntimeError("connection refused")
+        with patch_unit("app.infrastructure.artifact_store._build_s3_client", return_value=mock_s3):
+            from app.infrastructure.artifact_store import ArtifactStore
+            store = ArtifactStore("test_model")
+            store._local_dir = tmp_path
+            with pytest.raises(RuntimeError, match="connection refused"):
+                store._download_all()
+
+    def test_upload_artifact_skips_when_no_bucket(self, monkeypatch, tmp_path):
+        """Verify upload_artifact returns without error when STORAGE_BUCKET is not set."""
+        monkeypatch.delenv("STORAGE_BUCKET", raising=False)
+        with patch_unit("app.infrastructure.artifact_store._build_s3_client") as mock_client:
+            from app.infrastructure.artifact_store import ArtifactStore
+            ArtifactStore("test_model").upload_artifact(tmp_path / "model.pth")
+            mock_client.assert_not_called()
+
+    def test_upload_artifact_calls_s3_upload(self, monkeypatch, tmp_path):
+        """Verify upload_artifact calls s3.upload_file with the correct bucket and key."""
+        monkeypatch.setenv("STORAGE_BUCKET", "test-bucket")
+        artifact = tmp_path / "model.pth"
+        artifact.write_bytes(b"fake model data")
+        mock_s3 = MagicMock()
+        with patch_unit("app.infrastructure.artifact_store._build_s3_client", return_value=mock_s3):
+            from app.infrastructure.artifact_store import ArtifactStore
+            ArtifactStore("test_model").upload_artifact(artifact)
+        call_args = mock_s3.upload_file.call_args[0]
+        assert call_args[0] == str(artifact)
+        assert call_args[1] == "test-bucket"
+        assert call_args[2] == "artifacts/fixed/test_model/model.pth"
 
 
 # ── model_loader helper tests ─────────────────────────────────────────────
