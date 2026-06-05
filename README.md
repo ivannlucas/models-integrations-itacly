@@ -275,6 +275,7 @@ https://sites.google.com/luceit.es/luceit/otros/devops/devops-politica_de_versio
 | Version | Date (last change) |  Developer   | Changes                      |
 |:-------:|:-------------------|:------------:|
 :-----------------------------|
+| v0.1.31 | 05/06/2026         | Alejandro Flores | Remove uncovered except block from train endpoint to fix SonarQube |
 | v0.1.30 | 05/06/2026         | Alejandro Flores | Add _reload_classifier test to reach SonarQube coverage threshold |
 | v0.1.29 | 05/06/2026         | Alejandro Flores | ModelEntry train defaults to None, fallback resolved in router_factory |
 | v0.1.28 | 05/06/2026         | Alejandro Flores | Fix ModelEntry train field defaults (SonarQube lambda smell) |
