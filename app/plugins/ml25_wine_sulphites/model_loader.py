@@ -29,7 +29,8 @@ def upload_artifact(filename: str) -> None:
 
 
 def load_artifacts() -> tuple[Any, Any, dict]:
-    """Load the quality model, bound SO2 model, and metadata from disk (or S3).
+    """Load quality model, bound SO2 model, and metadata from artifact storage."""
+    _store.download_all_if_needed()
 
     quality_path = _store.path(QUALITY_RF_MODEL_FILENAME)
     bound_path = _store.path(BOUND_RF_MODEL_FILENAME)
