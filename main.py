@@ -68,8 +68,6 @@ for _entry in _active_entries:
         train_request_type=_entry.train_request_type,
         train_response_type=_entry.train_response_type,
         extra_predict_exceptions=_entry.extra_predict_exceptions,
-        train_request_type=_entry.train_request_type,
-        train_response_type=_entry.train_response_type,
     )
     app.include_router(_router, prefix=_entry.prefix, tags=[_entry.model_id])
 
