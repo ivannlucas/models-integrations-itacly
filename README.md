@@ -275,7 +275,8 @@ https://sites.google.com/luceit.es/luceit/otros/devops/devops-politica_de_versio
 | Version | Date (last change) |  Developer   | Changes                      |
 |:-------:|:-------------------|:------------:|
 :-----------------------------|
-| v0.1.28 | 08/06/2026         |   Pablo      | Sonarqube fix		         |
+| v0.1.29 | 05/06/2026         | Alejandro Flores | ModelEntry train defaults to None, fallback resolved in router_factory |
+| v0.1.28 | 05/06/2026         | Alejandro Flores | Fix ModelEntry train field defaults (SonarQube lambda smell) |
 | v0.1.27 | 05/06/2026         | Alejandro Flores | Fix missing train fields in ModelEntry dataclass |
 | v0.1.26 | 05/06/2026         | Alejandro Flores | Fix SyntaxError in ml25 model_loader |
 | v0.1.25 | 05/06/2026         | Alejandro Flores | Fix post-merge: SyntaxError, lint, StatsResponse schema, tests |

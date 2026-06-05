@@ -5,6 +5,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request, status
 
 from app.application.dto.stats_dto import StatsResponse
+from app.application.dto.train_dto import TrainRequest as _DefaultTrainRequest, TrainResponse as _DefaultTrainResponse
 from app.domain.services.exceptions import TrainingNotSupportedError
 
 logger = logging.getLogger(__name__)
@@ -30,6 +31,8 @@ def make_model_router(
     2. Adding a ModelEntry to app/registry.py
     """
     router = APIRouter()
+    _train_req = train_request_type or _DefaultTrainRequest
+    _train_resp = train_response_type or _DefaultTrainResponse
 
     @router.get("/health")
     async def health(request: Request) -> dict:
@@ -64,7 +67,7 @@ def make_model_router(
             ) from exc
 
     @router.post("/train")
-    async def train(request: Request, body: train_request_type) -> train_response_type:
+    async def train(request: Request, body: _train_req) -> _train_resp:
         """Trigger model training with the provided data."""
         container = request.app.state.containers[model_id]
         try:
