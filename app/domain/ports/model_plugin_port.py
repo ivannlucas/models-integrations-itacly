@@ -2,7 +2,6 @@
 from abc import ABC, abstractmethod
 
 from app.application.dto.stats_dto import StatsResponse
-from app.domain.services.exceptions import TrainingNotSupportedError
 
 
 class ModelPluginPort(ABC):

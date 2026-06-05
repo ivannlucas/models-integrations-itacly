@@ -101,4 +101,4 @@ def test_stats_after_predict(client):
         json={"mode": "inline", "image_base64": "dGVzdA=="},
     )
     body = client.get(f"{PREFIX}/stats").json()
-    assert body["predict_count"] >= 0
+    assert body["runtime_stats"]["total_predictions"] >= 0

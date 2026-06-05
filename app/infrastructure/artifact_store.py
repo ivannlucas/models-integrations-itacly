@@ -20,7 +20,6 @@ from pathlib import Path
 
 from boto3.s3.transfer import TransferConfig
 from botocore.client import Config
-from boto3.s3.transfer import TransferConfig
 from dotenv import find_dotenv, load_dotenv
 
 logger = logging.getLogger(__name__)
@@ -73,9 +72,18 @@ class ArtifactStore:
         self._model_name = model_name
         self._local_dir = ARTIFACTS_ROOT / model_name
 
+    @property
+    def local_dir(self) -> Path:
+        """Return the local directory where this model's artifacts are stored."""
+        return self._local_dir
+
     def get_local_dir(self) -> Path:
         """Return the local directory where this model's artifacts are stored."""
         return self._local_dir
+
+    def upload(self, filename: str) -> None:
+        """Upload *filename* (relative to local_dir) to S3. No-op when STORAGE_BUCKET is unset."""
+        self.upload_artifact(self._local_dir / filename)
 
     def path(self, filename: str) -> Path:
         """Return the local path to *filename*, downloading from S3 if needed.
@@ -97,13 +105,12 @@ class ArtifactStore:
     def download_all_if_needed(self) -> None:
         """Download every file under the model's S3 prefix, skipping up-to-date files.
 
-        No-op when STORAGE_BUCKET is not set (assumes artifacts are already local).
+        Raises EnvironmentError if STORAGE_BUCKET is not set.
         """
         if not os.environ.get("STORAGE_BUCKET"):
-            logger.debug(
-                "STORAGE_BUCKET not set — skipping S3 sync for '%s'", self._model_name
+            raise EnvironmentError(
+                "STORAGE_BUCKET is not set. Cannot download artifacts from S3."
             )
-            return
         self._download_all()
 
     # ── S3 download ───────────────────────────────────────────────────────────

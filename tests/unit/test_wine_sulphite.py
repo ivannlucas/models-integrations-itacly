@@ -1,9 +1,7 @@
 """Endpoint tests for the ``wine-sulphite`` model."""
-from unittest.mock import MagicMock
-
 from app.domain.services.exceptions import NoValidSimulationPointError
 
-PREFIX = "/models/ml25_wine_sulphites"
+PREFIX = "/models/wine-sulphite"
 
 
 def test_health(client):
@@ -67,8 +65,8 @@ def test_predict_no_valid_simulation_point_maps_to_422(
 
 
 def test_train_returns_501(client):
-    """Verify train returns HTTP 501 (not supported) for wine-sulphite."""
-    resp = client.post(f"{PREFIX}/train", json={})
+    """Verify train returns HTTP 501 when no training backend is wired for wine-sulphite."""
+    resp = client.post(f"{PREFIX}/train", json={"data_path": "/tmp/wine.csv"})
     assert resp.status_code == 501
 
 

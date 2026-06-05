@@ -20,7 +20,7 @@ from torch import optim
 from torch.utils.data import DataLoader
 from torchvision import datasets, models, transforms
 
-from app.application.dto.stats_dto import StatsResponse
+from app.application.dto.stats_dto import InputField, OutputField, RuntimeStats, StatsResponse
 from app.application.dto.train_dto import TrainResponse
 from app.domain.ports.model_plugin_port import ModelPluginPort
 from app.domain.services.exceptions import InvalidImageError, ModelNotLoadedError
@@ -242,33 +242,33 @@ class Modelo10LacteoPlugin(ModelPluginPort):
 
     def stats(self) -> StatsResponse:
         """Devuelve estadísticas de uso y metadata del modelo."""
+        avg = self._total_latency_ms / self._predict_count if self._predict_count > 0 else None
         return StatsResponse(
             model_name=self.MODEL_ID,
-            model_type="classification",
+            version=self.VERSION,
+            description="Detección y clasificación de vectores (mosca, mosquito, garrapata) en imágenes de ganado lechero.",
+            task_type="object-detection+classification",
             framework=self.FRAMEWORK,
-            artifact_path=str(_store.get_local_dir()),
-            input_schema={
-                "type": "object",
-                "properties": {
-                    "image": {
-                        "type": "file",
-                        "formats": ["jpg", "jpeg", "png", "bmp", "tif"],
-                        "description": "Imagen de ganado lechero (base64 para inline, CSV/ZIP/directorio para batch)",
-                    },
-                },
-            },
-            output_schema={
-                "type": "object",
-                "properties": {
-                    "prediction": {"type": "str", "description": "Especie dominante detectada (fly | mos | tick | no_vectors)"},
-                    "confidence": {"type": "float", "description": "Confianza de clasificación de la detección dominante [0, 1]"},
-                    "vectors_count": {"type": "int", "description": "Número total de vectores detectados y clasificados"},
-                    "detections": {"type": "list", "description": "Lista de detecciones con species, det_conf, cls_conf, bbox"},
-                    "species_summary": {"type": "dict", "description": "Resumen de cantidad por especie"},
-                },
-            },
-            predict_count=self._predict_count,
-            last_predict_at=self._last_predict_at,
+            inputs=[
+                InputField(
+                    name="image",
+                    type="file",
+                    format=["jpg", "jpeg", "png", "bmp", "tif"],
+                    description="Imagen de ganado lechero (base64 para inline, CSV/ZIP/directorio para batch)",
+                ),
+            ],
+            outputs=[
+                OutputField(name="prediction", type="str", description="Especie dominante detectada (fly | mos | tick | no_vectors)"),
+                OutputField(name="confidence", type="float", description="Confianza de clasificación de la detección dominante [0, 1]"),
+                OutputField(name="vectors_count", type="int", description="Número total de vectores detectados y clasificados"),
+                OutputField(name="detections", type="list", description="Lista de detecciones con species, det_conf, cls_conf, bbox"),
+                OutputField(name="species_summary", type="dict", description="Resumen de cantidad por especie"),
+            ],
+            metrics={},
+            runtime_stats=RuntimeStats(
+                total_predictions=self._predict_count,
+                avg_latency_ms=avg,
+            ),
         )
 
     # ── private helpers ───────────────────────────────────────────────────────

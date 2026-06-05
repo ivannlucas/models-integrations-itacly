@@ -47,8 +47,6 @@ class ModelEntry:
     batch_response_class: type
     inline_response_class: type
     extra_predict_exceptions: tuple[type[Exception], ...] = field(default_factory=tuple)
-    train_request_type: Any = None
-    train_response_type: Any = None
 
 
 # ── Registry ──────────────────────────────────────────────────────────────────
@@ -56,7 +54,7 @@ class ModelEntry:
 REGISTRY: list[ModelEntry] = [
     ModelEntry(
         model_id="wine-sulphite",
-        prefix="/models/ml25_wine_sulphites",
+        prefix="/models/wine-sulphite",
         version="1.2.0",
         plugin_class=WineSulphitePlugin,
         predict_request_type=WineSO2_Request,

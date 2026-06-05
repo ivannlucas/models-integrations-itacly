@@ -218,13 +218,12 @@ class TestModelo10LacteoPluginDirect:
         plugin.load()
         stats = plugin.stats()
         assert stats.model_name == "modelo10-lacteo"
-        assert stats.model_type == "classification"
+        assert stats.task_type == "object-detection+classification"
         assert stats.framework == "pytorch+ultralytics"
-        assert isinstance(stats.artifact_path, str)
-        assert isinstance(stats.input_schema, dict)
-        assert isinstance(stats.output_schema, dict)
-        assert stats.predict_count == 0
-        assert stats.last_predict_at is None
+        assert isinstance(stats.inputs, list)
+        assert isinstance(stats.outputs, list)
+        assert stats.runtime_stats.total_predictions == 0
+        assert stats.runtime_stats.avg_latency_ms is None
 
     @patch("app.plugins.modelo10_lacteo.plugin.load_detector_and_classifier")
     def test_stats_with_predictions(self, mock_load):
@@ -236,7 +235,7 @@ class TestModelo10LacteoPluginDirect:
         plugin._update_stats(latency_ms=100.0)
         plugin._update_stats(latency_ms=200.0)
         stats = plugin.stats()
-        assert stats.predict_count == 2
+        assert stats.runtime_stats.total_predictions == 2
 
     @patch("app.plugins.modelo10_lacteo.plugin.load_detector_and_classifier")
     def test_update_stats_tracking(self, mock_load):
