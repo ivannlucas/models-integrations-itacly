@@ -8,7 +8,6 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from app.domain.services.exceptions import NoValidSimulationPointError
-from app.application.dto.train_dto import TrainResponse, TrainRequest
 
 # ── Plugin imports ────────────────────────────────────────────────────────────
 
@@ -47,9 +46,6 @@ class ModelEntry:
     predict_response_type: Any
     batch_response_class: type
     inline_response_class: type
-    # Optional values, you need to leave them at the bottom
-    train_request_type: Any | None = TrainRequest
-    train_response_type: Any | None = TrainResponse
     extra_predict_exceptions: tuple[type[Exception], ...] = field(default_factory=tuple)
     train_request_type: Any = None
     train_response_type: Any = None
