@@ -1,3 +1,4 @@
+"""Plugin for recommending optimal free SO2 doses for wine preservation."""
 import logging
 import time
 import types

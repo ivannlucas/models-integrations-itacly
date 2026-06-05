@@ -1,3 +1,4 @@
+"""DTOs for wine sulphite training operations."""
 from pydantic import BaseModel, ConfigDict, Field
 
 

@@ -275,6 +275,7 @@ https://sites.google.com/luceit.es/luceit/otros/devops/devops-politica_de_versio
 | Version | Date (last change) |  Developer   | Changes                      |
 |:-------:|:-------------------|:------------:|
 :-----------------------------|
+| v0.1.33 | 05/06/2026         | Alejandro Flores | Fix missing module docstrings, misplaced docstring in stats_dto, rename pH param, remove no-else-return |
 | v0.1.32 | 05/06/2026         | Alejandro Flores | Delete dead wine_sulphite plugin files to fix SonarQube broken import bugs and 0% coverage |
 | v0.1.31 | 05/06/2026         | Alejandro Flores | Remove uncovered except block from train endpoint to fix SonarQube |
 | v0.1.30 | 05/06/2026         | Alejandro Flores | Add _reload_classifier test to reach SonarQube coverage threshold |

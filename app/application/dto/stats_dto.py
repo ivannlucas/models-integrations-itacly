@@ -1,8 +1,8 @@
+"""Data Transfer Objects for model statistics."""
 from __future__ import annotations
 
 from typing import Any, Optional
 
-"""Data Transfer Objects for model statistics."""
 from pydantic import BaseModel, ConfigDict
 
 
@@ -31,13 +31,12 @@ class RuntimeStats(BaseModel):
 
     model_config = ConfigDict(protected_namespaces=())
     total_predictions: int
-    avg_latency_ms: Optional[float]
+    avg_latency_ms: Optional[float] = None
 
 
 class StatsResponse(BaseModel):
     """Full stats payload returned by the /stats endpoint for any registered model."""
 
-    """Response body for model statistics."""
     model_config = ConfigDict(protected_namespaces=())
     model_name: str
     version: str

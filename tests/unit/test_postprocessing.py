@@ -66,26 +66,26 @@ def test_molecular_so2_known_value():
 def test_molecular_so2_is_less_than_free_at_typical_wine_ph():
     """Molecular SO2 is always strictly less than free SO2 at typical wine pH."""
     free = np.array([10.0, 20.0, 30.0])
-    result = compute_molecular_so2(free, pH=3.5)
+    result = compute_molecular_so2(free, ph=3.5)
     assert np.all(result < free)
 
 
 def test_lower_ph_gives_higher_molecular_fraction():
     """Lower pH produces more molecular SO2 from the same free SO2 concentration."""
     free = np.array([20.0])
-    assert compute_molecular_so2(free, pH=3.0)[0] > compute_molecular_so2(free, pH=3.8)[0]
+    assert compute_molecular_so2(free, ph=3.0)[0] > compute_molecular_so2(free, ph=3.8)[0]
 
 
 def test_molecular_so2_zero_free_gives_zero():
     """Zero free SO2 always yields zero molecular SO2."""
     free = np.array([0.0])
-    assert compute_molecular_so2(free, pH=3.5)[0] == pytest.approx(0.0)
+    assert compute_molecular_so2(free, ph=3.5)[0] == pytest.approx(0.0)
 
 
 def test_molecular_so2_output_length_matches_input():
     """Output array has the same length as the free_targets input."""
     free = np.array([10.0, 20.0, 30.0, 40.0])
-    assert len(compute_molecular_so2(free, pH=3.5)) == 4
+    assert len(compute_molecular_so2(free, ph=3.5)) == 4
 
 
 # ── apply_operational_constraints ────────────────────────────────────────────

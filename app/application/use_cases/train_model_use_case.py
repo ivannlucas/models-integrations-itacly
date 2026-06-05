@@ -18,5 +18,4 @@ class TrainModelUseCase:
         if list(request_data.keys()) == ["data_path"]:
             return self._plugin.train(data_path=request_data["data_path"])
 
-        else:
-            return self._plugin.train(**request_data, data_path=request.pop("data_path"))
+        return self._plugin.train(**request_data, data_path=request.pop("data_path"))

@@ -1,3 +1,4 @@
+"""Postprocessing functions for the wine sulphite plugin."""
 import numpy as np
 
 from app.plugins.ml25_wine_sulphites.preprocessing import PKA_SO2
@@ -23,19 +24,19 @@ def decode_bound_predictions(raw_bound: np.ndarray, free_targets: np.ndarray) ->
     return pred_sorted[np.argsort(order)]
 
 
-def compute_molecular_so2(free_targets: np.ndarray, pH: float) -> np.ndarray:
+def compute_molecular_so2(free_targets: np.ndarray, ph: float) -> np.ndarray:
     """Calculate molecular SO2 concentration from free SO2 and wine pH.
 
     Formula: [SO2 molecular] = free_SO2 / (1 + 10^(pH - pKa))
 
     Args:
         free_targets: Array of free SO2 values (mg/L).
-        pH: Wine pH.
+        ph: Wine pH.
 
     Returns:
         Array of molecular SO2 values (mg/L).
     """
-    return free_targets / (1.0 + 10.0 ** (pH - PKA_SO2))
+    return free_targets / (1.0 + 10.0 ** (ph - PKA_SO2))
 
 
 def apply_operational_constraints(
