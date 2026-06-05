@@ -274,6 +274,7 @@ https://sites.google.com/luceit.es/luceit/otros/devops/devops-politica_de_versio
 
 | Version | Date (last change) |  Developer   | Changes                      |
 |:-------:|:-------------------|:------------:|:-----------------------------|
+| v0.1.23 | 05/06/2026         |   Pablo      | Artifact store fix				 |
 | v0.1.22 | 05/06/2026         |   Pablo      | Artifact store mock				 |
 | v0.1.21 | 05/06/2026         |   Pablo      | Artifact store mock				 |
 | v0.1.20 | 28/05/2026         |   Trinidad   | Added modelo10-lacteo logic  |

@@ -16,8 +16,6 @@ def make_model_router(
     version: str,
     predict_request_type: Any,
     predict_response_type: Any,
-    train_request_type: Any,
-    train_response_type: Any,
     extra_predict_exceptions: tuple[type[Exception], ...] = (),
     train_request_type: Any = None,
     train_response_type: Any = None,
@@ -66,15 +64,23 @@ def make_model_router(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)
             ) from exc
 
-    @router.post("/train", response_model=train_response_type)
-    async def train(request: Request, body: train_request_type) -> train_response_type:
+    _train_req_type = train_request_type or _DefaultTrainRequest
+    _train_resp_type = train_response_type
+
+    @router.post("/train", response_model=_train_resp_type)
+    async def train(request: Request, body: _train_req_type) -> Any:
         """Trigger model training with the provided data."""
         container = request.app.state.containers[model_id]
         try:
-            return container.train_use_case.execute(body)
+            return container.train_use_case.execute(data_path=body.data_path)
         except TrainingNotSupportedError as exc:
             raise HTTPException(
                 status_code=status.HTTP_501_NOT_IMPLEMENTED, detail=str(exc)
-            )
+            ) from exc
+        except Exception as exc:
+            logger.exception("Unexpected error during training for model '%s'", model_id)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)
+            ) from exc
 
     return router
