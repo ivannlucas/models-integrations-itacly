@@ -4,6 +4,8 @@ from pydantic import BaseModel, Field, ConfigDict
 
 
 class PredictBatchRequest(BaseModel):
+    """Request body for batch prediction via a CSV file path."""
+
     model_config = ConfigDict(protected_namespaces=())
     mode: Literal["batch"] = "batch"
     data_path: str = Field(
@@ -13,6 +15,8 @@ class PredictBatchRequest(BaseModel):
 
 
 class PredictBatchResponse(BaseModel):
+    """Response body returned after a batch prediction request."""
+
     model_config = ConfigDict(protected_namespaces=())
     model_id: str
     predictions: list[dict[str, Any]]
@@ -20,6 +24,8 @@ class PredictBatchResponse(BaseModel):
 
 
 class PredictInlineRequest(BaseModel):
+    """Request body for inline single-sample prediction with wine physicochemical properties."""
+
     model_config = ConfigDict(protected_namespaces=())
     mode: Literal["inline"] = "inline"
     model_key: str | None = None
@@ -60,6 +66,8 @@ class PredictInlineRequest(BaseModel):
 
 
 class PredictInlineResponse(BaseModel):
+    """Response body returned after a single-sample inline prediction."""
+
     model_config = ConfigDict(protected_namespaces=())
     model_id: str
     threshold: float | None = None

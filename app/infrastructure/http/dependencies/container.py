@@ -23,6 +23,7 @@ class ModelContainer:
         batch_response_cls: type,
         inline_response_cls: type,
     ) -> None:
+        """Wire use cases and runtime service around *plugin* with the given response schemas."""
         self._plugin = plugin
         self._service = ModelRuntimeService(plugin)
         self.predict_use_case = PredictModelUseCase(plugin, batch_response_cls, inline_response_cls)
@@ -30,10 +31,12 @@ class ModelContainer:
         self.train_use_case = TrainModelUseCase(plugin)
 
     def init(self) -> None:
+        """Load the plugin's artifacts; called once at application startup."""
         logger.info("Initializing container — loading plugin %s ...", type(self._plugin).__name__)
         self._plugin.load()
         logger.info("Plugin %s loaded successfully.", type(self._plugin).__name__)
 
     @property
     def service(self) -> ModelRuntimeService:
+        """Return the runtime service wrapping the plugin."""
         return self._service

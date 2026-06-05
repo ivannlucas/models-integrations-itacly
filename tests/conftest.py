@@ -50,6 +50,7 @@ class FakePlugin(ModelPluginPort):
         inline_factory: Callable[..., dict],
         batch_factory: Callable[..., dict],
     ) -> None:
+        """Initialise the fake plugin with factory callables for inline and batch responses."""
         self._model_id = model_id
         self._inline_factory = inline_factory
         self._batch_factory = batch_factory
@@ -60,9 +61,11 @@ class FakePlugin(ModelPluginPort):
         self.raise_on_batch: Exception | None = None
 
     def load(self) -> None:
+        """Mark the plugin as loaded."""
         self._loaded = True
 
     def is_loaded(self) -> bool:
+        """Return True once load() has been called."""
         return self._loaded
 
     def predict_inline(
@@ -72,6 +75,7 @@ class FakePlugin(ModelPluginPort):
         model_key: str | None = None,
         threshold: float | None = None,
     ) -> dict:
+        """Delegate to the inline factory, optionally raising a pre-set exception."""
         if self.raise_on_inline is not None:
             exc, self.raise_on_inline = self.raise_on_inline, None
             raise exc
@@ -82,6 +86,7 @@ class FakePlugin(ModelPluginPort):
         )
 
     def predict_batch(self, *, data_path: str) -> dict:
+        """Delegate to the batch factory, optionally raising a pre-set exception."""
         if self.raise_on_batch is not None:
             exc, self.raise_on_batch = self.raise_on_batch, None
             raise exc
@@ -90,6 +95,7 @@ class FakePlugin(ModelPluginPort):
         return self._batch_factory(self, data_path=data_path)
 
     def stats(self) -> StatsResponse:
+        """Return a minimal StatsResponse sufficient for schema-validation tests."""
         return StatsResponse(
             model_name=self._model_id,
             version="0.0.0",
@@ -109,6 +115,7 @@ class FakePlugin(ModelPluginPort):
 # ── Fake response factories per model ──────────────────────────────────────
 
 def _wine_pf_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> dict:
+    """Return a canned inline response for the wine-price-fluctuation model."""
     return {
         "model_id": "wine-price-fluctuation",
         "threshold": threshold,
@@ -122,6 +129,7 @@ def _wine_pf_inline(plugin: FakePlugin, *, features: dict, model_key, threshold)
 
 
 def _wine_pf_batch(plugin: FakePlugin, *, data_path: str) -> dict:
+    """Return a canned batch response for the wine-price-fluctuation model."""
     return {
         "model_id": "wine-price-fluctuation",
         "predictions": [
@@ -133,6 +141,7 @@ def _wine_pf_batch(plugin: FakePlugin, *, data_path: str) -> dict:
 
 
 def _cereal_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> dict:
+    """Return a canned inline response for the cereal-price-forecast model."""
     return {
         "model_id": "cereal-price-forecast",
         "threshold": threshold,
@@ -148,6 +157,7 @@ def _cereal_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) 
 
 
 def _cereal_batch(plugin: FakePlugin, *, data_path: str) -> dict:
+    """Return a canned batch response for the cereal-price-forecast model."""
     return {
         "model_id": "cereal-price-forecast",
         "predictions": [
@@ -159,6 +169,7 @@ def _cereal_batch(plugin: FakePlugin, *, data_path: str) -> dict:
 
 
 def _meat_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> dict:
+    """Return a canned inline response for the meat-price-forecast model."""
     return {
         "model_id": "meat-price-forecast",
         "threshold": threshold,
@@ -178,6 +189,7 @@ def _meat_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) ->
 
 
 def _meat_batch(plugin: FakePlugin, *, data_path: str) -> dict:
+    """Return a canned batch response for the meat-price-forecast model."""
     return {
         "model_id": "meat-price-forecast",
         "predictions": [
@@ -189,6 +201,7 @@ def _meat_batch(plugin: FakePlugin, *, data_path: str) -> dict:
 
 
 def _cnn_fungal_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> dict:
+    """Return a canned inline response for the cnn-fungal-detection model."""
     return {
         "model_id": "cnn-fungal-detection",
         "threshold": threshold,
@@ -200,6 +213,7 @@ def _cnn_fungal_inline(plugin: FakePlugin, *, features: dict, model_key, thresho
 
 
 def _cnn_fungal_batch(plugin: FakePlugin, *, data_path: str) -> dict:
+    """Return a canned batch response for the cnn-fungal-detection model."""
     return {
         "model_id": "cnn-fungal-detection",
         "predictions": [
@@ -211,6 +225,7 @@ def _cnn_fungal_batch(plugin: FakePlugin, *, data_path: str) -> dict:
 
 
 def _cnn_thermal_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> dict:
+    """Return a canned inline response for the cnn-thermal-scm model."""
     return {
         "model_id": "cnn-thermal-scm",
         "threshold": threshold,
@@ -224,6 +239,7 @@ def _cnn_thermal_inline(plugin: FakePlugin, *, features: dict, model_key, thresh
 
 
 def _cnn_thermal_batch(plugin: FakePlugin, *, data_path: str) -> dict:
+    """Return a canned batch response for the cnn-thermal-scm model."""
     return {
         "model_id": "cnn-thermal-scm",
         "predictions": [
@@ -235,6 +251,7 @@ def _cnn_thermal_batch(plugin: FakePlugin, *, data_path: str) -> dict:
 
 
 def _cow_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> dict:
+    """Return a canned inline response for the cow-behavior model."""
     return {
         "model_id": "cow-behavior",
         "threshold": threshold,
@@ -247,6 +264,7 @@ def _cow_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> 
 
 
 def _cow_batch(plugin: FakePlugin, *, data_path: str) -> dict:
+    """Return a canned batch response for the cow-behavior model."""
     return {
         "model_id": "cow-behavior",
         "predictions": [
@@ -258,6 +276,7 @@ def _cow_batch(plugin: FakePlugin, *, data_path: str) -> dict:
 
 
 def _wine_so2_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> dict:
+    """Return a canned inline response for the wine-sulphite model."""
     return {
         "model_id": "wine-sulphite",
         "threshold": threshold,
@@ -282,6 +301,7 @@ def _wine_so2_inline(plugin: FakePlugin, *, features: dict, model_key, threshold
 
 
 def _wine_so2_batch(plugin: FakePlugin, *, data_path: str) -> dict:
+    """Return a canned batch response for the wine-sulphite model."""
     return {
         "model_id": "wine-sulphite",
         "predictions": [
@@ -314,11 +334,13 @@ class _FakeContainer:
     """Lightweight stand-in for ModelContainer used only in tests."""
 
     def __init__(self, plugin: FakePlugin) -> None:
+        """Wire the runtime service around *plugin* and store it for use-case attachment."""
         self._plugin = plugin
         self.service = ModelRuntimeService(plugin)
 
 
 def _build_container(plugin: FakePlugin, entry) -> Any:
+    """Build a _FakeContainer with all use cases wired from *entry*'s response classes."""
     container = _FakeContainer(plugin)
     container.predict_use_case = PredictModelUseCase(
         plugin, entry.batch_response_class, entry.inline_response_class
@@ -371,6 +393,7 @@ def app(fake_plugins: dict[str, FakePlugin]) -> FastAPI:
 
 @pytest.fixture
 def client(app: FastAPI) -> TestClient:
+    """Return a synchronous TestClient backed by the fake-plugin FastAPI app."""
     return TestClient(app)
 
 
@@ -378,6 +401,7 @@ def client(app: FastAPI) -> TestClient:
 
 @pytest.fixture
 def wine_pf_inline_payload() -> dict:
+    """Valid inline request payload for the wine-price-fluctuation model."""
     records = [
         {"campaign": "2023/2024", "week": w, "price_red": 40.0 + w * 0.1}
         for w in range(1, 25)
@@ -387,6 +411,7 @@ def wine_pf_inline_payload() -> dict:
 
 @pytest.fixture
 def cereal_inline_payload() -> dict:
+    """Valid inline request payload for the cereal-price-forecast model."""
     return {
         "mode": "inline",
         "product_name": "Milling wheat",
@@ -401,6 +426,7 @@ def cereal_inline_payload() -> dict:
 
 @pytest.fixture
 def meat_inline_payload() -> dict:
+    """Valid inline request payload for the meat-price-forecast model."""
     rows = [
         {
             "date": f"2024-01-{day:02d}",
@@ -417,16 +443,19 @@ def meat_inline_payload() -> dict:
 
 @pytest.fixture
 def cnn_fungal_inline_payload() -> dict:
+    """Valid inline request payload for the cnn-fungal-detection model."""
     return {"mode": "inline", "image_path": "/tmp/fake_image.jpg"}
 
 
 @pytest.fixture
 def cnn_thermal_inline_payload() -> dict:
+    """Valid inline request payload for the cnn-thermal-scm model."""
     return {"mode": "inline", "image_path": "/tmp/fake_thermal.jpg"}
 
 
 @pytest.fixture
 def cow_inline_payload() -> dict:
+    """Valid inline request payload for the cow-behavior model (32-frame minimum clip)."""
     # 32 frames is the minimum clip length
     frames = ["AAAA"] * 32
     return {"mode": "inline", "frames_base64": frames, "detection_threshold": 0.5}
@@ -434,6 +463,7 @@ def cow_inline_payload() -> dict:
 
 @pytest.fixture
 def wine_so2_inline_payload() -> dict:
+    """Valid inline request payload for the wine-sulphite model."""
     return {
         "mode": "inline",
         "fixed_acidity": 7.4,

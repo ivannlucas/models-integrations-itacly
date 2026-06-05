@@ -33,6 +33,7 @@ def make_model_router(
 
     @router.get("/health")
     async def health(request: Request) -> dict:
+        """Return liveness status and whether the model artifacts are loaded."""
         container = request.app.state.containers[model_id]
         return {
             "status": "ok",
@@ -43,10 +44,12 @@ def make_model_router(
 
     @router.get("/stats", response_model=StatsResponse)
     async def stats(request: Request) -> StatsResponse:
+        """Return model metadata, input/output schema, and runtime statistics."""
         return request.app.state.containers[model_id].stats_use_case.execute()
 
     @router.post("/predict", response_model=predict_response_type)
     async def predict(request: Request, body: predict_request_type) -> predict_response_type:
+        """Run inline or batch prediction and return the model's response."""
         container = request.app.state.containers[model_id]
         try:
             return container.predict_use_case.execute(body)
@@ -65,6 +68,7 @@ def make_model_router(
 
     @router.post("/train", response_model=_train_resp_type)
     async def train(request: Request, body: _train_req_type) -> Any:
+        """Trigger model training with the CSV at *body.data_path*."""
         container = request.app.state.containers[model_id]
         try:
             return container.train_use_case.execute(data_path=body.data_path)

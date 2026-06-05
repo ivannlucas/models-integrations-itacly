@@ -31,7 +31,10 @@ MODEL_VERSION = "1.2.0"
 
 
 class WineSulphitePlugin(ModelPluginPort):
+    """Plugin that recommends optimal free SO2 doses for wine preservation."""
+
     def __init__(self) -> None:
+        """Initialise the plugin with empty models and zeroed runtime counters."""
         self._model_qual: Any = None
         self._model_bound: Any = None
         self._metadata: dict = {}
@@ -41,13 +44,16 @@ class WineSulphitePlugin(ModelPluginPort):
         self._total_latency_ms: float = 0.0
 
     def load(self) -> None:
+        """Load quality and bound SO2 models plus metadata from the artifact store."""
         self._model_qual, self._model_bound, self._metadata = load_artifacts()
         self._loaded = True
 
     def is_loaded(self) -> bool:
+        """Return True if both models and metadata have been loaded."""
         return self._loaded
 
     def _run_inference(self, features: dict) -> dict:
+        """Run the full dual-model simulation pipeline for *features* and return raw results."""
         mae_quality: float = (
             self._metadata.get("metrics", {}).get("quality_cv", {}).get("mae_mean", 0.427)
         )
@@ -114,6 +120,7 @@ class WineSulphitePlugin(ModelPluginPort):
         }
 
     def predict_batch(self, *, data_path: str) -> dict:
+        """Run inference on every row of the CSV at *data_path* and return all predictions."""
         df = pd.read_csv(data_path, sep=None, engine="python")
         df.columns = [c.strip().replace(" ", "_") for c in df.columns]
 
@@ -162,6 +169,7 @@ class WineSulphitePlugin(ModelPluginPort):
         model_key: str | None = None,
         threshold: float | None = None,
     ) -> dict:
+        """Run a single-sample inference and return the sulphite recommendation."""
         t0 = time.perf_counter()
         res = self._run_inference(features)
         self._total_latency_ms += (time.perf_counter() - t0) * 1000
@@ -196,6 +204,7 @@ class WineSulphitePlugin(ModelPluginPort):
         }
 
     def train(self, *, data_path: str) -> dict:  # pylint: disable=too-many-locals
+        """Train dual RandomForest models from the CSV at *data_path*, persist artifacts, and reload."""
         # pylint: disable=import-outside-toplevel
         import json
         import joblib
@@ -280,6 +289,7 @@ class WineSulphitePlugin(ModelPluginPort):
         }
 
     def stats(self) -> StatsResponse:
+        """Build and return the full stats response including input/output schema and runtime metrics."""
         avg = self._total_latency_ms / self._predict_count if self._predict_count > 0 else None
         return StatsResponse(
             model_name=MODEL_NAME,

@@ -2,11 +2,15 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class TrainRequest(BaseModel):
+    """Request body that specifies the CSV file to use for training."""
+
     model_config = ConfigDict(protected_namespaces=())
     data_path: str = Field(..., description="Path to the CSV training file inside the container")
 
 
 class TrainResponse(BaseModel):
+    """Response body returned after a successful training run."""
+
     model_config = ConfigDict(protected_namespaces=())
     detail: str = Field(..., description="Human-readable result message")
     mae_quality: float = Field(..., description="Mean absolute error of the quality model on the held-out test split")

@@ -6,6 +6,8 @@ from pydantic import BaseModel, ConfigDict
 
 
 class InputField(BaseModel):
+    """Describes a single input feature expected by the model."""
+
     model_config = ConfigDict(protected_namespaces=())
     name: str
     type: str
@@ -15,6 +17,8 @@ class InputField(BaseModel):
 
 
 class OutputField(BaseModel):
+    """Describes a single output field produced by the model."""
+
     model_config = ConfigDict(protected_namespaces=())
     name: str
     type: str
@@ -22,12 +26,16 @@ class OutputField(BaseModel):
 
 
 class RuntimeStats(BaseModel):
+    """Aggregated runtime counters collected since the model was loaded."""
+
     model_config = ConfigDict(protected_namespaces=())
     total_predictions: int
     avg_latency_ms: Optional[float]
 
 
 class StatsResponse(BaseModel):
+    """Full stats payload returned by the /stats endpoint for any registered model."""
+
     model_config = ConfigDict(protected_namespaces=())
     model_name: str
     version: str

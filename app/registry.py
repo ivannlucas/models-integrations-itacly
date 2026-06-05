@@ -29,6 +29,8 @@ from app.plugins.ml25_wine_sulphites.train_dto import (
 
 @dataclass
 class ModelEntry:
+    """Registry entry that binds a model ID to its plugin class and Pydantic DTOs."""
+
     model_id: str
     prefix: str
     version: str
