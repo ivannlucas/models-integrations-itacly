@@ -1,3 +1,4 @@
+"""Service layer for interacting with model plugins."""
 import logging
 
 from app.application.dto.stats_dto import StatsResponse
@@ -7,16 +8,16 @@ logger = logging.getLogger(__name__)
 
 
 class ModelRuntimeService:
-    """Runtime wrapper that delegates service-level operations to a plugin."""
+    """Service layer that interacts with model plugins for stats and health checks."""
 
     def __init__(self, plugin: ModelPluginPort) -> None:
-        """Wrap *plugin* so use cases can call it through a uniform interface."""
+        """Initialize the service with a model plugin."""
         self._plugin = plugin
 
     def stats(self) -> StatsResponse:
-        """Return the plugin's model statistics and runtime metadata."""
+        """Fetches model statistics from the plugin."""
         return self._plugin.stats()
 
     def is_loaded(self) -> bool:
-        """Return True if the underlying plugin has loaded its artifacts."""
+        """Checks if the model is loaded."""
         return self._plugin.is_loaded()

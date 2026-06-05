@@ -1,3 +1,4 @@
+"""Model artifact loader for the wine sulphite plugin."""
 import json
 import logging
 from typing import Any
@@ -28,7 +29,8 @@ def upload_artifact(filename: str) -> None:
 
 
 def load_artifacts() -> tuple[Any, Any, dict]:
-    """Load the quality model, bound SO2 model, and metadata from disk (or S3).
+    """Load quality model, bound SO2 model, and metadata from artifact storage."""
+    _store.download_all_if_needed()  # ensure all artifacts are local before loading
 
     Returns a tuple of (model_qual, model_bound, metadata).
     """

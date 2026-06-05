@@ -1,11 +1,11 @@
+"""DTOs for wine sulphite prediction operations."""
 from typing import Annotated, Any, Literal, Union
 
 from pydantic import BaseModel, Field, ConfigDict
 
 
 class PredictBatchRequest(BaseModel):
-    """Request body for batch prediction via a CSV file path."""
-
+    """DTO for batch prediction request."""
     model_config = ConfigDict(protected_namespaces=())
     mode: Literal["batch"] = "batch"
     data_path: str = Field(
@@ -15,8 +15,7 @@ class PredictBatchRequest(BaseModel):
 
 
 class PredictBatchResponse(BaseModel):
-    """Response body returned after a batch prediction request."""
-
+    """DTO for batch prediction response."""
     model_config = ConfigDict(protected_namespaces=())
     model_id: str
     predictions: list[dict[str, Any]]
@@ -24,8 +23,7 @@ class PredictBatchResponse(BaseModel):
 
 
 class PredictInlineRequest(BaseModel):
-    """Request body for inline single-sample prediction with wine physicochemical properties."""
-
+    """DTO for inline prediction request."""
     model_config = ConfigDict(protected_namespaces=())
     mode: Literal["inline"] = "inline"
     model_key: str | None = None
@@ -66,8 +64,7 @@ class PredictInlineRequest(BaseModel):
 
 
 class PredictInlineResponse(BaseModel):
-    """Response body returned after a single-sample inline prediction."""
-
+    """DTO for inline prediction response."""
     model_config = ConfigDict(protected_namespaces=())
     model_id: str
     threshold: float | None = None

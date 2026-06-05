@@ -20,6 +20,7 @@ from pathlib import Path
 
 from boto3.s3.transfer import TransferConfig
 from botocore.client import Config
+from boto3.s3.transfer import TransferConfig
 from dotenv import find_dotenv, load_dotenv
 
 logger = logging.getLogger(__name__)
@@ -38,7 +39,7 @@ ARTIFACTS_ROOT = _REPO_ROOT / "artifacts"
 
 
 def _build_s3_client():
-    """Build and return a boto3 S3 client using environment-variable credentials."""
+    """Build and return an S3 client configured from environment variables."""
     import boto3  # type: ignore[import]
 
     return boto3.client(
@@ -68,13 +69,12 @@ class ArtifactStore:
     """
 
     def __init__(self, model_name: str) -> None:
-        """Initialise the store for *model_name*, pointing at the local artifacts directory."""
+        """Initialize the store for the given model name."""
         self._model_name = model_name
         self._local_dir = ARTIFACTS_ROOT / model_name
 
-    @property
-    def local_dir(self) -> Path:
-        """Return the local directory for this model's artifacts."""
+    def get_local_dir(self) -> Path:
+        """Return the local directory where this model's artifacts are stored."""
         return self._local_dir
 
     def path(self, filename: str) -> Path:
@@ -95,11 +95,15 @@ class ArtifactStore:
         return local
 
     def download_all_if_needed(self) -> None:
-        """Download every file under the model's S3 prefix, skipping up-to-date files."""
+        """Download every file under the model's S3 prefix, skipping up-to-date files.
+
+        No-op when STORAGE_BUCKET is not set (assumes artifacts are already local).
+        """
         if not os.environ.get("STORAGE_BUCKET"):
-            raise EnvironmentError(
-                "STORAGE_BUCKET is not set. Cannot download artifacts from S3."
+            logger.debug(
+                "STORAGE_BUCKET not set — skipping S3 sync for '%s'", self._model_name
             )
+            return
         self._download_all()
 
     # ── S3 download ───────────────────────────────────────────────────────────
@@ -161,22 +165,23 @@ class ArtifactStore:
 
         logger.info("Artifact download complete for model '%s'.", self._model_name)
 
-    def upload(self, filename: str) -> None:
-        """Upload a single local artifact file to S3.
-
-        No-op with a warning if STORAGE_BUCKET is not configured.
-        """
-        if not os.environ.get("STORAGE_BUCKET"):
-            logger.warning(
-                "STORAGE_BUCKET not set — skipping S3 upload for '%s'", filename
-            )
+    def upload_artifact(self, local_path: Path) -> None:
+        """Upload a single artifact file to S3 under the model's prefix."""
+        bucket = os.getenv("STORAGE_BUCKET")
+        if not bucket:
+            logger.warning("STORAGE_BUCKET not set — skipping S3 upload of %s", local_path)
             return
-        bucket = os.environ["STORAGE_BUCKET"]
+
         s3 = _build_s3_client()
-        local_path = self._local_dir / filename
-        remote_key = f"artifacts/fixed/{self._model_name}/{filename}"
-        logger.info("Uploading '%s' to s3://%s/%s ...", filename, bucket, remote_key)
-        # Force single-part (PutObject) — some S3-compatible endpoints fail on CreateMultipartUpload
-        transfer_cfg = TransferConfig(multipart_threshold=5 * 1024 ** 3, use_threads=False)
-        s3.upload_file(str(local_path), bucket, remote_key, Config=transfer_cfg)
-        logger.info("Upload complete: %s", filename)
+        remote_key = f"artifacts/fixed/{self._model_name}/{local_path.name}"
+        logger.info("Uploading %s → s3://%s/%s", local_path.name, bucket, remote_key)
+
+        config = TransferConfig(
+            multipart_threshold=1024 * 1024 * 1024 * 5,  # 5 GB threshold
+            max_concurrency=10,
+            use_threads=False                             # Simpler, single-threaded execution
+        )
+
+        # Pass the config to the upload_file method
+        s3.upload_file(str(local_path), bucket, remote_key, Config=config)
+        logger.info("Upload complete: s3://%s/%s", bucket, remote_key)

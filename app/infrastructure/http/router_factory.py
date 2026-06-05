@@ -1,3 +1,4 @@
+"""Factory for creating FastAPI routers per model plugin."""
 import logging
 from typing import Any
 
@@ -15,6 +16,8 @@ def make_model_router(
     version: str,
     predict_request_type: Any,
     predict_response_type: Any,
+    train_request_type: Any,
+    train_response_type: Any,
     extra_predict_exceptions: tuple[type[Exception], ...] = (),
     train_request_type: Any = None,
     train_response_type: Any = None,
@@ -33,7 +36,7 @@ def make_model_router(
 
     @router.get("/health")
     async def health(request: Request) -> dict:
-        """Return liveness status and whether the model artifacts are loaded."""
+        """Return health status for the model, including load state and version."""
         container = request.app.state.containers[model_id]
         return {
             "status": "ok",
@@ -44,12 +47,12 @@ def make_model_router(
 
     @router.get("/stats", response_model=StatsResponse)
     async def stats(request: Request) -> StatsResponse:
-        """Return model metadata, input/output schema, and runtime statistics."""
+        """Return model metadata and runtime statistics."""
         return request.app.state.containers[model_id].stats_use_case.execute()
 
     @router.post("/predict", response_model=predict_response_type)
     async def predict(request: Request, body: predict_request_type) -> predict_response_type:
-        """Run inline or batch prediction and return the model's response."""
+        """Run prediction (inline or batch) and return typed response."""
         container = request.app.state.containers[model_id]
         try:
             return container.predict_use_case.execute(body)
@@ -63,23 +66,15 @@ def make_model_router(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)
             ) from exc
 
-    _train_req_type = train_request_type or _DefaultTrainRequest
-    _train_resp_type = train_response_type
-
-    @router.post("/train", response_model=_train_resp_type)
-    async def train(request: Request, body: _train_req_type) -> Any:
-        """Trigger model training with the CSV at *body.data_path*."""
+    @router.post("/train", response_model=train_response_type)
+    async def train(request: Request, body: train_request_type) -> train_response_type:
+        """Trigger model training with the provided data."""
         container = request.app.state.containers[model_id]
         try:
-            return container.train_use_case.execute(data_path=body.data_path)
+            return container.train_use_case.execute(body)
         except TrainingNotSupportedError as exc:
             raise HTTPException(
                 status_code=status.HTTP_501_NOT_IMPLEMENTED, detail=str(exc)
-            ) from exc
-        except Exception as exc:
-            logger.exception("Unexpected error during training for model '%s'", model_id)
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)
-            ) from exc
+            )
 
     return router

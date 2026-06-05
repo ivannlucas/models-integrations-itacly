@@ -1,3 +1,4 @@
+"""Generic predict use case for model plugins."""
 import logging
 from typing import Any
 
@@ -20,11 +21,13 @@ class PredictModelUseCase:
         batch_response_cls: type,
         inline_response_cls: type,
     ) -> None:
+        """Initialize the use case with a model plugin and response types."""
         self._plugin = plugin
         self._batch_cls = batch_response_cls
         self._inline_cls = inline_response_cls
 
     def execute(self, request: Any) -> Any:
+        """Execute the prediction, routing to batch or inline mode based on the request."""
         if request.mode == "batch":
             logger.info("Executing batch prediction, data_path=%s", request.data_path)
             result = self._plugin.predict_batch(data_path=request.data_path)

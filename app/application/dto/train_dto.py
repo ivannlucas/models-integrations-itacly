@@ -1,7 +1,13 @@
+"""Data Transfer Objects (DTOs) for training a model."""
 from pydantic import BaseModel
 
 
 class TrainRequest(BaseModel):
-    """Default training request body used when a plugin does not supply its own."""
+    """Request body for training a model."""
+    data_path: str = ""
 
-    data_path: str
+
+class TrainResponse(BaseModel):
+    """Response body for training a model."""
+    detail: str
+    metrics: dict = {}

@@ -1,3 +1,4 @@
+"""Abstract port interface for model plugins."""
 from abc import ABC, abstractmethod
 
 from app.application.dto.stats_dto import StatsResponse
@@ -5,6 +6,8 @@ from app.domain.services.exceptions import TrainingNotSupportedError
 
 
 class ModelPluginPort(ABC):
+    """Interface that all model plugins must implement."""
+
     @abstractmethod
     def load(self) -> None:
         """Load model artifacts from disk."""
@@ -31,8 +34,6 @@ class ModelPluginPort(ABC):
     def stats(self) -> StatsResponse:
         """Return model metadata and runtime statistics."""
 
+    @abstractmethod
     def train(self, *, data_path: str) -> dict:
-        """Train the model on a CSV file and persist artifacts. Override to support training."""
-        raise TrainingNotSupportedError(
-            "Training is not supported by this model. Use the data science pipeline instead."
-        )
+        """Train the model with the provided data"""

@@ -1,3 +1,6 @@
+"""Custom exceptions for model runtime service."""
+
+
 class ModelNotLoadedError(RuntimeError):
     """Raised when prediction is attempted before the model is loaded."""
 

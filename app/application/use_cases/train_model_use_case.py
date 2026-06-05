@@ -1,13 +1,22 @@
+"""Generic train use case for model plugins."""
+from typing import Any
 from app.domain.ports.model_plugin_port import ModelPluginPort
 
 
 class TrainModelUseCase:
-    """Use case that triggers model training via a plugin."""
+    """Generic train use case."""
 
     def __init__(self, plugin: ModelPluginPort) -> None:
-        """Store *plugin* for use during execution."""
+        """Initialize the use case with a model plugin."""
         self._plugin = plugin
 
-    def execute(self, *, data_path: str) -> dict:
-        """Train the model using the CSV at *data_path* and return a result dict."""
-        return self._plugin.train(data_path=data_path)
+    def execute(self, request: Any) -> dict:
+        """Executes the training process."""
+        request_data = request.model_dump()
+
+        # Check if 'data_path' is the ONLY key in the dictionary
+        if list(request_data.keys()) == ["data_path"]:
+            return self._plugin.train(data_path=request_data["data_path"])
+
+        else:
+            return self._plugin.train(**request_data, data_path=request.pop("data_path"))

@@ -1,9 +1,16 @@
+"""Preprocessing functions for the wine sulphite plugin."""
+import logging
+
 from __future__ import annotations
 
 from typing import Any
 
 import numpy as np
 import pandas as pd
+
+from app.plugins.wine_sulphite.predict_dto import PredictInlineRequest
+
+logger = logging.getLogger(__name__)
 
 # Feature sets — order is mandatory (matches training column order)
 FEATURES_PHYS = [
@@ -48,23 +55,29 @@ def build_simulation_grid(
     base_wine: dict,
     delta_max: float,
 ) -> tuple[np.ndarray, pd.DataFrame, pd.DataFrame]:
-    """Build simulation grid from current free SO2 up to current + delta_max.
+    """Build simulation grid from current free SO2 up to current + delta_max."""
+    try:
+        current_free = float(base_wine["free sulfur dioxide"])
+    except KeyError as exc:
+        logger.error("Missing key 'free sulfur dioxide' in base_wine: %s", exc)
+        raise ValueError("base_wine must contain 'free sulfur dioxide'") from exc
+    except (TypeError, ValueError) as exc:
+        logger.error("Invalid 'free sulfur dioxide' value in base_wine: %s", exc)
+        raise ValueError("'free sulfur dioxide' must be a numeric value") from exc
 
-    Args:
-        base_wine: Wine properties dict with space-separated keys.
-        delta_max: Maximum free SO2 increment to explore (mg/L).
+    if delta_max < 0:
+        logger.error("delta_max cannot be negative: %s", delta_max)
+        raise ValueError("delta_max must be non-negative")
 
-    Returns:
-        tuple: (free_targets, qual_rows, bound_rows)
-            - free_targets: 1-D array of candidate free SO2 values
-            - qual_rows: DataFrame with FEATURES_QUAL columns for quality model
-            - bound_rows: DataFrame with FEATURES_BOUND columns for bound model
-    """
-    current_free = float(base_wine["free sulfur dioxide"])
-    free_targets = np.arange(current_free, current_free + delta_max + 1e-9, 1.0)
-    n = len(free_targets)
+    try:
+        free_targets = np.arange(current_free, current_free + delta_max + 1e-9, 1.0)
+        n = len(free_targets)
 
-    phys_base = {k: base_wine[k] for k in FEATURES_PHYS}
+        phys_base = {k: base_wine[k] for k in FEATURES_PHYS}
+    except KeyError as exc:
+        logger.error("Missing key in base_wine: %s", exc)
+        raise ValueError(f"base_wine missing required key: {exc}") from exc
+
     phys_df = pd.DataFrame([phys_base] * n)
 
     bound_rows = phys_df.copy()
@@ -73,6 +86,10 @@ def build_simulation_grid(
     # total SO2 placeholder — will be replaced after bound prediction
     qual_rows = phys_df.copy()
     qual_rows["free sulfur dioxide"] = free_targets
-    qual_rows["total sulfur dioxide"] = float(base_wine["total sulfur dioxide"])
+    try:
+        qual_rows["total sulfur dioxide"] = float(base_wine["total sulfur dioxide"])
+    except (KeyError, TypeError, ValueError) as exc:
+        logger.error("Invalid or missing 'total sulfur dioxide': %s", exc)
+        raise ValueError("base_wine must contain a numeric 'total sulfur dioxide'") from exc
 
     return free_targets, qual_rows[FEATURES_QUAL], bound_rows[FEATURES_BOUND]
