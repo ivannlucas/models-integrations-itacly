@@ -1,9 +1,12 @@
+"""Abstract port interface for model plugins."""
 from abc import ABC, abstractmethod
 
 from app.application.dto.stats_dto import StatsResponse
 
 
 class ModelPluginPort(ABC):
+    """Interface that all model plugins must implement."""
+
     @abstractmethod
     def load(self) -> None:
         """Load model artifacts from disk."""
@@ -29,3 +32,7 @@ class ModelPluginPort(ABC):
     @abstractmethod
     def stats(self) -> StatsResponse:
         """Return model metadata and runtime statistics."""
+
+    @abstractmethod
+    def train(self, *, data_path: str) -> dict:
+        """Train the model with the provided data"""

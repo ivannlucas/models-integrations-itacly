@@ -1,3 +1,4 @@
+"""Postprocessing functions for the wine sulphite plugin."""
 import numpy as np
 
 from app.plugins.wine_sulphite.preprocessing import PKA_SO2

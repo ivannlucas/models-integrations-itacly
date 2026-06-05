@@ -1,3 +1,8 @@
+"""Application entry point for the Luce ML Models API.
+
+Creates and configures the FastAPI application, loading model plugins
+based on the registry and the optional MODEL environment variable.
+"""
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -24,6 +29,7 @@ _active_entries = [e for e in REGISTRY if not _model_filter or e.model_id == _mo
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    """Manage the application lifespan: load models on startup, clean up on shutdown."""
     logger.info("Starting up — loading %d model(s)...", len(_active_entries))
     app.state.containers = {}
     for entry in _active_entries:
@@ -59,6 +65,8 @@ for _entry in _active_entries:
         version=_entry.version,
         predict_request_type=_entry.predict_request_type,
         predict_response_type=_entry.predict_response_type,
+        train_request_type=_entry.train_request_type,
+        train_response_type=_entry.train_response_type,
         extra_predict_exceptions=_entry.extra_predict_exceptions,
     )
     app.include_router(_router, prefix=_entry.prefix, tags=[_entry.model_id])
