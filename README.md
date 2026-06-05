@@ -274,6 +274,7 @@ https://sites.google.com/luceit.es/luceit/otros/devops/devops-politica_de_versio
 
 | Version | Date (last change) |  Developer   | Changes                      |
 |:-------:|:-------------------|:------------:|:-----------------------------|
+| v0.1.21 | 05/06/2026         |   Paolo      | Artifact store mock				 |
 | v0.1.20 | 28/05/2026         |   Trinidad   | Added modelo10-lacteo logic  |
 | v0.1.0  | 28/05/2026         |  Ivan Lucas  | Plugin architecture, ML-25 wine-sulphite model, S3 artifact store, MODEL env var filtering |
 | v0.0.1  | 17/02/2026         | javier.perez | Luce IT repository structure |
