@@ -67,11 +67,7 @@ class TestModelContainer:
     def test_init_creates_use_cases(self):
         """Verify ModelContainer wires use cases on construction."""
         plugin = FakeModelPlugin()
-        container = ModelContainer(
-            plugin=plugin,
-            batch_response_cls=dict,
-            inline_response_cls=dict,
-        )
+        container = ModelContainer(plugin=plugin)
         assert container._plugin is plugin
         assert container._service is not None
         assert container.predict_use_case is not None
@@ -81,11 +77,7 @@ class TestModelContainer:
     def test_init_calls_plugin_load(self):
         """Verify container.init() calls plugin.load()."""
         plugin = FakeModelPlugin()
-        container = ModelContainer(
-            plugin=plugin,
-            batch_response_cls=dict,
-            inline_response_cls=dict,
-        )
+        container = ModelContainer(plugin=plugin)
         assert plugin.is_loaded() is False
         container.init()
         assert plugin.is_loaded() is True
@@ -93,22 +85,14 @@ class TestModelContainer:
     def test_service_property(self):
         """Verify container.service returns a ModelRuntimeService."""
         plugin = FakeModelPlugin()
-        container = ModelContainer(
-            plugin=plugin,
-            batch_response_cls=dict,
-            inline_response_cls=dict,
-        )
+        container = ModelContainer(plugin=plugin)
         assert isinstance(container.service, ModelRuntimeService)
         assert container.service._plugin is plugin
 
     def test_predict_use_case_executes(self):
         """Verify predict use case is wired in the container."""
         plugin = FakeModelPlugin()
-        container = ModelContainer(
-            plugin=plugin,
-            batch_response_cls=dict,
-            inline_response_cls=dict,
-        )
+        container = ModelContainer(plugin=plugin)
         # Just verify it's wired correctly
         assert container.stats_use_case is not None
         assert container.train_use_case is not None

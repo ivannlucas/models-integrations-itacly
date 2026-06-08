@@ -12,6 +12,11 @@ from app.application.dto.stats_dto import InputField, OutputField, RuntimeStats,
 from app.domain.ports.model_plugin_port import ModelPluginPort
 from app.domain.services.exceptions import NoValidSimulationPointError
 from app.plugins.ml25_wine_sulphites.model_loader import load_artifacts
+from app.plugins.ml25_wine_sulphites.predict_dto import (
+    PredictBatchResponse,
+    PredictInlineResponse,
+)
+from app.plugins.ml25_wine_sulphites.train_dto import TrainResponse
 from app.plugins.ml25_wine_sulphites.postprocessing import (
     apply_operational_constraints,
     compute_molecular_so2,
@@ -120,7 +125,7 @@ class WineSulphitePlugin(ModelPluginPort):
             "intervention": intervention,
         }
 
-    def predict_batch(self, *, data_path: str) -> dict:
+    def predict_batch(self, *, data_path: str) -> PredictBatchResponse:
         """Run inference on every row of the CSV at *data_path* and return all predictions."""
         df = pd.read_csv(data_path, sep=None, engine="python")
         df.columns = [c.strip().replace(" ", "_") for c in df.columns]
@@ -157,11 +162,11 @@ class WineSulphitePlugin(ModelPluginPort):
             "predict_batch done — %d predictions count=%d", len(predictions), self._predict_count
         )
 
-        return {
-            "model_id": MODEL_NAME,
-            "predictions": predictions,
-            "output_path": None,
-        }
+        return PredictBatchResponse(
+            model_id=MODEL_NAME,
+            predictions=predictions,
+            output_path=None,
+        )
 
     def predict_inline(
         self,
@@ -169,7 +174,7 @@ class WineSulphitePlugin(ModelPluginPort):
         features: dict,
         model_key: str | None = None,
         threshold: float | None = None,
-    ) -> dict:
+    ) -> PredictInlineResponse:
         """Run a single-sample inference and return the sulphite recommendation."""
         t0 = time.perf_counter()
         res = self._run_inference(features)
@@ -186,25 +191,25 @@ class WineSulphitePlugin(ModelPluginPort):
             self._predict_count,
         )
 
-        return {
-            "model_id": MODEL_NAME,
-            "threshold": threshold,
-            "prediction": res["intervention"],
-            "confidence": float(res["valid_qualities"][i]),
-            "features_used": list(FEATURES_QUAL),
-            "recommended_free_so2": float(res["valid_free"][i]),
-            "recommended_bound_so2": float(res["valid_bounds"][i]),
-            "recommended_total_so2": float(res["valid_totals"][i]),
-            "recommended_molecular_so2": float(res["valid_moleculars"][i]),
-            "predicted_quality": float(res["valid_qualities"][i]),
-            "baseline_predicted_quality": res["baseline_quality"],
-            "recommendation_reason": res["reason"],
-            "intervention_recommended": res["intervention"],
-            "mae_quality": res["mae_quality"],
-            "mae_bound": res["mae_bound"],
-        }
+        return PredictInlineResponse(
+            model_id=MODEL_NAME,
+            threshold=threshold,
+            prediction=res["intervention"],
+            confidence=float(res["valid_qualities"][i]),
+            features_used=list(FEATURES_QUAL),
+            recommended_free_so2=float(res["valid_free"][i]),
+            recommended_bound_so2=float(res["valid_bounds"][i]),
+            recommended_total_so2=float(res["valid_totals"][i]),
+            recommended_molecular_so2=float(res["valid_moleculars"][i]),
+            predicted_quality=float(res["valid_qualities"][i]),
+            baseline_predicted_quality=res["baseline_quality"],
+            recommendation_reason=res["reason"],
+            intervention_recommended=res["intervention"],
+            mae_quality=res["mae_quality"],
+            mae_bound=res["mae_bound"],
+        )
 
-    def train(self, *, data_path: str) -> dict:  # pylint: disable=too-many-locals
+    def train(self, *, data_path: str) -> TrainResponse:  # pylint: disable=too-many-locals
         """Train dual RandomForest models from the CSV at *data_path*, persist artifacts, and reload."""
         # pylint: disable=import-outside-toplevel
         import json
@@ -279,15 +284,15 @@ class WineSulphitePlugin(ModelPluginPort):
 
         self.load()
 
-        return {
-            "detail": "Training completed",
-            "mae_quality": round(mae_qual, 4),
-            "mae_bound_so2": round(mae_bound, 4),
-            "n_train": int(split),
-            "n_test": int(len(df) - split),
-            "training_time_s": round(elapsed, 1),
-            "upload_warning": upload_warning,
-        }
+        return TrainResponse(
+            detail="Training completed",
+            mae_quality=round(mae_qual, 4),
+            mae_bound_so2=round(mae_bound, 4),
+            n_train=int(split),
+            n_test=int(len(df) - split),
+            training_time_s=round(elapsed, 1),
+            upload_warning=upload_warning,
+        )
 
     def stats(self) -> StatsResponse:
         """Build and return the full stats response including input/output schema and runtime metrics."""

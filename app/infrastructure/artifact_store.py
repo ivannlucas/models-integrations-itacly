@@ -77,10 +77,6 @@ class ArtifactStore:
         """Return the local directory where this model's artifacts are stored."""
         return self._local_dir
 
-    def get_local_dir(self) -> Path:
-        """Return the local directory where this model's artifacts are stored."""
-        return self._local_dir
-
     def upload(self, filename: str) -> None:
         """Upload *filename* (relative to local_dir) to S3. No-op when STORAGE_BUCKET is unset."""
         self.upload_artifact(self._local_dir / filename)

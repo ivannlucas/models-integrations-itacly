@@ -14,8 +14,6 @@ from app.domain.services.exceptions import NoValidSimulationPointError
 
 from app.plugins.ml25_wine_sulphites.plugin import WineSulphitePlugin
 from app.plugins.ml25_wine_sulphites.predict_dto import (
-    PredictBatchResponse as WineSO2_BatchResp,
-    PredictInlineResponse as WineSO2_InlineResp,
     PredictRequest as WineSO2_Request,
     PredictResponse as WineSO2_Response,
 )
@@ -26,8 +24,6 @@ from app.plugins.ml25_wine_sulphites.train_dto import (
 
 from app.plugins.modelo10_lacteo.plugin import Modelo10LacteoPlugin
 from app.plugins.modelo10_lacteo.predict_dto import (
-    PredictBatchResponse as Lacteo10_BatchResp,
-    PredictInlineResponse as Lacteo10_InlineResp,
     PredictRequest as Lacteo10_Request,
     PredictResponse as Lacteo10_Response,
 )
@@ -44,11 +40,9 @@ class ModelEntry:
     plugin_class: type
     predict_request_type: Any
     predict_response_type: Any
-    batch_response_class: type
-    inline_response_class: type
-    extra_predict_exceptions: tuple[type[Exception], ...] = field(default_factory=tuple)
     train_request_type: Any | None = None
     train_response_type: Any | None = None
+    extra_predict_exceptions: tuple[type[Exception], ...] = field(default_factory=tuple)
 
 
 # ── Registry ──────────────────────────────────────────────────────────────────
@@ -61,8 +55,6 @@ REGISTRY: list[ModelEntry] = [
         plugin_class=WineSulphitePlugin,
         predict_request_type=WineSO2_Request,
         predict_response_type=WineSO2_Response,
-        batch_response_class=WineSO2_BatchResp,
-        inline_response_class=WineSO2_InlineResp,
         extra_predict_exceptions=(NoValidSimulationPointError,),
         train_request_type=WineSO2_TrainReq,
         train_response_type=WineSO2_TrainResp,
@@ -74,8 +66,6 @@ REGISTRY: list[ModelEntry] = [
         plugin_class=Modelo10LacteoPlugin,
         predict_request_type=Lacteo10_Request,
         predict_response_type=Lacteo10_Response,
-        batch_response_class=Lacteo10_BatchResp,
-        inline_response_class=Lacteo10_InlineResp,
         extra_predict_exceptions=(),
     ),
 ]

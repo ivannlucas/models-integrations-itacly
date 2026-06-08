@@ -410,10 +410,10 @@ class TestWineSulphitePluginDirect:
             "delta_max": delta_max,
         }
         result = plugin.predict_inline(features=features)
-        assert result["model_id"] == "wine-sulphite"
-        assert "prediction" in result
-        assert "confidence" in result
-        assert "recommended_free_so2" in result
+        assert result.model_id == "wine-sulphite"
+        assert hasattr(result, "prediction")
+        assert hasattr(result, "confidence")
+        assert hasattr(result, "recommended_free_so2")
         assert plugin._predict_count == 1
 
     @patch("app.plugins.ml25_wine_sulphites.plugin.load_artifacts")
@@ -481,8 +481,8 @@ class TestWineSulphitePluginDirect:
                 "7.4,0.66,0.0,1.8,0.075,0.9978,3.51,0.56,9.4,11.0,34.0\n"
             )
             result = plugin.predict_batch(data_path=str(csv_path))
-            assert "predictions" in result
-            assert len(result["predictions"]) == 1
+            assert hasattr(result, "predictions")
+            assert len(result.predictions) == 1
 
     @patch("app.plugins.ml25_wine_sulphites.plugin.load_artifacts")
     def test_predict_batch_with_error(self, mock_load):
@@ -511,5 +511,5 @@ class TestWineSulphitePluginDirect:
                 "7.4,0.66,0.0,1.8,0.075,0.9978,3.51,0.56,9.4,11.0,34.0\n"
             )
             result = plugin.predict_batch(data_path=str(csv_path))
-            assert len(result["predictions"]) == 1
-            assert "error" in result["predictions"][0]
+            assert len(result.predictions) == 1
+            assert "error" in result.predictions[0]

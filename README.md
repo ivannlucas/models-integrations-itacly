@@ -4,7 +4,7 @@
 ![Python](https://img.shields.io/badge/Python-3.12-3776AB.svg?logo=python&logoColor=white)
 ![Docker](https://img.shields.io/badge/Docker-Enabled-2496ED.svg?logo=docker&logoColor=white)
 
-![Version](https://img.shields.io/badge/version-0.1.36-blue.svg)
+![Version](https://img.shields.io/badge/version-0.1.37-blue.svg)
 
 ![Status](https://img.shields.io/badge/Status-Work_in_Progress-orange.svg) / ![Status](https://img.shields.io/badge/Status-Production_Ready-brightgreen.svg) / ![Status](https://img.shields.io/badge/Status-Maintenance-lightgrey.svg) / ![Status](https://img.shields.io/badge/Status-Archived-red.svg)
 
@@ -275,6 +275,7 @@ https://sites.google.com/luceit.es/luceit/otros/devops/devops-politica_de_versio
 | Version | Date (last change) |  Developer   | Changes                      |
 |:-------:|:-------------------|:------------:|
 :-----------------------------|
+| v0.1.37 | 08/06/2026         | Alejandro Flores | Typed plugin responses; fix duplicate ModelEntry train fields |
 | v0.1.36 | 08/06/2026         | Pablo    | Add docstrings to ml25 module |  
 | v0.1.35 | 05/06/2026         | Alejandro Flores | Enable sonar.verbose=true (temporary) to debug SonarQube quality gate failure in CI |
 | v0.1.34 | 05/06/2026         | Alejandro Flores | Fix duplicate train kwargs SyntaxError in main.py, refresh CLAUDE.md, wrap long lines in train_dto |

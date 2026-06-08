@@ -18,20 +18,15 @@ class ModelContainer:
     """Generic DI container for any model plugin.
 
     Wires up use cases and the runtime service around a concrete ModelPluginPort.
-    The batch/inline response classes are passed in so each model keeps its own
-    typed Pydantic response schema.
+    Each plugin returns its own typed Pydantic response models, so no response
+    classes need to be injected here.
     """
 
-    def __init__(
-        self,
-        plugin: ModelPluginPort,
-        batch_response_cls: type,
-        inline_response_cls: type,
-    ) -> None:
-        """Recibe el plugin concreto y las clases de respuesta, y crea los casos de uso."""
+    def __init__(self, plugin: ModelPluginPort) -> None:
+        """Recibe el plugin concreto y crea los casos de uso."""
         self._plugin = plugin
         self._service = ModelRuntimeService(plugin)
-        self.predict_use_case = PredictModelUseCase(plugin, batch_response_cls, inline_response_cls)
+        self.predict_use_case = PredictModelUseCase(plugin)
         self.stats_use_case = GetStatsUseCase(plugin)
         self.train_use_case = TrainModelUseCase(plugin)
 

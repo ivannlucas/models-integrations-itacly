@@ -436,9 +436,9 @@ class TestPredictInlineWithMocks:
         plugin = self._make_plugin(detector, classifier)
 
         result = plugin.predict_inline(features={"image_base64": b64})
-        assert result["model_id"] == "modelo10-lacteo"
-        assert result["prediction"] == "fly"
-        assert result["vectors_count"] == 1
+        assert result.model_id == "modelo10-lacteo"
+        assert result.prediction == "fly"
+        assert result.vectors_count == 1
 
     def test_predict_inline_multiple_detections(self):
         """Verify predict_inline handles multiple detections correctly."""
@@ -456,8 +456,8 @@ class TestPredictInlineWithMocks:
         plugin = self._make_plugin(detector, classifier)
 
         result = plugin.predict_inline(features={"image_base64": b64})
-        assert result["model_id"] == "modelo10-lacteo"
-        assert result["vectors_count"] == 2
+        assert result.model_id == "modelo10-lacteo"
+        assert result.vectors_count == 2
 
     def test_predict_inline_no_detections(self):
         """Verify predict_inline returns no_vectors when no detections are found."""
@@ -471,8 +471,8 @@ class TestPredictInlineWithMocks:
         plugin = self._make_plugin(mock_detector, MagicMock())
 
         result = plugin.predict_inline(features={"image_base64": b64})
-        assert result["prediction"] == "no_vectors"
-        assert result["vectors_count"] == 0
+        assert result.prediction == "no_vectors"
+        assert result.vectors_count == 0
 
     def test_predict_inline_with_image_path(self):
         """Verify predict_inline works with an image_path field."""
@@ -485,8 +485,8 @@ class TestPredictInlineWithMocks:
             img_path = Path(tmp) / "test.jpg"
             Image.new("RGB", (50, 50), color="red").save(str(img_path))
             result = plugin.predict_inline(features={"image_path": str(img_path)})
-            assert result["model_id"] == "modelo10-lacteo"
-            assert result["vectors_count"] == 1
+            assert result.model_id == "modelo10-lacteo"
+            assert result.vectors_count == 1
 
     def test_predict_inline_no_image_field_raises(self):
         """Verify predict_inline raises ValueError when no image field is provided."""
@@ -534,7 +534,7 @@ class TestPredictInlineWithMocks:
         classifier = _make_mock_classifier()
         plugin = self._make_plugin(d, classifier)
         result = plugin.predict_inline(features={"image_base64": b64})
-        assert result["vectors_count"] == 0  # zero-area box skipped
+        assert result.vectors_count == 0  # zero-area box skipped
 
 
 # ── Predict batch with mocked models ─────────────────────────────────────
@@ -576,8 +576,8 @@ class TestPredictBatchWithMocks:
                 img_path = Path(tmp) / "test.jpg"
                 Image.new("RGB", (50, 50), color="red").save(str(img_path))
                 result = plugin.predict_batch(data_path=tmp)
-                assert result["model_id"] == "modelo10-lacteo"
-                assert len(result["predictions"]) == 1
+                assert result.model_id == "modelo10-lacteo"
+                assert len(result.predictions) == 1
                 assert plugin._predict_count == 1
 
     def test_predict_batch_with_csv(self):
@@ -600,8 +600,8 @@ class TestPredictBatchWithMocks:
                     writer.writerow(["image_path"])
                     writer.writerow([str(img_path)])
                 result = plugin.predict_batch(data_path=str(csv_path))
-                assert result["model_id"] == "modelo10-lacteo"
-                assert len(result["predictions"]) == 1
+                assert result.model_id == "modelo10-lacteo"
+                assert len(result.predictions) == 1
                 assert plugin._predict_count == 1
 
     def test_predict_batch_empty_directory_raises(self):
@@ -644,8 +644,8 @@ class TestPredictBatchWithMocks:
                     writer.writerow(["image_path"])
                     writer.writerow([str(Path(tmp) / "nonexistent.jpg")])
                 result = plugin.predict_batch(data_path=str(csv_path))
-                assert len(result["predictions"]) == 1
-                assert result["predictions"][0]["status"] == "error"
+                assert len(result.predictions) == 1
+                assert result.predictions[0]["status"] == "error"
 
 
 # ── Predict batch zip mode ──────────────────────────────────────────────
@@ -694,8 +694,8 @@ class TestPredictBatchZip:
                     for f in img_dir.rglob("*"):
                         zf.write(str(f), arcname=f"images/{f.name}")
                 result = plugin.predict_batch(data_path=str(zip_path))
-                assert result["model_id"] == "modelo10-lacteo"
-                assert len(result["predictions"]) == 2
+                assert result.model_id == "modelo10-lacteo"
+                assert len(result.predictions) == 2
 
     def test_predict_batch_zip_no_images_raises(self):
         """Verify predict_batch raises ValueError when ZIP has no image files."""

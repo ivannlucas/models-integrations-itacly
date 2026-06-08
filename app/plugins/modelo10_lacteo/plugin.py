@@ -27,6 +27,10 @@ from app.domain.services.exceptions import InvalidImageError, ModelNotLoadedErro
 from app.infrastructure.artifact_store import ArtifactStore
 from app.plugins.modelo10_lacteo.model_loader import load_detector_and_classifier
 from app.plugins.modelo10_lacteo.postprocessing import build_inline_result, classify_crop
+from app.plugins.modelo10_lacteo.predict_dto import (
+    PredictBatchResponse,
+    PredictInlineResponse,
+)
 from app.plugins.modelo10_lacteo.preprocessing import (
     crop_to_tensor,
     image_base64_to_pil,
@@ -164,7 +168,7 @@ class Modelo10LacteoPlugin(ModelPluginPort):
         features: dict,
         model_key: str | None = None,
         threshold: float | None = None,
-    ) -> dict:
+    ) -> PredictInlineResponse:
         """Ejecuta inferencia en una sola imagen (base64 o path) y devuelve la predicción."""
         self._assert_loaded()
 
@@ -186,11 +190,11 @@ class Modelo10LacteoPlugin(ModelPluginPort):
         detections = self._run_pipeline(image_pil, det_conf, cls_conf)
         self._update_stats(latency_ms=(time.perf_counter() - t0) * 1000)
 
-        return build_inline_result(self.MODEL_ID, detections)
+        return PredictInlineResponse(**build_inline_result(self.MODEL_ID, detections))
 
     # ── predict_batch ─────────────────────────────────────────────────────────
 
-    def predict_batch(self, *, data_path: str) -> dict:
+    def predict_batch(self, *, data_path: str) -> PredictBatchResponse:
         """Ejecuta inferencia en batch sobre un CSV/ZIP/directorio de imágenes y devuelve las predicciones."""
         self._assert_loaded()
 
@@ -236,7 +240,9 @@ class Modelo10LacteoPlugin(ModelPluginPort):
                 shutil.rmtree(temp_dir, ignore_errors=True)
 
         self._update_stats(latency_ms=(time.perf_counter() - t0) * 1000)
-        return {"model_id": self.MODEL_ID, "predictions": predictions, "output_path": None}
+        return PredictBatchResponse(
+            model_id=self.MODEL_ID, predictions=predictions, output_path=None
+        )
 
     # ── get_stats ─────────────────────────────────────────────────────────────
 
@@ -312,7 +318,7 @@ class Modelo10LacteoPlugin(ModelPluginPort):
                     paths.append(Path(ip))
         return paths
 
-    def train(self, *, data_path: str) -> dict:
+    def train(self, *, data_path: str) -> TrainResponse:
         """Train the MobileNetV3 classifier from a ZIP.
 
         Accepted ZIP structures:
@@ -394,7 +400,7 @@ class Modelo10LacteoPlugin(ModelPluginPort):
                 model.load_state_dict(best_state)
 
             # Save artifacts
-            torch.save(model.state_dict(), _store.get_local_dir() / CLASSIFIER_FILENAME)  # Direct save to final location to avoid double disk usage
+            torch.save(model.state_dict(), _store.local_dir / CLASSIFIER_FILENAME)  # Direct save to final location to avoid double disk usage
             with open(_store.path(CLASS_NAMES_FILENAME), "w") as fh:
                 json.dump(class_names, fh)
             logger.info("Clasificador guardado. Clases: %s", class_names)
