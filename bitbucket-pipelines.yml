@@ -48,7 +48,6 @@ pipelines:
     '{feature/*,fix/*}':
       - step:
           name: Lint & Tests
-          trigger: manual
           image: python:3.12
           script:
             - echo "Ejecutar lint y tests aquí"
@@ -57,7 +56,6 @@ pipelines:
     develop:
       - step:
           name: Docker Build & Push
-          trigger: manual
           image: mcr.microsoft.com/azure-cli:latest
           runs-on:
             - self.hosted
