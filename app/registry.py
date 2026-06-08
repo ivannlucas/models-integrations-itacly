@@ -7,7 +7,6 @@ To add a new model:
 from dataclasses import dataclass, field
 from typing import Any
 
-from app.application.dto.train_dto import TrainRequest, TrainResponse
 from app.domain.services.exceptions import NoValidSimulationPointError
 
 # ── Plugin imports ────────────────────────────────────────────────────────────
@@ -47,9 +46,9 @@ class ModelEntry:
     predict_response_type: Any
     batch_response_class: type
     inline_response_class: type
-    train_request_type: Any | None = field(default_factory=lambda: TrainRequest)
-    train_response_type: Any | None = field(default_factory=lambda: TrainResponse)
     extra_predict_exceptions: tuple[type[Exception], ...] = field(default_factory=tuple)
+    train_request_type: Any | None = None
+    train_response_type: Any | None = None
 
 
 # ── Registry ──────────────────────────────────────────────────────────────────

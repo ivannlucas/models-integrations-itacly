@@ -4,7 +4,7 @@
 ![Python](https://img.shields.io/badge/Python-3.12-3776AB.svg?logo=python&logoColor=white)
 ![Docker](https://img.shields.io/badge/Docker-Enabled-2496ED.svg?logo=docker&logoColor=white)
 
-![Version](https://img.shields.io/badge/version-0.1.20-blue.svg)
+![Version](https://img.shields.io/badge/version-0.1.28-blue.svg)
 
 ![Status](https://img.shields.io/badge/Status-Work_in_Progress-orange.svg) / ![Status](https://img.shields.io/badge/Status-Production_Ready-brightgreen.svg) / ![Status](https://img.shields.io/badge/Status-Maintenance-lightgrey.svg) / ![Status](https://img.shields.io/badge/Status-Archived-red.svg)
 
@@ -275,6 +275,7 @@ https://sites.google.com/luceit.es/luceit/otros/devops/devops-politica_de_versio
 | Version | Date (last change) |  Developer   | Changes                      |
 |:-------:|:-------------------|:------------:|
 :-----------------------------|
+| v0.1.28 | 08/06/2026         |   Pablo      | Sonarqube fix		         |
 | v0.1.27 | 05/06/2026         | Alejandro Flores | Fix missing train fields in ModelEntry dataclass |
 | v0.1.26 | 05/06/2026         | Alejandro Flores | Fix SyntaxError in ml25 model_loader |
 | v0.1.25 | 05/06/2026         | Alejandro Flores | Fix post-merge: SyntaxError, lint, StatsResponse schema, tests |
