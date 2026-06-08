@@ -4,7 +4,6 @@ options:
   docker: true
 clone:
   depth: full
-
 pipelines:
   # Heritage pipelines to combine common steps across different branches
   custom:
@@ -49,62 +48,60 @@ pipelines:
     '{feature/*,fix/*}':
       - step:
           name: Lint & Tests
-          trigger: manual
           image: python:3.12
           script:
             - echo "Ejecutar lint y tests aquí"
             # pip install -r requirements.txt
             # pytest, flake8, etc.
-  develop:
-    - step:
-        name: Docker Build & Push
-        trigger: manual
-        image: mcr.microsoft.com/azure-cli:latest
-        runs-on:
-          - self.hosted
-          - linux
-          - luceit
-        script:
-          - VERSION=$(cat .VERSION)
-          - DOCKER_IMAGE_VERSION=${DOCKER_IMAGE_NAME}:${VERSION}
-          - echo "Construimos imagen ${DOCKER_IMAGE_VERSION}"
-          - az login --service-principal --username ${AZURE_APP_ID} --password ${AZURE_APP_SECRET} --tenant ${AZURE_TENANT_ID}
-          - az acr build -r ${DOCKER_REGISTRY_SERVER} -t ${DOCKER_IMAGE_VERSION} .
-    - step:
-        name: Pipeline - Develop Common Steps
-        type: pipeline
-        custom: parent-develop-pipeline-common
-    - step:
-        name: Pipeline - Deploy to Develop
-        type: pipeline
-        custom: parent-develop-deploy-azure
-  staging:
-    - step:
-        name: Pipeline - Staging Common Steps
-        type: pipeline
-        custom: parent-staging-pipeline-common
-    - step:
-        name: Pipeline - Deploy to Staging
-        type: pipeline
-        custom: parent-staging-deploy-azure
-    - step:
-        name: Pipeline - Post Deploy Testing
-        type: pipeline
-        custom: parent-post-deploy-testing
-    - step:
-        name: Pipeline - Post Deploy Steps
-        type: pipeline
-        custom: parent-post-deploy-steps
-  master:
-    - step:
-        name: Pipeline - Master Common Steps
-        type: pipeline
-        custom: parent-master-pipeline-common
-    - step:
-        name: Pipeline - Deploy to Production
-        type: pipeline
-        custom: parent-master-deploy-azure
-    - step:
-        name: Pipeline - Post Deploy Steps
-        type: pipeline
-        custom: parent-post-deploy-steps
+    develop:
+      - step:
+          name: Docker Build & Push
+          image: mcr.microsoft.com/azure-cli:latest
+          runs-on:
+            - self.hosted
+            - linux
+            - luceit
+          script:
+            - VERSION=$(cat .VERSION)
+            - DOCKER_IMAGE_VERSION=${DOCKER_IMAGE_NAME}:${VERSION}
+            - echo "Construimos imagen ${DOCKER_IMAGE_VERSION}"
+            - az login --service-principal --username ${AZURE_APP_ID} --password ${AZURE_APP_SECRET} --tenant ${AZURE_TENANT_ID}
+            - az acr build -r ${DOCKER_REGISTRY_SERVER} -t ${DOCKER_IMAGE_VERSION} .
+      - step:
+          name: Pipeline - Develop Common Steps
+          type: pipeline
+          custom: parent-develop-pipeline-common
+      - step:
+          name: Pipeline - Deploy to Develop
+          type: pipeline
+          custom: parent-develop-deploy-azure
+    staging:
+      - step:
+          name: Pipeline - Staging Common Steps
+          type: pipeline
+          custom: parent-staging-pipeline-common
+      - step:
+          name: Pipeline - Deploy to Staging
+          type: pipeline
+          custom: parent-staging-deploy-azure
+      - step:
+          name: Pipeline - Post Deploy Testing
+          type: pipeline
+          custom: parent-post-deploy-testing
+      - step:
+          name: Pipeline - Post Deploy Steps
+          type: pipeline
+          custom: parent-post-deploy-steps
+    master:
+      - step:
+          name: Pipeline - Master Common Steps
+          type: pipeline
+          custom: parent-master-pipeline-common
+      - step:
+          name: Pipeline - Deploy to Production
+          type: pipeline
+          custom: parent-master-deploy-azure
+      - step:
+          name: Pipeline - Post Deploy Steps
+          type: pipeline
+          custom: parent-post-deploy-steps
