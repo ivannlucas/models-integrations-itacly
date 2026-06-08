@@ -69,3 +69,9 @@ tests/output*
 __pycache__/
 *.pyc
 .env
+
+# Markdown docs not meant to be tracked (README.md and deployment/ docs stay visible)
+CLAUDE.md
+IMPLEMENTATION.md
+ADDING_A_MODEL.md
+/docs/

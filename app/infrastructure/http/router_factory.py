@@ -5,6 +5,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request, status
 
 from app.application.dto.stats_dto import StatsResponse
+from app.application.dto.train_dto import TrainRequest as _DefaultTrainRequest, TrainResponse as _DefaultTrainResponse
 from app.domain.services.exceptions import TrainingNotSupportedError
 
 logger = logging.getLogger(__name__)
@@ -30,6 +31,8 @@ def make_model_router(
     2. Adding a ModelEntry to app/registry.py
     """
     router = APIRouter()
+    _train_req = train_request_type or _DefaultTrainRequest
+    _train_resp = train_response_type or _DefaultTrainResponse
 
     @router.get("/health")
     async def health(request: Request) -> dict:
@@ -42,12 +45,12 @@ def make_model_router(
             "loaded": container.service.is_loaded(),
         }
 
-    @router.get("/stats", response_model=StatsResponse)
+    @router.get("/stats")
     async def stats(request: Request) -> StatsResponse:
         """Return model metadata and runtime statistics."""
         return request.app.state.containers[model_id].stats_use_case.execute()
 
-    @router.post("/predict", response_model=predict_response_type)
+    @router.post("/predict")
     async def predict(request: Request, body: predict_request_type) -> predict_response_type:
         """Run prediction (inline or batch) and return typed response."""
         container = request.app.state.containers[model_id]
@@ -56,15 +59,15 @@ def make_model_router(
         except Exception as exc:
             if extra_predict_exceptions and isinstance(exc, extra_predict_exceptions):
                 raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
-                )
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)
+                ) from exc
             logger.exception("Unexpected error during prediction for model '%s'", model_id)
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)
-            )
+            ) from exc
 
-    @router.post("/train", response_model=train_response_type)
-    async def train(request: Request, body: train_request_type) -> train_response_type:
+    @router.post("/train")
+    async def train(request: Request, body: _train_req) -> _train_resp:
         """Trigger model training with the provided data."""
         container = request.app.state.containers[model_id]
         try:
@@ -72,6 +75,6 @@ def make_model_router(
         except TrainingNotSupportedError as exc:
             raise HTTPException(
                 status_code=status.HTTP_501_NOT_IMPLEMENTED, detail=str(exc)
-            )
+            ) from exc
 
     return router

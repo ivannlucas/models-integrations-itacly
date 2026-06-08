@@ -1,10 +1,11 @@
 """Preprocessing functions for the wine sulphite plugin."""
+from __future__ import annotations
+
 import logging
+from typing import Any
 
 import numpy as np
 import pandas as pd
-
-from app.plugins.wine_sulphite.predict_dto import PredictInlineRequest
 
 logger = logging.getLogger(__name__)
 
@@ -27,8 +28,11 @@ FEATURES_BOUND = FEATURES_PHYS + ["free sulfur dioxide"]
 PKA_SO2 = 1.81
 
 
-def map_request_to_wine_dict(request: PredictInlineRequest) -> dict:
-    """Map snake_case API fields to the space-separated column names used at training time."""
+def map_request_to_wine_dict(request: Any) -> dict:
+    """Map snake_case API fields to the space-separated column names used at training time.
+
+    Accepts any object with the expected attributes (Pydantic model, SimpleNamespace, etc.).
+    """
     return {
         "fixed acidity": request.fixed_acidity,
         "volatile acidity": request.volatile_acidity,

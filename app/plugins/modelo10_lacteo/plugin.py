@@ -20,13 +20,17 @@ from torch import optim
 from torch.utils.data import DataLoader
 from torchvision import datasets, models, transforms
 
-from app.application.dto.stats_dto import StatsResponse
+from app.application.dto.stats_dto import InputField, OutputField, RuntimeStats, StatsResponse
 from app.application.dto.train_dto import TrainResponse
 from app.domain.ports.model_plugin_port import ModelPluginPort
 from app.domain.services.exceptions import InvalidImageError, ModelNotLoadedError
 from app.infrastructure.artifact_store import ArtifactStore
 from app.plugins.modelo10_lacteo.model_loader import load_detector_and_classifier
 from app.plugins.modelo10_lacteo.postprocessing import build_inline_result, classify_crop
+from app.plugins.modelo10_lacteo.predict_dto import (
+    PredictBatchResponse,
+    PredictInlineResponse,
+)
 from app.plugins.modelo10_lacteo.preprocessing import (
     crop_to_tensor,
     image_base64_to_pil,
@@ -164,7 +168,7 @@ class Modelo10LacteoPlugin(ModelPluginPort):
         features: dict,
         model_key: str | None = None,
         threshold: float | None = None,
-    ) -> dict:
+    ) -> PredictInlineResponse:
         """Ejecuta inferencia en una sola imagen (base64 o path) y devuelve la predicción."""
         self._assert_loaded()
 
@@ -186,11 +190,11 @@ class Modelo10LacteoPlugin(ModelPluginPort):
         detections = self._run_pipeline(image_pil, det_conf, cls_conf)
         self._update_stats(latency_ms=(time.perf_counter() - t0) * 1000)
 
-        return build_inline_result(self.MODEL_ID, detections)
+        return PredictInlineResponse(**build_inline_result(self.MODEL_ID, detections))
 
     # ── predict_batch ─────────────────────────────────────────────────────────
 
-    def predict_batch(self, *, data_path: str) -> dict:
+    def predict_batch(self, *, data_path: str) -> PredictBatchResponse:
         """Ejecuta inferencia en batch sobre un CSV/ZIP/directorio de imágenes y devuelve las predicciones."""
         self._assert_loaded()
 
@@ -236,39 +240,41 @@ class Modelo10LacteoPlugin(ModelPluginPort):
                 shutil.rmtree(temp_dir, ignore_errors=True)
 
         self._update_stats(latency_ms=(time.perf_counter() - t0) * 1000)
-        return {"model_id": self.MODEL_ID, "predictions": predictions, "output_path": None}
+        return PredictBatchResponse(
+            model_id=self.MODEL_ID, predictions=predictions, output_path=None
+        )
 
     # ── get_stats ─────────────────────────────────────────────────────────────
 
     def stats(self) -> StatsResponse:
         """Devuelve estadísticas de uso y metadata del modelo."""
+        avg = self._total_latency_ms / self._predict_count if self._predict_count > 0 else None
         return StatsResponse(
             model_name=self.MODEL_ID,
-            model_type="classification",
+            version=self.VERSION,
+            description="Detección y clasificación de vectores (mosca, mosquito, garrapata) en imágenes de ganado lechero.",
+            task_type="object-detection+classification",
             framework=self.FRAMEWORK,
-            artifact_path=str(_store.get_local_dir()),
-            input_schema={
-                "type": "object",
-                "properties": {
-                    "image": {
-                        "type": "file",
-                        "formats": ["jpg", "jpeg", "png", "bmp", "tif"],
-                        "description": "Imagen de ganado lechero (base64 para inline, CSV/ZIP/directorio para batch)",
-                    },
-                },
-            },
-            output_schema={
-                "type": "object",
-                "properties": {
-                    "prediction": {"type": "str", "description": "Especie dominante detectada (fly | mos | tick | no_vectors)"},
-                    "confidence": {"type": "float", "description": "Confianza de clasificación de la detección dominante [0, 1]"},
-                    "vectors_count": {"type": "int", "description": "Número total de vectores detectados y clasificados"},
-                    "detections": {"type": "list", "description": "Lista de detecciones con species, det_conf, cls_conf, bbox"},
-                    "species_summary": {"type": "dict", "description": "Resumen de cantidad por especie"},
-                },
-            },
-            predict_count=self._predict_count,
-            last_predict_at=self._last_predict_at,
+            inputs=[
+                InputField(
+                    name="image",
+                    type="file",
+                    format=["jpg", "jpeg", "png", "bmp", "tif"],
+                    description="Imagen de ganado lechero (base64 para inline, CSV/ZIP/directorio para batch)",
+                ),
+            ],
+            outputs=[
+                OutputField(name="prediction", type="str", description="Especie dominante detectada (fly | mos | tick | no_vectors)"),
+                OutputField(name="confidence", type="float", description="Confianza de clasificación de la detección dominante [0, 1]"),
+                OutputField(name="vectors_count", type="int", description="Número total de vectores detectados y clasificados"),
+                OutputField(name="detections", type="list", description="Lista de detecciones con species, det_conf, cls_conf, bbox"),
+                OutputField(name="species_summary", type="dict", description="Resumen de cantidad por especie"),
+            ],
+            metrics={},
+            runtime_stats=RuntimeStats(
+                total_predictions=self._predict_count,
+                avg_latency_ms=avg,
+            ),
         )
 
     # ── private helpers ───────────────────────────────────────────────────────
@@ -312,7 +318,7 @@ class Modelo10LacteoPlugin(ModelPluginPort):
                     paths.append(Path(ip))
         return paths
 
-    def train(self, *, data_path: str) -> dict:
+    def train(self, *, data_path: str) -> TrainResponse:
         """Train the MobileNetV3 classifier from a ZIP.
 
         Accepted ZIP structures:
@@ -394,7 +400,7 @@ class Modelo10LacteoPlugin(ModelPluginPort):
                 model.load_state_dict(best_state)
 
             # Save artifacts
-            torch.save(model.state_dict(), _store.get_local_dir() / CLASSIFIER_FILENAME)  # Direct save to final location to avoid double disk usage
+            torch.save(model.state_dict(), _store.local_dir / CLASSIFIER_FILENAME)  # Direct save to final location to avoid double disk usage
             with open(_store.path(CLASS_NAMES_FILENAME), "w") as fh:
                 json.dump(class_names, fh)
             logger.info("Clasificador guardado. Clases: %s", class_names)

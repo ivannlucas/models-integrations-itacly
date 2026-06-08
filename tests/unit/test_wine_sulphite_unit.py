@@ -10,20 +10,20 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import pytest
 
-from app.plugins.wine_sulphite.postprocessing import (
+from app.plugins.ml25_wine_sulphites.postprocessing import (
     apply_operational_constraints,
     compute_molecular_so2,
     decode_bound_predictions,
     select_recommendation,
 )
-from app.plugins.wine_sulphite.preprocessing import (
+from app.plugins.ml25_wine_sulphites.preprocessing import (
     FEATURES_BOUND,
     FEATURES_QUAL,
     PKA_SO2,
     build_simulation_grid,
     map_request_to_wine_dict,
 )
-from app.plugins.wine_sulphite.predict_dto import PredictInlineRequest
+from app.plugins.ml25_wine_sulphites.predict_dto import PredictInlineRequest
 
 
 # ── preprocessing tests ───────────────────────────────────────────────────
@@ -306,12 +306,12 @@ class TestLoadArtifacts:
         mock_qual = MagicMock()
         mock_bound = MagicMock()
 
-        with patch("app.plugins.wine_sulphite.model_loader._store.download_all_if_needed"), \
-             patch("app.plugins.wine_sulphite.model_loader._store.path",
+        with patch("app.plugins.ml25_wine_sulphites.model_loader._store.download_all_if_needed"), \
+             patch("app.plugins.ml25_wine_sulphites.model_loader._store.path",
                    side_effect=lambda f: tmp_path / f), \
-             patch("app.plugins.wine_sulphite.model_loader.joblib.load",
+             patch("app.plugins.ml25_wine_sulphites.model_loader.joblib.load",
                    side_effect=[mock_qual, mock_bound]):
-            from app.plugins.wine_sulphite.model_loader import load_artifacts
+            from app.plugins.ml25_wine_sulphites.model_loader import load_artifacts
             qual, bound, metadata = load_artifacts()
 
         assert qual is mock_qual
@@ -324,53 +324,52 @@ class TestLoadArtifacts:
 class TestWineSulphitePluginDirect:
     """Tests for the real WineSulphitePlugin class with mocked model loading."""
 
-    @patch("app.plugins.wine_sulphite.plugin.load_artifacts")
+    @patch("app.plugins.ml25_wine_sulphites.plugin.load_artifacts")
     def test_initial_state(self, mock_load):
         """Verify the plugin starts in an unloaded state with zero stats."""
         mock_load.return_value = (MagicMock(), MagicMock(), {})
-        from app.plugins.wine_sulphite.plugin import WineSulphitePlugin
+        from app.plugins.ml25_wine_sulphites.plugin import WineSulphitePlugin
         plugin = WineSulphitePlugin()
         assert plugin.is_loaded() is False
         assert plugin._predict_count == 0
         assert plugin._last_predict_at is None
 
-    @patch("app.plugins.wine_sulphite.plugin.load_artifacts")
+    @patch("app.plugins.ml25_wine_sulphites.plugin.load_artifacts")
     def test_load_sets_loaded(self, mock_load):
         """Verify calling load() makes is_loaded() return True."""
         mock_load.return_value = (MagicMock(), MagicMock(), {})
-        from app.plugins.wine_sulphite.plugin import WineSulphitePlugin
+        from app.plugins.ml25_wine_sulphites.plugin import WineSulphitePlugin
         plugin = WineSulphitePlugin()
         plugin.load()
         assert plugin.is_loaded() is True
 
-    @patch("app.plugins.wine_sulphite.plugin.load_artifacts")
+    @patch("app.plugins.ml25_wine_sulphites.plugin.load_artifacts")
     def test_stats_structure(self, mock_load):
         """Verify stats() returns a StatsResponse with expected fields."""
         mock_load.return_value = (MagicMock(), MagicMock(), {})
-        from app.plugins.wine_sulphite.plugin import WineSulphitePlugin
+        from app.plugins.ml25_wine_sulphites.plugin import WineSulphitePlugin
         plugin = WineSulphitePlugin()
         plugin.load()
         stats = plugin.stats()
         assert stats.model_name == "wine-sulphite"
-        assert stats.predict_count == 0
-        assert stats.last_predict_at is None
+        assert stats.runtime_stats.total_predictions == 0
+        assert stats.runtime_stats.avg_latency_ms is None
 
-    @patch("app.plugins.wine_sulphite.plugin.load_artifacts")
-    def test_train_raises_not_supported(self, mock_load):
-        """Verify train() raises TrainingNotSupportedError."""
+    @patch("app.plugins.ml25_wine_sulphites.plugin.load_artifacts")
+    def test_train_raises_file_not_found_for_missing_path(self, mock_load):
+        """Verify train() raises FileNotFoundError when the data file does not exist."""
         mock_load.return_value = (MagicMock(), MagicMock(), {})
-        from app.domain.services.exceptions import TrainingNotSupportedError
-        from app.plugins.wine_sulphite.plugin import WineSulphitePlugin
+        from app.plugins.ml25_wine_sulphites.plugin import WineSulphitePlugin
         plugin = WineSulphitePlugin()
         plugin.load()
-        with pytest.raises(TrainingNotSupportedError):
-            plugin.train(data_path="/some/path.zip")
+        with pytest.raises((FileNotFoundError, OSError)):
+            plugin.train(data_path="/nonexistent/path.csv")
 
-    @patch("app.plugins.wine_sulphite.plugin.load_artifacts")
+    @patch("app.plugins.ml25_wine_sulphites.plugin.load_artifacts")
     def test_predict_inline_with_mocked_models(self, mock_load):
         """Verify predict_inline returns expected fields with mocked models."""
         import numpy as np
-        from app.plugins.wine_sulphite.plugin import WineSulphitePlugin
+        from app.plugins.ml25_wine_sulphites.plugin import WineSulphitePlugin
 
         # Build a range of free SO2 values matching expected grid
         base_free = 11.0
@@ -411,18 +410,18 @@ class TestWineSulphitePluginDirect:
             "delta_max": delta_max,
         }
         result = plugin.predict_inline(features=features)
-        assert result["model_id"] == "wine-sulphite"
-        assert "prediction" in result
-        assert "confidence" in result
-        assert "recommended_free_so2" in result
+        assert result.model_id == "wine-sulphite"
+        assert hasattr(result, "prediction")
+        assert hasattr(result, "confidence")
+        assert hasattr(result, "recommended_free_so2")
         assert plugin._predict_count == 1
 
-    @patch("app.plugins.wine_sulphite.plugin.load_artifacts")
+    @patch("app.plugins.ml25_wine_sulphites.plugin.load_artifacts")
     def test_predict_inline_no_valid_point_raises(self, mock_load):
         """Verify predict_inline raises NoValidSimulationPointError when no feasible SO2 dose exists."""
         import numpy as np
         from app.domain.services.exceptions import NoValidSimulationPointError
-        from app.plugins.wine_sulphite.plugin import WineSulphitePlugin
+        from app.plugins.ml25_wine_sulphites.plugin import WineSulphitePlugin
 
         base_free = 11.0
         n_grid = 41
@@ -455,13 +454,13 @@ class TestWineSulphitePluginDirect:
         with pytest.raises(NoValidSimulationPointError):
             plugin.predict_inline(features=features)
 
-    @patch("app.plugins.wine_sulphite.plugin.load_artifacts")
+    @patch("app.plugins.ml25_wine_sulphites.plugin.load_artifacts")
     def test_predict_batch_with_mocked_models(self, mock_load):
         """Verify predict_batch returns predictions list with mocked models."""
         import numpy as np
         import tempfile
         from pathlib import Path
-        from app.plugins.wine_sulphite.plugin import WineSulphitePlugin
+        from app.plugins.ml25_wine_sulphites.plugin import WineSulphitePlugin
 
         n_grid = 41
         mock_bound = MagicMock()
@@ -482,16 +481,16 @@ class TestWineSulphitePluginDirect:
                 "7.4,0.66,0.0,1.8,0.075,0.9978,3.51,0.56,9.4,11.0,34.0\n"
             )
             result = plugin.predict_batch(data_path=str(csv_path))
-            assert "predictions" in result
-            assert len(result["predictions"]) == 1
+            assert hasattr(result, "predictions")
+            assert len(result.predictions) == 1
 
-    @patch("app.plugins.wine_sulphite.plugin.load_artifacts")
+    @patch("app.plugins.ml25_wine_sulphites.plugin.load_artifacts")
     def test_predict_batch_with_error(self, mock_load):
         """Verify predict_batch handles errors gracefully and includes error status in results."""
         import numpy as np
         import tempfile
         from pathlib import Path
-        from app.plugins.wine_sulphite.plugin import WineSulphitePlugin
+        from app.plugins.ml25_wine_sulphites.plugin import WineSulphitePlugin
 
         # Model bound.predict returns non-numeric data, causing error in inference
         mock_bound = MagicMock()
@@ -512,5 +511,5 @@ class TestWineSulphitePluginDirect:
                 "7.4,0.66,0.0,1.8,0.075,0.9978,3.51,0.56,9.4,11.0,34.0\n"
             )
             result = plugin.predict_batch(data_path=str(csv_path))
-            assert len(result["predictions"]) == 1
-            assert "error" in result["predictions"][0]
+            assert len(result.predictions) == 1
+            assert "error" in result.predictions[0]

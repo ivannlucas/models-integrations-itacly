@@ -10,7 +10,7 @@ from __future__ import annotations
 import pytest
 from unittest.mock import MagicMock, patch as patch_unit
 
-from app.application.dto.stats_dto import StatsResponse
+from app.application.dto.stats_dto import RuntimeStats, StatsResponse
 from app.domain.ports.model_plugin_port import ModelPluginPort
 from app.domain.services.model_runtime_service import ModelRuntimeService
 from app.infrastructure.http.dependencies.container import ModelContainer
@@ -44,9 +44,15 @@ class FakeModelPlugin(ModelPluginPort):
     def stats(self):
         """Return a fake StatsResponse."""
         return StatsResponse(
-            model_name="test", model_type="test", framework="test",
-            artifact_path="/test", input_schema={}, output_schema={},
-            predict_count=0, last_predict_at=None,
+            model_name="test",
+            version="0.0.0",
+            description="test plugin",
+            task_type="test",
+            framework="test",
+            inputs=[],
+            outputs=[],
+            metrics={},
+            runtime_stats=RuntimeStats(total_predictions=0, avg_latency_ms=None),
         )
 
     def train(self, *, data_path):
@@ -61,11 +67,7 @@ class TestModelContainer:
     def test_init_creates_use_cases(self):
         """Verify ModelContainer wires use cases on construction."""
         plugin = FakeModelPlugin()
-        container = ModelContainer(
-            plugin=plugin,
-            batch_response_cls=dict,
-            inline_response_cls=dict,
-        )
+        container = ModelContainer(plugin=plugin)
         assert container._plugin is plugin
         assert container._service is not None
         assert container.predict_use_case is not None
@@ -75,11 +77,7 @@ class TestModelContainer:
     def test_init_calls_plugin_load(self):
         """Verify container.init() calls plugin.load()."""
         plugin = FakeModelPlugin()
-        container = ModelContainer(
-            plugin=plugin,
-            batch_response_cls=dict,
-            inline_response_cls=dict,
-        )
+        container = ModelContainer(plugin=plugin)
         assert plugin.is_loaded() is False
         container.init()
         assert plugin.is_loaded() is True
@@ -87,22 +85,14 @@ class TestModelContainer:
     def test_service_property(self):
         """Verify container.service returns a ModelRuntimeService."""
         plugin = FakeModelPlugin()
-        container = ModelContainer(
-            plugin=plugin,
-            batch_response_cls=dict,
-            inline_response_cls=dict,
-        )
+        container = ModelContainer(plugin=plugin)
         assert isinstance(container.service, ModelRuntimeService)
         assert container.service._plugin is plugin
 
     def test_predict_use_case_executes(self):
         """Verify predict use case is wired in the container."""
         plugin = FakeModelPlugin()
-        container = ModelContainer(
-            plugin=plugin,
-            batch_response_cls=dict,
-            inline_response_cls=dict,
-        )
+        container = ModelContainer(plugin=plugin)
         # Just verify it's wired correctly
         assert container.stats_use_case is not None
         assert container.train_use_case is not None
@@ -127,7 +117,7 @@ class TestModelRuntimeService:
         service = ModelRuntimeService(plugin)
         stats = service.stats()
         assert stats.model_name == "test"
-        assert stats.predict_count == 0
+        assert stats.runtime_stats.total_predictions == 0
 
     def test_stats_after_load(self):
         """Verify stats returns correct metadata after load."""
@@ -136,7 +126,7 @@ class TestModelRuntimeService:
         service = ModelRuntimeService(plugin)
         stats = service.stats()
         assert stats.framework == "test"
-        assert stats.model_type == "test"
+        assert stats.task_type == "test"
 
 
 # ── Router factory exception edge cases ───────────────────────────────────
@@ -202,12 +192,13 @@ class TestArtifactStoreLocal:
         with pytest.raises(FileNotFoundError):
             store.path("not_existing.pkl")
 
-    def test_download_all_is_noop_when_no_bucket(self, monkeypatch):
-        """Verify download_all_if_needed is a no-op (no error) when STORAGE_BUCKET is not set."""
+    def test_download_all_raises_when_no_bucket(self, monkeypatch):
+        """Verify download_all_if_needed raises EnvironmentError when STORAGE_BUCKET is not set."""
         monkeypatch.delenv("STORAGE_BUCKET", raising=False)
         from app.infrastructure.artifact_store import ArtifactStore
         store = ArtifactStore("test_model")
-        store.download_all_if_needed()  # should return silently
+        with pytest.raises(EnvironmentError, match="STORAGE_BUCKET"):
+            store.download_all_if_needed()
 
 
 # ── _file_needs_download tests ───────────────────────────────────────────────
