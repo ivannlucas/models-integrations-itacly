@@ -4,7 +4,7 @@
 ![Python](https://img.shields.io/badge/Python-3.12-3776AB.svg?logo=python&logoColor=white)
 ![Docker](https://img.shields.io/badge/Docker-Enabled-2496ED.svg?logo=docker&logoColor=white)
 
-![Version](https://img.shields.io/badge/version-0.1.43-blue.svg)
+![Version](https://img.shields.io/badge/version-0.1.44-blue.svg)
 
 ![Status](https://img.shields.io/badge/Status-Work_in_Progress-orange.svg) / ![Status](https://img.shields.io/badge/Status-Production_Ready-brightgreen.svg) / ![Status](https://img.shields.io/badge/Status-Maintenance-lightgrey.svg) / ![Status](https://img.shields.io/badge/Status-Archived-red.svg)
 
@@ -275,6 +275,7 @@ https://sites.google.com/luceit.es/luceit/otros/devops/devops-politica_de_versio
 | Version | Date (last change) |  Developer   | Changes                      |
 |:-------:|:-------------------|:------------:|
 :-----------------------------|
+| v0.1.44 | 09/06/2026         |     Pablo        | fix: added headless opencv |   
 | v0.1.43 | 09/06/2026         |     Pablo        | fix: replace opencv-python with opencv-python-headless to fix libxcb missing in container |
 | v0.1.42 | 09/06/2026         |     Pablo        | fix: add root /health endpoint for K8s liveness and readiness probes |
 | v0.1.41 | 09/06/2026         | Alejandro Flores | Register ml8-plugin |
