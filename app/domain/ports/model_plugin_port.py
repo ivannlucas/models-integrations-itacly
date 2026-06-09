@@ -1,9 +1,14 @@
+"""Abstract port interface for model plugins."""
 from abc import ABC, abstractmethod
+
+from pydantic import BaseModel
 
 from app.application.dto.stats_dto import StatsResponse
 
 
 class ModelPluginPort(ABC):
+    """Interface that all model plugins must implement."""
+
     @abstractmethod
     def load(self) -> None:
         """Load model artifacts from disk."""
@@ -13,8 +18,8 @@ class ModelPluginPort(ABC):
         """Return True if the model is ready for inference."""
 
     @abstractmethod
-    def predict_batch(self, *, data_path: str) -> dict:
-        """Run batch inference on a CSV/image directory and return a predictions dict."""
+    def predict_batch(self, *, data_path: str) -> BaseModel:
+        """Run batch inference and return the model's typed batch response."""
 
     @abstractmethod
     def predict_inline(
@@ -23,16 +28,13 @@ class ModelPluginPort(ABC):
         features: dict,
         model_key: str | None = None,
         threshold: float | None = None,
-    ) -> dict:
-        """Run inline inference on a single feature dict and return a prediction dict."""
+    ) -> BaseModel:
+        """Run inline inference on a single feature dict and return the typed inline response."""
 
     @abstractmethod
     def stats(self) -> StatsResponse:
         """Return model metadata and runtime statistics."""
 
-    def train(self, *, data_path: str) -> dict:
-        """Retrain the model. Override to support training; default raises TrainingNotSupportedError."""
-        from app.domain.services.exceptions import TrainingNotSupportedError
-        raise TrainingNotSupportedError(
-            "Training is not supported by this plugin. Use the data science pipeline instead."
-        )
+    @abstractmethod
+    def train(self, *, data_path: str) -> BaseModel:
+        """Train the model with the provided data and return the typed train response."""

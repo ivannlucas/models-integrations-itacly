@@ -18,6 +18,7 @@ import logging
 import os
 from pathlib import Path
 
+from boto3.s3.transfer import TransferConfig
 from botocore.client import Config
 from dotenv import find_dotenv, load_dotenv
 
@@ -37,6 +38,7 @@ ARTIFACTS_ROOT = _REPO_ROOT / "artifacts"
 
 
 def _build_s3_client():
+    """Build and return an S3 client configured from environment variables."""
     import boto3  # type: ignore[import]
 
     return boto3.client(
@@ -66,8 +68,18 @@ class ArtifactStore:
     """
 
     def __init__(self, model_name: str) -> None:
+        """Initialize the store for the given model name."""
         self._model_name = model_name
         self._local_dir = ARTIFACTS_ROOT / model_name
+
+    @property
+    def local_dir(self) -> Path:
+        """Return the local directory where this model's artifacts are stored."""
+        return self._local_dir
+
+    def upload(self, filename: str) -> None:
+        """Upload *filename* (relative to local_dir) to S3. No-op when STORAGE_BUCKET is unset."""
+        self.upload_artifact(self._local_dir / filename)
 
     def path(self, filename: str) -> Path:
         """Return the local path to *filename*, downloading from S3 if needed.
@@ -87,7 +99,10 @@ class ArtifactStore:
         return local
 
     def download_all_if_needed(self) -> None:
-        """Download every file under the model's S3 prefix, skipping up-to-date files."""
+        """Download every file under the model's S3 prefix, skipping up-to-date files.
+
+        Raises EnvironmentError if STORAGE_BUCKET is not set.
+        """
         if not os.environ.get("STORAGE_BUCKET"):
             raise EnvironmentError(
                 "STORAGE_BUCKET is not set. Cannot download artifacts from S3."
@@ -153,25 +168,23 @@ class ArtifactStore:
 
         logger.info("Artifact download complete for model '%s'.", self._model_name)
 
-    def upload(self, filename: str) -> None:
-        """Upload a single artifact file to S3.
+    def upload_artifact(self, local_path: Path) -> None:
+        """Upload a single artifact file to S3 under the model's prefix."""
+        bucket = os.getenv("STORAGE_BUCKET")
+        if not bucket:
+            logger.warning("STORAGE_BUCKET not set — skipping S3 upload of %s", local_path)
+            return
 
-        Raises EnvironmentError if STORAGE_BUCKET is not set.
-        Raises FileNotFoundError if the local file does not exist.
-        """
-        if not os.environ.get("STORAGE_BUCKET"):
-            raise EnvironmentError(
-                "STORAGE_BUCKET is not set. Cannot upload artifacts to S3."
-            )
-        local = self._local_dir / filename
-        if not local.exists():
-            raise FileNotFoundError(f"Local artifact not found: {local}")
-
-        bucket = os.environ["STORAGE_BUCKET"]
         s3 = _build_s3_client()
-        remote_key = f"artifacts/fixed/{self._model_name}/{filename}"
-        from boto3.s3.transfer import TransferConfig
-        # Forzar single-part upload (threshold 1 GB) para evitar CreateMultipartUpload
-        config = TransferConfig(multipart_threshold=1024 * 1024 * 1024)
-        s3.upload_file(str(local), bucket, remote_key, Config=config)
-        logger.info("Uploaded %s to s3://%s/%s", filename, bucket, remote_key)
+        remote_key = f"artifacts/fixed/{self._model_name}/{local_path.name}"
+        logger.info("Uploading %s → s3://%s/%s", local_path.name, bucket, remote_key)
+
+        config = TransferConfig(
+            multipart_threshold=1024 * 1024 * 1024 * 5,  # 5 GB threshold
+            max_concurrency=10,
+            use_threads=False                             # Simpler, single-threaded execution
+        )
+
+        # Pass the config to the upload_file method
+        s3.upload_file(str(local_path), bucket, remote_key, Config=config)
+        logger.info("Upload complete: s3://%s/%s", bucket, remote_key)

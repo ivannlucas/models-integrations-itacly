@@ -4,7 +4,7 @@
 ![Python](https://img.shields.io/badge/Python-3.12-3776AB.svg?logo=python&logoColor=white)
 ![Docker](https://img.shields.io/badge/Docker-Enabled-2496ED.svg?logo=docker&logoColor=white)
 
-![Version](https://img.shields.io/badge/version-0.1.10-blue.svg)
+![Version](https://img.shields.io/badge/version-0.1.39-blue.svg)
 
 ![Status](https://img.shields.io/badge/Status-Work_in_Progress-orange.svg) / ![Status](https://img.shields.io/badge/Status-Production_Ready-brightgreen.svg) / ![Status](https://img.shields.io/badge/Status-Maintenance-lightgrey.svg) / ![Status](https://img.shields.io/badge/Status-Archived-red.svg)
 
@@ -273,8 +273,29 @@ https://sites.google.com/luceit.es/luceit/otros/devops/devops-politica_de_versio
 ## Changelog
 
 | Version | Date (last change) |  Developer   | Changes                      |
-|:-------:|:-------------------|:------------:|:-----------------------------|
-| v0.1.10 | 02/06/2026         | Alejandro Flores | ML8-1: ml8-cereals-img-anomaly-detector plugin registered; model loader with MobileNetV3-Large multi-task checkpoint support (features + neck + dual classifier heads) |
+|:-------:|:-------------------|:------------:|
+:-----------------------------|
+| v0.1.41 | 09/06/2026         | Alejandro Flores | Merge develop into ML8 branch; adapt ml8 plugin to typed responses + new StatsResponse; register ml8; remove dead plugin dirs |
+| v0.1.39 | 08/06/2026         | Alejandro Flores | fix bitbucket-pipelines.yml |
+| v0.1.38 | 08/06/2026         | Alejandro Flores | update .gitignore |
+| v0.1.37 | 08/06/2026         | Alejandro Flores | Typed plugin responses; fix duplicate ModelEntry train fields |
+| v0.1.36 | 08/06/2026         | Pablo    | Add docstrings to ml25 module |  
+| v0.1.35 | 05/06/2026         | Alejandro Flores | Enable sonar.verbose=true (temporary) to debug SonarQube quality gate failure in CI |
+| v0.1.34 | 05/06/2026         | Alejandro Flores | Fix duplicate train kwargs SyntaxError in main.py, refresh CLAUDE.md, wrap long lines in train_dto |
+| v0.1.33 | 05/06/2026         | Alejandro Flores | Fix missing module docstrings, misplaced docstring in stats_dto, rename pH param, remove no-else-return |
+| v0.1.32 | 05/06/2026         | Alejandro Flores | Delete dead wine_sulphite plugin files to fix SonarQube broken import bugs and 0% coverage |
+| v0.1.31 | 05/06/2026         | Alejandro Flores | Remove uncovered except block from train endpoint to fix SonarQube |
+| v0.1.30 | 05/06/2026         | Alejandro Flores | Add _reload_classifier test to reach SonarQube coverage threshold |
+| v0.1.29 | 05/06/2026         | Alejandro Flores | ModelEntry train defaults to None, fallback resolved in router_factory |
+| v0.1.28 | 05/06/2026         | Alejandro Flores | Fix ModelEntry train field defaults (SonarQube lambda smell) |
+| v0.1.27 | 05/06/2026         | Alejandro Flores | Fix missing train fields in ModelEntry dataclass |
+| v0.1.26 | 05/06/2026         | Alejandro Flores | Fix SyntaxError in ml25 model_loader |
+| v0.1.25 | 05/06/2026         | Alejandro Flores | Fix post-merge: SyntaxError, lint, StatsResponse schema, tests |
+| v0.1.24 | 05/06/2026         |   Pablo      | Artifact store fix tests		 |
+| v0.1.23 | 05/06/2026         |   Pablo      | Artifact store fix				 |
+| v0.1.22 | 05/06/2026         |   Pablo      | Artifact store mock				 |
+| v0.1.21 | 05/06/2026         |   Pablo      | Artifact store mock				 |
+| v0.1.20 | 28/05/2026         |   Trinidad   | Added modelo10-lacteo logic  |
 | v0.1.0  | 28/05/2026         |  Ivan Lucas  | Plugin architecture, ML-25 wine-sulphite model, S3 artifact store, MODEL env var filtering |
 | v0.0.1  | 17/02/2026         | javier.perez | Luce IT repository structure |
 | v0.0.0  | 15/02/2026         |  Ivan Lucas  | Base project                 |

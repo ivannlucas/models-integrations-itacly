@@ -19,14 +19,32 @@ from typing import Any, Callable
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from pydantic import BaseModel
 
-from app.application.dto.stats_dto import StatsResponse
+from app.application.dto.stats_dto import InputField, OutputField, RuntimeStats, StatsResponse
+from app.application.dto.train_dto import TrainResponse
 from app.application.use_cases.get_stats_use_case import GetStatsUseCase
 from app.application.use_cases.predict_model_use_case import PredictModelUseCase
 from app.application.use_cases.train_model_use_case import TrainModelUseCase
 from app.domain.ports.model_plugin_port import ModelPluginPort
+from app.domain.services.exceptions import TrainingNotSupportedError
 from app.domain.services.model_runtime_service import ModelRuntimeService
 from app.infrastructure.http.router_factory import make_model_router
+from app.plugins.ml25_wine_sulphites.predict_dto import (
+    PredictBatchResponse as WineSO2BatchResp,
+    PredictInlineResponse as WineSO2InlineResp,
+)
+from app.plugins.modelo10_lacteo.predict_dto import (
+    PredictBatchResponse as LacteoBatchResp,
+    PredictInlineResponse as LacteoInlineResp,
+)
+from app.plugins.ml8_cereals_img_anomaly_detector.predict_dto import (
+    PredictBatchResponse as Ml8CerealsBatchResp,
+    PredictInlineResponse as Ml8CerealsInlineResp,
+)
+from app.plugins.ml8_cereals_img_anomaly_detector.train_dto import (
+    TrainResponse as Ml8CerealsTrainResp,
+)
 from app.registry import REGISTRY
 
 
@@ -36,8 +54,8 @@ class FakePlugin(ModelPluginPort):
     """Deterministic fake plugin.
 
     ``inline_factory`` and ``batch_factory`` receive the plugin instance plus
-    the call kwargs and must return a dict compatible with the model's
-    ``PredictInlineResponse`` / ``PredictBatchResponse``.
+    the call kwargs and must return the model's typed ``PredictInlineResponse``
+    / ``PredictBatchResponse`` (mirroring how real plugins build their DTOs).
 
     ``raise_on_inline`` / ``raise_on_batch`` can be set to force an error
     path for a single call (used by exception-mapping tests).
@@ -47,10 +65,11 @@ class FakePlugin(ModelPluginPort):
         self,
         *,
         model_id: str,
-        inline_factory: Callable[..., dict],
-        batch_factory: Callable[..., dict],
-        train_factory: Callable[..., dict] | None = None,
+        inline_factory: Callable[..., BaseModel],
+        batch_factory: Callable[..., BaseModel],
+        train_factory: Callable[..., BaseModel] | None = None,
     ) -> None:
+        """Initialize the fake plugin with the given model ID and factories."""
         self._model_id = model_id
         self._inline_factory = inline_factory
         self._batch_factory = batch_factory
@@ -62,9 +81,11 @@ class FakePlugin(ModelPluginPort):
         self.raise_on_batch: Exception | None = None
 
     def load(self) -> None:
+        """Simulate loading model artifacts from disk."""
         self._loaded = True
 
     def is_loaded(self) -> bool:
+        """Return True if the model is ready for inference."""
         return self._loaded
 
     def predict_inline(
@@ -73,7 +94,8 @@ class FakePlugin(ModelPluginPort):
         features: dict,
         model_key: str | None = None,
         threshold: float | None = None,
-    ) -> dict:
+    ) -> BaseModel:
+        """Run inline inference on a single feature dict and return the typed inline response."""
         if self.raise_on_inline is not None:
             exc, self.raise_on_inline = self.raise_on_inline, None
             raise exc
@@ -83,7 +105,8 @@ class FakePlugin(ModelPluginPort):
             self, features=features, model_key=model_key, threshold=threshold
         )
 
-    def predict_batch(self, *, data_path: str) -> dict:
+    def predict_batch(self, *, data_path: str) -> BaseModel:
+        """Run batch inference on a CSV file and return the typed batch response."""
         if self.raise_on_batch is not None:
             exc, self.raise_on_batch = self.raise_on_batch, None
             raise exc
@@ -91,192 +114,144 @@ class FakePlugin(ModelPluginPort):
         self._last_predict_at = datetime.now(tz=timezone.utc).isoformat()
         return self._batch_factory(self, data_path=data_path)
 
-    def train(self, *, data_path: str) -> dict:
-        if self._train_factory is None:
-            from app.domain.services.exceptions import TrainingNotSupportedError
-            raise TrainingNotSupportedError("Training is not supported by this plugin.")
-        return self._train_factory(self, data_path=data_path)
-
     def stats(self) -> StatsResponse:
+        """Return model metadata and runtime statistics."""
         return StatsResponse(
             model_name=self._model_id,
-            model_type="fake",
+            version="0.0.0",
+            description="Fake plugin for testing",
+            task_type="fake",
             framework="fake",
-            artifact_path=f"/fake/{self._model_id}",
-            input_schema={"fake": "input"},
-            output_schema={"fake": "output"},
-            predict_count=self._predict_count,
-            last_predict_at=self._last_predict_at,
+            inputs=[InputField(name="fake_input", type="float", description="Fake input field")],
+            outputs=[OutputField(name="fake_output", type="float", description="Fake output field")],
+            metrics={},
+            runtime_stats=RuntimeStats(
+                total_predictions=self._predict_count,
+                avg_latency_ms=None,
+            ),
         )
+
+    def train(self, *, data_path: str) -> BaseModel:
+        """Train the model with the provided data."""
+        if self._train_factory is None:
+            raise TrainingNotSupportedError(
+                "Training is not supported by this runtime. Use the data science pipeline instead."
+            )
+        return self._train_factory(self, data_path=data_path)
 
 
 # ── Fake response factories per model ──────────────────────────────────────
 
-def _wine_pf_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> dict:
-    return {
-        "model_id": "wine-price-fluctuation",
-        "threshold": threshold,
-        "prediction": 1,
-        "confidence": 0.72,
-        "features_used": ["rsi", "bollinger", "momentum"],
-        "model_type": "xgboost",
-        "prediction_date": "2024-01-15",
-        "xai_feature_values": {"rsi": 55.3, "bollinger": 1.1},
-    }
-
-
-def _wine_pf_batch(plugin: FakePlugin, *, data_path: str) -> dict:
-    return {
-        "model_id": "wine-price-fluctuation",
-        "predictions": [
-            {"row": 0, "prediction": 1, "confidence": 0.72},
-            {"row": 1, "prediction": 0, "confidence": 0.31},
+def _wine_so2_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> WineSO2InlineResp:
+    """Return a fake inline prediction response for the wine sulphite intervention model."""
+    return WineSO2InlineResp(
+        model_id="wine-sulphite",
+        threshold=threshold,
+        prediction=True,
+        confidence=6.2,
+        features_used=[
+            "fixed acidity", "volatile acidity", "citric acid", "residual sugar",
+            "chlorides", "density", "pH", "sulphates", "alcohol",
+            "free sulfur dioxide", "total sulfur dioxide",
         ],
-        "output_path": None,
-    }
+        recommended_free_so2=32.0,
+        recommended_bound_so2=68.0,
+        recommended_total_so2=100.0,
+        recommended_molecular_so2=0.7,
+        predicted_quality=6.2,
+        baseline_predicted_quality=5.8,
+        recommendation_reason="Intervention improves predicted quality by more than MAE threshold.",
+        intervention_recommended=True,
+        mae_quality=0.427,
+        mae_bound=14.5,
+    )
 
 
-def _cereal_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> dict:
-    return {
-        "model_id": "cereal-price-forecast",
-        "threshold": threshold,
-        "prediction": 245.7,
-        "confidence": None,
-        "features_used": ["Year", "Month", "prec", "tmed"],
-        "product_name": features.get("product_name", "Milling wheat"),
-        "market_name": features.get("market_name", "Unknown"),
-        "week_begin_date": features.get("week_begin_date", "Unknown"),
-        "model_version": "1.0",
-        "xai_feature_values": {"Year": 2024.0, "Month": 1.0},
-    }
-
-
-def _cereal_batch(plugin: FakePlugin, *, data_path: str) -> dict:
-    return {
-        "model_id": "cereal-price-forecast",
-        "predictions": [
-            {"row": 0, "product": "Milling wheat", "prediction": 245.7},
-            {"row": 1, "product": "Feed barley", "prediction": 208.3},
+def _wine_so2_batch(plugin: FakePlugin, *, data_path: str) -> WineSO2BatchResp:
+    """Return a fake batch prediction response for the wine sulphite intervention model."""
+    return WineSO2BatchResp(
+        model_id="wine-sulphite",
+        predictions=[
+            {
+                "row": 0,
+                "intervention_recommended": True,
+                "recommended_free_so2": 32.0,
+                "predicted_quality": 6.2,
+                "recommendation_reason": "ok",
+            }
         ],
-        "output_path": None,
-    }
+        output_path=None,
+    )
 
 
-def _meat_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> dict:
-    return {
-        "model_id": "meat-price-forecast",
-        "threshold": threshold,
-        "prediction": {
-            "bovino": {"rf": 130.4, "lstm": None},
-            "porcino": {"rf": 128.1, "lstm": None},
-            "ovino": {"rf": 135.2, "lstm": None},
-            "ave": {"rf": 120.8, "lstm": None},
-            "carne": {"rf": 129.7, "lstm": None},
+def _lacteo_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> LacteoInlineResp:
+    """Return a fake inline prediction response for the Modelo10Lacteo plugin."""
+    return LacteoInlineResp(
+        model_id="modelo10-lacteo",
+        prediction="fly",
+        confidence=0.91,
+        vectors_count=1,
+        detections=[
+            {"species": "fly", "det_conf": 0.85, "cls_conf": 0.91, "bbox": {"x1": 30, "y1": 40, "x2": 80, "y2": 90}},
+        ],
+        species_summary={"fly": 1},
+    )
+
+
+def _lacteo_batch(plugin: FakePlugin, *, data_path: str) -> LacteoBatchResp:
+    """Return a fake batch prediction response for the Modelo10Lacteo plugin."""
+    return LacteoBatchResp(
+        model_id="modelo10-lacteo",
+        predictions=[
+            {
+                "filename": "test_cow.jpg",
+                "prediction": "tick",
+                "confidence": 0.88,
+                "vectors_count": 2,
+                "detections": [
+                    {"species": "tick", "det_conf": 0.82, "cls_conf": 0.88, "bbox": {"x1": 10, "y1": 20, "x2": 50, "y2": 60}},
+                    {"species": "tick", "det_conf": 0.75, "cls_conf": 0.81, "bbox": {"x1": 100, "y1": 120, "x2": 150, "y2": 160}},
+                ],
+                "species_summary": {"tick": 2},
+            }
+        ],
+        output_path=None,
+    )
+
+
+def _lacteo_train(plugin: FakePlugin, *, data_path: str) -> TrainResponse:
+    """Return a fake training response for the Modelo10Lacteo plugin."""
+    return TrainResponse(
+        detail="Training completed successfully",
+        metrics={
+            "train_samples": 100,
+            "val_samples": 20,
+            "classes": ["fly", "mos", "tick"],
+            "epochs_run": 5,
+            "best_val_acc": 95.0,
+            "time_min": 2.5,
         },
-        "confidence": None,
-        "features_used": ["bovino_lag_1", "porcino_lag_1"],
-        "prediction_date": "2024-01-15",
-        "rows_used": 4,
-        "xai_feature_values": None,
-    }
+    )
 
 
-def _meat_batch(plugin: FakePlugin, *, data_path: str) -> dict:
-    return {
-        "model_id": "meat-price-forecast",
-        "predictions": [
-            {"date": "2024-01-15", "target": "bovino", "rf": 130.4},
-            {"date": "2024-01-15", "target": "porcino", "rf": 128.1},
-        ],
-        "output_path": None,
-    }
+def _ml8_cereals_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> Ml8CerealsInlineResp:
+    """Return a fake inline prediction response for the ml8 cereals model."""
+    return Ml8CerealsInlineResp(
+        model_id="ml8-cereals-img-anomaly-detector",
+        categoria="sano",
+        cereal="trigo",
+        confianza_categoria=0.95,
+        confianza_cereal=0.91,
+        probabilidades_categoria={"sano": 0.95, "hongos": 0.02, "insectos": 0.02, "otros": 0.01},
+        probabilidades_cereal={"trigo": 0.91, "maiz": 0.04, "arroz": 0.03, "sorgo": 0.02},
+    )
 
 
-def _cnn_fungal_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> dict:
-    return {
-        "model_id": "cnn-fungal-detection",
-        "threshold": threshold,
-        "prediction": "healthy",
-        "confidence": 0.93,
-        "features_used": ["pixel_tensor"],
-        "probabilities": {"healthy": 0.93, "fungal": 0.07},
-    }
-
-
-def _cnn_fungal_batch(plugin: FakePlugin, *, data_path: str) -> dict:
-    return {
-        "model_id": "cnn-fungal-detection",
-        "predictions": [
-            {"file": "img_0001.jpg", "prediction": "healthy", "confidence": 0.93},
-            {"file": "img_0002.jpg", "prediction": "fungal", "confidence": 0.81},
-        ],
-        "output_path": None,
-    }
-
-
-def _cnn_thermal_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> dict:
-    return {
-        "model_id": "cnn-thermal-scm",
-        "threshold": threshold,
-        "prediction": "Healthy",
-        "confidence": 0.88,
-        "features_used": ["thermal_image"],
-        "predicted_class_index": 0,
-        "probability_healthy": 0.88,
-        "probability_scm": 0.12,
-    }
-
-
-def _cnn_thermal_batch(plugin: FakePlugin, *, data_path: str) -> dict:
-    return {
-        "model_id": "cnn-thermal-scm",
-        "predictions": [
-            {"file": "thermal_001.jpg", "prediction": "Healthy", "probability_scm": 0.12},
-            {"file": "thermal_002.jpg", "prediction": "SCM", "probability_scm": 0.77},
-        ],
-        "output_path": None,
-    }
-
-
-def _cow_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> dict:
-    return {
-        "model_id": "cow-behavior",
-        "threshold": threshold,
-        "prediction": "walking",
-        "confidence": 0.81,
-        "features_used": ["frame_embedding"],
-        "is_anomaly": False,
-        "behavior_idx": 2,
-    }
-
-
-def _cow_batch(plugin: FakePlugin, *, data_path: str) -> dict:
-    return {
-        "model_id": "cow-behavior",
-        "predictions": [
-            {"clip_idx": 0, "behavior": "walking", "is_anomaly": False},
-            {"clip_idx": 1, "behavior": "lying", "is_anomaly": False},
-        ],
-        "output_path": None,
-    }
-
-
-def _ml8_cereals_img_anomaly_detector_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> dict:
-    return {
-        "model_id": "ml8-cereals-img-anomaly-detector",
-        "categoria": "sano",
-        "cereal": "trigo",
-        "confianza_categoria": 0.95,
-        "confianza_cereal": 0.91,
-        "probabilidades_categoria": {"sano": 0.95, "hongos": 0.02, "insectos": 0.02, "otros": 0.01},
-        "probabilidades_cereal": {"trigo": 0.91, "maiz": 0.04, "arroz": 0.03, "sorgo": 0.02},
-    }
-
-
-def _ml8_cereals_img_anomaly_detector_batch(plugin: FakePlugin, *, data_path: str) -> dict:
-    return {
-        "model_id": "ml8-cereals-img-anomaly-detector",
-        "predictions": [
+def _ml8_cereals_batch(plugin: FakePlugin, *, data_path: str) -> Ml8CerealsBatchResp:
+    """Return a fake batch prediction response for the ml8 cereals model."""
+    return Ml8CerealsBatchResp(
+        model_id="ml8-cereals-img-anomaly-detector",
+        predictions=[
             {
                 "filename": "img_001.jpg",
                 "model_id": "ml8-cereals-img-anomaly-detector",
@@ -288,78 +263,35 @@ def _ml8_cereals_img_anomaly_detector_batch(plugin: FakePlugin, *, data_path: st
                 "probabilidades_cereal": {"trigo": 0.91, "maiz": 0.04, "arroz": 0.03, "sorgo": 0.02},
             }
         ],
-        "output_path": None,
-    }
+        output_path=None,
+    )
 
 
-def _ml8_cereals_train(plugin: FakePlugin, *, data_path: str) -> dict:
-    return {
-        "detail": "Entrenamiento completado",
-        "train_samples": 80,
-        "val_samples": 20,
-        "fase1_epochs": 3,
-        "fase2_epochs": 2,
-        "fase1_time_min": 0.5,
-        "fase2_time_min": 0.2,
-        "best_val_acc_cat": 91.2,
-        "best_val_acc_cer": 88.5,
-        "upload_warning": None,
-    }
+def _ml8_cereals_train(plugin: FakePlugin, *, data_path: str) -> Ml8CerealsTrainResp:
+    """Return a fake training response for the ml8 cereals model."""
+    return Ml8CerealsTrainResp(
+        detail="Entrenamiento completado",
+        train_samples=80,
+        val_samples=20,
+        fase1_epochs=3,
+        fase2_epochs=2,
+        fase1_time_min=0.5,
+        fase2_time_min=0.2,
+        best_val_acc_cat=91.2,
+        best_val_acc_cer=88.5,
+        upload_warning=None,
+    )
 
-
-def _wine_so2_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> dict:
-    return {
-        "model_id": "wine-sulphite",
-        "threshold": threshold,
-        "prediction": True,
-        "confidence": 6.2,
-        "features_used": [
-            "fixed acidity", "volatile acidity", "citric acid", "residual sugar",
-            "chlorides", "density", "pH", "sulphates", "alcohol",
-            "free sulfur dioxide", "total sulfur dioxide",
-        ],
-        "recommended_free_so2": 32.0,
-        "recommended_bound_so2": 68.0,
-        "recommended_total_so2": 100.0,
-        "recommended_molecular_so2": 0.7,
-        "predicted_quality": 6.2,
-        "baseline_predicted_quality": 5.8,
-        "recommendation_reason": "Intervention improves predicted quality by more than MAE threshold.",
-        "intervention_recommended": True,
-        "mae_quality": 0.427,
-        "mae_bound": 14.5,
-    }
-
-
-def _wine_so2_batch(plugin: FakePlugin, *, data_path: str) -> dict:
-    return {
-        "model_id": "wine-sulphite",
-        "predictions": [
-            {
-                "row": 0,
-                "intervention_recommended": True,
-                "recommended_free_so2": 32.0,
-                "predicted_quality": 6.2,
-                "recommendation_reason": "ok",
-            }
-        ],
-        "output_path": None,
-    }
-
-
-FAKE_TRAIN_FACTORIES: dict[str, Callable] = {
-    "ml8-cereals-img-anomaly-detector": _ml8_cereals_train,
-}
 
 FAKE_FACTORIES: dict[str, tuple[Callable, Callable]] = {
-    "ml8-cereals-img-anomaly-detector": (_ml8_cereals_img_anomaly_detector_inline, _ml8_cereals_img_anomaly_detector_batch),  # noqa: E501
-    "wine-price-fluctuation": (_wine_pf_inline, _wine_pf_batch),
-    "cereal-price-forecast": (_cereal_inline, _cereal_batch),
-    "meat-price-forecast": (_meat_inline, _meat_batch),
-    "cnn-fungal-detection": (_cnn_fungal_inline, _cnn_fungal_batch),
-    "cnn-thermal-scm": (_cnn_thermal_inline, _cnn_thermal_batch),
-    "cow-behavior": (_cow_inline, _cow_batch),
     "wine-sulphite": (_wine_so2_inline, _wine_so2_batch),
+    "modelo10-lacteo": (_lacteo_inline, _lacteo_batch),
+    "ml8-cereals-img-anomaly-detector": (_ml8_cereals_inline, _ml8_cereals_batch),
+}
+
+TRAIN_FACTORIES: dict[str, Callable] = {
+    "modelo10-lacteo": _lacteo_train,
+    "ml8-cereals-img-anomaly-detector": _ml8_cereals_train,
 }
 
 
@@ -369,15 +301,15 @@ class _FakeContainer:
     """Lightweight stand-in for ModelContainer used only in tests."""
 
     def __init__(self, plugin: FakePlugin) -> None:
+        """Initialize the fake container with a plugin."""
         self._plugin = plugin
         self.service = ModelRuntimeService(plugin)
 
 
-def _build_container(plugin: FakePlugin, entry) -> Any:
+def _build_container(plugin: FakePlugin) -> Any:
+    """Build a fake container with the appropriate use cases for the given plugin."""
     container = _FakeContainer(plugin)
-    container.predict_use_case = PredictModelUseCase(
-        plugin, entry.batch_response_class, entry.inline_response_class
-    )
+    container.predict_use_case = PredictModelUseCase(plugin)
     container.stats_use_case = GetStatsUseCase(plugin)
     container.train_use_case = TrainModelUseCase(plugin)
     return container
@@ -389,11 +321,12 @@ def fake_plugins() -> dict[str, FakePlugin]:
     plugins: dict[str, FakePlugin] = {}
     for entry in REGISTRY:
         inline_factory, batch_factory = FAKE_FACTORIES[entry.model_id]
+        train_factory = TRAIN_FACTORIES.get(entry.model_id)
         plugin = FakePlugin(
             model_id=entry.model_id,
             inline_factory=inline_factory,
             batch_factory=batch_factory,
-            train_factory=FAKE_TRAIN_FACTORIES.get(entry.model_id),
+            train_factory=train_factory,
         )
         plugin.load()
         plugins[entry.model_id] = plugin
@@ -407,7 +340,7 @@ def app(fake_plugins: dict[str, FakePlugin]) -> FastAPI:
     application.state.containers = {}
     for entry in REGISTRY:
         application.state.containers[entry.model_id] = _build_container(
-            fake_plugins[entry.model_id], entry
+            fake_plugins[entry.model_id]
         )
         application.include_router(
             make_model_router(
@@ -427,69 +360,15 @@ def app(fake_plugins: dict[str, FakePlugin]) -> FastAPI:
 
 @pytest.fixture
 def client(app: FastAPI) -> TestClient:
+    """A TestClient for the app fixture."""
     return TestClient(app)
 
 
 # ── Sample payloads ────────────────────────────────────────────────────────
 
 @pytest.fixture
-def wine_pf_inline_payload() -> dict:
-    records = [
-        {"campaign": "2023/2024", "week": w, "price_red": 40.0 + w * 0.1}
-        for w in range(1, 25)
-    ]
-    return {"mode": "inline", "records": records}
-
-
-@pytest.fixture
-def cereal_inline_payload() -> dict:
-    return {
-        "mode": "inline",
-        "product_name": "Milling wheat",
-        "market_name": "Valladolid",
-        "week_begin_date": "2024-01-15",
-        "Year": 2024.0,
-        "Month": 1.0,
-        "Quarter": 1.0,
-        "Week_of_Year": 3.0,
-    }
-
-
-@pytest.fixture
-def meat_inline_payload() -> dict:
-    rows = [
-        {
-            "date": f"2024-01-{day:02d}",
-            "bovino": 130.0 + i,
-            "porcino": 128.0 + i,
-            "ovino": 135.0 + i,
-            "ave": 120.0 + i,
-            "carne": 129.0 + i,
-        }
-        for i, day in enumerate([1, 8, 15, 22])
-    ]
-    return {"mode": "inline", "rows": rows, "include_lstm": False}
-
-
-@pytest.fixture
-def cnn_fungal_inline_payload() -> dict:
-    return {"mode": "inline", "image_path": "/tmp/fake_image.jpg"}
-
-
-@pytest.fixture
-def cnn_thermal_inline_payload() -> dict:
-    return {"mode": "inline", "image_path": "/tmp/fake_thermal.jpg"}
-
-
-@pytest.fixture
-def cow_inline_payload() -> dict:
-    # 32 frames is the minimum clip length
-    frames = ["AAAA"] * 32
-    return {"mode": "inline", "frames_base64": frames, "detection_threshold": 0.5}
-
-
-@pytest.fixture
 def wine_so2_inline_payload() -> dict:
+    """Return a sample inline payload for the wine sulphite intervention model."""
     return {
         "mode": "inline",
         "fixed_acidity": 7.4,
@@ -507,3 +386,9 @@ def wine_so2_inline_payload() -> dict:
         "max_total": 200.0,
         "delta_max": 40.0,
     }
+
+
+@pytest.fixture
+def lacteo_inline_payload() -> dict:
+    """Return a sample inline payload for the Modelo10Lacteo plugin."""
+    return {"mode": "inline", "image_base64": "dGVzdC1pbWFnZQ=="}

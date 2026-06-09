@@ -11,7 +11,7 @@ from pathlib import Path
 
 import torch
 
-from app.application.dto.stats_dto import StatsResponse
+from app.application.dto.stats_dto import InputField, OutputField, RuntimeStats, StatsResponse
 from app.domain.ports.model_plugin_port import ModelPluginPort
 from app.domain.services.exceptions import InvalidImageError, ModelNotLoadedError
 from app.plugins.ml8_cereals_img_anomaly_detector.constants import (
@@ -24,7 +24,12 @@ from app.plugins.ml8_cereals_img_anomaly_detector.constants import (
 )
 from app.plugins.ml8_cereals_img_anomaly_detector.model_loader import load_model_bundle
 from app.plugins.ml8_cereals_img_anomaly_detector.postprocessing import build_batch_response, build_inline_response
+from app.plugins.ml8_cereals_img_anomaly_detector.predict_dto import (
+    PredictBatchResponse,
+    PredictInlineResponse,
+)
 from app.plugins.ml8_cereals_img_anomaly_detector.preprocessing import image_base64_to_tensor, image_path_to_tensor
+from app.plugins.ml8_cereals_img_anomaly_detector.train_dto import TrainResponse
 
 logger = logging.getLogger(__name__)
 
@@ -145,7 +150,7 @@ class Ml8CerealsImgAnomalyDetectorPlugin(ModelPluginPort):
         features: dict,
         model_key: str | None = None,
         threshold: float | None = None,
-    ) -> dict:
+    ) -> PredictInlineResponse:
         bundle = self._require_bundle()
         tensor = image_base64_to_tensor(
             features["image_base64"], image_size=bundle["image_size"]
@@ -159,15 +164,15 @@ class Ml8CerealsImgAnomalyDetectorPlugin(ModelPluginPort):
         self._last_predict_at = datetime.now(tz=timezone.utc).isoformat()
         logger.info("predict_inline done — count=%d", self._predict_count)
 
-        return build_inline_response(
+        return PredictInlineResponse(**build_inline_response(
             logits_cat,
             logits_cer,
             idx_to_class=bundle["idx_to_class"],
             idx_to_cereal=bundle["idx_to_cereal"],
             model_id=bundle["model_id"],
-        )
+        ))
 
-    def predict_batch(self, *, data_path: str) -> dict:
+    def predict_batch(self, *, data_path: str) -> PredictBatchResponse:
         bundle = self._require_bundle()
         model = bundle["model"]
         device: torch.device = bundle["device"]
@@ -208,41 +213,47 @@ class Ml8CerealsImgAnomalyDetectorPlugin(ModelPluginPort):
         self._last_predict_at = datetime.now(tz=timezone.utc).isoformat()
         logger.info("predict_batch done — %d predictions count=%d", len(predictions), self._predict_count)
 
-        return build_batch_response(predictions, model_id=bundle["model_id"])
+        return PredictBatchResponse(**build_batch_response(predictions, model_id=bundle["model_id"]))
 
     def stats(self) -> StatsResponse:
         arch = self._bundle["arch"] if self._bundle is not None else "unknown"
         model_id = self._bundle["model_id"] if self._bundle is not None else MODEL_ID
-        idx_to_class = self._bundle["idx_to_class"] if self._bundle is not None else {}
-        idx_to_cereal = self._bundle["idx_to_cereal"] if self._bundle is not None else {}
 
         return StatsResponse(
             model_name=model_id,
-            model_type=f"MultiTask CNN ({arch})",
+            version="1.0.0",
+            description=(
+                "Clasificación multitarea de imágenes de cereales: predice la categoría "
+                "(anomalía) y el tipo de cereal a partir de una imagen."
+            ),
+            task_type="image-classification",
             framework="pytorch",
-            artifact_path=f"artifacts/{MODEL_ID}",
-            input_schema={
-                "mode=inline": {"image_base64": "str — Base64-encoded image (JPEG/PNG/BMP)"},
-                "mode=batch": {"data_path": "str — path to ZIP file containing images"},
-            },
-            output_schema={
-                "inline": {
-                    "categoria": f"str — one of {list(idx_to_class.values())}",
-                    "cereal": f"str — one of {list(idx_to_cereal.values())}",
-                    "confianza_categoria": "float [0, 1]",
-                    "confianza_cereal": "float [0, 1]",
-                    "probabilidades_categoria": "dict[str, float]",
-                    "probabilidades_cereal": "dict[str, float]",
-                },
-                "batch": {"predictions": "list[dict] — per-image predictions"},
-            },
-            predict_count=self._predict_count,
-            last_predict_at=self._last_predict_at,
+            inputs=[
+                InputField(
+                    name="image",
+                    type="file",
+                    format=["jpg", "jpeg", "png", "bmp", "tif"],
+                    description="Imagen de cereal (base64 para inline, ZIP de imágenes para batch)",
+                ),
+            ],
+            outputs=[
+                OutputField(name="categoria", type="str", description="Categoría predicha (anomalía/estado)"),
+                OutputField(name="cereal", type="str", description="Tipo de cereal predicho"),
+                OutputField(name="confianza_categoria", type="float", description="Confianza de la categoría [0, 1]"),
+                OutputField(name="confianza_cereal", type="float", description="Confianza del cereal [0, 1]"),
+                OutputField(name="probabilidades_categoria", type="dict", description="Probabilidad por categoría"),
+                OutputField(name="probabilidades_cereal", type="dict", description="Probabilidad por cereal"),
+            ],
+            metrics={"arch": arch},
+            runtime_stats=RuntimeStats(
+                total_predictions=self._predict_count,
+                avg_latency_ms=None,
+            ),
         )
 
     # ── Entrenamiento ─────────────────────────────────────────────────────────
 
-    def train(self, *, data_path: str) -> dict:
+    def train(self, *, data_path: str) -> TrainResponse:
         import torch.nn as nn
         from PIL import Image
         from torch.utils.data import DataLoader, Dataset
@@ -370,7 +381,7 @@ class Ml8CerealsImgAnomalyDetectorPlugin(ModelPluginPort):
             gc.collect()
 
             # Guardar checkpoint
-            artifact_path = store._local_dir / MODEL_FILENAME
+            artifact_path = store.local_dir / MODEL_FILENAME
             artifact_path.parent.mkdir(parents=True, exist_ok=True)
             torch.save({
                 "model_name": "mobilenet_v3_large",
@@ -395,18 +406,18 @@ class Ml8CerealsImgAnomalyDetectorPlugin(ModelPluginPort):
 
             combined_cat = h2["val_acc_cat"] or h1["val_acc_cat"]
             combined_cer = h2["val_acc_cer"] or h1["val_acc_cer"]
-            return {
-                "detail": "Entrenamiento completado",
-                "train_samples": len(train_records),
-                "val_samples": len(val_records),
-                "fase1_epochs": len(h1["val_acc_cat"]),
-                "fase2_epochs": len(h2["val_acc_cat"]),
-                "fase1_time_min": round(t1 / 60, 1),
-                "fase2_time_min": round(t2 / 60, 1),
-                "best_val_acc_cat": round(max(combined_cat), 1) if combined_cat else 0.0,
-                "best_val_acc_cer": round(max(combined_cer), 1) if combined_cer else 0.0,
-                "upload_warning": upload_warning,
-            }
+            return TrainResponse(
+                detail="Entrenamiento completado",
+                train_samples=len(train_records),
+                val_samples=len(val_records),
+                fase1_epochs=len(h1["val_acc_cat"]),
+                fase2_epochs=len(h2["val_acc_cat"]),
+                fase1_time_min=round(t1 / 60, 1),
+                fase2_time_min=round(t2 / 60, 1),
+                best_val_acc_cat=round(max(combined_cat), 1) if combined_cat else 0.0,
+                best_val_acc_cer=round(max(combined_cer), 1) if combined_cer else 0.0,
+                upload_warning=upload_warning,
+            )
         finally:
             import shutil
             shutil.rmtree(tmp_dir, ignore_errors=True)
