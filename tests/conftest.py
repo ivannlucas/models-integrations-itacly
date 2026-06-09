@@ -38,6 +38,13 @@ from app.plugins.modelo10_lacteo.predict_dto import (
     PredictBatchResponse as LacteoBatchResp,
     PredictInlineResponse as LacteoInlineResp,
 )
+from app.plugins.ml8_cereals_img_anomaly_detector.predict_dto import (
+    PredictBatchResponse as Ml8CerealsBatchResp,
+    PredictInlineResponse as Ml8CerealsInlineResp,
+)
+from app.plugins.ml8_cereals_img_anomaly_detector.train_dto import (
+    TrainResponse as Ml8CerealsTrainResp,
+)
 from app.registry import REGISTRY
 
 
@@ -227,13 +234,64 @@ def _lacteo_train(plugin: FakePlugin, *, data_path: str) -> TrainResponse:
     )
 
 
+def _ml8_cereals_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> Ml8CerealsInlineResp:
+    """Return a fake inline prediction response for the ml8 cereals model."""
+    return Ml8CerealsInlineResp(
+        model_id="ml8-cereals-img-anomaly-detector",
+        categoria="sano",
+        cereal="trigo",
+        confianza_categoria=0.95,
+        confianza_cereal=0.91,
+        probabilidades_categoria={"sano": 0.95, "hongos": 0.02, "insectos": 0.02, "otros": 0.01},
+        probabilidades_cereal={"trigo": 0.91, "maiz": 0.04, "arroz": 0.03, "sorgo": 0.02},
+    )
+
+
+def _ml8_cereals_batch(plugin: FakePlugin, *, data_path: str) -> Ml8CerealsBatchResp:
+    """Return a fake batch prediction response for the ml8 cereals model."""
+    return Ml8CerealsBatchResp(
+        model_id="ml8-cereals-img-anomaly-detector",
+        predictions=[
+            {
+                "filename": "img_001.jpg",
+                "model_id": "ml8-cereals-img-anomaly-detector",
+                "categoria": "sano",
+                "cereal": "trigo",
+                "confianza_categoria": 0.95,
+                "confianza_cereal": 0.91,
+                "probabilidades_categoria": {"sano": 0.95, "hongos": 0.02, "insectos": 0.02, "otros": 0.01},
+                "probabilidades_cereal": {"trigo": 0.91, "maiz": 0.04, "arroz": 0.03, "sorgo": 0.02},
+            }
+        ],
+        output_path=None,
+    )
+
+
+def _ml8_cereals_train(plugin: FakePlugin, *, data_path: str) -> Ml8CerealsTrainResp:
+    """Return a fake training response for the ml8 cereals model."""
+    return Ml8CerealsTrainResp(
+        detail="Entrenamiento completado",
+        train_samples=80,
+        val_samples=20,
+        fase1_epochs=3,
+        fase2_epochs=2,
+        fase1_time_min=0.5,
+        fase2_time_min=0.2,
+        best_val_acc_cat=91.2,
+        best_val_acc_cer=88.5,
+        upload_warning=None,
+    )
+
+
 FAKE_FACTORIES: dict[str, tuple[Callable, Callable]] = {
     "wine-sulphite": (_wine_so2_inline, _wine_so2_batch),
     "modelo10-lacteo": (_lacteo_inline, _lacteo_batch),
+    "ml8-cereals-img-anomaly-detector": (_ml8_cereals_inline, _ml8_cereals_batch),
 }
 
 TRAIN_FACTORIES: dict[str, Callable] = {
     "modelo10-lacteo": _lacteo_train,
+    "ml8-cereals-img-anomaly-detector": _ml8_cereals_train,
 }
 
 

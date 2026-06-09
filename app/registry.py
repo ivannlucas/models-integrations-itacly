@@ -7,7 +7,7 @@ To add a new model:
 from dataclasses import dataclass, field
 from typing import Any
 
-from app.domain.services.exceptions import NoValidSimulationPointError
+from app.domain.services.exceptions import InvalidImageError, NoValidSimulationPointError
 
 # ── Plugin imports ────────────────────────────────────────────────────────────
 
@@ -26,6 +26,16 @@ from app.plugins.modelo10_lacteo.plugin import Modelo10LacteoPlugin
 from app.plugins.modelo10_lacteo.predict_dto import (
     PredictRequest as Lacteo10_Request,
     PredictResponse as Lacteo10_Response,
+)
+
+from app.plugins.ml8_cereals_img_anomaly_detector.plugin import Ml8CerealsImgAnomalyDetectorPlugin
+from app.plugins.ml8_cereals_img_anomaly_detector.predict_dto import (
+    PredictRequest as Ml8Cereals_Request,
+    PredictResponse as Ml8Cereals_Response,
+)
+from app.plugins.ml8_cereals_img_anomaly_detector.train_dto import (
+    TrainRequest as Ml8Cereals_TrainReq,
+    TrainResponse as Ml8Cereals_TrainResp,
 )
 
 
@@ -67,5 +77,16 @@ REGISTRY: list[ModelEntry] = [
         predict_request_type=Lacteo10_Request,
         predict_response_type=Lacteo10_Response,
         extra_predict_exceptions=(),
+    ),
+    ModelEntry(
+        model_id="ml8-cereals-img-anomaly-detector",
+        prefix="/models/ml8-cereals-img-anomaly-detector",
+        version="1.0.0",
+        plugin_class=Ml8CerealsImgAnomalyDetectorPlugin,
+        predict_request_type=Ml8Cereals_Request,
+        predict_response_type=Ml8Cereals_Response,
+        extra_predict_exceptions=(InvalidImageError,),
+        train_request_type=Ml8Cereals_TrainReq,
+        train_response_type=Ml8Cereals_TrainResp,
     ),
 ]
