@@ -28,7 +28,7 @@ torchvision==0.26.0
 #   python -m pip install --no-build-isolation \
 #     'git+https://github.com/facebookresearch/detectron2.git'
 
-opencv-python
+opencv-python-headless
 lightgbm
 timm
 albumentations
