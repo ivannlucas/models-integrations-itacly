@@ -275,7 +275,7 @@ https://sites.google.com/luceit.es/luceit/otros/devops/devops-politica_de_versio
 | Version | Date (last change) |  Developer   | Changes                      |
 |:-------:|:-------------------|:------------:|
 :-----------------------------|
-| v0.1.41 | 09/06/2026         | Alejandro Flores | Register ml8-plugin |
+| v0.1.41 | 09/06/2026         | Alejandro Flores / Pablo | Register ml8-plugin; fix: add root /health endpoint for K8s probes |
 | v0.1.39 | 08/06/2026         | Alejandro Flores | fix bitbucket-pipelines.yml |
 | v0.1.38 | 08/06/2026         | Alejandro Flores | update .gitignore |
 | v0.1.37 | 08/06/2026         | Alejandro Flores | Typed plugin responses; fix duplicate ModelEntry train fields |

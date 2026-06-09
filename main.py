@@ -55,6 +55,19 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+
+@app.get("/health", tags=["health"])
+async def health() -> dict:
+    """Global health check used by Kubernetes liveness and readiness probes."""
+    containers = getattr(app.state, "containers", {})
+    models_status = {mid: c.service.is_loaded() for mid, c in containers.items()}
+    all_loaded = all(models_status.values()) if models_status else False
+    return {
+        "status": "ok" if all_loaded else "loading",
+        "models": models_status,
+    }
+
+
 for _entry in _active_entries:
     _router = make_model_router(
         model_id=_entry.model_id,
