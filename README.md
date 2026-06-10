@@ -275,6 +275,7 @@ https://sites.google.com/luceit.es/luceit/otros/devops/devops-politica_de_versio
 | Version | Date (last change) |  Developer   | Changes                      |
 |:-------:|:-------------------|:------------:|
 :-----------------------------|
+| v0.1.45 | 10/06/2026         | Pablo | fix: Added s3 download datasets  |
 | v0.1.44 | 09/06/2026         |     Pablo        | fix: added headless opencv |   
 | v0.1.43 | 09/06/2026         |     Pablo        | fix: replace opencv-python with opencv-python-headless to fix libxcb missing in container |
 | v0.1.42 | 09/06/2026         |     Pablo        | fix: add root /health endpoint for K8s liveness and readiness probes |

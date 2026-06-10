@@ -213,6 +213,55 @@ class WineSulphitePlugin(ModelPluginPort):
         """Train dual RandomForest models from the CSV at *data_path*, persist artifacts, and reload."""
         # pylint: disable=import-outside-toplevel
         import json
+        import os
+        import tempfile
+        import joblib
+        from sklearn.ensemble import RandomForestRegressor
+        from sklearn.metrics import mean_absolute_error
+        from app.plugins.ml25_wine_sulphites.model_loader import get_artifacts_dir, upload_artifact
+        from app.plugins.ml25_wine_sulphites.constants import (
+            QUALITY_RF_MODEL_FILENAME,
+            BOUND_RF_MODEL_FILENAME,
+            METADATA_FILENAME,
+        )
+        # pylint: enable=import-outside-toplevel
+
+        _tmp_path: str | None = None
+        local_data_path = data_path
+
+        if data_path.startswith("s3://"):
+            import boto3
+            from botocore.client import Config as BotoConfig
+
+            without_prefix = data_path[5:]
+            bucket, _, s3_key = without_prefix.partition("/")
+            s3 = boto3.client(
+                "s3",
+                endpoint_url=os.environ.get("CUSTOM_S3_ENDPOINT"),
+                aws_access_key_id=os.environ.get("AWS_ACCESS_KEY_ID"),
+                aws_secret_access_key=os.environ.get("AWS_SECRET_ACCESS_ID"),
+                config=BotoConfig(signature_version="s3v4"),
+                region_name=os.environ.get("CUSTOM_REGION", "us-east-1"),
+            )
+            fd, _tmp_path = tempfile.mkstemp(suffix=".csv")
+            os.close(fd)
+            logger.info("Downloading training data from s3://%s/%s", bucket, s3_key)
+            s3.download_file(bucket, s3_key, _tmp_path)
+            local_data_path = _tmp_path
+
+        try:
+            return self._train_from_local(local_data_path)
+        finally:
+            if _tmp_path is not None:
+                try:
+                    os.unlink(_tmp_path)
+                except OSError:
+                    pass
+
+    def _train_from_local(self, data_path: str) -> TrainResponse:  # pylint: disable=too-many-locals
+        """Core training logic operating on a local CSV file."""
+        # pylint: disable=import-outside-toplevel
+        import json
         import joblib
         from sklearn.ensemble import RandomForestRegressor
         from sklearn.metrics import mean_absolute_error
