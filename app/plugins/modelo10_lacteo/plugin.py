@@ -402,6 +402,8 @@ class Modelo10LacteoPlugin(ModelPluginPort):
             val_loader = DataLoader(val_ds, batch_size=32, shuffle=False, num_workers=0)
 
             # Build model: pretrained MobileNetV3, frozen backbone, trainable classifier head
+            # TORCH_HOME must point to a writable dir; pods run without a home directory.
+            os.environ.setdefault("TORCH_HOME", "/tmp/.torch")
             model = models.mobilenet_v3_large(weights="IMAGENET1K_V1")
             for param in model.parameters():
                 param.requires_grad = False
