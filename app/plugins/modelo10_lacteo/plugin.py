@@ -198,33 +198,51 @@ class Modelo10LacteoPlugin(ModelPluginPort):
         """Ejecuta inferencia en batch sobre un CSV/ZIP/directorio de imágenes y devuelve las predicciones."""
         self._assert_loaded()
 
+        _tmp_zip: str | None = None
+        local_data_path = data_path
+        if data_path.startswith("s3://"):
+            import boto3
+            from botocore.client import Config as BotoConfig
+            without_prefix = data_path[5:]
+            bucket, _, s3_key = without_prefix.partition("/")
+            s3 = boto3.client(
+                "s3",
+                endpoint_url=os.environ.get("CUSTOM_S3_ENDPOINT"),
+                aws_access_key_id=os.environ.get("AWS_ACCESS_KEY_ID"),
+                aws_secret_access_key=os.environ.get("AWS_SECRET_ACCESS_ID"),
+                config=BotoConfig(signature_version="s3v4"),
+                region_name=os.environ.get("CUSTOM_REGION", "us-east-1"),
+            )
+            fd, _tmp_zip = tempfile.mkstemp(suffix=".zip")
+            os.close(fd)
+            logger.info("Downloading batch data from s3://%s/%s", bucket, s3_key)
+            s3.download_file(bucket, s3_key, _tmp_zip)
+            local_data_path = _tmp_zip
+
         temp_dir: str | None = None
         image_files: list[Path] = []
-
-        if data_path.lower().endswith(".csv"):
-            # CSV mode: read image_path column
-            image_files = self._image_paths_from_csv(data_path)
-        elif data_path.lower().endswith(".zip"):
-            temp_dir = tempfile.mkdtemp(prefix="modelo10_lacteo_batch_")
-            with zipfile.ZipFile(data_path, "r") as zf:
-                zf.extractall(temp_dir)
-            entries = list(Path(temp_dir).iterdir())
-            image_dir = entries[0] if len(entries) == 1 and entries[0].is_dir() else Path(temp_dir)
-            image_files = sorted(f for f in image_dir.rglob("*") if f.suffix.lower() in SUPPORTED_EXTENSIONS)
-        else:
-            image_dir = Path(data_path)
-            if not image_dir.is_dir():
-                raise ValueError(f"data_path debe ser CSV, ZIP o directorio, recibido: {data_path}")
-            image_files = sorted(f for f in image_dir.rglob("*") if f.suffix.lower() in SUPPORTED_EXTENSIONS)
-
-        if not image_files:
-            if temp_dir:
-                shutil.rmtree(temp_dir, ignore_errors=True)
-            raise ValueError(f"No se encontraron imágenes en: {data_path}")
-
         predictions = []
         t0 = time.perf_counter()
+
         try:
+            if local_data_path.lower().endswith(".csv"):
+                image_files = self._image_paths_from_csv(local_data_path)
+            elif local_data_path.lower().endswith(".zip"):
+                temp_dir = tempfile.mkdtemp(prefix="modelo10_lacteo_batch_")
+                with zipfile.ZipFile(local_data_path, "r") as zf:
+                    zf.extractall(temp_dir)
+                entries = list(Path(temp_dir).iterdir())
+                image_dir = entries[0] if len(entries) == 1 and entries[0].is_dir() else Path(temp_dir)
+                image_files = sorted(f for f in image_dir.rglob("*") if f.suffix.lower() in SUPPORTED_EXTENSIONS)
+            else:
+                image_dir = Path(local_data_path)
+                if not image_dir.is_dir():
+                    raise ValueError(f"data_path debe ser CSV, ZIP o directorio, recibido: {local_data_path}")
+                image_files = sorted(f for f in image_dir.rglob("*") if f.suffix.lower() in SUPPORTED_EXTENSIONS)
+
+            if not image_files:
+                raise ValueError(f"No se encontraron imágenes en: {local_data_path}")
+
             for img_path in image_files:
                 try:
                     image_pil = image_path_to_pil(str(img_path))
@@ -238,6 +256,8 @@ class Modelo10LacteoPlugin(ModelPluginPort):
         finally:
             if temp_dir:
                 shutil.rmtree(temp_dir, ignore_errors=True)
+            if _tmp_zip:
+                os.unlink(_tmp_zip)
 
         self._update_stats(latency_ms=(time.perf_counter() - t0) * 1000)
         return PredictBatchResponse(
