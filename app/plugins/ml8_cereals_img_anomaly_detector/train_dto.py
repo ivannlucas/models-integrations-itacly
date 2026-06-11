@@ -10,6 +10,8 @@ class TrainRequest(BaseModel):
             "{cereal}/train/{categoria}/*.jpg"
         ),
     )
+    user_id: str = ""
+    model_id: str = ""
 
 
 class TrainResponse(BaseModel):

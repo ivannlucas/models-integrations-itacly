@@ -15,6 +15,8 @@ class PredictBatchRequest(BaseModel):
     data_path: str = Field(
         ..., description="Path to a ZIP file containing images inside the container"
     )
+    model_id: str = ""  # si se pasa, usa el modelo específico entrenado
+    user_id: str = ""   # propietario del modelo específico
 
 
 PredictRequest = Annotated[
@@ -39,6 +41,8 @@ class PredictBatchResponse(BaseModel):
     model_id: str
     predictions: list[dict]
     output_path: str | None = None
+    model_train_id: str = ""  # si se pasa, usa el modelo específico entrenado
+    user_id: str = ""   # propietario del modelo específico
 
 
 PredictResponse = Union[PredictInlineResponse, PredictBatchResponse]

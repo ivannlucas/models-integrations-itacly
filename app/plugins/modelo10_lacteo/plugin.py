@@ -150,6 +150,7 @@ class Modelo10LacteoPlugin(ModelPluginPort):
         self._predict_count: int = 0
         self._total_latency_ms: float = 0.0
         self._last_predict_at: str | None = None
+        self._model_metrics: dict = {}
 
     def load(self) -> None:
         """Carga los modelos desde artifacts/ y los prepara para inferencia."""
@@ -168,9 +169,20 @@ class Modelo10LacteoPlugin(ModelPluginPort):
         features: dict,
         model_key: str | None = None,
         threshold: float | None = None,
+        model_id: str = "",
+        user_id: str = "",
     ) -> PredictInlineResponse:
         """Ejecuta inferencia en una sola imagen (base64 o path) y devuelve la predicción."""
         self._assert_loaded()
+        user_clf = None
+        user_cls_names = None
+        user_temp_dir = None
+        if model_id and user_id:
+            logger.info(" [INLINE] Loading user-specific classifier for user_id=%s, model_id=%s", user_id, model_id)
+            loaded = self._load_user_classifier(user_id, model_id)
+            if loaded:
+                logger.info(" [INLINE] User-specific classifier loaded successfully")
+                user_clf, user_cls_names, user_temp_dir = loaded
 
         if features.get("image_path"):
             img_path = features["image_path"]
@@ -187,16 +199,34 @@ class Modelo10LacteoPlugin(ModelPluginPort):
         cls_conf = float(features.get("cls_conf_thresh", DEFAULT_CLS_CONF))
 
         t0 = time.perf_counter()
-        detections = self._run_pipeline(image_pil, det_conf, cls_conf)
+
+        try:
+            detections = self._run_pipeline(
+                image_pil, det_conf, cls_conf,
+                classifier=user_clf, class_names=user_cls_names,
+            )
+        finally:
+            if user_temp_dir:
+                shutil.rmtree(user_temp_dir, ignore_errors=True)
+
         self._update_stats(latency_ms=(time.perf_counter() - t0) * 1000)
 
         return PredictInlineResponse(**build_inline_result(self.MODEL_ID, detections))
 
     # ── predict_batch ─────────────────────────────────────────────────────────
 
-    def predict_batch(self, *, data_path: str) -> PredictBatchResponse:
+    def predict_batch(self, *, data_path: str, model_id: str = "", user_id: str = "") -> PredictBatchResponse:
         """Ejecuta inferencia en batch sobre un CSV/ZIP/directorio de imágenes y devuelve las predicciones."""
         self._assert_loaded()
+        user_clf = None
+        user_cls_names = None
+        user_temp_dir = None
+        if model_id and user_id:
+            logger.info(" [BATCH] Loading user-specific classifier for user_id=%s, model_id=%s", user_id, model_id)
+            loaded = self._load_user_classifier(user_id, model_id)
+            if loaded:
+                logger.info(" [BATCH] User-specific classifier loaded successfully")
+                user_clf, user_cls_names, user_temp_dir = loaded
 
         _tmp_zip: str | None = None
         local_data_path = data_path
@@ -240,13 +270,17 @@ class Modelo10LacteoPlugin(ModelPluginPort):
                     raise ValueError(f"data_path debe ser CSV, ZIP o directorio, recibido: {local_data_path}")
                 image_files = sorted(f for f in image_dir.rglob("*") if f.suffix.lower() in SUPPORTED_EXTENSIONS)
 
+            temps = [d for d in (temp_dir, user_temp_dir) if d]
+
             if not image_files:
-                raise ValueError(f"No se encontraron imágenes en: {local_data_path}")
+                for d in temps:
+                    shutil.rmtree(d, ignore_errors=True)
+                raise ValueError(f"No se encontraron imágenes en: {data_path}")
 
             for img_path in image_files:
                 try:
                     image_pil = image_path_to_pil(str(img_path))
-                    detections = self._run_pipeline(image_pil, DEFAULT_DET_CONF, DEFAULT_CLS_CONF)
+                    detections = self._run_pipeline(image_pil, DEFAULT_DET_CONF, DEFAULT_CLS_CONF, classifier=user_clf, class_names=user_cls_names)
                     row = build_inline_result(self.MODEL_ID, detections)
                     row.pop("model_id", None)
                     predictions.append({"filename": img_path.name, **row})
@@ -254,14 +288,14 @@ class Modelo10LacteoPlugin(ModelPluginPort):
                     logger.warning("Error procesando %s: %s", img_path.name, exc)
                     predictions.append({"filename": img_path.name, "status": "error", "error_message": str(exc)})
         finally:
-            if temp_dir:
-                shutil.rmtree(temp_dir, ignore_errors=True)
+            for d in temps:
+                shutil.rmtree(d, ignore_errors=True)
             if _tmp_zip:
                 os.unlink(_tmp_zip)
 
         self._update_stats(latency_ms=(time.perf_counter() - t0) * 1000)
         return PredictBatchResponse(
-            model_id=self.MODEL_ID, predictions=predictions, output_path=None
+            model_id=self.MODEL_ID, predictions=predictions, output_path=None, model_train_id=model_id, user_id=user_id
         )
 
     # ── get_stats ─────────────────────────────────────────────────────────────
@@ -298,11 +332,18 @@ class Modelo10LacteoPlugin(ModelPluginPort):
         )
 
     # ── private helpers ───────────────────────────────────────────────────────
-
     def _run_pipeline(
-        self, image_pil, det_conf_thresh: float, cls_conf_thresh: float
+        self, image_pil, det_conf_thresh: float, cls_conf_thresh: float,
+        classifier=None, class_names=None,
     ) -> list[dict]:
-        """Ejecuta el pipeline de dos etapas y devuelve la lista de detecciones."""
+        """Ejecuta el pipeline de dos etapas.
+
+        Si se proporcionan classifier/class_names se usan en lugar de los atributos
+        de instancia (para clasificadores de usuario sin sobrescribir los generales).
+        """
+        clf = classifier if classifier is not None else self._classifier
+        cnames = class_names if class_names is not None else self._class_names
+
         results = self._detector.predict(source=image_pil, conf=det_conf_thresh, save=False, verbose=False)
         if not results:
             return []
@@ -316,7 +357,7 @@ class Modelo10LacteoPlugin(ModelPluginPort):
                 continue
 
             tensor = crop_to_tensor(image_pil, x1, y1, x2, y2)
-            species, cls_conf = classify_crop(self._classifier, tensor, self._class_names, self._device)
+            species, cls_conf = classify_crop(clf, tensor, cnames, self._device)
 
             if cls_conf >= cls_conf_thresh:
                 detections.append({
@@ -338,7 +379,7 @@ class Modelo10LacteoPlugin(ModelPluginPort):
                     paths.append(Path(ip))
         return paths
 
-    def train(self, *, data_path: str) -> TrainResponse:
+    def train(self, *, data_path: str, user_id: str, model_id: str) -> TrainResponse:
         """Train the MobileNetV3 classifier from a ZIP.
 
         Accepted ZIP structures:
@@ -450,23 +491,25 @@ class Modelo10LacteoPlugin(ModelPluginPort):
             logger.info("Clasificador guardado. Clases: %s", class_names)
 
             try:
-                _store.upload_artifact(_store.path(CLASSIFIER_FILENAME))
-                _store.upload_artifact(_store.path(CLASS_NAMES_FILENAME))
+                _store.upload_artifact(_store.path(CLASSIFIER_FILENAME), user_id=user_id, model_id=model_id)
+                _store.upload_artifact(_store.path(CLASS_NAMES_FILENAME), user_id=user_id, model_id=model_id)
             except Exception as exc:
                 logger.error("S3 upload failed (artifacts saved locally): %s", exc)
 
             self._reload_classifier()
 
+            self._model_metrics = {
+                "train_samples": len(train_ds),
+                "val_samples": len(val_ds),
+                "classes": class_names,
+                "epochs_run": len(val_accs),
+                "best_val_acc": round(best_acc * 100, 1),
+                "time_min": round(elapsed / 60, 1),
+            }
+
             return TrainResponse(
                 detail="Entrenamiento del clasificador completado",
-                metrics={
-                    "train_samples": len(train_ds),
-                    "val_samples": len(val_ds),
-                    "classes": class_names,
-                    "epochs_run": len(val_accs),
-                    "best_val_acc": round(best_acc * 100, 1),
-                    "time_min": round(elapsed / 60, 1),
-                }
+                metrics=self._model_metrics
             )
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
@@ -489,6 +532,40 @@ class Modelo10LacteoPlugin(ModelPluginPort):
         model.to(self._device)
         self._classifier = model
         logger.info("Clasificador recargado. Clases: %s", self._class_names)
+
+    def _load_user_classifier(self, user_id: str, model_id: str) -> tuple | None:
+        """Download user-specific classifier from S3 to a temp dir and load it.
+        
+        Returns (classifier, class_names, temp_dir) — the caller MUST clean up
+        temp_dir after use (e.g. shutil.rmtree). Returns None if no artifacts found.
+        """
+        user_artifacts_dir = Path(tempfile.mkdtemp(prefix=f"modelo10_user_{user_id}_{model_id}"))
+        try:
+            _store.download_user_artifacts_if_needed(str(user_artifacts_dir), user_id, model_id)
+        except Exception as exc:
+            shutil.rmtree(str(user_artifacts_dir), ignore_errors=True)
+            logger.warning("No se encontraron artefactos para usuario %s: %s", user_id, exc)
+            return None
+
+        class_names_path = user_artifacts_dir / CLASS_NAMES_FILENAME
+        classifier_path = user_artifacts_dir / CLASSIFIER_FILENAME
+        if not class_names_path.exists() or not classifier_path.exists():
+            shutil.rmtree(str(user_artifacts_dir), ignore_errors=True)
+            logger.warning("Artefactos incompletos para usuario %s", user_id)
+            return None
+
+        with open(class_names_path) as fh:
+            class_names = json.load(fh)
+        model = models.mobilenet_v3_large(weights=None)
+        in_features = model.classifier[-1].in_features
+        model.classifier[-1] = nn.Linear(in_features, len(class_names))
+        state_dict = torch.load(str(classifier_path), map_location=self._device, weights_only=False)
+        model.load_state_dict(state_dict)
+        model.eval()
+        model.to(self._device)
+        logger.info("Clasificador de usuario %s cargado. Clases: %s", user_id, class_names)
+        return model, class_names, str(user_artifacts_dir)
+
 
     def _assert_loaded(self) -> None:
         """Lanza un error si el modelo no está cargado."""

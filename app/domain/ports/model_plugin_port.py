@@ -18,7 +18,7 @@ class ModelPluginPort(ABC):
         """Return True if the model is ready for inference."""
 
     @abstractmethod
-    def predict_batch(self, *, data_path: str) -> BaseModel:
+    def predict_batch(self, *, data_path: str, user_id: str = "", model_id: str = "") -> BaseModel:
         """Run batch inference and return the model's typed batch response."""
 
     @abstractmethod
@@ -28,6 +28,8 @@ class ModelPluginPort(ABC):
         features: dict,
         model_key: str | None = None,
         threshold: float | None = None,
+        model_id: str = "",
+        user_id: str = "",
     ) -> BaseModel:
         """Run inline inference on a single feature dict and return the typed inline response."""
 
@@ -36,5 +38,5 @@ class ModelPluginPort(ABC):
         """Return model metadata and runtime statistics."""
 
     @abstractmethod
-    def train(self, *, data_path: str) -> BaseModel:
+    def train(self, *, data_path: str, user_id: str, model_id: str) -> BaseModel:
         """Train the model with the provided data and return the typed train response."""

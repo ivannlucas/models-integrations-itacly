@@ -12,6 +12,8 @@ class PredictBatchRequest(BaseModel):
         ...,
         description="Path to CSV file with wine physicochemical properties inside the container",
     )
+    model_id: str = ""  # si se pasa, usa el modelo específico entrenado
+    user_id: str = ""   # propietario del modelo específico
 
 
 class PredictBatchResponse(BaseModel):
@@ -20,6 +22,8 @@ class PredictBatchResponse(BaseModel):
     model_id: str
     predictions: list[dict[str, Any]]
     output_path: str | None = None
+    model_train_id: str = ""
+    user_id: str = ""
 
 
 class PredictInlineRequest(BaseModel):

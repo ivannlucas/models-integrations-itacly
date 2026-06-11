@@ -98,6 +98,52 @@ class ArtifactStore:
                 )
         return local
 
+    def download_user_artifacts_if_needed(self,local_base_dir: str, user_id: str, model_id: str) -> None:
+        """
+        Download artifacts for a specific user from artifacts/fixed/<user_id>/<model_id>/<artifact_name>/ in S3.
+        """
+        bucket_name = os.getenv("STORAGE_BUCKET")
+        s3 = _build_s3_client()
+        remote_prefix = f"artifacts/fixed/{user_id}/{model_id}/{self._model_name}/"
+
+        logger.info("Checking for user artifacts in S3 for user=%s artifact=%s ...", user_id, self._model_name)
+
+        os.makedirs(local_base_dir, exist_ok=True)
+
+        paginator = s3.get_paginator("list_objects_v2")
+        remote_files = []
+        for page in paginator.paginate(Bucket=bucket_name, Prefix=remote_prefix):
+            for obj in page.get("Contents", []):
+                if not obj["Key"].endswith("/"):
+                    remote_files.append(obj)
+
+        if not remote_files:
+            logger.warning("No user artifacts found in S3 for user=%s artifact=%s", user_id, self._model_name)
+            return
+
+        pending = []
+        for obj in remote_files:
+            relative_path = obj["Key"][len(remote_prefix):]
+            local_path = os.path.join(local_base_dir, relative_path)
+            if _file_needs_download(local_path, obj["Size"]):
+                pending.append((obj["Key"], local_path))
+            else:
+                logger.info("Skipping (unchanged): %s", relative_path)
+
+        if not pending:
+            logger.info("All user artifact files are up-to-date. No download needed.")
+            return
+
+        for remote_key, local_path in pending:
+            os.makedirs(os.path.dirname(local_path), exist_ok=True)
+            try:
+                s3.download_file(bucket_name, remote_key, local_path)
+            except Exception as exc:
+                logger.error("Failed to download %s: %s", remote_key, exc)
+                raise
+
+        logger.info("User artifact download complete for user=%s", user_id)
+
     def download_all_if_needed(self) -> None:
         """Download every file under the model's S3 prefix, skipping up-to-date files.
 
@@ -168,7 +214,7 @@ class ArtifactStore:
 
         logger.info("Artifact download complete for model '%s'.", self._model_name)
 
-    def upload_artifact(self, local_path: Path) -> None:
+    def upload_artifact(self, local_path: Path, user_id: str, model_id: str) -> None:
         """Upload a single artifact file to S3 under the model's prefix."""
         bucket = os.getenv("STORAGE_BUCKET")
         if not bucket:
@@ -176,7 +222,7 @@ class ArtifactStore:
             return
 
         s3 = _build_s3_client()
-        remote_key = f"artifacts/fixed/{self._model_name}/{local_path.name}"
+        remote_key = f"artifacts/fixed/{user_id}/{model_id}/{self._model_name}/{local_path.name}"
         logger.info("Uploading %s → s3://%s/%s", local_path.name, bucket, remote_key)
 
         config = TransferConfig(

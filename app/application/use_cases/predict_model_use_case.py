@@ -25,11 +25,13 @@ class PredictModelUseCase:
         """Execute the prediction, routing to batch or inline mode based on the request."""
         if request.mode == "batch":
             logger.info("Executing batch prediction, data_path=%s", request.data_path)
-            return self._plugin.predict_batch(data_path=request.data_path)
+            return self._plugin.predict_batch(data_path=request.data_path, model_id=request.model_id, user_id=request.user_id,)
         logger.info("Executing inline prediction")
         features = request.model_dump(exclude={"mode", "model_key", "threshold"})
         return self._plugin.predict_inline(
             features=features,
             model_key=getattr(request, "model_key", None),
             threshold=getattr(request, "threshold", None),
+            model_id=getattr(request, "model_id", None),
+            user_id=getattr(request, "user_id", None),
         )

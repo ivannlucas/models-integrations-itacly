@@ -11,6 +11,8 @@ class PredictBatchRequest(BaseModel):
     model_config = ConfigDict(protected_namespaces=())
     mode: Literal["batch"] = "batch"
     data_path: str  # ruta a CSV, ZIP o directorio dentro del contenedor
+    model_id: str = ""  # si se pasa, usa el modelo específico entrenado
+    user_id: str = ""   # propietario del modelo específico
 
 
 class PredictBatchResponse(BaseModel):
@@ -19,6 +21,8 @@ class PredictBatchResponse(BaseModel):
     model_id: str
     predictions: List[Dict[str, Any]]
     output_path: str | None = None
+    model_train_id: str = ""
+    user_id: str = ""
 
 
 class PredictInlineRequest(BaseModel):
