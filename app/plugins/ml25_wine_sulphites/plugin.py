@@ -127,46 +127,74 @@ class WineSulphitePlugin(ModelPluginPort):
 
     def predict_batch(self, *, data_path: str) -> PredictBatchResponse:
         """Run inference on every row of the CSV at *data_path* and return all predictions."""
-        df = pd.read_csv(data_path, sep=None, engine="python")
-        df.columns = [c.strip().replace(" ", "_") for c in df.columns]
+        import os
+        import tempfile
 
-        predictions = []
-        t0 = time.perf_counter()
-        for idx, row in df.iterrows():
-            row_dict = row.to_dict()
-            row_dict.setdefault("min_molecular", 0.6)
-            row_dict.setdefault("max_total", 200.0)
-            row_dict.setdefault("delta_max", 40.0)
-            try:
-                res = self._run_inference(row_dict)
-                i = res["rec_idx"]
-                predictions.append(
-                    {
-                        "row": int(idx),
-                        "intervention_recommended": res["intervention"],
-                        "recommended_free_so2": float(res["valid_free"][i]),
-                        "recommended_bound_so2": float(res["valid_bounds"][i]),
-                        "recommended_total_so2": float(res["valid_totals"][i]),
-                        "recommended_molecular_so2": float(res["valid_moleculars"][i]),
-                        "predicted_quality": float(res["valid_qualities"][i]),
-                        "recommendation_reason": res["reason"],
-                    }
-                )
-            except Exception as exc:  # pylint: disable=broad-exception-caught
-                predictions.append({"row": int(idx), "error": str(exc)})
+        _tmp_csv: str | None = None
+        local_data_path = data_path
+        if data_path.startswith("s3://"):
+            import boto3
+            from botocore.client import Config as BotoConfig
+            without_prefix = data_path[5:]
+            bucket, _, s3_key = without_prefix.partition("/")
+            s3 = boto3.client(
+                "s3",
+                endpoint_url=os.environ.get("CUSTOM_S3_ENDPOINT"),
+                aws_access_key_id=os.environ.get("AWS_ACCESS_KEY_ID"),
+                aws_secret_access_key=os.environ.get("AWS_SECRET_ACCESS_ID"),
+                config=BotoConfig(signature_version="s3v4"),
+                region_name=os.environ.get("CUSTOM_REGION", "us-east-1"),
+            )
+            fd, _tmp_csv = tempfile.mkstemp(suffix=".csv")
+            os.close(fd)
+            logger.info("Downloading batch data from s3://%s/%s", bucket, s3_key)
+            s3.download_file(bucket, s3_key, _tmp_csv)
+            local_data_path = _tmp_csv
 
-        self._total_latency_ms += (time.perf_counter() - t0) * 1000
-        self._predict_count += 1
-        self._last_predict_at = datetime.now(tz=timezone.utc).isoformat()
-        logger.info(
-            "predict_batch done — %d predictions count=%d", len(predictions), self._predict_count
-        )
+        try:
+            df = pd.read_csv(local_data_path, sep=None, engine="python")
+            df.columns = [c.strip().replace(" ", "_") for c in df.columns]
 
-        return PredictBatchResponse(
-            model_id=MODEL_NAME,
-            predictions=predictions,
-            output_path=None,
-        )
+            predictions = []
+            t0 = time.perf_counter()
+            for idx, row in df.iterrows():
+                row_dict = row.to_dict()
+                row_dict.setdefault("min_molecular", 0.6)
+                row_dict.setdefault("max_total", 200.0)
+                row_dict.setdefault("delta_max", 40.0)
+                try:
+                    res = self._run_inference(row_dict)
+                    i = res["rec_idx"]
+                    predictions.append(
+                        {
+                            "row": int(idx),
+                            "intervention_recommended": res["intervention"],
+                            "recommended_free_so2": float(res["valid_free"][i]),
+                            "recommended_bound_so2": float(res["valid_bounds"][i]),
+                            "recommended_total_so2": float(res["valid_totals"][i]),
+                            "recommended_molecular_so2": float(res["valid_moleculars"][i]),
+                            "predicted_quality": float(res["valid_qualities"][i]),
+                            "recommendation_reason": res["reason"],
+                        }
+                    )
+                except Exception as exc:  # pylint: disable=broad-exception-caught
+                    predictions.append({"row": int(idx), "error": str(exc)})
+
+            self._total_latency_ms += (time.perf_counter() - t0) * 1000
+            self._predict_count += 1
+            self._last_predict_at = datetime.now(tz=timezone.utc).isoformat()
+            logger.info(
+                "predict_batch done — %d predictions count=%d", len(predictions), self._predict_count
+            )
+
+            return PredictBatchResponse(
+                model_id=MODEL_NAME,
+                predictions=predictions,
+                output_path=None,
+            )
+        finally:
+            if _tmp_csv:
+                os.unlink(_tmp_csv)
 
     def predict_inline(
         self,

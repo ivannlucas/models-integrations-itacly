@@ -389,6 +389,8 @@ class Ml8CerealsImgAnomalyDetectorPlugin(ModelPluginPort):
             logger.info("Dataset: %d train, %d val", len(train_records), len(val_records))
 
             # Backbone preentrenado, clasificador descongelado para fase 1
+            # TORCH_HOME must point to a writable dir; pods run without a home directory.
+            os.environ.setdefault("TORCH_HOME", "/tmp/.torch")
             base = models.mobilenet_v3_large(weights="IMAGENET1K_V2")
             for param in base.parameters():
                 param.requires_grad = False
