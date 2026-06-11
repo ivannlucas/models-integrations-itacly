@@ -51,7 +51,7 @@ def make_model_router(
         return request.app.state.containers[model_id].stats_use_case.execute()
 
     @router.post("/predict")
-    async def predict(request: Request, body: predict_request_type) -> predict_response_type:
+    def predict(request: Request, body: predict_request_type) -> predict_response_type:
         """Run prediction (inline or batch) and return typed response."""
         container = request.app.state.containers[model_id]
         try:
@@ -67,7 +67,7 @@ def make_model_router(
             ) from exc
 
     @router.post("/train")
-    async def train(request: Request, body: _train_req) -> _train_resp:
+    def train(request: Request, body: _train_req) -> _train_resp:
         """Trigger model training with the provided data."""
         container = request.app.state.containers[model_id]
         try:
