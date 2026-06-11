@@ -180,35 +180,60 @@ class Ml8CerealsImgAnomalyDetectorPlugin(ModelPluginPort):
         image_size: int = bundle["image_size"]
         predictions: list[dict] = []
 
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            with zipfile.ZipFile(data_path, "r") as zf:
-                zf.extractall(tmp_dir)
-
-            image_paths = sorted(
-                p for p in Path(tmp_dir).rglob("*")
-                if p.is_file() and p.suffix.lower() in IMAGE_EXTENSIONS
+        _tmp_zip: str | None = None
+        local_data_path = data_path
+        if data_path.startswith("s3://"):
+            import boto3
+            from botocore.client import Config as BotoConfig
+            without_prefix = data_path[5:]
+            bucket, _, s3_key = without_prefix.partition("/")
+            s3 = boto3.client(
+                "s3",
+                endpoint_url=os.environ.get("CUSTOM_S3_ENDPOINT"),
+                aws_access_key_id=os.environ.get("AWS_ACCESS_KEY_ID"),
+                aws_secret_access_key=os.environ.get("AWS_SECRET_ACCESS_ID"),
+                config=BotoConfig(signature_version="s3v4"),
+                region_name=os.environ.get("CUSTOM_REGION", "us-east-1"),
             )
+            fd, _tmp_zip = tempfile.mkstemp(suffix=".zip")
+            os.close(fd)
+            logger.info("Downloading batch data from s3://%s/%s", bucket, s3_key)
+            s3.download_file(bucket, s3_key, _tmp_zip)
+            local_data_path = _tmp_zip
 
-            model.eval()
-            for image_path in image_paths:
-                try:
-                    tensor = image_path_to_tensor(image_path, image_size=image_size).to(device)
-                    with torch.no_grad():
-                        logits_cat, logits_cer = model(tensor)
-                    result = build_inline_response(
-                        logits_cat,
-                        logits_cer,
-                        idx_to_class=bundle["idx_to_class"],
-                        idx_to_cereal=bundle["idx_to_cereal"],
-                        model_id=bundle["model_id"],
-                    )
-                    result["filename"] = image_path.name
-                    predictions.append(result)
-                except InvalidImageError as exc:
-                    predictions.append({"filename": image_path.name, "error": str(exc)})
-                except Exception as exc:
-                    logger.warning("Unexpected error processing %s: %s", image_path.name, exc)
-                    predictions.append({"filename": image_path.name, "error": str(exc)})
+        try:
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                with zipfile.ZipFile(local_data_path, "r") as zf:
+                    zf.extractall(tmp_dir)
+
+                image_paths = sorted(
+                    p for p in Path(tmp_dir).rglob("*")
+                    if p.is_file() and p.suffix.lower() in IMAGE_EXTENSIONS
+                )
+
+                model.eval()
+                for image_path in image_paths:
+                    try:
+                        tensor = image_path_to_tensor(image_path, image_size=image_size).to(device)
+                        with torch.no_grad():
+                            logits_cat, logits_cer = model(tensor)
+                        result = build_inline_response(
+                            logits_cat,
+                            logits_cer,
+                            idx_to_class=bundle["idx_to_class"],
+                            idx_to_cereal=bundle["idx_to_cereal"],
+                            model_id=bundle["model_id"],
+                        )
+                        result["filename"] = image_path.name
+                        predictions.append(result)
+                    except InvalidImageError as exc:
+                        predictions.append({"filename": image_path.name, "error": str(exc)})
+                    except Exception as exc:
+                        logger.warning("Unexpected error processing %s: %s", image_path.name, exc)
+                        predictions.append({"filename": image_path.name, "error": str(exc)})
+        finally:
+            if _tmp_zip:
+                os.unlink(_tmp_zip)
 
         self._predict_count += 1
         self._last_predict_at = datetime.now(tz=timezone.utc).isoformat()
