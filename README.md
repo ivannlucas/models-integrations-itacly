@@ -275,6 +275,8 @@ https://sites.google.com/luceit.es/luceit/otros/devops/devops-politica_de_versio
 | Version | Date (last change) |  Developer   | Changes                      |
 |:-------:|:-------------------|:------------:|
 :-----------------------------|
+| v0.1.49 | 11/06/2026         | Pablo | fix: async block /health probe so container stop
+ |  
 | v0.1.48 | 11/06/2026         | Pablo | fix: batch pred and train |  
 | v0.1.47 | 11/06/2026         | Pablo | fix: batch pred and train |  
 | v0.1.46 | 11/06/2026         | Pablo | fix: Added model s3 downloads  |
