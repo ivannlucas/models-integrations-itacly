@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import gc
 import logging
+import os
 import random
 import tempfile
 import time
@@ -262,7 +263,29 @@ class Ml8CerealsImgAnomalyDetectorPlugin(ModelPluginPort):
         from app.infrastructure.artifact_store import ArtifactStore
         from app.plugins.ml8_cereals_img_anomaly_detector.model_loader import MultiTaskMobileNetV3Large
 
-        if not data_path.lower().endswith(".zip"):
+        # Download from S3 if data_path is an s3:// URI
+        _tmp_zip: str | None = None
+        local_data_path = data_path
+        if data_path.startswith("s3://"):
+            import boto3
+            from botocore.client import Config as BotoConfig
+            without_prefix = data_path[5:]
+            bucket, _, s3_key = without_prefix.partition("/")
+            s3 = boto3.client(
+                "s3",
+                endpoint_url=os.environ.get("CUSTOM_S3_ENDPOINT"),
+                aws_access_key_id=os.environ.get("AWS_ACCESS_KEY_ID"),
+                aws_secret_access_key=os.environ.get("AWS_SECRET_ACCESS_ID"),
+                config=BotoConfig(signature_version="s3v4"),
+                region_name=os.environ.get("CUSTOM_REGION", "us-east-1"),
+            )
+            fd, _tmp_zip = tempfile.mkstemp(suffix=".zip")
+            os.close(fd)
+            logger.info("Downloading training data from s3://%s/%s", bucket, s3_key)
+            s3.download_file(bucket, s3_key, _tmp_zip)
+            local_data_path = _tmp_zip
+
+        if not local_data_path.lower().endswith(".zip"):
             raise ValueError("data_path debe ser un fichero .zip")
 
         from app.plugins.ml8_cereals_img_anomaly_detector.model_loader import _safe_device
@@ -306,7 +329,7 @@ class Ml8CerealsImgAnomalyDetectorPlugin(ModelPluginPort):
 
         tmp_dir = tempfile.mkdtemp(prefix="ml8_train_")
         try:
-            with zipfile.ZipFile(data_path, "r") as zf:
+            with zipfile.ZipFile(local_data_path, "r") as zf:
                 zf.extractall(tmp_dir)
 
             entries = list(Path(tmp_dir).iterdir())
@@ -421,4 +444,6 @@ class Ml8CerealsImgAnomalyDetectorPlugin(ModelPluginPort):
         finally:
             import shutil
             shutil.rmtree(tmp_dir, ignore_errors=True)
+            if _tmp_zip and os.path.exists(_tmp_zip):
+                os.unlink(_tmp_zip)
             gc.collect()

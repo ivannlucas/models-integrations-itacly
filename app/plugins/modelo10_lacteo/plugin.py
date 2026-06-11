@@ -325,12 +325,34 @@ class Modelo10LacteoPlugin(ModelPluginPort):
           - Flat:     {fly|mos|tick}/*.jpg  (auto-split 80/10/10)
           - Pre-split: {train|val}/{fly|mos|tick}/*.jpg
         """
-        if not data_path.lower().endswith(".zip"):
+        # Download from S3 if data_path is an s3:// URI
+        _tmp_zip: str | None = None
+        local_data_path = data_path
+        if data_path.startswith("s3://"):
+            import boto3
+            from botocore.client import Config as BotoConfig
+            without_prefix = data_path[5:]
+            bucket, _, s3_key = without_prefix.partition("/")
+            s3 = boto3.client(
+                "s3",
+                endpoint_url=os.environ.get("CUSTOM_S3_ENDPOINT"),
+                aws_access_key_id=os.environ.get("AWS_ACCESS_KEY_ID"),
+                aws_secret_access_key=os.environ.get("AWS_SECRET_ACCESS_ID"),
+                config=BotoConfig(signature_version="s3v4"),
+                region_name=os.environ.get("CUSTOM_REGION", "us-east-1"),
+            )
+            fd, _tmp_zip = tempfile.mkstemp(suffix=".zip")
+            os.close(fd)
+            logger.info("Downloading training data from s3://%s/%s", bucket, s3_key)
+            s3.download_file(bucket, s3_key, _tmp_zip)
+            local_data_path = _tmp_zip
+
+        if not local_data_path.lower().endswith(".zip"):
             raise ValueError("data_path debe ser un fichero .zip")
 
         temp_dir = tempfile.mkdtemp(prefix="modelo10_train_")
         try:
-            with zipfile.ZipFile(data_path, "r") as zf:
+            with zipfile.ZipFile(local_data_path, "r") as zf:
                 zf.extractall(temp_dir)
 
             entries = list(Path(temp_dir).iterdir())
@@ -426,6 +448,8 @@ class Modelo10LacteoPlugin(ModelPluginPort):
             )
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
+            if _tmp_zip and os.path.exists(_tmp_zip):
+                os.unlink(_tmp_zip)
             gc.collect()
 
     def _reload_classifier(self) -> None:
