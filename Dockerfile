@@ -14,6 +14,7 @@ COPY requirements.txt .
 
 RUN apt update && apt install -y --no-install-recommends build-essential \
     && pip install --no-cache-dir -r requirements.txt \
+    && pip install --no-cache-dir --force-reinstall opencv-python-headless \
     && apt remove -y build-essential \
     && apt autoremove -y \
     && rm -rf /var/lib/apt/lists/* \

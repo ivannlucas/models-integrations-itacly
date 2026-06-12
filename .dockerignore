@@ -1,7 +1,17 @@
-# Ignore all
-**
+#Ignore the logs directory
+logs/
 
-# Allow only necessary files
-!app/
-!main.py
-!requirements.txt
+#Ignoring git and cache folders
+.git
+.cache
+__pycache__
+.pytest_cache
+
+#Ignoring all the markdown and class files
+*.md
+**/*.class
+
+Dockerfile
+*.pyc
+*.pyo
+*.pyd

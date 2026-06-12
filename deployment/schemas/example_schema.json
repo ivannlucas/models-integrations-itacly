@@ -1,0 +1,14 @@
+[
+  {
+    "name": "col1",
+    "type": "STRING",
+    "mode": "REQUIRED",
+    "description": "Example column 1"
+  },
+  {
+    "name": "col2",
+    "type": "STRING",
+    "mode": "NULLABLE",
+    "description": "Example column 2"
+  }
+]
