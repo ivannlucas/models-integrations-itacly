@@ -33,7 +33,7 @@ else:
     logger.warning("No .env file found in this directory or parent directories.")
 
 # app/infrastructure/artifact_store.py → parents[0]=infrastructure, [1]=app, [2]=repo root
-_REPO_ROOT = Path(__file__).resolve().parents[1]
+_REPO_ROOT = Path(__file__).resolve().parents[2]
 ARTIFACTS_ROOT = _REPO_ROOT / "artifacts"
 
 
