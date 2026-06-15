@@ -275,6 +275,7 @@ https://sites.google.com/luceit.es/luceit/otros/devops/devops-politica_de_versio
 | Version | Date (last change) |  Developer   | Changes                      |
 |:-------:|:-------------------|:------------:|
 :-----------------------------|
+| v0.1.51 | 15/06/2026         | Pablo | fix: refactor artifact store for plugins |  
 | v0.1.50 | 15/06/2026         | Pablo | fix: missing artifacts folder |  
 | v0.1.49 | 11/06/2026         | Pablo | fix: async block /health probe so container stop
  |  
