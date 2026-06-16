@@ -1,4 +1,4 @@
-"""Use case layer for retrieving model statistics."""
+"""Use case layer for retrieving model statistics. """
 from app.application.dto.stats_dto import StatsResponse
 from app.domain.ports.model_plugin_port import ModelPluginPort
 
