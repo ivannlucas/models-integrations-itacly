@@ -45,9 +45,9 @@ from app.plugins.ml8_cereals_img_anomaly_detector.predict_dto import (
 from app.plugins.ml8_cereals_img_anomaly_detector.train_dto import (
     TrainResponse as Ml8CerealsTrainResp,
 )
-from app.plugins.ml2_fungal_cnn_disease_detection.predict_dto import (
-    PredictBatchResponse as Ml2FungalBatchResp,
-    PredictInlineResponse as Ml2FungalInlineResp,
+from app.plugins.ml5_meat_cow_behaviour.predict_dto import (
+    PredictBatchResponse as Ml5CowBatchResp,
+    PredictInlineResponse as Ml5CowInlineResp,
 )
 from app.registry import REGISTRY
 
@@ -287,39 +287,37 @@ def _ml8_cereals_train(plugin: FakePlugin, *, data_path: str) -> Ml8CerealsTrain
     )
 
 
-def _ml2_fungal_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> Ml2FungalInlineResp:
-    """Return a fake inline prediction response for the ml2 fungal CNN model."""
-    return Ml2FungalInlineResp(
-        model_id="ml2-fungal-cnn-disease-detection",
-        prediction="healthy",
-        confidence=0.93,
-        probabilities={
-            "black_rot": 0.02,
-            "downy_mildew": 0.02,
-            "healthy": 0.93,
-            "powdery_mildew": 0.02,
-            "trunk_disease": 0.01,
-        },
+def _ml5_cow_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> Ml5CowInlineResp:
+    """Return a fake inline prediction response for the ml5 cow-behaviour model."""
+    return Ml5CowInlineResp(
+        model_id="ml5-meat-cow-behaviour",
+        threshold=threshold if threshold is not None else 0.5,
+        prediction="grazing",
+        confidence=0.87,
+        features_used=["frames_base64"],
+        is_anomaly=False,
+        behavior_idx=0,
+        xai_feature_values={"grazing": 0.87, "walking": 0.08, "drinking": 0.05},
     )
 
 
-def _ml2_fungal_batch(plugin: FakePlugin, *, data_path: str) -> Ml2FungalBatchResp:
-    """Return a fake batch prediction response for the ml2 fungal CNN model."""
-    return Ml2FungalBatchResp(
-        model_id="ml2-fungal-cnn-disease-detection",
+def _ml5_cow_batch(plugin: FakePlugin, *, data_path: str) -> Ml5CowBatchResp:
+    """Return a fake batch prediction response for the ml5 cow-behaviour model."""
+    return Ml5CowBatchResp(
+        model_id="ml5-meat-cow-behaviour",
         predictions=[
             {
-                "filename": "leaf_001.jpg",
-                "model_id": "ml2-fungal-cnn-disease-detection",
-                "prediction": "powdery_mildew",
-                "confidence": 0.88,
-                "probabilities": {
-                    "black_rot": 0.03,
-                    "downy_mildew": 0.04,
-                    "healthy": 0.03,
-                    "powdery_mildew": 0.88,
-                    "trunk_disease": 0.02,
-                },
+                "frame": 0,
+                "detections": [
+                    {
+                        "track_id": 0,
+                        "bbox": [10.0, 20.0, 110.0, 220.0],
+                        "score": 0.95,
+                        "behavior": "grazing",
+                        "behavior_confidence": 0.87,
+                        "is_anomaly": False,
+                    }
+                ],
             }
         ],
         output_path=None,
@@ -330,7 +328,7 @@ FAKE_FACTORIES: dict[str, tuple[Callable, Callable]] = {
     "wine-sulphite": (_wine_so2_inline, _wine_so2_batch),
     "modelo10-lacteo": (_lacteo_inline, _lacteo_batch),
     "ml8-cereals-img-anomaly-detector": (_ml8_cereals_inline, _ml8_cereals_batch),
-    "ml2-fungal-cnn-disease-detection": (_ml2_fungal_inline, _ml2_fungal_batch),
+    "ml5-meat-cow-behaviour": (_ml5_cow_inline, _ml5_cow_batch),
 }
 
 TRAIN_FACTORIES: dict[str, Callable] = {

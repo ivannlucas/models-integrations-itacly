@@ -25,7 +25,7 @@ from app.application.dto.train_dto import TrainResponse
 from app.domain.ports.model_plugin_port import ModelPluginPort
 from app.domain.services.exceptions import InvalidImageError, ModelNotLoadedError
 from app.infrastructure.artifact_store import ArtifactStore
-from app.plugins.modelo10_lacteo.model_loader import load_detector_and_classifier
+from app.plugins.modelo10_lacteo.model_loader import load_detector_and_classifier, safe_device
 from app.plugins.modelo10_lacteo.postprocessing import build_inline_result, classify_crop
 from app.plugins.modelo10_lacteo.predict_dto import (
     PredictBatchResponse,
@@ -146,7 +146,7 @@ class Modelo10LacteoPlugin(ModelPluginPort):
         self._detector = None
         self._classifier = None
         self._class_names: list[str] = []
-        self._device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self._device = safe_device()
         self._predict_count: int = 0
         self._total_latency_ms: float = 0.0
         self._last_predict_at: str | None = None

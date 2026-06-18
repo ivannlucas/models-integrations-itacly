@@ -7,7 +7,12 @@ To add a new model:
 from dataclasses import dataclass, field
 from typing import Any
 
-from app.domain.services.exceptions import InvalidImageError, NoValidSimulationPointError
+from app.domain.services.exceptions import (
+    InsufficientFramesError,
+    InvalidImageError,
+    InvalidVideoError,
+    NoValidSimulationPointError,
+)
 
 # ── Plugin imports ────────────────────────────────────────────────────────────
 
@@ -38,10 +43,10 @@ from app.plugins.ml8_cereals_img_anomaly_detector.train_dto import (
     TrainResponse as Ml8Cereals_TrainResp,
 )
 
-from app.plugins.ml2_fungal_cnn_disease_detection.plugin import Ml2FungalCnnDiseaseDetectionPlugin
-from app.plugins.ml2_fungal_cnn_disease_detection.predict_dto import (
-    PredictRequest as Ml2Fungal_Request,
-    PredictResponse as Ml2Fungal_Response,
+from app.plugins.ml5_meat_cow_behaviour.plugin import Ml5MeatCowBehaviourPlugin
+from app.plugins.ml5_meat_cow_behaviour.predict_dto import (
+    PredictRequest as Ml5Cow_Request,
+    PredictResponse as Ml5Cow_Response,
 )
 
 
@@ -96,12 +101,12 @@ REGISTRY: list[ModelEntry] = [
         train_response_type=Ml8Cereals_TrainResp,
     ),
     ModelEntry(
-        model_id="ml2-fungal-cnn-disease-detection",
-        prefix="/models/ml2-fungal-cnn-disease-detection",
+        model_id="ml5-meat-cow-behaviour",
+        prefix="/models/ml5-meat-cow-behaviour",
         version="1.0.0",
-        plugin_class=Ml2FungalCnnDiseaseDetectionPlugin,
-        predict_request_type=Ml2Fungal_Request,
-        predict_response_type=Ml2Fungal_Response,
-        extra_predict_exceptions=(InvalidImageError,),
+        plugin_class=Ml5MeatCowBehaviourPlugin,
+        predict_request_type=Ml5Cow_Request,
+        predict_response_type=Ml5Cow_Response,
+        extra_predict_exceptions=(InvalidVideoError, InvalidImageError, InsufficientFramesError),
     ),
 ]
