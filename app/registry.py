@@ -38,6 +38,12 @@ from app.plugins.ml8_cereals_img_anomaly_detector.train_dto import (
     TrainResponse as Ml8Cereals_TrainResp,
 )
 
+from app.plugins.ml2_fungal_cnn_disease_detection.plugin import Ml2FungalCnnDiseaseDetectionPlugin
+from app.plugins.ml2_fungal_cnn_disease_detection.predict_dto import (
+    PredictRequest as Ml2Fungal_Request,
+    PredictResponse as Ml2Fungal_Response,
+)
+
 
 # ── Registry entry dataclass ──────────────────────────────────────────────────
 
@@ -88,5 +94,14 @@ REGISTRY: list[ModelEntry] = [
         extra_predict_exceptions=(InvalidImageError,),
         train_request_type=Ml8Cereals_TrainReq,
         train_response_type=Ml8Cereals_TrainResp,
+    ),
+    ModelEntry(
+        model_id="ml2-fungal-cnn-disease-detection",
+        prefix="/models/ml2-fungal-cnn-disease-detection",
+        version="1.0.0",
+        plugin_class=Ml2FungalCnnDiseaseDetectionPlugin,
+        predict_request_type=Ml2Fungal_Request,
+        predict_response_type=Ml2Fungal_Response,
+        extra_predict_exceptions=(InvalidImageError,),
     ),
 ]
