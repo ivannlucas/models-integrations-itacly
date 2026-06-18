@@ -43,6 +43,12 @@ from app.plugins.ml8_cereals_img_anomaly_detector.train_dto import (
     TrainResponse as Ml8Cereals_TrainResp,
 )
 
+from app.plugins.ml2_fungal_cnn_disease_detection.plugin import Ml2FungalCnnDiseaseDetectionPlugin
+from app.plugins.ml2_fungal_cnn_disease_detection.predict_dto import (
+    PredictRequest as Ml2Fungal_Request,
+    PredictResponse as Ml2Fungal_Response,
+)
+
 from app.plugins.ml5_meat_cow_behaviour.plugin import Ml5MeatCowBehaviourPlugin
 from app.plugins.ml5_meat_cow_behaviour.predict_dto import (
     PredictRequest as Ml5Cow_Request,
@@ -108,5 +114,14 @@ REGISTRY: list[ModelEntry] = [
         predict_request_type=Ml5Cow_Request,
         predict_response_type=Ml5Cow_Response,
         extra_predict_exceptions=(InvalidVideoError, InvalidImageError, InsufficientFramesError),
+    ),
+    ModelEntry(
+        model_id="ml2-fungal-cnn-disease-detection",
+        prefix="/models/ml2-fungal-cnn-disease-detection",
+        version="1.0.0",
+        plugin_class=Ml2FungalCnnDiseaseDetectionPlugin,
+        predict_request_type=Ml2Fungal_Request,
+        predict_response_type=Ml2Fungal_Response,
+        extra_predict_exceptions=(InvalidImageError,),
     ),
 ]
