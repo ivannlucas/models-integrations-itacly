@@ -45,6 +45,10 @@ from app.plugins.ml8_cereals_img_anomaly_detector.predict_dto import (
 from app.plugins.ml8_cereals_img_anomaly_detector.train_dto import (
     TrainResponse as Ml8CerealsTrainResp,
 )
+from app.plugins.ml2_fungal_cnn_disease_detection.predict_dto import (
+    PredictBatchResponse as Ml2FungalBatchResp,
+    PredictInlineResponse as Ml2FungalInlineResp,
+)
 from app.plugins.ml5_meat_cow_behaviour.predict_dto import (
     PredictBatchResponse as Ml5CowBatchResp,
     PredictInlineResponse as Ml5CowInlineResp,
@@ -324,7 +328,31 @@ def _ml5_cow_batch(plugin: FakePlugin, *, data_path: str) -> Ml5CowBatchResp:
     )
 
 
+def _ml2_fungal_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> Ml2FungalInlineResp:
+    """Fake inline response for the ml2 fungal CNN model."""
+    return Ml2FungalInlineResp(
+        model_id="ml2-fungal-cnn-disease-detection",
+        prediction="healthy",
+        confidence=0.93,
+        probabilities={"black_rot": 0.02, "downy_mildew": 0.02, "healthy": 0.93,
+                       "powdery_mildew": 0.02, "trunk_disease": 0.01},
+    )
+
+
+def _ml2_fungal_batch(plugin: FakePlugin, *, data_path: str) -> Ml2FungalBatchResp:
+    """Fake batch response for the ml2 fungal CNN model."""
+    return Ml2FungalBatchResp(
+        model_id="ml2-fungal-cnn-disease-detection",
+        predictions=[{"filename": "leaf_001.jpg", "model_id": "ml2-fungal-cnn-disease-detection",
+                      "prediction": "powdery_mildew", "confidence": 0.88,
+                      "probabilities": {"black_rot": 0.03, "downy_mildew": 0.04, "healthy": 0.03,
+                                        "powdery_mildew": 0.88, "trunk_disease": 0.02}}],
+        output_path=None,
+    )
+
+
 FAKE_FACTORIES: dict[str, tuple[Callable, Callable]] = {
+    "ml2-fungal-cnn-disease-detection": (_ml2_fungal_inline, _ml2_fungal_batch),
     "wine-sulphite": (_wine_so2_inline, _wine_so2_batch),
     "modelo10-lacteo": (_lacteo_inline, _lacteo_batch),
     "ml8-cereals-img-anomaly-detector": (_ml8_cereals_inline, _ml8_cereals_batch),
