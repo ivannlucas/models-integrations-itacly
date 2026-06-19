@@ -61,6 +61,16 @@ from app.plugins.ml7_cereals_grain_pest_detection.predict_dto import (
     PredictResponse as Ml7Grain_Response,
 )
 
+from app.plugins.ml30_meat_traceability_detection.plugin import Ml30MeatTraceabilityDetectionPlugin
+from app.plugins.ml30_meat_traceability_detection.predict_dto import (
+    PredictRequest as Ml30Trace_Request,
+    PredictResponse as Ml30Trace_Response,
+)
+from app.plugins.ml30_meat_traceability_detection.train_dto import (
+    TrainRequest as Ml30Trace_TrainReq,
+    TrainResponse as Ml30Trace_TrainResp,
+)
+
 
 # ── Registry entry dataclass ──────────────────────────────────────────────────
 
@@ -138,5 +148,15 @@ REGISTRY: list[ModelEntry] = [
         predict_request_type=Ml7Grain_Request,
         predict_response_type=Ml7Grain_Response,
         extra_predict_exceptions=(InvalidImageError,),
+    ),
+    ModelEntry(
+        model_id="ml30-meat-traceability-detection",
+        prefix="/models/ml30-meat-traceability-detection",
+        version="1.0.0",
+        plugin_class=Ml30MeatTraceabilityDetectionPlugin,
+        predict_request_type=Ml30Trace_Request,
+        predict_response_type=Ml30Trace_Response,
+        train_request_type=Ml30Trace_TrainReq,
+        train_response_type=Ml30Trace_TrainResp,
     ),
 ]
