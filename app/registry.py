@@ -55,6 +55,12 @@ from app.plugins.ml5_meat_cow_behaviour.predict_dto import (
     PredictResponse as Ml5Cow_Response,
 )
 
+from app.plugins.ml7_cereals_grain_pest_detection.plugin import Ml7CerealsGrainPestDetectionPlugin
+from app.plugins.ml7_cereals_grain_pest_detection.predict_dto import (
+    PredictRequest as Ml7Grain_Request,
+    PredictResponse as Ml7Grain_Response,
+)
+
 
 # ── Registry entry dataclass ──────────────────────────────────────────────────
 
@@ -122,6 +128,15 @@ REGISTRY: list[ModelEntry] = [
         plugin_class=Ml2FungalCnnDiseaseDetectionPlugin,
         predict_request_type=Ml2Fungal_Request,
         predict_response_type=Ml2Fungal_Response,
+        extra_predict_exceptions=(InvalidImageError,),
+    ),
+    ModelEntry(
+        model_id="ml7-cereals-grain-pest-detection",
+        prefix="/models/ml7-cereals-grain-pest-detection",
+        version="1.0.0",
+        plugin_class=Ml7CerealsGrainPestDetectionPlugin,
+        predict_request_type=Ml7Grain_Request,
+        predict_response_type=Ml7Grain_Response,
         extra_predict_exceptions=(InvalidImageError,),
     ),
 ]
