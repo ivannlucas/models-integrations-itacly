@@ -53,6 +53,10 @@ from app.plugins.ml5_meat_cow_behaviour.predict_dto import (
     PredictBatchResponse as Ml5CowBatchResp,
     PredictInlineResponse as Ml5CowInlineResp,
 )
+from app.plugins.ml7_cereals_grain_pest_detection.predict_dto import (
+    PredictBatchResponse as Ml7GrainBatchResp,
+    PredictInlineResponse as Ml7GrainInlineResp,
+)
 from app.registry import REGISTRY
 
 
@@ -351,7 +355,34 @@ def _ml2_fungal_batch(plugin: FakePlugin, *, data_path: str) -> Ml2FungalBatchRe
     )
 
 
+def _ml7_grain_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> Ml7GrainInlineResp:
+    """Fake inline response for the ml7 grain pest detector."""
+    return Ml7GrainInlineResp(
+        model_id="ml7-cereals-grain-pest-detection",
+        prediction="sz",
+        confidence=0.81,
+        total_detections=2,
+        species_counts={"sz": 2},
+        detections=[{"class": "sz", "class_name": "Sitophilus spp.", "confidence": 0.81,
+                     "bbox": [10.0, 20.0, 50.0, 60.0]}],
+        annotated_image="ZmFrZQ==",
+        threshold=threshold,
+        features_used=["image_base64"],
+    )
+
+
+def _ml7_grain_batch(plugin: FakePlugin, *, data_path: str) -> Ml7GrainBatchResp:
+    """Fake batch response for the ml7 grain pest detector."""
+    return Ml7GrainBatchResp(
+        model_id="ml7-cereals-grain-pest-detection",
+        predictions=[{"filename": "img_001.jpg", "prediction": "sz", "confidence": 0.81,
+                      "total_detections": 2, "species_counts": {"sz": 2}}],
+        output_path=None,
+    )
+
+
 FAKE_FACTORIES: dict[str, tuple[Callable, Callable]] = {
+    "ml7-cereals-grain-pest-detection": (_ml7_grain_inline, _ml7_grain_batch),
     "ml2-fungal-cnn-disease-detection": (_ml2_fungal_inline, _ml2_fungal_batch),
     "wine-sulphite": (_wine_so2_inline, _wine_so2_batch),
     "modelo10-lacteo": (_lacteo_inline, _lacteo_batch),
