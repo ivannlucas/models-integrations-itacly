@@ -10,6 +10,9 @@ import time
 from collections import defaultdict, deque
 from datetime import datetime, timezone
 
+import os
+import tempfile
+
 import cv2
 import numpy as np
 import torch
@@ -44,6 +47,23 @@ from app.plugins.ml5_meat_cow_behaviour.preprocessing import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _resolve_video_path(data_path: str) -> tuple[str, str | None]:
+    """Return (local_path, temp_path). Downloads from S3 if data_path is an s3:// URI."""
+    if not data_path.startswith("s3://"):
+        return data_path, None
+
+    from app.infrastructure.artifact_store import _build_s3_client  # pylint: disable=import-outside-toplevel
+
+    without_prefix = data_path[len("s3://"):]
+    bucket, key = without_prefix.split("/", 1)
+    suffix = os.path.splitext(key)[-1] or ".mp4"
+    tmp = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
+    tmp.close()
+    logger.info("Downloading video from S3: %s → %s", data_path, tmp.name)
+    _build_s3_client().download_file(bucket, key, tmp.name)
+    return tmp.name, tmp.name
 
 
 class Ml5MeatCowBehaviourPlugin(ModelPluginPort):
@@ -90,12 +110,23 @@ class Ml5MeatCowBehaviourPlugin(ModelPluginPort):
         bundle = self._require_bundle()
         detector = bundle["detector"]
 
-        cap = cv2.VideoCapture(data_path)
+        local_path, temp_path = _resolve_video_path(data_path)
+        try:
+            return self._run_video_pipeline(bundle, detector, local_path, data_path)
+        finally:
+            if temp_path:
+                os.unlink(temp_path)
+
+    def _run_video_pipeline(  # pylint: disable=too-many-locals
+        self, bundle: dict, detector: object, local_path: str, original_path: str
+    ) -> PredictBatchResponse:
+        """Execute the frame-by-frame detection + tracking + classification loop."""
+        cap = cv2.VideoCapture(local_path)
         if not cap.isOpened():
-            raise InvalidVideoError(f"Cannot open video file: {data_path}")
+            raise InvalidVideoError(f"Cannot open video file: {original_path}")
 
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        logger.info("predict_batch — video=%s total_frames=%d", data_path, total_frames)
+        logger.info("predict_batch — video=%s total_frames=%d", original_path, total_frames)
 
         tracker = ByteTracker(track_thresh=0.5, track_buffer=30, match_thresh=0.8)
         track_buffers: dict[int, deque] = defaultdict(lambda: deque(maxlen=CLIP_LENGTH))
