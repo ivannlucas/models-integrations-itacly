@@ -4,7 +4,7 @@
 ![Python](https://img.shields.io/badge/Python-3.12-3776AB.svg?logo=python&logoColor=white)
 ![Docker](https://img.shields.io/badge/Docker-Enabled-2496ED.svg?logo=docker&logoColor=white)
 
-![Version](https://img.shields.io/badge/version-0.1.57-blue.svg)
+![Version](https://img.shields.io/badge/version-0.1.58-blue.svg)
 
 ![Status](https://img.shields.io/badge/Status-Work_in_Progress-orange.svg) / ![Status](https://img.shields.io/badge/Status-Production_Ready-brightgreen.svg) / ![Status](https://img.shields.io/badge/Status-Maintenance-lightgrey.svg) / ![Status](https://img.shields.io/badge/Status-Archived-red.svg)
 
@@ -275,6 +275,7 @@ https://sites.google.com/luceit.es/luceit/otros/devops/devops-politica_de_versio
 | Version | Date (last change) |  Developer   | Changes                      |
 |:-------:|:-------------------|:------------:|
 :-----------------------------|
+| v0.1.58 | 19/06/2026         | Pablo | fix: fixed plugin to allow videos |  
 | v0.1.57 | 19/06/2026         | Pablo | feat: add TORCH_HOME env var |  
 | v0.1.56 | 17/06/2026         | Alejandro Flores | feat: integrate ml7-cereals-grain-pest-detection plugin |  
 | v0.1.55 | 17/06/2026         | Alejandro Flores | fix: add missing ml2-fungal fake factory in conftest |  
