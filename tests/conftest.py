@@ -7,12 +7,14 @@ a fake ``ModelPluginPort`` implementation that returns canonical dicts
 matching each model's Pydantic response schema.
 
 Fake plugins are injected into ``app.state.containers`` directly, and routers
-are mounted using the real ``make_model_router`` factory and the real
-``REGISTRY`` entries. This exercises the full HTTP surface (routing, schema
-validation, exception mapping) without touching disk or any ML framework.
+are mounted using the real ``make_model_router`` factory and a local
+``TEST_REGISTRY`` (avoids importing heavy plugin modules like cv2/torch).
+This exercises the full HTTP surface (routing, schema validation, exception
+mapping) without touching disk or any ML framework.
 """
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Callable
 
@@ -22,56 +24,85 @@ from fastapi.testclient import TestClient
 from pydantic import BaseModel
 
 from app.application.dto.stats_dto import InputField, OutputField, RuntimeStats, StatsResponse
-from app.application.dto.train_dto import TrainResponse
+from app.application.dto.train_dto import TrainResponse as BaseTrainResponse
 from app.application.use_cases.get_stats_use_case import GetStatsUseCase
 from app.application.use_cases.predict_model_use_case import PredictModelUseCase
 from app.application.use_cases.train_model_use_case import TrainModelUseCase
 from app.domain.ports.model_plugin_port import ModelPluginPort
-from app.domain.services.exceptions import TrainingNotSupportedError
+from app.domain.services.exceptions import (
+    InsufficientFramesError,
+    InvalidImageError,
+    InvalidVideoError,
+    NoValidSimulationPointError,
+    TrainingNotSupportedError,
+)
 from app.domain.services.model_runtime_service import ModelRuntimeService
 from app.infrastructure.http.router_factory import make_model_router
 from app.plugins.ml25_wine_sulphites.predict_dto import (
     PredictBatchResponse as WineSO2BatchResp,
     PredictInlineResponse as WineSO2InlineResp,
+    PredictRequest as WineSO2_Request,
+    PredictResponse as WineSO2_Response,
+)
+from app.plugins.ml25_wine_sulphites.train_dto import (
+    TrainRequest as WineSO2_TrainReq,
+    TrainResponse as WineSO2_TrainResp,
 )
 from app.plugins.modelo10_lacteo.predict_dto import (
     PredictBatchResponse as LacteoBatchResp,
     PredictInlineResponse as LacteoInlineResp,
+    PredictRequest as Lacteo10_Request,
+    PredictResponse as Lacteo10_Response,
 )
 from app.plugins.ml8_cereals_img_anomaly_detector.predict_dto import (
     PredictBatchResponse as Ml8CerealsBatchResp,
     PredictInlineResponse as Ml8CerealsInlineResp,
+    PredictRequest as Ml8Cereals_Request,
+    PredictResponse as Ml8Cereals_Response,
 )
 from app.plugins.ml8_cereals_img_anomaly_detector.train_dto import (
+    TrainRequest as Ml8Cereals_TrainReq,
     TrainResponse as Ml8CerealsTrainResp,
 )
 from app.plugins.ml2_fungal_cnn_disease_detection.predict_dto import (
     PredictBatchResponse as Ml2FungalBatchResp,
     PredictInlineResponse as Ml2FungalInlineResp,
+    PredictRequest as Ml2Fungal_Request,
+    PredictResponse as Ml2Fungal_Response,
 )
 from app.plugins.ml5_meat_cow_behaviour.predict_dto import (
     PredictBatchResponse as Ml5CowBatchResp,
     PredictInlineResponse as Ml5CowInlineResp,
+    PredictRequest as Ml5Cow_Request,
+    PredictResponse as Ml5Cow_Response,
 )
 from app.plugins.ml7_cereals_grain_pest_detection.predict_dto import (
     PredictBatchResponse as Ml7GrainBatchResp,
     PredictInlineResponse as Ml7GrainInlineResp,
+    PredictRequest as Ml7Grain_Request,
+    PredictResponse as Ml7Grain_Response,
 )
 from app.plugins.ml30_meat_traceability_detection.predict_dto import (
     PredictBatchResponse as Ml30TraceBatchResp,
     PredictInlineResponse as Ml30TraceInlineResp,
+    PredictRequest as Ml30Trace_Request,
+    PredictResponse as Ml30Trace_Response,
 )
 from app.plugins.ml30_meat_traceability_detection.train_dto import (
+    TrainRequest as Ml30Trace_TrainReq,
     TrainResponse as Ml30TraceTrainResp,
 )
 from app.plugins.ml31_cereals_residue_optimizer.predict_dto import (
     PredictBatchResponse as Ml31ResidueBatchResp,
     PredictInlineResponse as Ml31ResidueInlineResp,
+    PredictRequest as Ml31Residue_Request,
+    PredictResponse as Ml31Residue_Response,
 )
 from app.plugins.ml31_cereals_residue_optimizer.train_dto import (
+    TrainRequest as Ml31Residue_TrainReq,
     TrainResponse as Ml31ResidueTrainResp,
 )
-from app.registry import REGISTRY
+from app.registry import ModelEntry
 
 
 # ── Fake plugin ────────────────────────────────────────────────────────────
@@ -249,9 +280,9 @@ def _lacteo_batch(plugin: FakePlugin, *, data_path: str) -> LacteoBatchResp:
     )
 
 
-def _lacteo_train(plugin: FakePlugin, *, data_path: str) -> TrainResponse:
+def _lacteo_train(plugin: FakePlugin, *, data_path: str) -> BaseTrainResponse:
     """Return a fake training response for the Modelo10Lacteo plugin."""
-    return TrainResponse(
+    return BaseTrainResponse(
         detail="Training completed successfully",
         metrics={
             "train_samples": 100,
@@ -474,6 +505,92 @@ TRAIN_FACTORIES: dict[str, Callable] = {
 }
 
 
+# ── Test registry (avoids importing heavy plugin modules like cv2/torch) ───
+
+TEST_REGISTRY: list[ModelEntry] = [
+    ModelEntry(
+        model_id="wine-sulphite",
+        prefix="/models/wine-sulphite",
+        version="1.2.0",
+        plugin_class=FakePlugin,
+        predict_request_type=WineSO2_Request,
+        predict_response_type=WineSO2_Response,
+        extra_predict_exceptions=(NoValidSimulationPointError,),
+        train_request_type=WineSO2_TrainReq,
+        train_response_type=WineSO2_TrainResp,
+    ),
+    ModelEntry(
+        model_id="modelo10-lacteo",
+        prefix="/models/modelo10-lacteo",
+        version="1.0.0",
+        plugin_class=FakePlugin,
+        predict_request_type=Lacteo10_Request,
+        predict_response_type=Lacteo10_Response,
+        extra_predict_exceptions=(),
+    ),
+    ModelEntry(
+        model_id="ml8-cereals-img-anomaly-detector",
+        prefix="/models/ml8-cereals-img-anomaly-detector",
+        version="1.0.0",
+        plugin_class=FakePlugin,
+        predict_request_type=Ml8Cereals_Request,
+        predict_response_type=Ml8Cereals_Response,
+        extra_predict_exceptions=(InvalidImageError,),
+        train_request_type=Ml8Cereals_TrainReq,
+        train_response_type=Ml8CerealsTrainResp,
+    ),
+    ModelEntry(
+        model_id="ml5-meat-cow-behaviour",
+        prefix="/models/ml5-meat-cow-behaviour",
+        version="1.0.0",
+        plugin_class=FakePlugin,
+        predict_request_type=Ml5Cow_Request,
+        predict_response_type=Ml5Cow_Response,
+        extra_predict_exceptions=(InvalidVideoError, InvalidImageError, InsufficientFramesError),
+    ),
+    ModelEntry(
+        model_id="ml2-fungal-cnn-disease-detection",
+        prefix="/models/ml2-fungal-cnn-disease-detection",
+        version="1.0.0",
+        plugin_class=FakePlugin,
+        predict_request_type=Ml2Fungal_Request,
+        predict_response_type=Ml2Fungal_Response,
+        extra_predict_exceptions=(InvalidImageError,),
+    ),
+    ModelEntry(
+        model_id="ml7-cereals-grain-pest-detection",
+        prefix="/models/ml7-cereals-grain-pest-detection",
+        version="1.0.0",
+        plugin_class=FakePlugin,
+        predict_request_type=Ml7Grain_Request,
+        predict_response_type=Ml7Grain_Response,
+        extra_predict_exceptions=(InvalidImageError,),
+    ),
+    ModelEntry(
+        model_id="ml30-meat-traceability-detection",
+        prefix="/models/ml30-meat-traceability-detection",
+        version="1.0.0",
+        plugin_class=FakePlugin,
+        predict_request_type=Ml30Trace_Request,
+        predict_response_type=Ml30Trace_Response,
+        extra_predict_exceptions=(),
+        train_request_type=Ml30Trace_TrainReq,
+        train_response_type=Ml30TraceTrainResp,
+    ),
+    ModelEntry(
+        model_id="ml31-cereals-residue-optimizer",
+        prefix="/models/ml31-cereals-residue-optimizer",
+        version="1.0.0",
+        plugin_class=FakePlugin,
+        predict_request_type=Ml31Residue_Request,
+        predict_response_type=Ml31Residue_Response,
+        extra_predict_exceptions=(),
+        train_request_type=Ml31Residue_TrainReq,
+        train_response_type=Ml31ResidueTrainResp,
+    ),
+]
+
+
 # ── App / client fixtures ──────────────────────────────────────────────────
 
 class _FakeContainer:
@@ -496,9 +613,9 @@ def _build_container(plugin: FakePlugin) -> Any:
 
 @pytest.fixture
 def fake_plugins() -> dict[str, FakePlugin]:
-    """One fake plugin per REGISTRY entry, already ``load()``-ed."""
+    """One fake plugin per TEST_REGISTRY entry, already ``load()``-ed."""
     plugins: dict[str, FakePlugin] = {}
-    for entry in REGISTRY:
+    for entry in TEST_REGISTRY:
         inline_factory, batch_factory = FAKE_FACTORIES[entry.model_id]
         train_factory = TRAIN_FACTORIES.get(entry.model_id)
         plugin = FakePlugin(
@@ -517,7 +634,7 @@ def app(fake_plugins: dict[str, FakePlugin]) -> FastAPI:
     """A FastAPI app wired to fake containers — no real ML artifacts touched."""
     application = FastAPI(title="Luce ML Models API (test)")
     application.state.containers = {}
-    for entry in REGISTRY:
+    for entry in TEST_REGISTRY:
         application.state.containers[entry.model_id] = _build_container(
             fake_plugins[entry.model_id]
         )
