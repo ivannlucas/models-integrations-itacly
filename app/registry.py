@@ -7,7 +7,12 @@ To add a new model:
 from dataclasses import dataclass, field
 from typing import Any
 
-from app.domain.services.exceptions import InvalidImageError, NoValidSimulationPointError
+from app.domain.services.exceptions import (
+    InsufficientFramesError,
+    InvalidImageError,
+    InvalidVideoError,
+    NoValidSimulationPointError,
+)
 
 # ── Plugin imports ────────────────────────────────────────────────────────────
 
@@ -36,6 +41,34 @@ from app.plugins.ml8_cereals_img_anomaly_detector.predict_dto import (
 from app.plugins.ml8_cereals_img_anomaly_detector.train_dto import (
     TrainRequest as Ml8Cereals_TrainReq,
     TrainResponse as Ml8Cereals_TrainResp,
+)
+
+from app.plugins.ml2_fungal_cnn_disease_detection.plugin import Ml2FungalCnnDiseaseDetectionPlugin
+from app.plugins.ml2_fungal_cnn_disease_detection.predict_dto import (
+    PredictRequest as Ml2Fungal_Request,
+    PredictResponse as Ml2Fungal_Response,
+)
+
+from app.plugins.ml5_meat_cow_behaviour.plugin import Ml5MeatCowBehaviourPlugin
+from app.plugins.ml5_meat_cow_behaviour.predict_dto import (
+    PredictRequest as Ml5Cow_Request,
+    PredictResponse as Ml5Cow_Response,
+)
+
+from app.plugins.ml7_cereals_grain_pest_detection.plugin import Ml7CerealsGrainPestDetectionPlugin
+from app.plugins.ml7_cereals_grain_pest_detection.predict_dto import (
+    PredictRequest as Ml7Grain_Request,
+    PredictResponse as Ml7Grain_Response,
+)
+
+from app.plugins.ml30_meat_traceability_detection.plugin import Ml30MeatTraceabilityDetectionPlugin
+from app.plugins.ml30_meat_traceability_detection.predict_dto import (
+    PredictRequest as Ml30Trace_Request,
+    PredictResponse as Ml30Trace_Response,
+)
+from app.plugins.ml30_meat_traceability_detection.train_dto import (
+    TrainRequest as Ml30Trace_TrainReq,
+    TrainResponse as Ml30Trace_TrainResp,
 )
 
 
@@ -88,5 +121,42 @@ REGISTRY: list[ModelEntry] = [
         extra_predict_exceptions=(InvalidImageError,),
         train_request_type=Ml8Cereals_TrainReq,
         train_response_type=Ml8Cereals_TrainResp,
+    ),
+    ModelEntry(
+        model_id="ml5-meat-cow-behaviour",
+        prefix="/models/ml5-meat-cow-behaviour",
+        version="1.0.0",
+        plugin_class=Ml5MeatCowBehaviourPlugin,
+        predict_request_type=Ml5Cow_Request,
+        predict_response_type=Ml5Cow_Response,
+        extra_predict_exceptions=(InvalidVideoError, InvalidImageError, InsufficientFramesError),
+    ),
+    ModelEntry(
+        model_id="ml2-fungal-cnn-disease-detection",
+        prefix="/models/ml2-fungal-cnn-disease-detection",
+        version="1.0.0",
+        plugin_class=Ml2FungalCnnDiseaseDetectionPlugin,
+        predict_request_type=Ml2Fungal_Request,
+        predict_response_type=Ml2Fungal_Response,
+        extra_predict_exceptions=(InvalidImageError,),
+    ),
+    ModelEntry(
+        model_id="ml7-cereals-grain-pest-detection",
+        prefix="/models/ml7-cereals-grain-pest-detection",
+        version="1.0.0",
+        plugin_class=Ml7CerealsGrainPestDetectionPlugin,
+        predict_request_type=Ml7Grain_Request,
+        predict_response_type=Ml7Grain_Response,
+        extra_predict_exceptions=(InvalidImageError,),
+    ),
+    ModelEntry(
+        model_id="ml30-meat-traceability-detection",
+        prefix="/models/ml30-meat-traceability-detection",
+        version="1.0.0",
+        plugin_class=Ml30MeatTraceabilityDetectionPlugin,
+        predict_request_type=Ml30Trace_Request,
+        predict_response_type=Ml30Trace_Response,
+        train_request_type=Ml30Trace_TrainReq,
+        train_response_type=Ml30Trace_TrainResp,
     ),
 ]

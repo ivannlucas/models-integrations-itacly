@@ -240,18 +240,8 @@ class WineSulphitePlugin(ModelPluginPort):
     def train(self, *, data_path: str) -> TrainResponse:  # pylint: disable=too-many-locals
         """Train dual RandomForest models from the CSV at *data_path*, persist artifacts, and reload."""
         # pylint: disable=import-outside-toplevel
-        import json
         import os
         import tempfile
-        import joblib
-        from sklearn.ensemble import RandomForestRegressor
-        from sklearn.metrics import mean_absolute_error
-        from app.plugins.ml25_wine_sulphites.model_loader import get_artifacts_dir, upload_artifact
-        from app.plugins.ml25_wine_sulphites.constants import (
-            QUALITY_RF_MODEL_FILENAME,
-            BOUND_RF_MODEL_FILENAME,
-            METADATA_FILENAME,
-        )
         # pylint: enable=import-outside-toplevel
 
         _tmp_path: str | None = None

@@ -4,7 +4,7 @@
 ![Python](https://img.shields.io/badge/Python-3.12-3776AB.svg?logo=python&logoColor=white)
 ![Docker](https://img.shields.io/badge/Docker-Enabled-2496ED.svg?logo=docker&logoColor=white)
 
-![Version](https://img.shields.io/badge/version-0.1.44-blue.svg)
+![Version](https://img.shields.io/badge/version-0.1.59-blue.svg)
 
 ![Status](https://img.shields.io/badge/Status-Work_in_Progress-orange.svg) / ![Status](https://img.shields.io/badge/Status-Production_Ready-brightgreen.svg) / ![Status](https://img.shields.io/badge/Status-Maintenance-lightgrey.svg) / ![Status](https://img.shields.io/badge/Status-Archived-red.svg)
 
@@ -275,6 +275,16 @@ https://sites.google.com/luceit.es/luceit/otros/devops/devops-politica_de_versio
 | Version | Date (last change) |  Developer   | Changes                      |
 |:-------:|:-------------------|:------------:|
 :-----------------------------|
+| v0.1.59 | 19/06/2026         | Alejandro Flores | feat: integrate ml30-meat-traceability-detection plugin; fix ml7-cereals-grain-pest-detection plugin |  
+| v0.1.58 | 19/06/2026         | Pablo | fix: fixed plugin to allow videos |  
+| v0.1.57 | 19/06/2026         | Pablo | feat: add TORCH_HOME env var |  
+| v0.1.56 | 17/06/2026         | Alejandro Flores | feat: integrate ml7-cereals-grain-pest-detection plugin |  
+| v0.1.55 | 17/06/2026         | Alejandro Flores | fix: add missing ml2-fungal fake factory in conftest |  
+| v0.1.54 | 16/06/2026         | Alejandro Flores | feat: integrate ml5-meat-cow-behaviour |  
+| v0.1.53 | 16/06/2026         | Alejandro Flores | feat: integrate ml2-fungal-cnn-disease-detection plugin |  
+| v0.1.52 | 15/06/2026         | Pablo | feat: refactor artifact store for plugins to use repo root |  
+| v0.1.51 | 15/06/2026         | Pablo | fix: refactor artifact store for plugins |  
+| v0.1.50 | 15/06/2026         | Pablo | fix: missing artifacts folder |  
 | v0.1.49 | 11/06/2026         | Pablo | fix: async block /health probe so container stop
  |  
 | v0.1.48 | 11/06/2026         | Pablo | fix: batch pred and train |  
