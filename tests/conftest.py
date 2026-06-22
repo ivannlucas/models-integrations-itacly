@@ -451,7 +451,7 @@ def _ml31_residue_batch(plugin: FakePlugin, *, data_path: str) -> Ml31ResidueBat
 def _ml31_residue_train(plugin: FakePlugin, *, data_path: str) -> Ml31ResidueTrainResp:
     """Fake training response for the ml31 residue optimizer."""
     return Ml31ResidueTrainResp(
-        detail="Entrenamiento completado", r2_test=0.83, n_train=800, n_test=200, upload_warning=None,
+        detail="Entrenamiento completado", r2_test=0.83, n_train=800, n_test=200,
     )
 
 
