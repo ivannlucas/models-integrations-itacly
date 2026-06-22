@@ -5,8 +5,7 @@ from pydantic import BaseModel
 class TrainRequest(BaseModel):
     """Request body for training a model."""
     data_path: str = ""
-    user_id: str = ""
-    model_id: str = ""
+    mlflow_run_id: str
 
 
 class TrainResponse(BaseModel):

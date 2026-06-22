@@ -18,6 +18,7 @@ class PredictBatchRequest(BaseModel):
             "ejecuta Detectron2 + ByteTrack + SlowFast sobre cada frame."
         ),
     )
+    mlflow_run_id: str = Field(default="", description="MLflow run ID for user-trained model")
 
 
 class PredictBatchResponse(BaseModel):
@@ -51,6 +52,7 @@ class PredictInlineRequest(BaseModel):
             "muestrea 8 frames 'slow' + 32 'fast' de este clip."
         ),
     )
+    mlflow_run_id: str = Field(default="", description="MLflow run ID for user-trained model")
 
 
 class PredictInlineResponse(BaseModel):

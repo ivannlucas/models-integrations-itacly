@@ -4,6 +4,7 @@ import gc
 import logging
 import os
 import random
+import shutil
 import tempfile
 import time
 import zipfile
@@ -15,6 +16,7 @@ import torch
 from app.application.dto.stats_dto import InputField, OutputField, RuntimeStats, StatsResponse
 from app.domain.ports.model_plugin_port import ModelPluginPort
 from app.domain.services.exceptions import InvalidImageError, ModelNotLoadedError
+from app.domain.services.mlflow_tracker import BaseMLflowTracker
 from app.plugins.ml8_cereals_img_anomaly_detector.constants import (
     ARTIFACT_FOLDER_NAME,
     CATEGORY_NAMES,
@@ -29,6 +31,7 @@ from app.plugins.ml8_cereals_img_anomaly_detector.predict_dto import (
     PredictBatchResponse,
     PredictInlineResponse,
 )
+from app.plugins.ml8_cereals_img_anomaly_detector.mlflow_utils import download_user_model_from_mlflow
 from app.plugins.ml8_cereals_img_anomaly_detector.preprocessing import image_base64_to_tensor, image_path_to_tensor
 from app.plugins.ml8_cereals_img_anomaly_detector.train_dto import TrainResponse
 
@@ -151,102 +154,128 @@ class Ml8CerealsImgAnomalyDetectorPlugin(ModelPluginPort):
         features: dict,
         model_key: str | None = None,
         threshold: float | None = None,
+        mlflow_run_id: str = "",
     ) -> PredictInlineResponse:
-        bundle = self._require_bundle()
-        tensor = image_base64_to_tensor(
-            features["image_base64"], image_size=bundle["image_size"]
-        ).to(bundle["device"])
-
-        bundle["model"].eval()
-        with torch.no_grad():
-            logits_cat, logits_cer = bundle["model"](tensor)
-
-        self._predict_count += 1
-        self._last_predict_at = datetime.now(tz=timezone.utc).isoformat()
-        logger.info("predict_inline done — count=%d", self._predict_count)
-
-        return PredictInlineResponse(**build_inline_response(
-            logits_cat,
-            logits_cer,
-            idx_to_class=bundle["idx_to_class"],
-            idx_to_cereal=bundle["idx_to_cereal"],
-            model_id=bundle["model_id"],
-        ))
-
-    def predict_batch(self, *, data_path: str) -> PredictBatchResponse:
-        bundle = self._require_bundle()
-        model = bundle["model"]
-        device: torch.device = bundle["device"]
-        image_size: int = bundle["image_size"]
-        predictions: list[dict] = []
-
-        _tmp_zip: str | None = None
-        local_data_path = data_path
-        if data_path.startswith("s3://"):
-            import boto3
-            from botocore.client import Config as BotoConfig
-            without_prefix = data_path[5:]
-            bucket, _, s3_key = without_prefix.partition("/")
-            s3 = boto3.client(
-                "s3",
-                endpoint_url=os.environ.get("CUSTOM_S3_ENDPOINT"),
-                aws_access_key_id=os.environ.get("AWS_ACCESS_KEY_ID"),
-                aws_secret_access_key=os.environ.get("AWS_SECRET_ACCESS_ID"),
-                config=BotoConfig(signature_version="s3v4"),
-                region_name=os.environ.get("CUSTOM_REGION", "us-east-1"),
-            )
-            fd, _tmp_zip = tempfile.mkstemp(suffix=".zip")
-            os.close(fd)
-            logger.info("Downloading batch data from s3://%s/%s", bucket, s3_key)
-            s3.download_file(bucket, s3_key, _tmp_zip)
-            local_data_path = _tmp_zip
-
+        user_temp_dir = None
+        saved_bundle = self._bundle
+        if mlflow_run_id:
+            logger.info("predict_inline — using user-trained model from MLflow run_id=%s", mlflow_run_id)
+            loaded = download_user_model_from_mlflow(mlflow_run_id)
+            if loaded:
+                self._bundle, user_temp_dir = loaded
         try:
-            with tempfile.TemporaryDirectory() as tmp_dir:
-                with zipfile.ZipFile(local_data_path, "r") as zf:
-                    zf.extractall(tmp_dir)
+            bundle = self._require_bundle()
+            tensor = image_base64_to_tensor(
+                features["image_base64"], image_size=bundle["image_size"]
+            ).to(bundle["device"])
 
-                image_paths = sorted(
-                    p for p in Path(tmp_dir).rglob("*")
-                    if p.is_file() and p.suffix.lower() in IMAGE_EXTENSIONS
-                )
+            bundle["model"].eval()
+            with torch.no_grad():
+                logits_cat, logits_cer = bundle["model"](tensor)
 
-                model.eval()
-                for image_path in image_paths:
-                    try:
-                        tensor = image_path_to_tensor(image_path, image_size=image_size).to(device)
-                        with torch.no_grad():
-                            logits_cat, logits_cer = model(tensor)
-                        result = build_inline_response(
-                            logits_cat,
-                            logits_cer,
-                            idx_to_class=bundle["idx_to_class"],
-                            idx_to_cereal=bundle["idx_to_cereal"],
-                            model_id=bundle["model_id"],
-                        )
-                        result["filename"] = image_path.name
-                        predictions.append(result)
-                    except InvalidImageError as exc:
-                        predictions.append({"filename": image_path.name, "error": str(exc)})
-                    except Exception as exc:
-                        logger.warning("Unexpected error processing %s: %s", image_path.name, exc)
-                        predictions.append({"filename": image_path.name, "error": str(exc)})
+            self._predict_count += 1
+            self._last_predict_at = datetime.now(tz=timezone.utc).isoformat()
+            logger.info("predict_inline done — count=%d mlflow=%s", self._predict_count, bool(mlflow_run_id))
+
+            return PredictInlineResponse(**build_inline_response(
+                logits_cat,
+                logits_cer,
+                idx_to_class=bundle["idx_to_class"],
+                idx_to_cereal=bundle["idx_to_cereal"],
+                model_id=bundle["model_id"],
+            ))
         finally:
-            if _tmp_zip:
-                os.unlink(_tmp_zip)
+            if user_temp_dir:
+                shutil.rmtree(user_temp_dir, ignore_errors=True)
+                self._bundle = saved_bundle
 
-        self._predict_count += 1
-        self._last_predict_at = datetime.now(tz=timezone.utc).isoformat()
-        logger.info("predict_batch done — %d predictions count=%d", len(predictions), self._predict_count)
+    def predict_batch(self, *, data_path: str, mlflow_run_id: str = "") -> PredictBatchResponse:
+        user_temp_dir = None
+        saved_bundle = self._bundle
+        if mlflow_run_id:
+            logger.info("predict_batch — using user-trained model from MLflow run_id=%s", mlflow_run_id)
+            loaded = download_user_model_from_mlflow(mlflow_run_id)
+            if loaded:
+                self._bundle, user_temp_dir = loaded
+        try:
+            bundle = self._require_bundle()
+            model = bundle["model"]
+            device: torch.device = bundle["device"]
+            image_size: int = bundle["image_size"]
+            predictions: list[dict] = []
 
-        return PredictBatchResponse(**build_batch_response(predictions, model_id=bundle["model_id"]))
+            _tmp_zip: str | None = None
+            local_data_path = data_path
+            if data_path.startswith("s3://"):
+                import boto3
+                from botocore.client import Config as BotoConfig
+                without_prefix = data_path[5:]
+                bucket, _, s3_key = without_prefix.partition("/")
+                s3 = boto3.client(
+                    "s3",
+                    endpoint_url=os.environ.get("CUSTOM_S3_ENDPOINT"),
+                    aws_access_key_id=os.environ.get("AWS_ACCESS_KEY_ID"),
+                    aws_secret_access_key=os.environ.get("AWS_SECRET_ACCESS_ID"),
+                    config=BotoConfig(signature_version="s3v4"),
+                    region_name=os.environ.get("CUSTOM_REGION", "us-east-1"),
+                )
+                fd, _tmp_zip = tempfile.mkstemp(suffix=".zip")
+                os.close(fd)
+                logger.info("Downloading batch data from s3://%s/%s", bucket, s3_key)
+                s3.download_file(bucket, s3_key, _tmp_zip)
+                local_data_path = _tmp_zip
 
-    def stats(self) -> StatsResponse:
+            try:
+                with tempfile.TemporaryDirectory() as tmp_dir:
+                    with zipfile.ZipFile(local_data_path, "r") as zf:
+                        zf.extractall(tmp_dir)
+
+                    image_paths = sorted(
+                        p for p in Path(tmp_dir).rglob("*")
+                        if p.is_file() and p.suffix.lower() in IMAGE_EXTENSIONS
+                    )
+
+                    model.eval()
+                    for image_path in image_paths:
+                        try:
+                            tensor = image_path_to_tensor(image_path, image_size=image_size).to(device)
+                            with torch.no_grad():
+                                logits_cat, logits_cer = model(tensor)
+                            result = build_inline_response(
+                                logits_cat,
+                                logits_cer,
+                                idx_to_class=bundle["idx_to_class"],
+                                idx_to_cereal=bundle["idx_to_cereal"],
+                                model_id=bundle["model_id"],
+                            )
+                            result["filename"] = image_path.name
+                            predictions.append(result)
+                        except InvalidImageError as exc:
+                            predictions.append({"filename": image_path.name, "error": str(exc)})
+                        except Exception as exc:
+                            logger.warning("Unexpected error processing %s: %s", image_path.name, exc)
+                            predictions.append({"filename": image_path.name, "error": str(exc)})
+            finally:
+                if _tmp_zip:
+                    os.unlink(_tmp_zip)
+
+            self._predict_count += 1
+            self._last_predict_at = datetime.now(tz=timezone.utc).isoformat()
+            logger.info("predict_batch done — %d predictions count=%d mlflow=%s",
+                        len(predictions), self._predict_count, bool(mlflow_run_id))
+
+            return PredictBatchResponse(**build_batch_response(predictions, model_id=bundle["model_id"]))
+        finally:
+            if user_temp_dir:
+                shutil.rmtree(user_temp_dir, ignore_errors=True)
+                self._bundle = saved_bundle
+
+    def stats(self, mlflow_run_id: str = "") -> StatsResponse:
         arch = self._bundle["arch"] if self._bundle is not None else "unknown"
-        model_id = self._bundle["model_id"] if self._bundle is not None else MODEL_ID
+        model_id_v = self._bundle["model_id"] if self._bundle is not None else MODEL_ID
 
-        return StatsResponse(
-            model_name=model_id,
+        base = StatsResponse(
+            model_name=model_id_v,
             version="1.0.0",
             description=(
                 "Clasificación multitarea de imágenes de cereales: predice la categoría "
@@ -276,10 +305,21 @@ class Ml8CerealsImgAnomalyDetectorPlugin(ModelPluginPort):
                 avg_latency_ms=None,
             ),
         )
+        if mlflow_run_id:
+            try:
+                tracker = BaseMLflowTracker(mlflow_run_id)
+                base.metrics["mlflow"] = {
+                    "params": tracker.get_params(),
+                    "metrics": tracker.get_metrics(),
+                }
+                logger.info("Stats enriched with MLflow data for run_id=%s", mlflow_run_id)
+            except Exception as exc:
+                logger.warning("Could not fetch MLflow stats for run_id=%s: %s", mlflow_run_id, exc)
+        return base
 
     # ── Entrenamiento ─────────────────────────────────────────────────────────
 
-    def train(self, *, data_path: str) -> TrainResponse:
+    def train(self, *, data_path: str, mlflow_run_id: str = "") -> TrainResponse:
         import torch.nn as nn
         from PIL import Image
         from torch.utils.data import DataLoader, Dataset
@@ -288,7 +328,21 @@ class Ml8CerealsImgAnomalyDetectorPlugin(ModelPluginPort):
         from app.infrastructure.artifact_store import ArtifactStore
         from app.plugins.ml8_cereals_img_anomaly_detector.model_loader import MultiTaskMobileNetV3Large
 
-        # Download from S3 if data_path is an s3:// URI
+        if mlflow_run_id:
+            logger.info("Training with MLflow tracking, run_id=%s", mlflow_run_id)
+            tracker = BaseMLflowTracker(mlflow_run_id)
+            tracker.log_params({
+                "batch_size": 16,
+                "fase1_lr": 0.001,
+                "fase1_epochs": 10,
+                "fase1_optimizer": "Adam",
+                "fase2_lr": 0.00001,
+                "fase2_epochs": 5,
+                "fase2_optimizer": "Adam",
+                "model": "MultiTaskMobileNetV3Large",
+                "backbone_weights": "IMAGENET1K_V2",
+            })
+
         _tmp_zip: str | None = None
         local_data_path = data_path
         if data_path.startswith("s3://"):
@@ -388,8 +442,6 @@ class Ml8CerealsImgAnomalyDetectorPlugin(ModelPluginPort):
             )
             logger.info("Dataset: %d train, %d val", len(train_records), len(val_records))
 
-            # Backbone preentrenado, clasificador descongelado para fase 1
-            # TORCH_HOME must point to a writable dir; pods run without a home directory.
             os.environ.setdefault("TORCH_HOME", "/tmp/.torch")
             base = models.mobilenet_v3_large(weights="IMAGENET1K_V2")
             for param in base.parameters():
@@ -416,6 +468,12 @@ class Ml8CerealsImgAnomalyDetectorPlugin(ModelPluginPort):
                 device, epochs=10, patience=3, phase_name="Fase 1: Transfer Learning",
             )
             t1 = time.perf_counter() - t0
+            if mlflow_run_id:
+                for ep in range(len(h1["val_acc_cat"])):
+                    tracker.log_metrics({
+                        "fase1_val_acc_cat": h1["val_acc_cat"][ep],
+                        "fase1_val_acc_cer": h1["val_acc_cer"][ep],
+                    }, step=ep)
             gc.collect()
 
             # Fase 2: fine-tune completo
@@ -428,12 +486,18 @@ class Ml8CerealsImgAnomalyDetectorPlugin(ModelPluginPort):
                 device, epochs=5, patience=3, phase_name="Fase 2: Fine-tuning",
             )
             t2 = time.perf_counter() - t0
+            if mlflow_run_id:
+                for ep in range(len(h2["val_acc_cat"])):
+                    tracker.log_metrics({
+                        "fase2_val_acc_cat": h2["val_acc_cat"][ep],
+                        "fase2_val_acc_cer": h2["val_acc_cer"][ep],
+                    }, step=ep)
             gc.collect()
 
             # Guardar checkpoint
             artifact_path = store.local_dir / MODEL_FILENAME
             artifact_path.parent.mkdir(parents=True, exist_ok=True)
-            torch.save({
+            checkpoint = {
                 "model_name": "mobilenet_v3_large",
                 "model_state_dict": model.state_dict(),
                 "num_classes": len(CATEGORY_NAMES),
@@ -442,15 +506,27 @@ class Ml8CerealsImgAnomalyDetectorPlugin(ModelPluginPort):
                 "cereal_to_idx": cereal_to_idx,
                 "idx_to_class": idx_to_class,
                 "idx_to_cereal": idx_to_cereal,
-            }, artifact_path)
+            }
+            torch.save(checkpoint, artifact_path)
             logger.info("Checkpoint guardado en %s", artifact_path)
 
-            upload_warning: str | None = None
-            try:
-                store.upload(MODEL_FILENAME)
-            except Exception as exc:
-                upload_warning = f"Artefactos guardados en local; fallo en S3: {exc}"
-                logger.warning(upload_warning)
+            # ── MLflow: log metrics and upload artifacts ────────────────────
+            if mlflow_run_id:
+                combined_cat_m = h2["val_acc_cat"] or h1["val_acc_cat"]
+                combined_cer_m = h2["val_acc_cer"] or h1["val_acc_cer"]
+                tracker.log_metrics({
+                    "best_val_acc_cat": round(max(combined_cat_m), 1) if combined_cat_m else 0.0,
+                    "best_val_acc_cer": round(max(combined_cer_m), 1) if combined_cer_m else 0.0,
+                    "train_samples": len(train_records),
+                    "val_samples": len(val_records),
+                })
+                try:
+                    mlflow_tmp = tempfile.mkdtemp(prefix="ml8_mlflow_")
+                    torch.save(checkpoint, os.path.join(mlflow_tmp, MODEL_FILENAME))
+                    tracker.upload_artifacts(mlflow_tmp, artifact_path="model")
+                    shutil.rmtree(mlflow_tmp, ignore_errors=True)
+                except Exception as exc:
+                    logger.error("MLflow artifact upload failed: %s", exc)
 
             self.load()
 
@@ -466,10 +542,8 @@ class Ml8CerealsImgAnomalyDetectorPlugin(ModelPluginPort):
                 fase2_time_min=round(t2 / 60, 1),
                 best_val_acc_cat=round(max(combined_cat), 1) if combined_cat else 0.0,
                 best_val_acc_cer=round(max(combined_cer), 1) if combined_cer else 0.0,
-                upload_warning=upload_warning,
             )
         finally:
-            import shutil
             shutil.rmtree(tmp_dir, ignore_errors=True)
             if _tmp_zip and os.path.exists(_tmp_zip):
                 os.unlink(_tmp_zip)

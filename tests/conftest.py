@@ -113,8 +113,10 @@ class FakePlugin(ModelPluginPort):
         features: dict,
         model_key: str | None = None,
         threshold: float | None = None,
+        mlflow_run_id: str = "",
     ) -> BaseModel:
         """Run inline inference on a single feature dict and return the typed inline response."""
+        _ = mlflow_run_id
         if self.raise_on_inline is not None:
             exc, self.raise_on_inline = self.raise_on_inline, None
             raise exc
@@ -124,8 +126,9 @@ class FakePlugin(ModelPluginPort):
             self, features=features, model_key=model_key, threshold=threshold
         )
 
-    def predict_batch(self, *, data_path: str) -> BaseModel:
+    def predict_batch(self, *, data_path: str, mlflow_run_id: str = "") -> BaseModel:
         """Run batch inference on a CSV file and return the typed batch response."""
+        _ = mlflow_run_id
         if self.raise_on_batch is not None:
             exc, self.raise_on_batch = self.raise_on_batch, None
             raise exc
@@ -133,7 +136,7 @@ class FakePlugin(ModelPluginPort):
         self._last_predict_at = datetime.now(tz=timezone.utc).isoformat()
         return self._batch_factory(self, data_path=data_path)
 
-    def stats(self) -> StatsResponse:
+    def stats(self, mlflow_run_id: str = "") -> StatsResponse:
         """Return model metadata and runtime statistics."""
         return StatsResponse(
             model_name=self._model_id,
@@ -150,8 +153,9 @@ class FakePlugin(ModelPluginPort):
             ),
         )
 
-    def train(self, *, data_path: str) -> BaseModel:
+    def train(self, *, data_path: str, mlflow_run_id: str = "") -> BaseModel:
         """Train the model with the provided data."""
+        _ = mlflow_run_id
         if self._train_factory is None:
             raise TrainingNotSupportedError(
                 "Training is not supported by this runtime. Use the data science pipeline instead."

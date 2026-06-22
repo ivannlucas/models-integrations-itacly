@@ -12,8 +12,7 @@ class PredictBatchRequest(BaseModel):
         ...,
         description="Path to CSV file with wine physicochemical properties inside the container",
     )
-    model_id: str = ""  # si se pasa, usa el modelo específico entrenado
-    user_id: str = ""   # propietario del modelo específico
+    mlflow_run_id: str = Field(default="", description="MLflow run ID for user-trained model")
 
 
 class PredictBatchResponse(BaseModel):
@@ -22,8 +21,7 @@ class PredictBatchResponse(BaseModel):
     model_id: str
     predictions: list[dict[str, Any]]
     output_path: str | None = None
-    model_train_id: str = ""
-    user_id: str = ""
+    mlflow_run_id: str = ""
 
 
 class PredictInlineRequest(BaseModel):
@@ -65,6 +63,7 @@ class PredictInlineRequest(BaseModel):
         default=40.0,
         description="Maximum free SO2 increment to explore in simulation (mg/L)",
     )
+    mlflow_run_id: str = Field(default="", description="MLflow run ID for user-trained model")
 
 
 class PredictInlineResponse(BaseModel):

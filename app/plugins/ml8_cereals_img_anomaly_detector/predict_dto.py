@@ -7,6 +7,7 @@ class PredictInlineRequest(BaseModel):
     model_config = ConfigDict(protected_namespaces=())
     mode: Literal["inline"] = "inline"
     image_base64: str = Field(..., description="Base64-encoded image (JPEG, PNG or BMP)")
+    mlflow_run_id: str = Field(default="", description="MLflow run ID for user-trained model")
 
 
 class PredictBatchRequest(BaseModel):
@@ -15,8 +16,7 @@ class PredictBatchRequest(BaseModel):
     data_path: str = Field(
         ..., description="Path to a ZIP file containing images inside the container"
     )
-    model_id: str = ""  # si se pasa, usa el modelo específico entrenado
-    user_id: str = ""   # propietario del modelo específico
+    mlflow_run_id: str = ""
 
 
 PredictRequest = Annotated[
@@ -41,8 +41,8 @@ class PredictBatchResponse(BaseModel):
     model_id: str
     predictions: list[dict]
     output_path: str | None = None
-    model_train_id: str = ""  # si se pasa, usa el modelo específico entrenado
-    user_id: str = ""   # propietario del modelo específico
+    mlflow_run_id: str = ""
+    model_train_id: str = ""
 
 
 PredictResponse = Union[PredictInlineResponse, PredictBatchResponse]

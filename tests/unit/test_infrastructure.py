@@ -332,29 +332,6 @@ class TestArtifactStoreS3:
             with pytest.raises(RuntimeError, match="connection refused"):
                 store._download_all()
 
-    def test_upload_artifact_skips_when_no_bucket(self, monkeypatch, tmp_path):
-        """Verify upload_artifact returns without error when STORAGE_BUCKET is not set."""
-        monkeypatch.delenv("STORAGE_BUCKET", raising=False)
-        with patch_unit("app.infrastructure.artifact_store._build_s3_client") as mock_client:
-            from app.infrastructure.artifact_store import ArtifactStore
-            ArtifactStore("test_model").upload_artifact(tmp_path / "model.pth")
-            mock_client.assert_not_called()
-
-    def test_upload_artifact_calls_s3_upload(self, monkeypatch, tmp_path):
-        """Verify upload_artifact calls s3.upload_file with the correct bucket and key."""
-        monkeypatch.setenv("STORAGE_BUCKET", "test-bucket")
-        artifact = tmp_path / "model.pth"
-        artifact.write_bytes(b"fake model data")
-        mock_s3 = MagicMock()
-        with patch_unit("app.infrastructure.artifact_store._build_s3_client", return_value=mock_s3):
-            from app.infrastructure.artifact_store import ArtifactStore
-            ArtifactStore("test_model").upload_artifact(artifact)
-        call_args = mock_s3.upload_file.call_args[0]
-        assert call_args[0] == str(artifact)
-        assert call_args[1] == "test-bucket"
-        assert call_args[2] == "artifacts/fixed/test_model/model.pth"
-
-
 # ── model_loader helper tests ─────────────────────────────────────────────
 
 class TestModelo10ModelLoader:

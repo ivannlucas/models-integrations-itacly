@@ -15,8 +15,7 @@ class TrainModelUseCase:
 
     def execute(self, request: Any) -> dict:
         """Executes the training process."""
-        logger.info("Executing training, data_path=%s", getattr(request, "data_path", ""))
         data_path = getattr(request, "data_path", "")
-        user_id = getattr(request, "user_id", "")
-        model_id = getattr(request, "model_id", "")
-        return self._plugin.train(data_path=data_path, user_id=user_id, model_id=model_id)
+        mlflow_run_id = getattr(request, "mlflow_run_id", "")
+        logger.info("Executing training, data_path=%s, mlflow_run_id=%s", data_path, mlflow_run_id)
+        return self._plugin.train(data_path=data_path, mlflow_run_id=mlflow_run_id)
