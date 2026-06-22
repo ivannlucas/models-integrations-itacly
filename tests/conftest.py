@@ -57,6 +57,13 @@ from app.plugins.ml7_cereals_grain_pest_detection.predict_dto import (
     PredictBatchResponse as Ml7GrainBatchResp,
     PredictInlineResponse as Ml7GrainInlineResp,
 )
+from app.plugins.ml30_meat_traceability_detection.predict_dto import (
+    PredictBatchResponse as Ml30TraceBatchResp,
+    PredictInlineResponse as Ml30TraceInlineResp,
+)
+from app.plugins.ml30_meat_traceability_detection.train_dto import (
+    TrainResponse as Ml30TraceTrainResp,
+)
 from app.registry import REGISTRY
 
 
@@ -381,7 +388,38 @@ def _ml7_grain_batch(plugin: FakePlugin, *, data_path: str) -> Ml7GrainBatchResp
     )
 
 
+def _ml30_trace_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> Ml30TraceInlineResp:
+    """Fake inline response for the ml30 traceability model."""
+    return Ml30TraceInlineResp(
+        model_id="ml30-meat-traceability-detection",
+        pred_traceability_incident=1,
+        pred_score=0.82,
+        confidence=0.82,
+        model_name="ml30-meat-traceability-detection",
+        xai_feature_values={"sensor_temp_c": 7.5},
+    )
+
+
+def _ml30_trace_batch(plugin: FakePlugin, *, data_path: str) -> Ml30TraceBatchResp:
+    """Fake batch response for the ml30 traceability model."""
+    return Ml30TraceBatchResp(
+        model_id="ml30-meat-traceability-detection",
+        predictions=[{"row_id": 0, "pred_traceability_incident": 1, "pred_score": 0.82,
+                      "model_name": "ml30-meat-traceability-detection"}],
+        output_path=None,
+    )
+
+
+def _ml30_trace_train(plugin: FakePlugin, *, data_path: str) -> Ml30TraceTrainResp:
+    """Fake training response for the ml30 traceability model."""
+    return Ml30TraceTrainResp(
+        detail="Training completed", accuracy=0.87, f1=0.6, roc_auc=0.72,
+        n_train=800, n_test=200, training_time_s=12.3, upload_warning=None,
+    )
+
+
 FAKE_FACTORIES: dict[str, tuple[Callable, Callable]] = {
+    "ml30-meat-traceability-detection": (_ml30_trace_inline, _ml30_trace_batch),
     "ml7-cereals-grain-pest-detection": (_ml7_grain_inline, _ml7_grain_batch),
     "ml2-fungal-cnn-disease-detection": (_ml2_fungal_inline, _ml2_fungal_batch),
     "wine-sulphite": (_wine_so2_inline, _wine_so2_batch),
@@ -393,6 +431,7 @@ FAKE_FACTORIES: dict[str, tuple[Callable, Callable]] = {
 TRAIN_FACTORIES: dict[str, Callable] = {
     "modelo10-lacteo": _lacteo_train,
     "ml8-cereals-img-anomaly-detector": _ml8_cereals_train,
+    "ml30-meat-traceability-detection": _ml30_trace_train,
 }
 
 

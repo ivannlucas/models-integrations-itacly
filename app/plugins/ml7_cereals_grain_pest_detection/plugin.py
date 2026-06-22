@@ -11,6 +11,8 @@ import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 
+import numpy as np
+
 from app.application.dto.stats_dto import InputField, OutputField, RuntimeStats, StatsResponse
 from app.domain.ports.model_plugin_port import ModelPluginPort
 from app.domain.services.exceptions import (
@@ -44,6 +46,11 @@ logger = logging.getLogger(__name__)
 # ponytail: CPU only; the source forced cpu and YOLO infers fine on it. Add device
 # selection if GPU inference is ever needed.
 _DEVICE = "cpu"
+
+
+def _to_bgr(img_rgb: np.ndarray) -> np.ndarray:
+    """ultralytics expects numpy frames in BGR; our loaders produce RGB."""
+    return np.ascontiguousarray(img_rgb[:, :, ::-1])
 
 
 class Ml7CerealsGrainPestDetectionPlugin(ModelPluginPort):
@@ -95,7 +102,7 @@ class Ml7CerealsGrainPestDetectionPlugin(ModelPluginPort):
             raise InvalidImageError("features must contain 'image_path' or 'image_base64'")
 
         conf = threshold if threshold is not None else CONF_THRESHOLD
-        results = model.predict(img_np, verbose=False, conf=conf, device=_DEVICE)
+        results = model.predict(_to_bgr(img_np), verbose=False, conf=conf, device=_DEVICE)
         result = yolo_results_to_dict(results[0], img_np, conf_threshold=conf)
         self._record()
 
@@ -134,7 +141,7 @@ class Ml7CerealsGrainPestDetectionPlugin(ModelPluginPort):
                 try:
                     img_np = image_path_to_numpy(str(img_file))
                     results = model.predict(
-                        img_np, verbose=False, conf=CONF_THRESHOLD, device=_DEVICE
+                        _to_bgr(img_np), verbose=False, conf=CONF_THRESHOLD, device=_DEVICE
                     )
                     result = yolo_results_to_dict(results[0], img_np)
                     predictions.append({
