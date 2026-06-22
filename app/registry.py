@@ -71,6 +71,16 @@ from app.plugins.ml30_meat_traceability_detection.train_dto import (
     TrainResponse as Ml30Trace_TrainResp,
 )
 
+from app.plugins.ml31_cereals_residue_optimizer.plugin import Ml31CerealsResidueOptimizerPlugin
+from app.plugins.ml31_cereals_residue_optimizer.predict_dto import (
+    PredictRequest as Ml31Residue_Request,
+    PredictResponse as Ml31Residue_Response,
+)
+from app.plugins.ml31_cereals_residue_optimizer.train_dto import (
+    TrainRequest as Ml31Residue_TrainReq,
+    TrainResponse as Ml31Residue_TrainResp,
+)
+
 
 # ── Registry entry dataclass ──────────────────────────────────────────────────
 
@@ -158,5 +168,15 @@ REGISTRY: list[ModelEntry] = [
         predict_response_type=Ml30Trace_Response,
         train_request_type=Ml30Trace_TrainReq,
         train_response_type=Ml30Trace_TrainResp,
+    ),
+    ModelEntry(
+        model_id="ml31-cereals-residue-optimizer",
+        prefix="/models/ml31-cereals-residue-optimizer",
+        version="1.0.0",
+        plugin_class=Ml31CerealsResidueOptimizerPlugin,
+        predict_request_type=Ml31Residue_Request,
+        predict_response_type=Ml31Residue_Response,
+        train_request_type=Ml31Residue_TrainReq,
+        train_response_type=Ml31Residue_TrainResp,
     ),
 ]

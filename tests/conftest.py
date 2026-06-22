@@ -64,6 +64,13 @@ from app.plugins.ml30_meat_traceability_detection.predict_dto import (
 from app.plugins.ml30_meat_traceability_detection.train_dto import (
     TrainResponse as Ml30TraceTrainResp,
 )
+from app.plugins.ml31_cereals_residue_optimizer.predict_dto import (
+    PredictBatchResponse as Ml31ResidueBatchResp,
+    PredictInlineResponse as Ml31ResidueInlineResp,
+)
+from app.plugins.ml31_cereals_residue_optimizer.train_dto import (
+    TrainResponse as Ml31ResidueTrainResp,
+)
 from app.registry import REGISTRY
 
 
@@ -422,7 +429,34 @@ def _ml30_trace_train(plugin: FakePlugin, *, data_path: str) -> Ml30TraceTrainRe
     )
 
 
+def _ml31_residue_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> Ml31ResidueInlineResp:
+    """Fake inline response for the ml31 residue optimizer."""
+    return Ml31ResidueInlineResp(
+        model_id="ml31-cereals-residue-optimizer",
+        prediction=1234.5,
+        confidence=None,
+        xai_feature_values={"Sup_Secano_ha": 100.0, "Lluvia_Primavera_mm": 180.0},
+    )
+
+
+def _ml31_residue_batch(plugin: FakePlugin, *, data_path: str) -> Ml31ResidueBatchResp:
+    """Fake batch response for the ml31 residue optimizer."""
+    return Ml31ResidueBatchResp(
+        model_id="ml31-cereals-residue-optimizer",
+        predictions=[{"row": 0, "prediction": 1234.5, "Cultivo": "Trigo"}],
+        output_path=None,
+    )
+
+
+def _ml31_residue_train(plugin: FakePlugin, *, data_path: str) -> Ml31ResidueTrainResp:
+    """Fake training response for the ml31 residue optimizer."""
+    return Ml31ResidueTrainResp(
+        detail="Entrenamiento completado", r2_test=0.83, n_train=800, n_test=200, upload_warning=None,
+    )
+
+
 FAKE_FACTORIES: dict[str, tuple[Callable, Callable]] = {
+    "ml31-cereals-residue-optimizer": (_ml31_residue_inline, _ml31_residue_batch),
     "ml30-meat-traceability-detection": (_ml30_trace_inline, _ml30_trace_batch),
     "ml7-cereals-grain-pest-detection": (_ml7_grain_inline, _ml7_grain_batch),
     "ml2-fungal-cnn-disease-detection": (_ml2_fungal_inline, _ml2_fungal_batch),
@@ -436,6 +470,7 @@ TRAIN_FACTORIES: dict[str, Callable] = {
     "modelo10-lacteo": _lacteo_train,
     "ml8-cereals-img-anomaly-detector": _ml8_cereals_train,
     "ml30-meat-traceability-detection": _ml30_trace_train,
+    "ml31-cereals-residue-optimizer": _ml31_residue_train,
 }
 
 
