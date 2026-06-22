@@ -275,6 +275,7 @@ https://sites.google.com/luceit.es/luceit/otros/devops/devops-politica_de_versio
 | Version | Date (last change) |  Developer   | Changes                      |
 |:-------:|:-------------------|:------------:|
 :-----------------------------|
+| v0.1.61 | 19/06/2026         | Trinidad | feat: added mlflow logic 
 | v0.1.60 | 19/06/2026         | Alejandro Flores | feat: integrate ml31-cereals-residue-optimizer plugin (sklearn regression surrogate, trains) |  
 | v0.1.59 | 19/06/2026         | Alejandro Flores | feat: integrate ml30-meat-traceability-detection plugin; fix ml7-cereals-grain-pest-detection plugin |  
 | v0.1.58 | 19/06/2026         | Pablo | fix: fixed plugin to allow videos |  
