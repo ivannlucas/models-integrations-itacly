@@ -73,8 +73,12 @@ class Ml2FungalCnnDiseaseDetectionPlugin(ModelPluginPort):
         features: dict,
         model_key: str | None = None,
         threshold: float | None = None,
+        mlflow_run_id: str = "",
     ) -> PredictInlineResponse:
         """Classify a single base64 image and return the typed inline response."""
+        if mlflow_run_id:
+            logger.warning("mlflow_run_id=%s provided but model '%s' does not support user training — using standard model",
+                           mlflow_run_id, MODEL_ID)
         bundle = self._require_bundle()
         tensor = image_base64_to_tensor(
             features["image_base64"], image_size=bundle["image_size"]
@@ -94,8 +98,11 @@ class Ml2FungalCnnDiseaseDetectionPlugin(ModelPluginPort):
             model_id=bundle["model_id"],
         ))
 
-    def predict_batch(self, *, data_path: str) -> PredictBatchResponse:
+    def predict_batch(self, *, data_path: str, mlflow_run_id: str = "") -> PredictBatchResponse:
         """Classify every image inside a ZIP (local path or ``s3://`` URI)."""
+        if mlflow_run_id:
+            logger.warning("mlflow_run_id=%s provided but model '%s' does not support user training — using standard model",
+                           mlflow_run_id, MODEL_ID)
         bundle = self._require_bundle()
         model = bundle["model"]
         device: torch.device = bundle["device"]
@@ -172,19 +179,22 @@ class Ml2FungalCnnDiseaseDetectionPlugin(ModelPluginPort):
         s3.download_file(bucket, s3_key, tmp_zip)
         return tmp_zip
 
-    def train(self, *, data_path: str) -> PredictBatchResponse:
+    def train(self, *, data_path: str, mlflow_run_id: str = "") -> PredictBatchResponse:
         """Training is not supported: this model uses externally trained artifacts (HTTP 501)."""
-        _ = data_path
+        _ = data_path, mlflow_run_id
         raise TrainingNotSupportedError(
             "Este modelo usa artefactos externos; el reentrenamiento no está disponible."
         )
 
-    def stats(self) -> StatsResponse:
+    def stats(self, mlflow_run_id: str = "") -> StatsResponse:
         """Return model metadata and runtime statistics."""
-        model_id = self._bundle["model_id"] if self._bundle is not None else MODEL_ID
+        if mlflow_run_id:
+            logger.warning("mlflow_run_id=%s provided but model '%s' does not support user training",
+                           mlflow_run_id, MODEL_ID)
+        model_id_v = self._bundle["model_id"] if self._bundle is not None else MODEL_ID
 
         return StatsResponse(
-            model_name=model_id,
+            model_name=model_id_v,
             version="1.0.0",
             description=(
                 "Detección de enfermedades fúngicas en hojas de vid mediante una "

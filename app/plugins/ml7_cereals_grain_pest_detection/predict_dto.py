@@ -12,6 +12,7 @@ class PredictInlineRequest(BaseModel):
     image_path: str | None = None
     image_base64: str | None = None
     threshold: float | None = Field(default=None, description="Override del umbral de confianza")
+    mlflow_run_id: str = Field(default="", description="MLflow run ID for user-trained model")
 
 
 class PredictBatchRequest(BaseModel):
@@ -20,6 +21,7 @@ class PredictBatchRequest(BaseModel):
     model_config = ConfigDict(protected_namespaces=())
     mode: Literal["batch"] = "batch"
     data_path: str = Field(..., description="Ruta a un directorio o fichero .zip de imágenes")
+    mlflow_run_id: str = Field(default="", description="MLflow run ID for user-trained model")
 
 
 PredictRequest = Annotated[

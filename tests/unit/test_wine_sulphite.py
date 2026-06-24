@@ -52,6 +52,30 @@ def test_predict_batch(client):
     assert body["predictions"][0]["intervention_recommended"] is True
 
 
+def test_predict_inline_with_mlflow_run_id(client, wine_so2_inline_payload):
+    """Verify mlflow_run_id in predict request is accepted (ignored by fake)."""
+    payload = {**wine_so2_inline_payload, "mlflow_run_id": "mlflow-run-123"}
+    resp = client.post(f"{PREFIX}/predict", json=payload)
+    assert resp.status_code == 200
+    assert resp.json()["model_id"] == "wine-sulphite"
+
+
+def test_predict_batch_with_mlflow_run_id(client):
+    """Verify mlflow_run_id in batch predict is accepted."""
+    resp = client.post(
+        f"{PREFIX}/predict",
+        json={"mode": "batch", "data_path": "/tmp/wine.csv", "mlflow_run_id": "mlflow-run-123"},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["model_id"] == "wine-sulphite"
+
+
+def test_stats_with_mlflow_run_id(client):
+    """Verify stats endpoint accepts mlflow_run_id query parameter."""
+    body = client.get(f"{PREFIX}/stats", params={"mlflow_run_id": "mlflow-run-123"}).json()
+    assert body["model_name"] == "wine-sulphite"
+
+
 def test_predict_no_valid_simulation_point_maps_to_422(
     client, fake_plugins, wine_so2_inline_payload
 ):
@@ -64,9 +88,15 @@ def test_predict_no_valid_simulation_point_maps_to_422(
     assert "no feasible" in resp.json()["detail"]
 
 
+def test_train_without_mlflow_run_id_returns_422(client):
+    """Verify train without mlflow_run_id returns HTTP 422 (required field)."""
+    resp = client.post(f"{PREFIX}/train", json={"data_path": "/tmp/wine.csv"})
+    assert resp.status_code == 422
+
+
 def test_train_returns_501(client):
     """Verify train returns HTTP 501 when no training backend is wired for wine-sulphite."""
-    resp = client.post(f"{PREFIX}/train", json={"data_path": "/tmp/wine.csv"})
+    resp = client.post(f"{PREFIX}/train", json={"data_path": "/tmp/wine.csv", "mlflow_run_id": "test-run-id"})
     assert resp.status_code == 501
 
 

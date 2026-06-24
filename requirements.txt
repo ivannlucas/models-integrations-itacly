@@ -45,3 +45,6 @@ Pillow>=11.0.0
 # Detectron2 (detector) must be installed from source like the note above.
 pytorchvideo>=0.1.5
 fvcore>=0.1.5
+
+# MLflow integration
+mlflow>=2.20.0

@@ -88,8 +88,12 @@ class Ml7CerealsGrainPestDetectionPlugin(ModelPluginPort):
         features: dict,
         model_key: str | None = None,
         threshold: float | None = None,
+        mlflow_run_id: str = "",
     ) -> PredictInlineResponse:
         """Detect pests in a single image (path or base64)."""
+        if mlflow_run_id:
+            logger.warning("mlflow_run_id=%s provided but model '%s' does not support user training — using standard model",
+                           mlflow_run_id, MODEL_ID)
         model = self._require_model()
 
         if features.get("image_path"):
@@ -113,8 +117,11 @@ class Ml7CerealsGrainPestDetectionPlugin(ModelPluginPort):
             **result,
         )
 
-    def predict_batch(self, *, data_path: str) -> PredictBatchResponse:
+    def predict_batch(self, *, data_path: str, mlflow_run_id: str = "") -> PredictBatchResponse:
         """Detect pests in every image of a directory or ZIP."""
+        if mlflow_run_id:
+            logger.warning("mlflow_run_id=%s provided but model '%s' does not support user training — using standard model",
+                           mlflow_run_id, MODEL_ID)
         model = self._require_model()
         data_p = Path(data_path)
         tmp_dir: str | None = None
@@ -163,15 +170,18 @@ class Ml7CerealsGrainPestDetectionPlugin(ModelPluginPort):
             if tmp_dir is not None:
                 shutil.rmtree(tmp_dir, ignore_errors=True)
 
-    def train(self, *, data_path: str) -> PredictInlineResponse:
+    def train(self, *, data_path: str, mlflow_run_id: str = "") -> PredictInlineResponse:
         """Training is not supported: the model uses externally trained artifacts (HTTP 501)."""
-        _ = data_path
+        _ = data_path, mlflow_run_id
         raise TrainingNotSupportedError(
             "Este modelo usa artefactos externos; el reentrenamiento no está disponible."
         )
 
-    def stats(self) -> StatsResponse:
+    def stats(self, mlflow_run_id: str = "") -> StatsResponse:
         """Return model metadata and runtime statistics."""
+        if mlflow_run_id:
+            logger.warning("mlflow_run_id=%s provided but model '%s' does not support user training",
+                           mlflow_run_id, MODEL_ID)
         return StatsResponse(
             model_name=MODEL_ID,
             version=VERSION,

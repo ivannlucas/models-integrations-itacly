@@ -67,7 +67,7 @@ def test_predict_inline_invalid_image_maps_to_422(client, fake_plugins):
 def test_train(client):
     resp = client.post(
         f"{PREFIX}/train",
-        json={"data_path": "/tmp/cereales_train.zip"},
+        json={"data_path": "/tmp/cereales_train.zip", "mlflow_run_id": "test-run-id"},
     )
     assert resp.status_code == 200
     body = resp.json()

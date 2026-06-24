@@ -10,6 +10,7 @@ class PredictBatchRequest(BaseModel):
     model_config = ConfigDict(protected_namespaces=())
     mode: Literal["batch"] = "batch"
     data_path: str = Field(..., description="Path to CSV with cereal scenario features")
+    mlflow_run_id: str = ""
 
 
 class PredictBatchResponse(BaseModel):
@@ -28,6 +29,7 @@ class PredictInlineRequest(BaseModel):
     mode: Literal["inline"] = "inline"
     model_key: str | None = None
     threshold: float | None = None
+    mlflow_run_id: str = ""
     Sup_Secano_ha: float = Field(..., description="Superficie en secano (ha)")
     Sup_Regadio_ha: float = Field(..., description="Superficie en regadío (ha)")
     Lluvia_Primavera_mm: float = Field(..., description="Precipitación primaveral (mm)")

@@ -13,7 +13,7 @@ EXPOSE ${PORT}
 
 COPY requirements.txt .
 
-RUN apt update && apt install -y --no-install-recommends build-essential git \
+RUN apt update && apt install -y --no-install-recommends build-essential git libgl1 libglib2.0-0 \
     && pip install --no-cache-dir -r requirements.txt \
     && pip install --no-cache-dir --no-build-isolation 'git+https://github.com/facebookresearch/detectron2.git' \
     && pip install --no-cache-dir --force-reinstall opencv-python-headless \

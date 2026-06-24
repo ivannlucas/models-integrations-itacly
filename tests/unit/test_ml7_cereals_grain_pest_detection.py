@@ -43,4 +43,4 @@ def test_predict_inline_invalid_image_maps_to_422(client, fake_plugins):
 
 
 def test_train_returns_501(client):
-    assert client.post(f"{PREFIX}/train", json={"data_path": "/tmp/x"}).status_code == 501
+    assert client.post(f"{PREFIX}/train", json={"data_path": "/tmp/x", "mlflow_run_id": "test-run-id"}).status_code == 501

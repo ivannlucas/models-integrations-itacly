@@ -32,7 +32,7 @@ def test_predict_batch(client):
 
 
 def test_train(client):
-    resp = client.post(f"{PREFIX}/train", json={"data_path": "/tmp/train.csv"})
+    resp = client.post(f"{PREFIX}/train", json={"data_path": "/tmp/train.csv", "mlflow_run_id": "test-run-id"})
     assert resp.status_code == 200
     body = resp.json()
     assert body["detail"] == "Training completed"

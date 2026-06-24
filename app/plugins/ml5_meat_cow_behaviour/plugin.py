@@ -105,8 +105,11 @@ class Ml5MeatCowBehaviourPlugin(ModelPluginPort):
         self._predict_count += 1
         self._last_predict_at = datetime.now(tz=timezone.utc).isoformat()
 
-    def predict_batch(self, *, data_path: str) -> PredictBatchResponse:  # pylint: disable=too-many-locals
+    def predict_batch(self, *, data_path: str, mlflow_run_id: str = "") -> PredictBatchResponse:  # pylint: disable=too-many-locals
         """Run the full detection + tracking + classification pipeline over a video file."""
+        if mlflow_run_id:
+            logger.warning("mlflow_run_id=%s provided but model '%s' does not support user training — using standard model",
+                           mlflow_run_id, MODEL_ID)
         bundle = self._require_bundle()
         detector = bundle["detector"]
 
@@ -209,8 +212,12 @@ class Ml5MeatCowBehaviourPlugin(ModelPluginPort):
         features: dict,
         model_key: str | None = None,
         threshold: float | None = None,
+        mlflow_run_id: str = "",
     ) -> PredictInlineResponse:
         """Classify a pre-cropped clip of one cow given as base64 frames."""
+        if mlflow_run_id:
+            logger.warning("mlflow_run_id=%s provided but model '%s' does not support user training — using standard model",
+                           mlflow_run_id, MODEL_ID)
         self._require_bundle()
         frames_b64: list[str] = features["frames_base64"]
         anomaly_threshold = threshold if threshold is not None else DEFAULT_ANOMALY_THRESHOLD
@@ -237,15 +244,18 @@ class Ml5MeatCowBehaviourPlugin(ModelPluginPort):
             xai_feature_values=result.get("all_probs", {}),
         )
 
-    def train(self, *, data_path: str) -> PredictInlineResponse:
+    def train(self, *, data_path: str, mlflow_run_id: str = "") -> PredictInlineResponse:
         """Training is not supported: the model uses externally trained artifacts (HTTP 501)."""
-        _ = data_path
+        _ = data_path, mlflow_run_id
         raise TrainingNotSupportedError(
             "Este modelo usa artefactos externos; el reentrenamiento no está disponible."
         )
 
-    def stats(self) -> StatsResponse:
+    def stats(self, mlflow_run_id: str = "") -> StatsResponse:
         """Return model metadata and runtime statistics."""
+        if mlflow_run_id:
+            logger.warning("mlflow_run_id=%s provided but model '%s' does not support user training",
+                           mlflow_run_id, MODEL_ID)
         behaviors = list(self._bundle["idx_to_behavior"].values()) if self._bundle else []
         avg = self._total_latency_ms / self._predict_count if self._predict_count > 0 else None
 

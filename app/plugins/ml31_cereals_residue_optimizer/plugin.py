@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import logging
+import os
+import shutil
 from datetime import datetime, timezone
 
 import pandas as pd
@@ -9,6 +11,7 @@ import pandas as pd
 from app.application.dto.stats_dto import InputField, OutputField, RuntimeStats, StatsResponse
 from app.domain.ports.model_plugin_port import ModelPluginPort
 from app.domain.services.exceptions import ModelNotLoadedError
+from app.domain.services.mlflow_tracker import BaseMLflowTracker
 from app.plugins.ml31_cereals_residue_optimizer.constants import (
     FRAMEWORK,
     MODEL_ID,
@@ -16,7 +19,8 @@ from app.plugins.ml31_cereals_residue_optimizer.constants import (
     TRAIN_TARGET_COL,
     VERSION,
 )
-from app.plugins.ml31_cereals_residue_optimizer.model_loader import load_pipeline
+from app.plugins.ml31_cereals_residue_optimizer.model_loader import load_pipeline, _store
+from app.plugins.ml31_cereals_residue_optimizer.mlflow_utils import download_user_model_from_mlflow
 from app.plugins.ml31_cereals_residue_optimizer.predict_dto import (
     PredictBatchResponse,
     PredictInlineResponse,
@@ -60,52 +64,91 @@ class Ml31CerealsResidueOptimizerPlugin(ModelPluginPort):
         features: dict,
         model_key: str | None = None,
         threshold: float | None = None,
+        mlflow_run_id: str = "",
     ) -> PredictInlineResponse:
         """Predict available residue for a single cereal scenario."""
-        self._require_loaded()
-        df = pd.DataFrame([{c: features[c] for c in REQUIRED_COLS}])
-        prediction = float(self._pipe.predict(df)[0])
-        self._record()
-        return PredictInlineResponse(
-            model_id=MODEL_ID,
-            prediction=prediction,
-            confidence=None,
-            xai_feature_values={c: features[c] for c in REQUIRED_COLS if c != "Cultivo"},
-        )
+        user_temp_dir = None
+        saved_pipe = self._pipe
+        if mlflow_run_id:
+            logger.info("predict_inline — using user-trained model from MLflow run_id=%s", mlflow_run_id)
+            loaded = download_user_model_from_mlflow(mlflow_run_id)
+            if loaded:
+                self._pipe, user_temp_dir = loaded
+        try:
+            self._require_loaded()
+            df = pd.DataFrame([{c: features[c] for c in REQUIRED_COLS}])
+            prediction = float(self._pipe.predict(df)[0])
+            self._record()
+            return PredictInlineResponse(
+                model_id=MODEL_ID,
+                prediction=prediction,
+                confidence=None,
+                xai_feature_values={c: features[c] for c in REQUIRED_COLS if c != "Cultivo"},
+            )
+        finally:
+            if user_temp_dir:
+                shutil.rmtree(user_temp_dir, ignore_errors=True)
+                self._pipe = saved_pipe
 
-    def predict_batch(self, *, data_path: str) -> PredictBatchResponse:
+    def predict_batch(self, *, data_path: str, mlflow_run_id: str = "") -> PredictBatchResponse:
         """Predict available residue for every row of a CSV."""
-        self._require_loaded()
-        df = pd.read_csv(data_path)
-        predictions: list[dict] = []
-        for idx, row in df.iterrows():
-            try:
-                row_df = pd.DataFrame([{c: row[c] for c in REQUIRED_COLS}])
-                predictions.append({
-                    "row": int(idx),
-                    "prediction": float(self._pipe.predict(row_df)[0]),
-                    "Cultivo": str(row["Cultivo"]),
-                })
-            except Exception as exc:
-                logger.warning("Error en fila %s: %s", idx, exc)
-                predictions.append({"row": int(idx), "error": str(exc)})
-        self._record()
-        return PredictBatchResponse(model_id=MODEL_ID, predictions=predictions, output_path=None)
+        user_temp_dir = None
+        saved_pipe = self._pipe
+        if mlflow_run_id:
+            logger.info("predict_batch — using user-trained model from MLflow run_id=%s", mlflow_run_id)
+            loaded = download_user_model_from_mlflow(mlflow_run_id)
+            if loaded:
+                self._pipe, user_temp_dir = loaded
+        try:
+            self._require_loaded()
+            df = pd.read_csv(data_path)
+            predictions: list[dict] = []
+            for idx, row in df.iterrows():
+                try:
+                    row_df = pd.DataFrame([{c: row[c] for c in REQUIRED_COLS}])
+                    predictions.append({
+                        "row": int(idx),
+                        "prediction": float(self._pipe.predict(row_df)[0]),
+                        "Cultivo": str(row["Cultivo"]),
+                    })
+                except Exception as exc:
+                    logger.warning("Error en fila %s: %s", idx, exc)
+                    predictions.append({"row": int(idx), "error": str(exc)})
+            self._record()
+            return PredictBatchResponse(model_id=MODEL_ID, predictions=predictions, output_path=None)
+        finally:
+            if user_temp_dir:
+                shutil.rmtree(user_temp_dir, ignore_errors=True)
+                self._pipe = saved_pipe
 
-    def train(self, *, data_path: str) -> TrainResponse:  # pylint: disable=too-many-locals
+    def train(self, *, data_path: str, mlflow_run_id: str = "") -> TrainResponse:  # pylint: disable=too-many-locals
         """Re-fit the surrogate pipeline on a CSV and persist the artifact."""
+        import joblib  # pylint: disable=import-outside-toplevel
+        import tempfile  # pylint: disable=import-outside-toplevel
         from sklearn.compose import ColumnTransformer  # pylint: disable=import-outside-toplevel
         from sklearn.metrics import r2_score  # pylint: disable=import-outside-toplevel
         from sklearn.model_selection import train_test_split  # pylint: disable=import-outside-toplevel
         from sklearn.neural_network import MLPRegressor  # pylint: disable=import-outside-toplevel
         from sklearn.pipeline import Pipeline  # pylint: disable=import-outside-toplevel
         from sklearn.preprocessing import OneHotEncoder, StandardScaler  # pylint: disable=import-outside-toplevel
-        import joblib  # pylint: disable=import-outside-toplevel
 
         from app.plugins.ml31_cereals_residue_optimizer.constants import (  # pylint: disable=import-outside-toplevel
             CATEGORICAL_FEATURES, MODEL_FILENAME, NUMERIC_FEATURES,
         )
-        from app.plugins.ml31_cereals_residue_optimizer.model_loader import _store  # pylint: disable=import-outside-toplevel
+
+        if mlflow_run_id:
+            logger.info("Training with MLflow tracking, run_id=%s", mlflow_run_id)
+            tracker = BaseMLflowTracker(mlflow_run_id)
+            tracker.log_params({
+                "hidden_layer_sizes": "(128, 64)",
+                "max_iter": 500,
+                "early_stopping": True,
+                "validation_fraction": 0.1,
+                "random_state": 42,
+                "test_split": 0.2,
+            })
+        else:
+            tracker = None
 
         df = pd.read_csv(data_path)
         missing = [c for c in REQUIRED_COLS + [TRAIN_TARGET_COL] if c not in df.columns]
@@ -138,29 +181,37 @@ class Ml31CerealsResidueOptimizerPlugin(ModelPluginPort):
         pipe.fit(x_train, y_train)
         r2 = float(r2_score(y_test, pipe.predict(x_test)))
 
+        # ── MLflow: log metrics and upload artifacts ────────────────────────
+        if tracker:
+            tracker.log_metrics({
+                "r2_test": r2,
+                "n_train": int(len(x_train)),
+                "n_test": int(len(x_test)),
+            })
+            try:
+                mlflow_tmp = tempfile.mkdtemp(prefix="ml31_mlflow_")
+                joblib.dump(pipe, os.path.join(mlflow_tmp, MODEL_FILENAME))
+                tracker.upload_artifacts(mlflow_tmp, artifact_path="model")
+                shutil.rmtree(mlflow_tmp, ignore_errors=True)
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                logger.error("MLflow artifact upload failed: %s", exc)
+
         _store.local_dir.mkdir(parents=True, exist_ok=True)
         joblib.dump(pipe, _store.local_dir / MODEL_FILENAME)
-        upload_warning: str | None = None
-        try:
-            _store.upload(MODEL_FILENAME)
-        except Exception as exc:  # pylint: disable=broad-exception-caught
-            upload_warning = f"Artefacto guardado en local; fallo en S3: {exc}"
-            logger.warning(upload_warning)
 
         self.load()
-        logger.info("train() done — r2=%.4f", r2)
+        logger.info("train() done — r2=%.4f mlflow=%s", r2, bool(mlflow_run_id))
         return TrainResponse(
             detail="Entrenamiento completado",
             r2_test=round(r2, 4),
             n_train=int(len(x_train)),
             n_test=int(len(x_test)),
-            upload_warning=upload_warning,
         )
 
-    def stats(self) -> StatsResponse:
+    def stats(self, mlflow_run_id: str = "") -> StatsResponse:
         """Return model metadata and runtime statistics."""
         avg = None  # latency not tracked
-        return StatsResponse(
+        base = StatsResponse(
             model_name=MODEL_ID,
             version=VERSION,
             description=(
@@ -188,3 +239,14 @@ class Ml31CerealsResidueOptimizerPlugin(ModelPluginPort):
             metrics={},
             runtime_stats=RuntimeStats(total_predictions=self._predict_count, avg_latency_ms=avg),
         )
+        if mlflow_run_id:
+            try:
+                tracker = BaseMLflowTracker(mlflow_run_id)
+                base.metrics["mlflow"] = {
+                    "params": tracker.get_params(),
+                    "metrics": tracker.get_metrics(),
+                }
+                logger.info("Stats enriched with MLflow data for run_id=%s", mlflow_run_id)
+            except Exception as exc:
+                logger.warning("Could not fetch MLflow stats for run_id=%s: %s", mlflow_run_id, exc)
+        return base

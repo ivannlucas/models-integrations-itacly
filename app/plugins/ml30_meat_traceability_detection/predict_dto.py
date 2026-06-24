@@ -10,6 +10,7 @@ class PredictBatchRequest(BaseModel):
     model_config = ConfigDict(protected_namespaces=())
     mode: Literal["batch"] = "batch"
     data_path: str = Field(..., description="Path to CSV file with traceability event records")
+    mlflow_run_id: str = Field(default="", description="MLflow run ID for user-trained model")
 
 
 class PredictBatchResponse(BaseModel):
@@ -63,6 +64,7 @@ class PredictInlineRequest(BaseModel):
     prev_ph_measurement_source: str | None = None
     cold_room_id: str | None = None
     scale_id: str | None = None
+    mlflow_run_id: str = Field(default="", description="MLflow run ID for user-trained model")
 
 
 class PredictInlineResponse(BaseModel):

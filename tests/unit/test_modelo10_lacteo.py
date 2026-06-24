@@ -47,7 +47,7 @@ def test_train(client):
     """Verify the train endpoint returns training metrics."""
     resp = client.post(
         f"{PREFIX}/train",
-        json={"data_path": "/tmp/dataset.zip"},
+        json={"data_path": "/tmp/dataset.zip", "mlflow_run_id": "test-run-id"},
     )
     assert resp.status_code == 200
     body = resp.json()
@@ -89,7 +89,7 @@ def test_train_with_empty_data_path(client):
     """Verify train with empty data_path still returns 200 (fake)."""
     resp = client.post(
         f"{PREFIX}/train",
-        json={"data_path": ""},
+        json={"data_path": "", "mlflow_run_id": "test-run-id"},
     )
     assert resp.status_code == 200
 

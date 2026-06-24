@@ -7,6 +7,7 @@ class TrainRequest(BaseModel):
 
     model_config = ConfigDict(protected_namespaces=())
     data_path: str = Field(..., description="CSV con features + columna Residuo_Disponible_Suelo_t")
+    mlflow_run_id: str
 
 
 class TrainResponse(BaseModel):
@@ -17,7 +18,3 @@ class TrainResponse(BaseModel):
     r2_test: float
     n_train: int
     n_test: int
-    upload_warning: str | None = Field(
-        default=None,
-        description="Informativo si el artefacto se guardó en local pero falló el upload a S3",
-    )

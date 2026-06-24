@@ -10,6 +10,7 @@ class TrainRequest(BaseModel):
             "{cereal}/train/{categoria}/*.jpg"
         ),
     )
+    mlflow_run_id: str
 
 
 class TrainResponse(BaseModel):
