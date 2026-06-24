@@ -7,6 +7,7 @@ class TrainRequest(BaseModel):
 
     model_config = ConfigDict(protected_namespaces=())
     data_path: str = Field(..., description="Path to the CSV training file inside the container")
+    mlflow_run_id: str
 
 
 class TrainResponse(BaseModel):

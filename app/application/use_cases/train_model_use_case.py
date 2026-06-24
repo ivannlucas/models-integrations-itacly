@@ -1,6 +1,9 @@
 """Generic train use case for model plugins."""
 from typing import Any
 from app.domain.ports.model_plugin_port import ModelPluginPort
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class TrainModelUseCase:
@@ -12,10 +15,7 @@ class TrainModelUseCase:
 
     def execute(self, request: Any) -> dict:
         """Executes the training process."""
-        request_data = request.model_dump()
-
-        # Check if 'data_path' is the ONLY key in the dictionary
-        if list(request_data.keys()) == ["data_path"]:
-            return self._plugin.train(data_path=request_data["data_path"])
-
-        return self._plugin.train(**request_data, data_path=request.pop("data_path"))
+        data_path = getattr(request, "data_path", "")
+        mlflow_run_id = getattr(request, "mlflow_run_id", "")
+        logger.info("Executing training, data_path=%s, mlflow_run_id=%s", data_path, mlflow_run_id)
+        return self._plugin.train(data_path=data_path, mlflow_run_id=mlflow_run_id)

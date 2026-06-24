@@ -40,3 +40,11 @@ python-dotenv>=1.0.1
 ultralytics>=8.0.0
 # Procesamiento de imágenes
 Pillow>=11.0.0
+
+# Added for ml5 (cow behaviour) — SlowFast video classifier
+# Detectron2 (detector) must be installed from source like the note above.
+pytorchvideo>=0.1.5
+fvcore>=0.1.5
+
+# MLflow integration
+mlflow>=2.20.0

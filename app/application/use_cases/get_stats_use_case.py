@@ -1,6 +1,10 @@
-"""Use case layer for retrieving model statistics. """
+"""Use case layer for retrieving model statistics."""
+import logging
 from app.application.dto.stats_dto import StatsResponse
 from app.domain.ports.model_plugin_port import ModelPluginPort
+
+
+logger = logging.getLogger(__name__)
 
 
 class GetStatsUseCase:
@@ -9,6 +13,8 @@ class GetStatsUseCase:
         """Initialize the use case with a model plugin."""
         self._plugin = plugin
 
-    def execute(self) -> StatsResponse:
+    def execute(self, mlflow_run_id: str = "") -> StatsResponse:
         """Execute the use case and return model statistics from the plugin."""
-        return self._plugin.stats()
+        if mlflow_run_id:
+            logger.info("Retrieving user-trained model stats from MLflow run_id=%s", mlflow_run_id)
+        return self._plugin.stats(mlflow_run_id=mlflow_run_id)

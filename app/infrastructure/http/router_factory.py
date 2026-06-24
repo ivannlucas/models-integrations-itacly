@@ -46,9 +46,11 @@ def make_model_router(
         }
 
     @router.get("/stats")
-    async def stats(request: Request) -> StatsResponse:
+    async def stats(request: Request, mlflow_run_id: str = "") -> StatsResponse:
         """Return model metadata and runtime statistics."""
-        return request.app.state.containers[model_id].stats_use_case.execute()
+        if mlflow_run_id:
+            logger.info("Stats requested with mlflow_run_id=%s for model '%s'", mlflow_run_id, model_id)
+        return request.app.state.containers[model_id].stats_use_case.execute(mlflow_run_id=mlflow_run_id)
 
     @router.post("/predict")
     def predict(request: Request, body: predict_request_type) -> predict_response_type:

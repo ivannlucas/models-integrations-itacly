@@ -10,7 +10,8 @@ class PredictBatchRequest(BaseModel):
     """DTO para petición de predicción en modo batch."""
     model_config = ConfigDict(protected_namespaces=())
     mode: Literal["batch"] = "batch"
-    data_path: str  # ruta a CSV, ZIP o directorio dentro del contenedor
+    data_path: str
+    mlflow_run_id: str = ""
 
 
 class PredictBatchResponse(BaseModel):
@@ -19,6 +20,8 @@ class PredictBatchResponse(BaseModel):
     model_id: str
     predictions: List[Dict[str, Any]]
     output_path: str | None = None
+    mlflow_run_id: str = ""
+    model_train_id: str = ""
 
 
 class PredictInlineRequest(BaseModel):
@@ -27,8 +30,9 @@ class PredictInlineRequest(BaseModel):
     mode: Literal["inline"] = "inline"
     image_path: str | None = None     # ruta a imagen en disco (vía shared_data)
     image_base64: str | None = None   # imagen JPG/PNG codificada en base64
-    det_conf_thresh: float = 0.2      # umbral de confianza de detección
-    cls_conf_thresh: float = 0.5      # umbral de confianza de clasificación
+    det_conf_thresh: float = 0.2
+    cls_conf_thresh: float = 0.5
+    mlflow_run_id: str = ""
 
 
 class PredictInlineResponse(BaseModel):
