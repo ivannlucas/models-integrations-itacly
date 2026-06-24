@@ -4,7 +4,7 @@
 ![Python](https://img.shields.io/badge/Python-3.12-3776AB.svg?logo=python&logoColor=white)
 ![Docker](https://img.shields.io/badge/Docker-Enabled-2496ED.svg?logo=docker&logoColor=white)
 
-![Version](https://img.shields.io/badge/version-0.1.60-blue.svg)
+![Version](https://img.shields.io/badge/version-0.1.62-blue.svg)
 
 ![Status](https://img.shields.io/badge/Status-Work_in_Progress-orange.svg) / ![Status](https://img.shields.io/badge/Status-Production_Ready-brightgreen.svg) / ![Status](https://img.shields.io/badge/Status-Maintenance-lightgrey.svg) / ![Status](https://img.shields.io/badge/Status-Archived-red.svg)
 
@@ -275,6 +275,7 @@ https://sites.google.com/luceit.es/luceit/otros/devops/devops-politica_de_versio
 | Version | Date (last change) |  Developer   | Changes                      |
 |:-------:|:-------------------|:------------:|
 :-----------------------------|
+| v0.1.62 | 24/06/2026         | Pablo    | chore: merge staging into develop, resolve conflict in get_stats_use_case |
 | v0.1.61 | 19/06/2026         | Trinidad | feat: added mlflow logic 
 | v0.1.60 | 19/06/2026         | Alejandro Flores | feat: integrate ml31-cereals-residue-optimizer plugin (sklearn regression surrogate, trains) |  
 | v0.1.59 | 19/06/2026         | Alejandro Flores | feat: integrate ml30-meat-traceability-detection plugin; fix ml7-cereals-grain-pest-detection plugin |  
