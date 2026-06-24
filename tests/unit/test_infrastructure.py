@@ -100,6 +100,7 @@ class TestModelContainer:
 
 # ── ModelRuntimeService tests ─────────────────────────────────────────────
 
+
 class TestModelRuntimeService:
     """Tests for ModelRuntimeService delegation to plugins."""
 
@@ -333,6 +334,7 @@ class TestArtifactStoreS3:
                 store._download_all()
 
 # ── model_loader helper tests ─────────────────────────────────────────────
+
 
 class TestModelo10ModelLoader:
     """Tests for model_loader helper functions."""

@@ -105,6 +105,7 @@ from app.plugins.ml31_cereals_residue_optimizer.train_dto import (
 
 # ── ModelEntry dataclass (local copy — avoids importing app.registry which loads real plugins) ───
 
+
 @dataclass
 class ModelEntry:
     """Defines the metadata and types for a model plugin."""

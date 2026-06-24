@@ -6,8 +6,6 @@ import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from app.domain.services.mlflow_tracker import BaseMLflowTracker, download_mlflow_artifacts
 
 
