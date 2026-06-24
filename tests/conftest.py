@@ -102,7 +102,21 @@ from app.plugins.ml31_cereals_residue_optimizer.train_dto import (
     TrainRequest as Ml31Residue_TrainReq,
     TrainResponse as Ml31ResidueTrainResp,
 )
-from app.registry import ModelEntry
+
+# ── ModelEntry dataclass (local copy — avoids importing app.registry which loads real plugins) ───
+
+@dataclass
+class ModelEntry:
+    """Defines the metadata and types for a model plugin."""
+    model_id: str
+    prefix: str
+    version: str
+    plugin_class: type
+    predict_request_type: Any
+    predict_response_type: Any
+    train_request_type: Any | None = None
+    train_response_type: Any | None = None
+    extra_predict_exceptions: tuple[type[Exception], ...] = field(default_factory=tuple)
 
 
 # ── Fake plugin ────────────────────────────────────────────────────────────
