@@ -23,6 +23,23 @@ SPECIES = ["fly", "mos", "tick"]
 _store = ArtifactStore(ARTIFACT_FOLDER_NAME)
 
 
+def safe_device() -> torch.device:
+    """Return CUDA only if it can actually execute network operations; otherwise CPU.
+
+    ``torch.cuda.is_available()`` returns True for GPUs whose compute capability is
+    unsupported by the installed PyTorch build (e.g. sm_61), but real ops then fail.
+    This probes a tiny conv and falls back to CPU when CUDA is not functional.
+    """
+    if not torch.cuda.is_available():
+        return torch.device("cpu")
+    try:
+        torch.nn.Conv2d(1, 1, 1)(torch.zeros(1, 1, 4, 4).cuda())
+        return torch.device("cuda")
+    except Exception:
+        logger.warning("CUDA detectada pero no funcional para operaciones de red — usando CPU.")
+        return torch.device("cpu")
+
+
 def _build_mobilenetv3_classifier(num_classes: int) -> nn.Module:
     """MobileNetV3-Large con cabeza de clasificación reemplazada."""
     model = models.mobilenet_v3_large(weights=None)

@@ -1,7 +1,9 @@
 """Plugin for recommending optimal free SO2 doses for wine preservation."""
 import logging
+import shutil
 import time
 import types
+import os
 from datetime import datetime, timezone
 from typing import Any
 
@@ -11,12 +13,14 @@ import pandas as pd
 from app.application.dto.stats_dto import InputField, OutputField, RuntimeStats, StatsResponse
 from app.domain.ports.model_plugin_port import ModelPluginPort
 from app.domain.services.exceptions import NoValidSimulationPointError
+from app.domain.services.mlflow_tracker import BaseMLflowTracker
 from app.plugins.ml25_wine_sulphites.model_loader import load_artifacts
 from app.plugins.ml25_wine_sulphites.predict_dto import (
     PredictBatchResponse,
     PredictInlineResponse,
 )
 from app.plugins.ml25_wine_sulphites.train_dto import TrainResponse
+from app.plugins.ml25_wine_sulphites.mlflow_utils import download_user_predictor_from_mlflow
 from app.plugins.ml25_wine_sulphites.postprocessing import (
     apply_operational_constraints,
     compute_molecular_so2,
@@ -125,13 +129,25 @@ class WineSulphitePlugin(ModelPluginPort):
             "intervention": intervention,
         }
 
-    def predict_batch(self, *, data_path: str) -> PredictBatchResponse:
+    def predict_batch(self, *, data_path: str, mlflow_run_id: str = "") -> PredictBatchResponse:
         """Run inference on every row of the CSV at *data_path* and return all predictions."""
         import os
         import tempfile
 
         _tmp_csv: str | None = None
         local_data_path = data_path
+
+        # ── MLflow: swap to user-trained model if requested ────────────────
+        user_temp_dir = None
+        saved_qual = self._model_qual
+        saved_bound = self._model_bound
+        saved_meta = self._metadata
+        if mlflow_run_id:
+            logger.info("predict_batch — using user-trained model from MLflow run_id=%s", mlflow_run_id)
+            loaded = download_user_predictor_from_mlflow(mlflow_run_id)
+            if loaded:
+                self._model_qual, self._model_bound, self._metadata, user_temp_dir = loaded
+
         if data_path.startswith("s3://"):
             import boto3
             from botocore.client import Config as BotoConfig
@@ -177,14 +193,15 @@ class WineSulphitePlugin(ModelPluginPort):
                             "recommendation_reason": res["reason"],
                         }
                     )
-                except Exception as exc:  # pylint: disable=broad-exception-caught
+                except Exception as exc:
                     predictions.append({"row": int(idx), "error": str(exc)})
 
             self._total_latency_ms += (time.perf_counter() - t0) * 1000
             self._predict_count += 1
             self._last_predict_at = datetime.now(tz=timezone.utc).isoformat()
             logger.info(
-                "predict_batch done — %d predictions count=%d", len(predictions), self._predict_count
+                "predict_batch done — %d predictions count=%d mlflow=%s",
+                len(predictions), self._predict_count, bool(mlflow_run_id),
             )
 
             return PredictBatchResponse(
@@ -195,6 +212,11 @@ class WineSulphitePlugin(ModelPluginPort):
         finally:
             if _tmp_csv:
                 os.unlink(_tmp_csv)
+            if user_temp_dir:
+                shutil.rmtree(user_temp_dir, ignore_errors=True)
+                self._model_qual = saved_qual
+                self._model_bound = saved_bound
+                self._metadata = saved_meta
 
     def predict_inline(
         self,
@@ -202,57 +224,77 @@ class WineSulphitePlugin(ModelPluginPort):
         features: dict,
         model_key: str | None = None,
         threshold: float | None = None,
+        mlflow_run_id: str = "",
     ) -> PredictInlineResponse:
         """Run a single-sample inference and return the sulphite recommendation."""
-        t0 = time.perf_counter()
-        res = self._run_inference(features)
-        self._total_latency_ms += (time.perf_counter() - t0) * 1000
-        i = res["rec_idx"]
+        user_temp_dir = None
+        if mlflow_run_id:
+            logger.info("predict_inline — using user-trained model from MLflow run_id=%s", mlflow_run_id)
+            loaded = download_user_predictor_from_mlflow(mlflow_run_id)
+            if loaded:
+                saved_qual = self._model_qual
+                saved_bound = self._model_bound
+                saved_meta = self._metadata
+                self._model_qual, self._model_bound, self._metadata, user_temp_dir = loaded
+        try:
+            t0 = time.perf_counter()
+            res = self._run_inference(features)
+            self._total_latency_ms += (time.perf_counter() - t0) * 1000
+            i = res["rec_idx"]
 
-        self._predict_count += 1
-        self._last_predict_at = datetime.now(tz=timezone.utc).isoformat()
-        logger.info(
-            "predict_inline done — intervention=%s rec_free=%.1f quality=%.3f count=%d",
-            res["intervention"],
-            float(res["valid_free"][i]),
-            float(res["valid_qualities"][i]),
-            self._predict_count,
-        )
+            self._predict_count += 1
+            self._last_predict_at = datetime.now(tz=timezone.utc).isoformat()
+            logger.info(
+                "predict_inline done — intervention=%s rec_free=%.1f quality=%.3f count=%d mlflow=%s",
+                res["intervention"],
+                float(res["valid_free"][i]),
+                float(res["valid_qualities"][i]),
+                self._predict_count,
+                bool(mlflow_run_id),
+            )
 
-        return PredictInlineResponse(
-            model_id=MODEL_NAME,
-            threshold=threshold,
-            prediction=res["intervention"],
-            confidence=float(res["valid_qualities"][i]),
-            features_used=list(FEATURES_QUAL),
-            recommended_free_so2=float(res["valid_free"][i]),
-            recommended_bound_so2=float(res["valid_bounds"][i]),
-            recommended_total_so2=float(res["valid_totals"][i]),
-            recommended_molecular_so2=float(res["valid_moleculars"][i]),
-            predicted_quality=float(res["valid_qualities"][i]),
-            baseline_predicted_quality=res["baseline_quality"],
-            recommendation_reason=res["reason"],
-            intervention_recommended=res["intervention"],
-            mae_quality=res["mae_quality"],
-            mae_bound=res["mae_bound"],
-        )
+            return PredictInlineResponse(
+                model_id=MODEL_NAME,
+                threshold=threshold,
+                prediction=res["intervention"],
+                confidence=float(res["valid_qualities"][i]),
+                features_used=list(FEATURES_QUAL),
+                recommended_free_so2=float(res["valid_free"][i]),
+                recommended_bound_so2=float(res["valid_bounds"][i]),
+                recommended_total_so2=float(res["valid_totals"][i]),
+                recommended_molecular_so2=float(res["valid_moleculars"][i]),
+                predicted_quality=float(res["valid_qualities"][i]),
+                baseline_predicted_quality=res["baseline_quality"],
+                recommendation_reason=res["reason"],
+                intervention_recommended=res["intervention"],
+                mae_quality=res["mae_quality"],
+                mae_bound=res["mae_bound"],
+            )
+        finally:
+            if user_temp_dir:
+                shutil.rmtree(user_temp_dir, ignore_errors=True)
+                self._model_qual = saved_qual
+                self._model_bound = saved_bound
+                self._metadata = saved_meta
 
-    def train(self, *, data_path: str) -> TrainResponse:  # pylint: disable=too-many-locals
+    def train(self, *, data_path: str, mlflow_run_id: str = "") -> TrainResponse:  # pylint: disable=too-many-locals
         """Train dual RandomForest models from the CSV at *data_path*, persist artifacts, and reload."""
         # pylint: disable=import-outside-toplevel
-        import json
         import os
         import tempfile
-        import joblib
-        from sklearn.ensemble import RandomForestRegressor
-        from sklearn.metrics import mean_absolute_error
-        from app.plugins.ml25_wine_sulphites.model_loader import get_artifacts_dir, upload_artifact
-        from app.plugins.ml25_wine_sulphites.constants import (
-            QUALITY_RF_MODEL_FILENAME,
-            BOUND_RF_MODEL_FILENAME,
-            METADATA_FILENAME,
-        )
         # pylint: enable=import-outside-toplevel
+
+        if mlflow_run_id:
+            logger.info("Training with MLflow tracking, run_id=%s", mlflow_run_id)
+            tracker = BaseMLflowTracker(mlflow_run_id)
+            tracker.log_params({
+                "n_estimators": 200,
+                "random_state": 42,
+                "n_jobs": -1,
+                "test_split": 0.2,
+                "model_qual": "RandomForestRegressor",
+                "model_bound": "RandomForestRegressor",
+            })
 
         _tmp_path: str | None = None
         local_data_path = data_path
@@ -278,7 +320,8 @@ class WineSulphitePlugin(ModelPluginPort):
             local_data_path = _tmp_path
 
         try:
-            return self._train_from_local(local_data_path)
+            result = self._train_from_local(local_data_path, mlflow_run_id=mlflow_run_id, tracker=tracker if mlflow_run_id else None)
+            return result
         finally:
             if _tmp_path is not None:
                 try:
@@ -286,14 +329,20 @@ class WineSulphitePlugin(ModelPluginPort):
                 except OSError:
                     pass
 
-    def _train_from_local(self, data_path: str) -> TrainResponse:  # pylint: disable=too-many-locals
+    def _train_from_local(
+        self,
+        data_path: str,
+        mlflow_run_id: str = "",
+        tracker: BaseMLflowTracker | None = None,
+    ) -> TrainResponse:  # pylint: disable=too-many-locals
         """Core training logic operating on a local CSV file."""
         # pylint: disable=import-outside-toplevel
         import json
         import joblib
+        import tempfile
         from sklearn.ensemble import RandomForestRegressor
         from sklearn.metrics import mean_absolute_error
-        from app.plugins.ml25_wine_sulphites.model_loader import get_artifacts_dir, upload_artifact
+        from app.plugins.ml25_wine_sulphites.model_loader import get_artifacts_dir
         from app.plugins.ml25_wine_sulphites.constants import (
             QUALITY_RF_MODEL_FILENAME,
             BOUND_RF_MODEL_FILENAME,
@@ -348,16 +397,28 @@ class WineSulphitePlugin(ModelPluginPort):
         with open(artifacts_dir / METADATA_FILENAME, "w", encoding="utf-8") as fh:
             json.dump(metadata, fh)
 
-        upload_warning: str | None = None
-        try:
-            for fname in [QUALITY_RF_MODEL_FILENAME, BOUND_RF_MODEL_FILENAME, METADATA_FILENAME]:
-                upload_artifact(fname)
-        except Exception as exc:  # pylint: disable=broad-exception-caught
-            upload_warning = f"Artifacts saved locally but S3 upload failed: {exc}"
-            logger.warning(upload_warning)
+        # ── MLflow: log metrics and upload artifacts ────────────────────────
+        if tracker:
+            tracker.log_metrics({
+                "mae_quality": mae_qual,
+                "mae_bound": mae_bound,
+                "n_train": int(split),
+                "n_test": int(len(df) - split),
+            })
+            try:
+                mlflow_tmp = tempfile.mkdtemp(prefix="wine_mlflow_")
+                joblib.dump(model_qual, os.path.join(mlflow_tmp, QUALITY_RF_MODEL_FILENAME))
+                joblib.dump(model_bound, os.path.join(mlflow_tmp, BOUND_RF_MODEL_FILENAME))
+                with open(os.path.join(mlflow_tmp, METADATA_FILENAME), "w") as fh:
+                    json.dump(metadata, fh)
+                tracker.upload_artifacts(mlflow_tmp, artifact_path="model")
+                shutil.rmtree(mlflow_tmp, ignore_errors=True)
+            except Exception as exc:
+                logger.error("MLflow artifact upload failed: %s", exc)
 
         elapsed = time.perf_counter() - t0
-        logger.info("train() done — mae_qual=%.4f mae_bound=%.4f elapsed=%.1fs", mae_qual, mae_bound, elapsed)
+        logger.info("train() done — mae_qual=%.4f mae_bound=%.4f elapsed=%.1fs mlflow=%s",
+                    mae_qual, mae_bound, elapsed, bool(mlflow_run_id))
 
         self.load()
 
@@ -368,13 +429,12 @@ class WineSulphitePlugin(ModelPluginPort):
             n_train=int(split),
             n_test=int(len(df) - split),
             training_time_s=round(elapsed, 1),
-            upload_warning=upload_warning,
         )
 
-    def stats(self) -> StatsResponse:
+    def stats(self, mlflow_run_id: str = "") -> StatsResponse:
         """Build and return the full stats response including input/output schema and runtime metrics."""
         avg = self._total_latency_ms / self._predict_count if self._predict_count > 0 else None
-        return StatsResponse(
+        base = StatsResponse(
             model_name=MODEL_NAME,
             version=MODEL_VERSION,
             description=(
@@ -399,7 +459,7 @@ class WineSulphitePlugin(ModelPluginPort):
                 InputField(name="max_total", type="float", default=200.0, description="Maximum legal total SO2 (mg/L)"),
                 InputField(
                     name="delta_max", type="float", default=40.0,
-                    description="Maximum free SO2 increment (mg/L)",
+                    description="Maximum free SO2 increment to explore (mg/L)",
                 ),
             ],
             outputs=[
@@ -421,3 +481,14 @@ class WineSulphitePlugin(ModelPluginPort):
                 avg_latency_ms=round(avg, 1) if avg is not None else None,
             ),
         )
+        if mlflow_run_id:
+            try:
+                tracker = BaseMLflowTracker(mlflow_run_id)
+                base.metrics["mlflow"] = {
+                    "params": tracker.get_params(),
+                    "metrics": tracker.get_metrics(),
+                }
+                logger.info("Stats enriched with MLflow data for run_id=%s", mlflow_run_id)
+            except Exception as exc:
+                logger.warning("Could not fetch MLflow stats for run_id=%s: %s", mlflow_run_id, exc)
+        return base

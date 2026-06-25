@@ -23,11 +23,6 @@ def get_artifacts_dir():
     return _store.local_dir
 
 
-def upload_artifact(filename: str) -> None:
-    """Upload *filename* from the local artifact directory to S3 via the artifact store."""
-    _store.upload(filename)
-
-
 def load_artifacts() -> tuple[Any, Any, dict]:
     """Load quality model, bound SO2 model, and metadata from artifact storage."""
     _store.download_all_if_needed()
