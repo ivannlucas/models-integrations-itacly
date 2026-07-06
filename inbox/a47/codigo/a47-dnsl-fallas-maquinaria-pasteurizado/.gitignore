@@ -1,0 +1,35 @@
+# --- DATOS ---
+data/predictions/*
+data/processed/*
+data/raw/Dataset_Hydraulic/*
+data/raw/hydraulic_raw.csv
+data/splits/train_split.csv
+data/splits/val_split.csv
+data/splits/test_split.csv
+
+# --- ENTORNO VIRTUAL ---
+env/
+venv/
+.env
+
+# --- NOTEBOOKS E IDE ---
+notebooks/test/
+.ipynb_checkpoints/
+.vscode/
+.idea/
+
+# --- PYTHON CACHE (Basura automática) ---
+__pycache__/
+*.py[cod]
+
+# --- MODELOS Y ARTEFACTOS ---
+!models/
+!models/**/*
+
+# Modelos de PyTorch
+*.pt
+*.ckpt
+
+# Scalers y Modelos Clásicos (Joblib/Pickle)
+*.pickle
+*.joblib

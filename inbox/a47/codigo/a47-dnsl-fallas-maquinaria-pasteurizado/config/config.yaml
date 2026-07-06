@@ -1,0 +1,44 @@
+paths:
+  raw_data: "data/raw/Dataset_Hydraulic"
+  raw_csv: "data/raw/hydraulic_raw.csv"
+  processed_data10hz: "data/processed/hydraulic_10hz_raw.csv"
+  models_dir: "models/artifacts"
+  split_ids: "data/splits/cycle_splits.json"
+  splits_dir: "data/splits/"
+  metrics_dir: "models/metrics"
+  stats_csv: "data/processed/estadisticas.csv"
+  features_csv: "data/processed/feature_descriptions.csv"
+  prediction_input: "data/raw/hydraulic_raw.csv"
+  prediction_output: "data/predictions/prediction_output.csv"
+
+features:
+  cols_sensores_base: ['PS1', 'PS3', 'EPS1', 'FS1', 'TS1', 'TS2', 'VS1']
+  cols_targets: ['Target_Fouling', 'Target_Valvula', 'Target_Bomba', 'Target_Acumulador']
+
+training:
+  n_classes: 3                          # Número de clases de salida por componente (0=Sano, 1=Warning, 2=Crítico).
+  learning_rate: 0.0022243234786004373  # Tasa de aprendizaje del optimizador.
+  dropout_rate: 0.20219689010649033     # Tasa de dropout aplicada a las capas de la red.
+  max_lambda: 3.7585293696964697        # Valor máximo del coeficiente lambda (peso de la física) durante el entrenamiento.
+  lambda_phys: 1.0                      # Coeficiente inicial del peso de la física.
+  epochs: 300                           # Número total de épocas de entrenamiento.
+  warmup_epochs: 10                     # Número de épocas iniciales donde lambda se incrementa linealmente desde 0 hasta lambda_phys.
+  ramp_up_epochs: 80                    # Número de épocas donde lambda se incrementa linealmente desde lambda_phys hasta max_lambda.
+  patience: 15                          # Número de épocas de espera sin mejora en la métrica de validación antes de detener el entrenamiento.
+  batch_size: 32                        # Tamaño de los lotes de datos utilizados en el entrenamiento.
+
+data:
+  window_size: 600                      # Longitud de ventana de inferencia (máx 60 pasos si 10Hz, 600 si es el original, basado en nb = 600)
+  noise_level: 0.2                      # Nivel de ruido a añadir a los datos durante el entrenamiento (Data Augmentation).
+  test_size_1: 0.30                     # Primer split: separa el 30% de los ciclos en un conjunto temporal (temp_cycles), dejando el 70% para Train.
+  test_size_2: 0.50                     # Segundo split: separa el 50% de los ciclos restantes en un conjunto de validación (val_cycles), dejando el 50% restante para Test.
+  random_state: 42                      # Semilla para la reproducibilidad de los splits.
+
+fine_tuning:
+  epochs: 50                              # Número máximo de épocas de calibración del fine-tuning.
+  patience: 7                             # Paciencia del Early Stopping: épocas sin mejora en validación antes de detener la calibración.
+  lr_divisor: 10                          # Factor por el que se divide el learning_rate base para obtener el LR del fine-tuning (LR_ft = learning_rate / lr_divisor).
+  batch_size: 32                          # Tamaño de los lotes de datos durante el fine-tuning.
+  fluid_density_kg_l: 1.03                # Densidad por defecto del fluido real (leche entera ≈ 1.03 kg/L). Aceite de referencia: ~0.87 kg/L.
+  fluid_cp_kj_kgK: 3.93                  # Calor específico por defecto del fluido real (leche entera ≈ 3.93 kJ/(kg·K)). Aceite de referencia: ~1.88 kJ/(kg·K).
+  output_model_name: "neurosymbolic_cnn_finetuned.pth"  # Nombre del archivo de pesos calibrados (no sobreescribe el modelo base).
