@@ -1,0 +1,115 @@
+openapi: 3.1.0
+info:
+  title: Python AppEngine Service
+  description: A basic web service with Flask and GCP App Engine project format.
+  version: 0.5.0
+servers:
+  - url: 'http://{host}:{port}'
+    variables:
+      host:
+        default: 'localhost'
+      port:
+        default: '8080'
+    description: Local development server
+paths:
+  /health:
+    get:
+      summary: Fast liveness probe with no external dependencies.
+      description: Returns the service status and current time.
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+                  time:
+                    type: string
+                    format: date-time
+                    example: '2023-10-27T10:00:00Z'
+  /ready:
+    get:
+      summary: Readiness probe.
+      description: Checks if the service is ready to serve requests.
+      responses:
+        '200':
+          description: Service is ready
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ready
+        '503':
+          description: Service not ready
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /test:
+    get:
+      summary: Un simple endpoint de bienvenida.
+      description: Returns a welcome message.
+      responses:
+        '200':
+          description: Respuesta exitosa
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: Welcome message example
+    post:
+      summary: Un simple endpoint de bienvenida.
+      description: Returns a welcome message.
+      responses:
+        '200':
+          description: Respuesta exitosa
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: Welcome message example
+  /:
+    get:
+      summary: Página de bienvenida simple en HTML.
+      description: Renders the index.html template.
+      responses:
+        '200':
+          description: Respuesta exitosa (HTML)
+          content:
+            text/html:
+              schema:
+                type: string
+                example: "<html><body><h1>Welcome</h1><p>Service is running</p></body></html>"
+components:
+  schemas:
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code:
+              type: string
+              description: Error code
+              example: 'not_ready'
+            message:
+              type: string
+              description: Error message
+              example: 'Service not ready.'
+            details:
+              type: object
+              description: Additional error details
+              example: { }

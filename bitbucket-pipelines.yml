@@ -1,0 +1,119 @@
+image: python:3.12
+# enable Docker for your repository
+options:
+  docker: true
+clone:
+  depth: full
+pipelines:
+  # Heritage pipelines to combine common steps across different branches
+  custom:
+    parent-develop-pipeline-common:
+      import: luce-bitbucket-pipes:master:develop
+    parent-develop-deploy-azure:
+      import: luce-bitbucket-pipes:master:develop-deploy-azure
+    parent-staging-pipeline-common:
+      import: luce-bitbucket-pipes:master:staging
+    parent-staging-deploy-azure:
+      import: luce-bitbucket-pipes:master:staging-deploy-azure
+    parent-master-pipeline-common:
+      import: luce-bitbucket-pipes:master:master
+    parent-master-deploy-azure:
+      import: luce-bitbucket-pipes:master:master-deploy-azure
+    parent-post-deploy-testing:
+      import: luce-bitbucket-pipes:master:post-deploy-testing
+    parent-post-deploy-steps:
+      import: luce-bitbucket-pipes:master:post-deploy
+    parent-post-deploy-steps-with-mirror:
+      import: luce-bitbucket-pipes:master:post-deploy-mirror
+    parent-empty-deploy:
+      # This is a placeholder step for empty deployments.
+      - variables:
+          - name: DEPLOY_ENVIRONMENT
+            default: 'develop'
+            allowed-values:
+              - develop
+              - staging
+              - master
+      - step:
+          name: Empty Pipeline
+          script:
+            - echo "This is an empty pipeline step. You should replace the 'parent-empty-deploy' reference with the 'parent-[branch]-deploy-[cloud]' reference to deploy. Make sure to use the correct cloud provider (gcp or azure) as needed and configure the environment variables on the corresponding Bitbucket Deployment."
+  # Repository specific pipelines
+  default:
+    import: luce-bitbucket-pipes:master:default
+  pull-requests:
+    '{feature/*,fix/*,develop}':
+      import: luce-bitbucket-pipes:master:pull-requests
+  branches:
+    '{feature/*,fix/*}':
+      - step:
+          name: Lint & Tests
+          image: python:3.12
+          script:
+            - echo "Ejecutar lint y tests aquí"
+            # pip install -r requirements.txt
+            # pytest, flake8, etc.
+    develop:
+      - step:
+          name: Docker Build & Push
+          image: mcr.microsoft.com/azure-cli:latest
+          runs-on:
+            - self.hosted
+            - linux
+            - luceit
+          script:
+            - VERSION=$(cat .VERSION)
+            - DOCKER_IMAGE_VERSION=${DOCKER_IMAGE_NAME}:${VERSION}
+            - echo "Construimos imagen ${DOCKER_IMAGE_VERSION}"
+            - az login --service-principal --username ${AZURE_APP_ID} --password ${AZURE_APP_SECRET} --tenant ${AZURE_TENANT_ID}
+            - az acr build -r ${DOCKER_REGISTRY_SERVER} -t ${DOCKER_IMAGE_VERSION} .
+      - step:
+          name: Pipeline - Develop Common Steps
+          type: pipeline
+          custom: parent-develop-pipeline-common
+      - step:
+          name: Pipeline - Deploy to Develop
+          type: pipeline
+          custom: parent-develop-deploy-azure
+    staging:
+      - step:
+          name: Pipeline - Staging Common Steps
+          type: pipeline
+          custom: parent-staging-pipeline-common
+      - step:
+          name: Pipeline - Deploy to Staging
+          type: pipeline
+          custom: parent-staging-deploy-azure
+          script:
+            - VERSION=$(cat .VERSION)
+            - DOCKER_IMAGE_VERSION=${DOCKER_IMAGE_NAME}:${VERSION}
+            - echo "Construimos imagen ${DOCKER_IMAGE_VERSION}"
+            - az login --service-principal --username ${AZURE_APP_ID} --password ${AZURE_APP_SECRET} --tenant ${AZURE_TENANT_ID}
+            - az acr build -r ${DOCKER_REGISTRY_SERVER} -t ${DOCKER_IMAGE_VERSION} .
+      - step:
+          name: Pipeline - Post Deploy Testing
+          type: pipeline
+          custom: parent-post-deploy-testing
+      - step:
+          name: Pipeline - Post Deploy Steps
+          type: pipeline
+          custom: parent-post-deploy-steps
+    master:
+      - step:
+          name: Pipeline - Master Common Steps
+          type: pipeline
+          custom: parent-master-pipeline-common
+      - step:
+          name: Pipeline - Deploy to Production
+          type: pipeline
+          custom: parent-master-deploy-azure
+          script:
+            - VERSION=$(cat .VERSION)
+            - DOCKER_IMAGE_VERSION=${DOCKER_IMAGE_NAME}:${VERSION}
+            - echo "Construimos imagen ${DOCKER_IMAGE_VERSION}"
+            - az login --service-principal --username ${AZURE_APP_ID} --password ${AZURE_APP_SECRET} --tenant ${AZURE_TENANT_ID}
+            - az acr build -r ${DOCKER_REGISTRY_SERVER} -t ${DOCKER_IMAGE_VERSION} .
+      - step:
+          name: Pipeline - Post Deploy Steps
+          type: pipeline
+          custom: parent-post-deploy-steps

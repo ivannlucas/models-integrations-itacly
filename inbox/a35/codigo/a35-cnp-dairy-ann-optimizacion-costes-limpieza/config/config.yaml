@@ -1,0 +1,113 @@
+raw_dataset_path: data/raw/raw_dataset.csv
+dataset_path: data/processed/milk_dataset.csv
+model_artifacts_path: models/artifacts/
+model_metrics_path: models/metrics/
+predictions_path: data/predictions/
+splits_path: data/splits/
+random_seed: 42
+contexto_actual:
+  temp_entrada_leche: 14.5
+  temp_ambiente: 31.0
+  horas_desde_limpieza: 12.0
+  presion_diferencial_bar: 2.1
+
+optimization_scenarios:
+  - temp_entrada_leche: 4.94
+    temp_ambiente: 22.89
+    horas_desde_limpieza: 19.6
+    presion_diferencial_bar: 1.98
+
+  - temp_entrada_leche: 6.38
+    temp_ambiente: 19.12
+    horas_desde_limpieza: 21.6
+    presion_diferencial_bar: 2.22
+
+  - temp_entrada_leche: 5.83
+    temp_ambiente: 20.34
+    horas_desde_limpieza: 8.3
+    presion_diferencial_bar: 1.15
+
+  - temp_entrada_leche: 5.50
+    temp_ambiente: 20.93
+    horas_desde_limpieza: 3.5
+    presion_diferencial_bar: 0.74
+
+  - temp_entrada_leche: 4.39
+    temp_ambiente: 21.65
+    horas_desde_limpieza: 6.2
+    presion_diferencial_bar: 0.82
+
+  - temp_entrada_leche: 4.39
+    temp_ambiente: 24.28
+    horas_desde_limpieza: 10.8
+    presion_diferencial_bar: 1.41
+
+  - temp_entrada_leche: 4.15
+    temp_ambiente: 19.60
+    horas_desde_limpieza: 19.8
+    presion_diferencial_bar: 1.98
+
+  - temp_entrada_leche: 6.17
+    temp_ambiente: 22.11
+    horas_desde_limpieza: 20.8
+    presion_diferencial_bar: 2.02
+
+  - temp_entrada_leche: 5.50
+    temp_ambiente: 22.74
+    horas_desde_limpieza: 1.2
+    presion_diferencial_bar: 0.41
+
+  - temp_entrada_leche: 5.77
+    temp_ambiente: 18.37
+    horas_desde_limpieza: 12.7
+    presion_diferencial_bar: 1.49
+
+  - temp_entrada_leche: 4.05
+    temp_ambiente: 22.86
+    horas_desde_limpieza: 10.6
+    presion_diferencial_bar: 1.35
+
+  - temp_entrada_leche: 6.42
+    temp_ambiente: 19.36
+    horas_desde_limpieza: 6.1
+    presion_diferencial_bar: 0.79
+
+  - temp_entrada_leche: 6.08
+    temp_ambiente: 18.52
+    horas_desde_limpieza: 3.8
+    presion_diferencial_bar: 0.76
+
+  - temp_entrada_leche: 4.53
+    temp_ambiente: 25.59
+    horas_desde_limpieza: 8.8
+    presion_diferencial_bar: 1.07
+
+  - temp_entrada_leche: 4.45
+    temp_ambiente: 25.73
+    horas_desde_limpieza: 22.7
+    presion_diferencial_bar: 2.31
+
+  - temp_entrada_leche: 4.46
+    temp_ambiente: 24.47
+    horas_desde_limpieza: 8.4
+    presion_diferencial_bar: 1.02
+
+  - temp_entrada_leche: 4.76
+    temp_ambiente: 20.44
+    horas_desde_limpieza: 12.9
+    presion_diferencial_bar: 1.54
+
+  - temp_entrada_leche: 5.31
+    temp_ambiente: 18.78
+    horas_desde_limpieza: 17.2
+    presion_diferencial_bar: 1.79
+
+  - temp_entrada_leche: 5.08
+    temp_ambiente: 23.47
+    horas_desde_limpieza: 9.4
+    presion_diferencial_bar: 1.33
+
+  - temp_entrada_leche: 4.73
+    temp_ambiente: 21.52
+    horas_desde_limpieza: 23.4
+    presion_diferencial_bar: 2.21

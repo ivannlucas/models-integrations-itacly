@@ -1,0 +1,50 @@
+# Core dependencies for production
+pandas>=2.0.0
+numpy>=1.24.0
+scikit-learn>=1.3.0
+tensorflow>=2.15.0
+xgboost>=2.0.0
+joblib>=1.3.0
+
+# Visualization (for notebooks and analysis)
+matplotlib>=3.7.0
+seaborn>=0.12.0
+
+# Development and testing
+pytest>=7.4.0
+pytest-cov>=4.1.0
+
+# Optional: only if you need XGBoost or SARIMA (not used in production ensemble)
+# statsmodels>=0.14.0
+fastapi==0.136.1
+uvicorn[standard]==0.30.6
+pydantic==2.9.2
+
+
+torch>=2.6.0
+torchvision==0.26.0
+
+# Detectron2 — must be installed from source after torch is available:
+#   python -m pip install --no-build-isolation \
+#     'git+https://github.com/facebookresearch/detectron2.git'
+
+opencv-python-headless
+lightgbm
+timm
+albumentations
+boto3>=1.36.17
+python-dotenv>=1.0.1
+
+# Added for ml10
+# Object detection
+ultralytics>=8.0.0
+# Procesamiento de imágenes
+Pillow>=11.0.0
+
+# Added for ml5 (cow behaviour) — SlowFast video classifier
+# Detectron2 (detector) must be installed from source like the note above.
+pytorchvideo>=0.1.5
+fvcore>=0.1.5
+
+# MLflow integration
+mlflow>=2.20.0

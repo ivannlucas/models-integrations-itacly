@@ -1,0 +1,156 @@
+---
+name: plugin-integration
+description: Usa este skill para integrar un modelo nuevo en app/plugins/ del repo inference-pan-model. Cubre el contrato ModelPluginPort, los ficheros obligatorios de cada plugin (incluido mlflow_utils.py, obligatorio siempre), el registro en app/registry.py, excepciones de dominio y artefactos. Requiere inbox/<model_id>/manifest.yaml ya generado (skill manifest-extraction).
+---
+
+# Integración de un plugin de modelo
+
+## Arquitectura del repo (hexagonal)
+
+- `app/domain/ports/model_plugin_port.py` — contrato abstracto, no se toca.
+- `app/application/` — casos de uso genéricos (predict, stats, train), no se tocan por modelo.
+- `app/infrastructure/` — DI, `router_factory`, artifact store, no se tocan por modelo.
+- `app/plugins/<nombre>/` — todo lo específico del modelo vive aquí, autocontenido.
+- `app/registry.py` — único punto de conexión entre tu plugin y el resto del sistema.
+
+## Requisito previo
+
+Debe existir `inbox/<model_id>/manifest.yaml` (skill `manifest-extraction`). Si no existe, para
+y genera el manifest primero — no se scaffoldea directamente sobre el código crudo del equipo
+de IA sin haber pasado por esa extracción.
+
+## Contrato obligatorio: ModelPluginPort
+
+Toda clase `XxxPlugin(ModelPluginPort)` implementa estos 5 métodos:
+
+| Método | Firma | Notas |
+|---|---|---|
+| `load` | `load()` | Carga artefactos desde disco/S3 vía `ArtifactStore` |
+| `is_loaded` | `is_loaded() -> bool` | Salud |
+| `predict_batch` | `predict_batch(*, data_path, mlflow_run_id="")` | Inferencia sobre CSV/lote |
+| `predict_inline` | `predict_inline(*, features, model_key=None, threshold=None, mlflow_run_id="")` | Inferencia de una muestra |
+| `stats` | `stats(mlflow_run_id="")` | Devuelve `StatsResponse` |
+| `train` | `train(*, data_path, mlflow_run_id)` | Obligatorio que exista; si no aplica, lanza `TrainingNotSupportedError` → 501 |
+
+El parámetro `mlflow_run_id` es lo que permite servir un modelo reentrenado por un usuario
+concreto en lugar del artefacto fijo — ver `mlflow_utils.py` más abajo.
+
+## Ficheros obligatorios en app/plugins/<nombre>/
+
+| Fichero | Obligatorio | Contenido |
+|---|---|---|
+| `__init__.py` | Sí | vacío |
+| `plugin.py` | Sí | Clase con los 5 métodos |
+| `predict_dto.py` | Sí | `PredictBatchRequest/Response`, `PredictInlineRequest/Response`, `PredictRequest = Annotated[Union[...], Field(discriminator="mode")]` |
+| `constants.py` | Sí | Nombres de artefactos + `ARTIFACT_FOLDER_NAME` |
+| `model_loader.py` | Sí | Usa `ArtifactStore(ARTIFACT_FOLDER_NAME)` |
+| `mlflow_utils.py` | **Sí, siempre** | Ver plantilla abajo — no es opcional aunque el modelo no soporte reentrenamiento hoy |
+| `preprocessing.py` | Si aplica | Transformación de entrada |
+| `postprocessing.py` | Si aplica | Transformación de salida |
+| `train_dto.py` | Si `train()` hace algo real | `TrainRequest/TrainResponse` |
+| otros helpers | Opcional | lógica auxiliar específica del dominio |
+
+### mlflow_utils.py — obligatorio en todos los plugins
+
+Plantilla base (adaptar tipo de modelo, arquitectura y ficheros de artefacto al plugin concreto):
+
+```python
+"""MLflow helper for <Nombre> — download user-trained model from MLflow."""
+from __future__ import annotations
+
+import logging
+
+from app.domain.services.mlflow_tracker import download_mlflow_artifacts
+from app.plugins.<nombre>.constants import MODEL_FILENAME  # + lo que aplique (class_names, scalers...)
+
+logger = logging.getLogger(__name__)
+
+
+def download_user_model_from_mlflow(run_id: str):
+    """Download a user-trained model from MLflow.
+
+    Returns (model, extra_artifacts, temp_dir).
+    Caller MUST shutil.rmtree(temp_dir) after inference — usar try/finally.
+    """
+    result = download_mlflow_artifacts(run_id, artifact_path="<carpeta_artifact_en_mlflow>", prefix="mlflow_<nombre>_")
+    if result is None:
+        return None
+    tmp, local_path = result
+
+    # ... cargar el modelo desde local_path según su framework (torch/sklearn/etc.)
+
+    logger.info("Downloaded user model from MLflow run_id=%s", run_id)
+    return model, extra_artifacts, tmp
+```
+
+**Checklist de este fichero**:
+
+- [ ] El caller (`plugin.py`) hace `try/finally: shutil.rmtree(tmp)` — si no, hay fuga de disco
+      en cada predicción que use un modelo de usuario.
+- [ ] Si el modelo tiene número de clases/salida variable según el reentrenamiento
+      (clasificación), la arquitectura se reconstruye dinámicamente a partir de los metadatos
+      descargados, no se asume fija.
+- [ ] `predict_inline`/`predict_batch`/`stats` reciben `mlflow_run_id` y, si viene informado,
+      usan `download_user_model_from_mlflow` en vez del artefacto fijo de `model_loader.py`.
+
+## Reference por tipo de modelo (copiar el plugin ya integrado más parecido)
+
+| Tipo de modelo | Referencia |
+|---|---|
+| Imagen (CNN, PyTorch) | plugin de detección/clasificación de imagen ya integrado más cercano al sector |
+| Tabular regresión (sklearn/PyTorch) | plugin tabular ya integrado más cercano |
+| Tabular + optimización prescriptiva (ANN + GA) | a35, una vez integrado — usar como caso piloto |
+
+## Registro en app/registry.py
+
+```python
+from app.plugins.<nombre>.plugin import <Nombre>Plugin
+from app.plugins.<nombre>.predict_dto import PredictRequest, PredictResponse
+# + train_dto si aplica
+
+ModelEntry(
+    model_id="<model_id>",
+    prefix="/models/<model_id>",
+    version="1.0.0",
+    plugin_class=<Nombre>Plugin,
+    predict_request_type=PredictRequest,
+    predict_response_type=PredictResponse,
+    train_request_type=TrainRequest,        # o None
+    train_response_type=TrainResponse,      # o None
+    extra_predict_exceptions=(...,),        # excepciones de dominio -> 422
+)
+```
+
+No se toca `main.py` — `router_factory.py` genera `/health`, `/stats`, `/predict`, `/train`
+automáticamente a partir de esta entrada.
+
+## Excepciones de dominio
+
+Si el modelo necesita códigos HTTP específicos (p. ej. una restricción de negocio violada, como
+PU < 13 en a35), añadir la excepción en `app/domain/services/exceptions.py` y referenciarla en
+`extra_predict_exceptions` — se traduce automáticamente a 422. Cualquier excepción no listada
+cae en 500.
+
+## Artefactos
+
+Local: `artifacts/<ARTIFACT_FOLDER_NAME>/`. Producción:
+`s3://<STORAGE_BUCKET>/artifacts/fixed/<ARTIFACT_FOLDER_NAME>/` — `ArtifactStore` descarga
+automáticamente si faltan o difieren y `STORAGE_BUCKET` está seteado.
+
+## Tests
+
+`tests/unit/test_<nombre>.py`, siguiendo el patrón de los existentes (mockeo del plugin/artefactos
+vía `FakePlugin`, fixtures en `conftest.py`). Estos tests validan wiring, no correctitud — la
+correctitud se valida en el skill `verification` contra el golden dataset real del manifest.
+
+## Checklist de salida de este skill
+
+```
+[ ] app/plugins/<nombre>/ con todos los ficheros de la tabla de arriba
+[ ] mlflow_utils.py presente, con try/finally rmtree documentado en plugin.py
+[ ] app/registry.py: ModelEntry añadido
+[ ] Excepciones de dominio añadidas si aplica
+[ ] tests/unit/test_<nombre>.py con FakePlugin
+[ ] Artefactos colocados en artifacts/<ARTIFACT_FOLDER_NAME>/ local
+[ ] Listo para pasar al skill "verification"
+```

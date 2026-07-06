@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python *)",
+      "Bash(python3 *)",
+      "Bash(pip-audit -r requirements.txt)",
+      "Bash(MODEL=ml35-dairy-ann-cleaning-cost python3 main.py)",
+      "Bash(curl -s http://localhost:8000/models/ml35-dairy-ann-cleaning-cost/health)",
+      "Bash(fuser 8000/tcp)",
+      "Bash(MODEL=ml35-dairy-ann-cleaning-cost uvicorn main:app --host 0.0.0.0 --port 8035)",
+      "Bash(curl -s http://localhost:8035/models/ml35-dairy-ann-cleaning-cost/health)",
+      "Bash(pkill -f \"uvicorn main:app --host 0.0.0.0 --port 8035\")",
+      "Read(//tmp/**)",
+      "Bash(curl -s http://localhost:8035/models/ml35-dairy-ann-cleaning-cost/stats)",
+      "Bash(pip3 install *)"
+    ]
+  }
+}

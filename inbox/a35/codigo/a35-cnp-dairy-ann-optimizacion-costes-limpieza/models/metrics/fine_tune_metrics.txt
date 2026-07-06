@@ -1,0 +1,10 @@
+INFORME DE FINE-TUNING - PROYECTO DATAGIA
+------------------------------------------------
+Filas usadas:   5000
+Epochs:         1
+Learning rate:  0.001
+R2 Score:       0.9848
+MAE:            495.24 L
+RMSE:           619.02 L
+MAE Relativo:   2.06%
+RMSE/MAE:       1.25

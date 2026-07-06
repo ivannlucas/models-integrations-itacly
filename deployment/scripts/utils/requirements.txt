@@ -1,0 +1,4 @@
+google-generativeai==0.8.5
+markdown2==2.5.4
+atlassian-python-api==4.0.7
+streamlit==1.51.0

@@ -1,0 +1,394 @@
+model_id: ml35_dairy_ann_cleaning_cost
+sector: lacteo
+nombre: "Modelo basado en algoritmos ANN para la optimización de costes de limpieza e impacto ambiental"
+task_type: regression_prescriptive  # ANN predice consumo_agua_l; GA optimiza setpoints de control
+framework:
+  - torch==2.10.0
+  - scikit-learn==1.8.0
+  - pygad==3.5.0
+  - joblib==1.5.3
+  - numpy==2.4.1
+  - pandas==3.0.0
+
+artifacts:
+  folder: models/artifacts/
+  files:
+    - model_ann.pt        # pesos ANN (PasteurizationANN: 8→128→64→32→1, ReLU + Dropout 0.2)
+    - scaler_X.pkl        # StandardScaler ajustado sobre X_train (8 features)
+    - scaler_y.pkl        # StandardScaler ajustado sobre y_train (consumo_agua_l)
+
+inputs:
+  # Variables de contexto/sensor — llegan siempre del operario o IIoT
+  fixed:
+    - name: temp_entrada_leche
+      type: float
+      unit: "°C"
+      description: "Temperatura de entrada de la leche al pasteurizador"
+      train_range: [3.3, 6.5]
+    - name: temp_ambiente
+      type: float
+      unit: "°C"
+      description: "Temperatura ambiente de la sala de proceso"
+      train_range: [12.4, 31.8]
+    - name: horas_desde_limpieza
+      type: float
+      unit: h
+      description: "Horas de operación acumuladas desde la última limpieza (indicador de fouling)"
+      train_range: [0.1, 24.0]
+    - name: presion_diferencial_bar
+      type: float
+      unit: bar
+      description: "Caída de presión diferencial en el intercambiador (indicador indirecto de fouling)"
+      train_range: [0.3, 2.4]
+
+  # Variables de control/decisión — en modo predict las da el operario;
+  # en modo optimize las resuelve el GA dentro de sus rangos
+  control:
+    - name: temp_setpoint_leche
+      type: float
+      unit: "°C"
+      description: "Setpoint de temperatura de leche en la zona de calentamiento"
+      ga_range: [72.0, 82.0]
+    - name: temp_proceso_leche
+      type: float
+      unit: "°C"
+      description: "Temperatura de proceso real (sensor); en simulación = temp_setpoint_leche"
+      ga_range: [72.0, 82.0]  # siempre igual al setpoint en la llamada del GA
+    - name: temp_agua_servicio
+      type: float
+      unit: "°C"
+      description: "Temperatura del agua de servicio de refrigeración"
+      ga_range: [75.0, 92.0]
+    - name: flujo_leche_lh
+      type: float
+      unit: "L/h"
+      description: "Caudal de leche procesada"
+      ga_range: [2500.0, 4500.0]
+
+  # Campos que el servicio calcula si no los aporta el cliente
+  derived_if_missing:
+    temp_proceso_leche: "temp_setpoint_leche"          # iguales en inferencia/simulación
+    temp_agua_servicio: "temp_proceso_leche + 10.0"    # delta medio de 10 °C por defecto
+
+outputs:
+  # Modo predict: entrada libre de los 8 features; devuelve consumo + seguridad microbiológica
+  predict_inline:
+    - name: consumo_agua_l
+      type: float
+      unit: L
+      description: "Consumo de agua de refrigeración predicho para el ciclo"
+    - name: pu_logrado
+      type: float
+      unit: "-"
+      description: "Unidades de pasteurización calculadas (determinista, no predicción ANN)"
+      formula: "(16 / flujo_leche_lh) * 3600 * 10**((temp_proceso_leche - 72) / 7)"
+
+  # Modo optimize: dado el contexto fijo, el GA busca los setpoints óptimos
+  optimize:
+    - name: opt_temp_leche
+      type: float
+      unit: "°C"
+      description: "Setpoint óptimo de temperatura de leche sugerido"
+    - name: opt_temp_agua
+      type: float
+      unit: "°C"
+      description: "Temperatura óptima de agua de servicio sugerida"
+    - name: opt_flujo
+      type: float
+      unit: "L/h"
+      description: "Caudal óptimo de leche sugerido"
+    - name: consumo_estandar
+      type: float
+      unit: L
+      description: "Consumo predicho con setpoints estándar (80°C leche, 88°C agua, 3500 L/h)"
+    - name: consumo_optimizado
+      type: float
+      unit: L
+      description: "Consumo predicho con los setpoints optimizados por el GA"
+    - name: ahorro_l
+      type: float
+      unit: L
+      description: "Ahorro absoluto de agua (consumo_estandar - consumo_optimizado)"
+    - name: ahorro_pct
+      type: float
+      unit: "%"
+      description: "Porcentaje de reducción de consumo respecto al baseline estándar"
+    - name: pu_logrado
+      type: float
+      unit: "-"
+      description: "Unidades de pasteurización de la solución optimizada (debe ser >= 13)"
+
+constraints:
+  pu_minimo: 13.0
+  temp_setpoint_minima_celsius: 72.0
+  descripcion: >
+    Restricción de seguridad alimentaria (ISO 22000/HTST). Si PU < 13 o
+    temp_setpoint_leche < 72 °C, el GA penaliza la solución con fitness=1e-8
+    (en efecto, la descarta). El plugin debe rechazar predicciones donde estas
+    condiciones se incumplan y lanzar una excepción de dominio.
+
+# GA config (pygad, random_seed=42 — resultados deterministas)
+ga_config:
+  num_generations: 50
+  num_parents_mating: 5
+  sol_per_pop: 20
+  num_genes: 3
+  random_seed: 42
+  gene_space:
+    temp_setpoint_leche: {low: 72, high: 82}
+    temp_agua_servicio: {low: 75, high: 92}
+    flujo_leche_lh: {low: 2500, high: 4500}
+
+metrics_reported:
+  dataset: test_hold_out
+  split: 70/15/15
+  random_seed: 42
+  n_samples_test: 750
+  r2: 0.9932
+  mae_l: 341.58
+  rmse_l: 417.75
+  mae_relativo_pct: 1.39
+  rmse_mae_ratio: 1.22
+  veredicto_kpi: APTO
+  kpi_objetivo_mae_relativo_pct: 5.0
+  kpi_objetivo_r2: 0.90
+
+# 15 casos extraídos de data/splits/X_test.csv + y_test.csv + test_predictions.csv
+# expected = consumo_predicho del modelo (reproducibildad numérica)
+# tolerance_pct = 2 % (margen numérico sobre MAE relativo 1.39 %)
+golden_cases:
+  - id: caso_001
+    source: dataset_test_split
+    input:
+      temp_entrada_leche: 4.396065721160107
+      temp_ambiente: 19.6124658695316
+      temp_setpoint_leche: 72.0216951706294
+      temp_proceso_leche: 72.12475866413807
+      temp_agua_servicio: 80.45923792747283
+      flujo_leche_lh: 2687.360031746242
+      horas_desde_limpieza: 0.3665233709039728
+      presion_diferencial_bar: 0.3883314513903335
+    expected:
+      consumo_agua_l: 13617.42
+    tolerance_pct: 2.0
+
+  - id: caso_002
+    source: dataset_test_split
+    input:
+      temp_entrada_leche: 3.745217776067511
+      temp_ambiente: 25.00651372693874
+      temp_setpoint_leche: 73.87132610528968
+      temp_proceso_leche: 74.02684233153724
+      temp_agua_servicio: 87.92266768904086
+      flujo_leche_lh: 2519.612303101558
+      horas_desde_limpieza: 18.378694862209947
+      presion_diferencial_bar: 1.1932709918216424
+    expected:
+      consumo_agua_l: 18119.62
+    tolerance_pct: 2.0
+
+  - id: caso_003
+    source: dataset_test_split
+    input:
+      temp_entrada_leche: 4.190404248867383
+      temp_ambiente: 17.363487354898268
+      temp_setpoint_leche: 72.4837257130547
+      temp_proceso_leche: 72.2584413653718
+      temp_agua_servicio: 84.57269562178861
+      flujo_leche_lh: 2921.5705272127384
+      horas_desde_limpieza: 15.1823819116852
+      presion_diferencial_bar: 1.124370736552479
+    expected:
+      consumo_agua_l: 19064.95
+    tolerance_pct: 2.0
+
+  - id: caso_004
+    source: dataset_test_split
+    input:
+      temp_entrada_leche: 3.496987371161921
+      temp_ambiente: 18.067710872582666
+      temp_setpoint_leche: 72.0672066923294
+      temp_proceso_leche: 72.44202863194833
+      temp_agua_servicio: 83.13139811047381
+      flujo_leche_lh: 3053.1749965647023
+      horas_desde_limpieza: 14.224811836058793
+      presion_diferencial_bar: 1.1110049406512827
+    expected:
+      consumo_agua_l: 19857.45
+    tolerance_pct: 2.0
+
+  - id: caso_005
+    source: dataset_test_split
+    input:
+      temp_entrada_leche: 3.44768659665523
+      temp_ambiente: 13.585605692623837
+      temp_setpoint_leche: 72.11423380517549
+      temp_proceso_leche: 71.93843208514343
+      temp_agua_servicio: 83.34600385028187
+      flujo_leche_lh: 3381.921164642389
+      horas_desde_limpieza: 12.63156218958173
+      presion_diferencial_bar: 1.0984818495522417
+    expected:
+      consumo_agua_l: 21133.78
+    tolerance_pct: 2.0
+
+  - id: caso_006
+    source: dataset_test_split
+    input:
+      temp_entrada_leche: 3.909953078025047
+      temp_ambiente: 14.387620226763936
+      temp_setpoint_leche: 76.04118755939494
+      temp_proceso_leche: 76.17169894345612
+      temp_agua_servicio: 85.95668120667418
+      flujo_leche_lh: 3106.0397813621594
+      horas_desde_limpieza: 15.19161500030145
+      presion_diferencial_bar: 1.336113097871533
+    expected:
+      consumo_agua_l: 22181.56
+    tolerance_pct: 2.0
+
+  - id: caso_007
+    source: dataset_test_split
+    input:
+      temp_entrada_leche: 4.2052773623193
+      temp_ambiente: 31.142696650795923
+      temp_setpoint_leche: 76.64519195717511
+      temp_proceso_leche: 76.63770609541068
+      temp_agua_servicio: 86.53105895742576
+      flujo_leche_lh: 3300.9049262307653
+      horas_desde_limpieza: 19.13536434429701
+      presion_diferencial_bar: 1.3265967141956725
+    expected:
+      consumo_agua_l: 23843.57
+    tolerance_pct: 2.0
+
+  - id: caso_008
+    source: dataset_test_split
+    input:
+      temp_entrada_leche: 3.723343764516068
+      temp_ambiente: 12.863198239011522
+      temp_setpoint_leche: 77.42249358446034
+      temp_proceso_leche: 77.1782606291877
+      temp_agua_servicio: 91.06498399676258
+      flujo_leche_lh: 3675.62246414994
+      horas_desde_limpieza: 6.7192729710730426
+      presion_diferencial_bar: 1.135762034025868
+    expected:
+      consumo_agua_l: 24892.93
+    tolerance_pct: 2.0
+
+  - id: caso_009
+    source: dataset_test_split
+    input:
+      temp_entrada_leche: 3.802571721108576
+      temp_ambiente: 15.252338786897829
+      temp_setpoint_leche: 75.96650260361312
+      temp_proceso_leche: 75.8212828190688
+      temp_agua_servicio: 86.28738359789256
+      flujo_leche_lh: 4839.887884321508
+      horas_desde_limpieza: 0.6267492135345254
+      presion_diferencial_bar: 0.5473137706546203
+    expected:
+      consumo_agua_l: 25657.72
+    tolerance_pct: 2.0
+
+  - id: caso_010
+    source: dataset_test_split
+    input:
+      temp_entrada_leche: 5.195875895869246
+      temp_ambiente: 19.014236309034203
+      temp_setpoint_leche: 73.48239987254526
+      temp_proceso_leche: 73.45340019100512
+      temp_agua_servicio: 80.25431654825326
+      flujo_leche_lh: 4286.718623587385
+      horas_desde_limpieza: 9.599129869266251
+      presion_diferencial_bar: 1.0624194350009823
+    expected:
+      consumo_agua_l: 26083.58
+    tolerance_pct: 2.0
+
+  - id: caso_011
+    source: dataset_test_split
+    input:
+      temp_entrada_leche: 3.439308455477903
+      temp_ambiente: 13.140538280072388
+      temp_setpoint_leche: 75.63520108507133
+      temp_proceso_leche: 75.28308879992082
+      temp_agua_servicio: 81.87910855206628
+      flujo_leche_lh: 4139.622371434685
+      horas_desde_limpieza: 11.64018561763826
+      presion_diferencial_bar: 1.261003579675436
+    expected:
+      consumo_agua_l: 28087.46
+    tolerance_pct: 2.0
+
+  - id: caso_012
+    source: dataset_test_split
+    input:
+      temp_entrada_leche: 4.300556946865583
+      temp_ambiente: 31.328347717328143
+      temp_setpoint_leche: 74.20285895587244
+      temp_proceso_leche: 74.0533725897164
+      temp_agua_servicio: 83.29354455633745
+      flujo_leche_lh: 4507.480044667882
+      horas_desde_limpieza: 11.434746223206444
+      presion_diferencial_bar: 1.1492445922758594
+    expected:
+      consumo_agua_l: 28898.40
+    tolerance_pct: 2.0
+
+  - id: caso_013
+    source: dataset_test_split
+    input:
+      temp_entrada_leche: 3.848262565441044
+      temp_ambiente: 13.53516123777476
+      temp_setpoint_leche: 73.98750748195198
+      temp_proceso_leche: 73.50301415332989
+      temp_agua_servicio: 87.40445637978455
+      flujo_leche_lh: 4806.737459885919
+      horas_desde_limpieza: 9.43749173542582
+      presion_diferencial_bar: 1.0964023220341057
+    expected:
+      consumo_agua_l: 30021.03
+    tolerance_pct: 2.0
+
+  - id: caso_014
+    source: dataset_test_split
+    input:
+      temp_entrada_leche: 4.510314506732103
+      temp_ambiente: 27.59033402848127
+      temp_setpoint_leche: 76.8001108886905
+      temp_proceso_leche: 76.86036167310608
+      temp_agua_servicio: 84.71980226613981
+      flujo_leche_lh: 4605.096959013803
+      horas_desde_limpieza: 11.633811694953604
+      presion_diferencial_bar: 1.323686438940848
+    expected:
+      consumo_agua_l: 31926.97
+    tolerance_pct: 2.0
+
+  - id: caso_015
+    source: dataset_test_split
+    input:
+      temp_entrada_leche: 3.570812733889784
+      temp_ambiente: 19.734706926010748
+      temp_setpoint_leche: 77.42937966883876
+      temp_proceso_leche: 77.42880283248914
+      temp_agua_servicio: 91.04310768425034
+      flujo_leche_lh: 4998.337807077789
+      horas_desde_limpieza: 17.72872110710781
+      presion_diferencial_bar: 1.3838398716815383
+    expected:
+      consumo_agua_l: 35372.06
+    tolerance_pct: 2.0
+
+known_issues:
+  - "requirements.txt está codificado en UTF-16LE con BOM y CRLF (caracteres con espacios entre sí).
+     Normalizar a UTF-8/LF antes de usarlo en pip install o pip-audit."
+  - "El modelo fue entrenado con datos sintéticos generados por simulación física; los rangos
+     de entrada (temp_entrada_leche 3-7°C, temp_ambiente 12-32°C) reflejan el espacio simulado.
+     Predicciones fuera de estos rangos son extrapolaciones no validadas."
+  - "presion_diferencial_bar es un proxy de fouling: la memoria advierte que su comportamiento
+     fuera del dominio de entrenamiento puede ser no lineal."
+  - "El GA usa random_seed=42 (pygad), lo que hace las soluciones de optimización deterministas
+     en el entorno del equipo de IA, pero no entre versiones distintas de pygad."

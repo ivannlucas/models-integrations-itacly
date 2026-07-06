@@ -1,0 +1,17 @@
+#Ignore the logs directory
+logs/
+
+#Ignoring git and cache folders
+.git
+.cache
+__pycache__
+.pytest_cache
+
+#Ignoring all the markdown and class files
+*.md
+**/*.class
+
+Dockerfile
+*.pyc
+*.pyo
+*.pyd
