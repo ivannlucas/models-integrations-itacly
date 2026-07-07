@@ -133,7 +133,10 @@ cae en 500.
 
 ## Artefactos
 
-Local: `artifacts/<ARTIFACT_FOLDER_NAME>/`. Producción:
+Local: `artifacts/<ARTIFACT_FOLDER_NAME>/`. 
+
+En producción, los artefactos se pueden encontrar en dos sitios: s3 o mlflow. En mlflow se deben almacenar los artefactos creados por el usuario (como resultado del entrenamiento de los modelos), a su vez, cuando se recibe un mlflow_run_id en el endpoint de solicitud de prediccion o estaditicas, los artefactos deben buscarse en mlflow. Por otro lado, en s3 se almacenan los artefactos estandar, aquellos que fueron entrenados por un equipo especializado de IA. Estos nunca deben de ser sobreescritos por el usuario. Cuando el usuario no envia mlflow_run_id, se deben usar estos artefactos para realizar las predicciones y devolver su estadisticas asociadas. En app\domain\services\mlflow_tracker.py se encuentra la logica de integracion para con mlflow. Cuando el usuario solicita un artefacto de s3 y lo utiliza para realizar una prediccion, posteriormente, el artefacto debe ser eliminado del contenedor para liberar espacio de almacenamiento. Si el usuario vuelve a solicitarlo, se debe descargar nuevamente.
+Producción s3:
 `s3://<STORAGE_BUCKET>/artifacts/fixed/<ARTIFACT_FOLDER_NAME>/` — `ArtifactStore` descarga
 automáticamente si faltan o difieren y `STORAGE_BUCKET` está seteado.
 
