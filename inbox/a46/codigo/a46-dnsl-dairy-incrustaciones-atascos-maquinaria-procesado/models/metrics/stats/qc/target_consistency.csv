@@ -1,0 +1,9 @@
+check_name,rows_evaluated,mismatch_count,mismatch_pct,detail,mae_min
+clog_onset_within_15min_vs_time_to_clog_onset_min,198615,0,0.0,binary target should match 0 <= time_to_clog_onset_min <= 15,
+fouling_onset_within_30min_vs_time_to_fouling_onset_min,198615,0,0.0,binary target should match 0 <= time_to_fouling_onset_min <= 30,
+fouling_stage_vs_physical_thresholds,189755,0,0.0,reported stage should match stage derived from physical thresholds (production rows only),
+time_to_clog_onset_min_countdown_step,66147,0,0.0,next time-to-event should roughly equal current minus dt,0.0
+time_to_fouling_onset_min_countdown_step,131647,0,0.0,next time-to-event should roughly equal current minus dt,0.0
+ttm_to_planned_cip_min_countdown_step,181833,0,0.0,next time-to-event should roughly equal current minus dt,0.0
+ttm_to_unplanned_event_min_countdown_step,77936,0,0.0,next time-to-event should roughly equal current minus dt,0.0
+unplanned_event_within_60min_vs_ttm_to_unplanned_event_min,198615,0,0.0,binary target should match 0 <= ttm_to_unplanned_event_min <= 60,

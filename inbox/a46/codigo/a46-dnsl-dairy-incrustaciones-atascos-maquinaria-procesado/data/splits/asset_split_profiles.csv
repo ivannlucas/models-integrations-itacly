@@ -1,0 +1,11 @@
+asset_id,n_rows,n_prod_rows,n_sequences,watch_foul_pos_rows,actionable_foul_pos_rows,clog_pos_rows,unplanned_fouling_events,unplanned_clog_events
+asset_00,19504,18616,18,558,0,96,0,6
+asset_01,21375,20522,18,558,360,96,3,6
+asset_02,18436,17585,18,558,0,112,0,7
+asset_03,19258,18347,18,558,0,112,0,7
+asset_04,18315,17486,18,558,0,64,0,4
+asset_05,20872,20001,18,558,360,112,3,7
+asset_06,20426,19478,18,558,240,112,2,7
+asset_07,20787,20054,18,558,0,48,0,3
+asset_08,19095,18138,18,558,120,144,1,9
+asset_09,20547,19528,18,558,0,128,0,8

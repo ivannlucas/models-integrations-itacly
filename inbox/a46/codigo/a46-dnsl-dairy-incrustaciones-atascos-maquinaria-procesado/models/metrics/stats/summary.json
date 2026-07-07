@@ -1,0 +1,52 @@
+{
+  "overview": {
+    "telemetry_rows": 198615,
+    "telemetry_columns": 89,
+    "assets": 10,
+    "cycles": 180,
+    "time_min": "2026-01-01T00:26:00+00:00",
+    "time_max": "2026-01-26T07:27:00+00:00",
+    "time_span_h": 607.0166666666667,
+    "median_dt_min": 1.0,
+    "phase_counts": {
+      "production": 189755,
+      "CIP_alkaline": 3741,
+      "CIP_acid": 2983,
+      "maintenance": 2136
+    },
+    "stage_counts": {
+      "stable": 131647,
+      "incipient": 34401,
+      "advanced": 23707,
+      "not_production": 8860
+    },
+    "informative_row_pct": 36.43632152657151,
+    "low_info_production_row_pct": 63.563678473428496,
+    "production_row_pct": 95.53910832515167,
+    "informative_within_production_pct": 33.468419804484725,
+    "low_info_within_production_pct": 66.53158019551528,
+    "severity_col": "Rf_m2K_W",
+    "severity_min": 9.7764e-06,
+    "severity_p50": 0.0003166589,
+    "severity_p99": 0.002319189255999999,
+    "severity_max": 0.00306,
+    "maintenance_rows": 244,
+    "planned_maintenance_events": 171,
+    "unplanned_maintenance_events": 73,
+    "maintenance_duration_min_total": 8860.0,
+    "maintenance_duration_min_median": 38.0
+  },
+  "qc_summary": {
+    "sequences_total": 180,
+    "sequence_issue_rows": 0,
+    "stage_threshold_mismatch_pct": 0.0,
+    "max_target_mismatch_pct": 0.0,
+    "naive_cross_cycle_window_pct_if_group_by_asset": 10.240567232210687,
+    "sequence_aware_windows_total": 35508,
+    "bad_windows_crossing_cycle_boundary": 0,
+    "sequences_shorter_than_seq_len": 0,
+    "median_inter_cycle_gap_h": 12.825,
+    "median_negative_rf_steps_in_production_per_cycle": 0.0,
+    "median_negative_mass_steps_in_production_per_cycle": 0.0
+  }
+}

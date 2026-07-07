@@ -1,0 +1,9 @@
+{
+  "input": "data/processed/telemetry_processed.csv",
+  "selected_scenario": "no_clock",
+  "checkpoint_used": "models/artifacts/selected_model.pt",
+  "predictions": "data/predictions/telemetry_processed_predictions.csv",
+  "alerts": "data/predictions/telemetry_processed_alerts.csv",
+  "rows_scored": 33738,
+  "alert_rows": 79
+}

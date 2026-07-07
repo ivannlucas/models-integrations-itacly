@@ -1,0 +1,318 @@
+{
+  "outdir": "models/metrics/stats",
+  "files": [
+    {
+      "relative_path": "column_catalog.csv",
+      "size_bytes": 6613
+    },
+    {
+      "relative_path": "column_catalog.model_summary.json",
+      "size_bytes": 88
+    },
+    {
+      "relative_path": "eda_config.json",
+      "size_bytes": 425
+    },
+    {
+      "relative_path": "manifest.json",
+      "size_bytes": 7106
+    },
+    {
+      "relative_path": "plots/cold_lift_C_hist.png",
+      "size_bytes": 21953
+    },
+    {
+      "relative_path": "plots/correlation_heatmap.png",
+      "size_bytes": 121540
+    },
+    {
+      "relative_path": "plots/cycle_duration_hist.png",
+      "size_bytes": 14812
+    },
+    {
+      "relative_path": "plots/dP_kPa_hist.png",
+      "size_bytes": 22517
+    },
+    {
+      "relative_path": "plots/flow_kg_s_hist.png",
+      "size_bytes": 25337
+    },
+    {
+      "relative_path": "plots/flow_vs_dp_by_stage.png",
+      "size_bytes": 91613
+    },
+    {
+      "relative_path": "plots/heat_proxy_hist.png",
+      "size_bytes": 22062
+    },
+    {
+      "relative_path": "plots/hot_drop_C_hist.png",
+      "size_bytes": 20765
+    },
+    {
+      "relative_path": "plots/informative_row_pct_by_cycle_hist.png",
+      "size_bytes": 19525
+    },
+    {
+      "relative_path": "plots/inter_cycle_gap_hist.png",
+      "size_bytes": 16673
+    },
+    {
+      "relative_path": "plots/m_total_kg_m2_hist.png",
+      "size_bytes": 24509
+    },
+    {
+      "relative_path": "plots/maintenance_fault_type_counts.png",
+      "size_bytes": 29209
+    },
+    {
+      "relative_path": "plots/maintenance_type_counts.png",
+      "size_bytes": 30214
+    },
+    {
+      "relative_path": "plots/normalized_cycle_severity.png",
+      "size_bytes": 64738
+    },
+    {
+      "relative_path": "plots/phase_counts.png",
+      "size_bytes": 34815
+    },
+    {
+      "relative_path": "plots/Rf_m2K_W_hist.png",
+      "size_bytes": 22488
+    },
+    {
+      "relative_path": "plots/rows_per_cycle_hist.png",
+      "size_bytes": 16623
+    },
+    {
+      "relative_path": "plots/severity_by_stage_box.png",
+      "size_bytes": 32179
+    },
+    {
+      "relative_path": "plots/severity_vs_dp.png",
+      "size_bytes": 75456
+    },
+    {
+      "relative_path": "plots/severity_vs_thermal_eff.png",
+      "size_bytes": 59621
+    },
+    {
+      "relative_path": "plots/stage_counts.png",
+      "size_bytes": 29317
+    },
+    {
+      "relative_path": "plots/thermal_eff_proxy_hist.png",
+      "size_bytes": 29584
+    },
+    {
+      "relative_path": "plots/time_to_clog_onset_min_hist.png",
+      "size_bytes": 23565
+    },
+    {
+      "relative_path": "plots/time_to_fouling_onset_min_hist.png",
+      "size_bytes": 25223
+    },
+    {
+      "relative_path": "plots/ttm_to_planned_cip_min_hist.png",
+      "size_bytes": 25930
+    },
+    {
+      "relative_path": "plots/ttm_to_unplanned_event_min_hist.png",
+      "size_bytes": 25514
+    },
+    {
+      "relative_path": "plots/vibration_mm_s_hist.png",
+      "size_bytes": 23407
+    },
+    {
+      "relative_path": "qc/inter_cycle_gaps.csv",
+      "size_bytes": 19768
+    },
+    {
+      "relative_path": "qc/naive_window_crossing_by_asset.csv",
+      "size_bytes": 231
+    },
+    {
+      "relative_path": "qc/naive_window_crossing_check.json",
+      "size_bytes": 1268
+    },
+    {
+      "relative_path": "qc/qc_summary.json",
+      "size_bytes": 495
+    },
+    {
+      "relative_path": "qc/sequence_qc.csv",
+      "size_bytes": 12650
+    },
+    {
+      "relative_path": "qc/target_consistency.csv",
+      "size_bytes": 1069
+    },
+    {
+      "relative_path": "qc/window_boundary_check.json",
+      "size_bytes": 30378
+    },
+    {
+      "relative_path": "qc/window_capacity_per_sequence.csv",
+      "size_bytes": 9146
+    },
+    {
+      "relative_path": "report.html",
+      "size_bytes": 3072278
+    },
+    {
+      "relative_path": "report.md",
+      "size_bytes": 23379
+    },
+    {
+      "relative_path": "samples/asset_01_C00005.csv",
+      "size_bytes": 1155491
+    },
+    {
+      "relative_path": "samples/asset_01_C00005.png",
+      "size_bytes": 245067
+    },
+    {
+      "relative_path": "samples/asset_01_C00010.csv",
+      "size_bytes": 960711
+    },
+    {
+      "relative_path": "samples/asset_01_C00010.png",
+      "size_bytes": 245400
+    },
+    {
+      "relative_path": "samples/asset_02_C00006.csv",
+      "size_bytes": 721135
+    },
+    {
+      "relative_path": "samples/asset_02_C00006.png",
+      "size_bytes": 251468
+    },
+    {
+      "relative_path": "samples/asset_02_C00010.csv",
+      "size_bytes": 813596
+    },
+    {
+      "relative_path": "samples/asset_02_C00010.png",
+      "size_bytes": 253785
+    },
+    {
+      "relative_path": "samples/asset_05_C00006.csv",
+      "size_bytes": 1178269
+    },
+    {
+      "relative_path": "samples/asset_05_C00006.png",
+      "size_bytes": 244780
+    },
+    {
+      "relative_path": "samples/asset_06_C00001.csv",
+      "size_bytes": 691413
+    },
+    {
+      "relative_path": "samples/asset_06_C00001.png",
+      "size_bytes": 252099
+    },
+    {
+      "relative_path": "samples/asset_06_C00006.csv",
+      "size_bytes": 961287
+    },
+    {
+      "relative_path": "samples/asset_06_C00006.png",
+      "size_bytes": 248108
+    },
+    {
+      "relative_path": "samples/asset_06_C00007.csv",
+      "size_bytes": 648895
+    },
+    {
+      "relative_path": "samples/asset_06_C00007.png",
+      "size_bytes": 256252
+    },
+    {
+      "relative_path": "samples/asset_08_C00001.csv",
+      "size_bytes": 956510
+    },
+    {
+      "relative_path": "samples/asset_08_C00001.png",
+      "size_bytes": 249622
+    },
+    {
+      "relative_path": "samples/asset_09_C00007.csv",
+      "size_bytes": 742616
+    },
+    {
+      "relative_path": "samples/asset_09_C00007.png",
+      "size_bytes": 246894
+    },
+    {
+      "relative_path": "summary.json",
+      "size_bytes": 1748
+    },
+    {
+      "relative_path": "tables/asset_summary.csv",
+      "size_bytes": 2606
+    },
+    {
+      "relative_path": "tables/correlation_matrix.csv",
+      "size_bytes": 8320
+    },
+    {
+      "relative_path": "tables/cycle_summary.csv",
+      "size_bytes": 73182
+    },
+    {
+      "relative_path": "tables/fault_type_counts.csv",
+      "size_bytes": 59
+    },
+    {
+      "relative_path": "tables/maintenance_head_1000.csv",
+      "size_bytes": 45618
+    },
+    {
+      "relative_path": "tables/maintenance_missingness.csv",
+      "size_bytes": 440
+    },
+    {
+      "relative_path": "tables/maintenance_schema.csv",
+      "size_bytes": 1598
+    },
+    {
+      "relative_path": "tables/maintenance_summary.csv",
+      "size_bytes": 193
+    },
+    {
+      "relative_path": "tables/maintenance_type_counts.csv",
+      "size_bytes": 68
+    },
+    {
+      "relative_path": "tables/phase_counts.csv",
+      "size_bytes": 91
+    },
+    {
+      "relative_path": "tables/sample_cycles_catalog.csv",
+      "size_bytes": 4975
+    },
+    {
+      "relative_path": "tables/stage_counts.csv",
+      "size_bytes": 73
+    },
+    {
+      "relative_path": "tables/telemetry_head_1000.csv",
+      "size_bytes": 741065
+    },
+    {
+      "relative_path": "tables/telemetry_missingness.csv",
+      "size_bytes": 3412
+    },
+    {
+      "relative_path": "tables/telemetry_schema.csv",
+      "size_bytes": 8372
+    },
+    {
+      "relative_path": "tables/top_cycles_by_severity.csv",
+      "size_bytes": 20722
+    }
+  ],
+  "file_count": 78
+}

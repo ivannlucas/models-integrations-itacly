@@ -1,0 +1,13 @@
+{
+  "sequences_total": 180,
+  "sequence_issue_rows": 0,
+  "stage_threshold_mismatch_pct": 0.0,
+  "max_target_mismatch_pct": 0.0,
+  "naive_cross_cycle_window_pct_if_group_by_asset": 10.240567232210687,
+  "sequence_aware_windows_total": 35508,
+  "bad_windows_crossing_cycle_boundary": 0,
+  "sequences_shorter_than_seq_len": 0,
+  "median_inter_cycle_gap_h": 12.825,
+  "median_negative_rf_steps_in_production_per_cycle": 0.0,
+  "median_negative_mass_steps_in_production_per_cycle": 0.0
+}
