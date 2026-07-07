@@ -93,6 +93,62 @@ def download_user_model_from_mlflow(run_id: str):
 - [ ] `predict_inline`/`predict_batch`/`stats` reciben `mlflow_run_id` y, si viene informado,
       usan `download_user_model_from_mlflow` en vez del artefacto fijo de `model_loader.py`.
 
+## train() — patrón de reentrenamiento (fine-tuning)
+
+Consultar `manifest.training` (skill `manifest-extraction`) antes de escribir nada aquí — define
+si el modelo soporta reentrenamiento y con qué columnas/hiperparámetros.
+
+### Si `training.supported: true`
+
+Seguir el patrón real ya usado en `ml35_dairy_ann_cleaning_cost/plugin.py` y
+`ml25_wine_sulphites/plugin.py` (ambos con `train()` funcional):
+
+1. Cargar `data_path` (CSV) y validar que trae `training.required_columns` del manifest. Si
+   faltan columnas, `raise ValueError` con el detalle explícito — no se entrena con datos
+   incompletos.
+2. **Clonar los pesos del modelo cargado en una instancia nueva antes de entrenar** — nunca mutar
+   `self._model` in-place hasta tener el resultado final. Así una petición de `predict`
+   concurrente nunca ve un modelo a medio entrenar.
+3. Fine-tune con los `training.hyperparams` del manifest (mismo optimizador/loss que usó el
+   equipo de IA en el entrenamiento original — nunca elegidos a criterio del agente).
+4. Calcular las métricas de `training.metrics_returned` sobre los datos de entrenamiento y
+   devolverlas en `TrainResponse` — deben ser las mismas métricas que reporta la memoria, para
+   que sean comparables.
+5. Guardar el artefacto reentrenado **localmente siempre** (vía `_store.local_dir` /
+   `ArtifactStore`), y si viene `mlflow_run_id`, subirlo también a MLflow reutilizando
+   `BaseMLflowTracker` (`app/domain/services/mlflow_tracker.py` — no se reimplementa):
+
+   ```python
+   if mlflow_run_id:
+       tracker = BaseMLflowTracker(mlflow_run_id)
+       tracker.log_params({...})       # hiperparámetros usados en este run
+       tracker.log_metrics({...})      # mae, r2, n_samples, etc.
+       tracker.upload_artifacts(tmp_dir, artifact_path="model")  # tmp_dir con try/finally rmtree
+   ```
+
+### train_dto.py
+
+```python
+from pydantic import BaseModel, ConfigDict, Field
+
+class TrainRequest(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
+    data_path: str = Field(..., description="Path to CSV with <features> + <target_column>")
+    mlflow_run_id: str = ""
+
+class TrainResponse(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
+    detail: str
+    # + un campo por cada métrica en training.metrics_returned del manifest (mae, r2, n_samples...)
+```
+
+### Si `training.supported: false`
+
+`train()` lanza `TrainingNotSupportedError` explícitamente (→ 501 automático vía
+`router_factory`) — nunca se deja sin implementar ni se devuelve un stub silencioso. Ver
+`ml2_fungal_cnn_disease_detection/plugin.py`, `ml5_meat_cow_behaviour/plugin.py` o
+`ml7_cereals_grain_pest_detection/plugin.py` como referencia de este caso.
+
 ## Reference por tipo de modelo (copiar el plugin ya integrado más parecido)
 
 | Tipo de modelo | Referencia |
@@ -151,6 +207,8 @@ correctitud se valida en el skill `verification` contra el golden dataset real d
 ```
 [ ] app/plugins/<nombre>/ con todos los ficheros de la tabla de arriba
 [ ] mlflow_utils.py presente, con try/finally rmtree documentado en plugin.py
+[ ] train() implementado según manifest.training (fine-tuning real) o TrainingNotSupportedError
+    explícito si training.supported=false — train_dto.py acorde en ambos casos
 [ ] app/registry.py: ModelEntry añadido
 [ ] Excepciones de dominio añadidas si aplica
 [ ] tests/unit/test_<nombre>.py con FakePlugin

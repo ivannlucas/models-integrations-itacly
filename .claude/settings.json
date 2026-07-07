@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Edit(/.claude/skills/plugin-integration/**)",
+      "Edit(/.claude/skills/verification/**)"
+    ]
+  }
+}
