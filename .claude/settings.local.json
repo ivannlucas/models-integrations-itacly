@@ -12,7 +12,32 @@
       "Bash(pkill -f \"uvicorn main:app --host 0.0.0.0 --port 8035\")",
       "Read(//tmp/**)",
       "Bash(curl -s http://localhost:8035/models/ml35-dairy-ann-cleaning-cost/stats)",
-      "Bash(pip3 install *)"
+      "Bash(pip3 install *)",
+      "Bash(cat app/plugins/ml35_dairy_ann_cleaning_cost/predict_dto.py)",
+      "Bash(sed -n '1,80p' app/plugins/ml35_dairy_ann_cleaning_cost/plugin.py)",
+      "Bash(mkdir -p /tmp/claude-1000/-mnt-c-Users-PC-Desktop-Repositorios-models-integrations-itacly/16e6074a-f8c4-456d-ac84-183a37e8801f/scratchpad)",
+      "Bash(pandoc -t markdown \"inbox/a46/entregable/46 - Checklist revisión v1.2.docx\" -o /tmp/claude-1000/-mnt-c-Users-PC-Desktop-Repositorios-models-integrations-itacly/16e6074a-f8c4-456d-ac84-183a37e8801f/scratchpad/a46_memoria.md)",
+      "Bash(pip show *)",
+      "Bash(apt list *)",
+      "Bash(mkdir -p /tmp/claude-1000/-mnt-c-Users-PC-Desktop-Repositorios-models-integrations-itacly/934c9529-002c-44dd-ad9f-8d2d7f8eba51/scratchpad)",
+      "Bash(pandoc -t markdown \"inbox/a46/entregable/46 - Diseño y entrenamiento de un modelo DNSL para detectar incrustaciones y atascos en la maquinaria del procesado de la leche v1.2.docx\" -o /tmp/claude-1000/-mnt-c-Users-PC-Desktop-Repositorios-models-integrations-itacly/934c9529-002c-44dd-ad9f-8d2d7f8eba51/scratchpad/a46_memoria.md)",
+      "Bash(pip3 show *)",
+      "Bash(grep -n '^\\\\[Heading' __TRACKED_VAR__/a46_memoria_outline.txt)",
+      "Bash(find inbox/a46/codigo/a46-dnsl-dairy-incrustaciones-atascos-maquinaria-procesado -iname *inference_input_contract* -o -iname *artifact_contract* -o -iname *kpi_design_definition*)",
+      "Bash(mkdir -p \"/mnt/c/Users/PC/Desktop/Repositorios/models-integrations-itacly/app/plugins/ml46_dairy_fouling_clog_detection/_vendor\")",
+      "Bash(mkdir -p \"/mnt/c/Users/PC/Desktop/Repositorios/models-integrations-itacly/artifacts/ml46_dairy_fouling_clog_detection\")",
+      "Bash(echo \"=== flake8 exit: $? ===\")",
+      "Bash(echo \"exit: $?\")",
+      "Bash(pip3 list *)",
+      "Bash(pip install *)",
+      "Bash(MODEL=ml46-dairy-fouling-clog-detection nohup python3 -m uvicorn main:app --host 0.0.0.0 --port 8009)",
+      "Bash(echo \"started pid $!\")",
+      "Bash(curl -s -m 5 http://localhost:8009/models/ml46-dairy-fouling-clog-detection/health)",
+      "Bash(curl -s -m 10 http://localhost:8009/models/ml46-dairy-fouling-clog-detection/stats)",
+      "Bash(curl -s -m 30 -X POST http://localhost:8009/models/ml46-dairy-fouling-clog-detection/predict -H 'Content-Type: application/json' -d @/tmp/claude-1000/-mnt-c-Users-PC-Desktop-Repositorios-models-integrations-itacly/934c9529-002c-44dd-ad9f-8d2d7f8eba51/scratchpad/inline_payload.json)",
+      "Bash(curl -s -m 60 -X POST http://localhost:8009/models/ml46-dairy-fouling-clog-detection/predict -H 'Content-Type: application/json' -d '{\"mode\":\"batch\",\"data_path\":\"/mnt/c/Users/PC/Desktop/Repositorios/models-integrations-itacly/inbox/a46/codigo/a46-dnsl-dairy-incrustaciones-atascos-maquinaria-procesado/data/splits/test_rows.csv\"}')",
+      "Bash(time curl -s -m 300 -X POST http://localhost:8009/models/ml46-dairy-fouling-clog-detection/train -H 'Content-Type: application/json' -d '{\"data_path\":\"/mnt/c/Users/PC/Desktop/Repositorios/models-integrations-itacly/inbox/a46/codigo/a46-dnsl-dairy-incrustaciones-atascos-maquinaria-procesado/data/splits/val_rows.csv\",\"mlflow_run_id\":\"\"}')",
+      "Bash(kill %1)"
     ]
   }
 }

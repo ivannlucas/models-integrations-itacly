@@ -31,6 +31,7 @@ from app.application.use_cases.train_model_use_case import TrainModelUseCase
 from app.domain.ports.model_plugin_port import ModelPluginPort
 from app.domain.services.exceptions import (
     InsufficientFramesError,
+    InsufficientTelemetryHistoryError,
     InvalidImageError,
     InvalidVideoError,
     NoValidSimulationPointError,
@@ -113,6 +114,16 @@ from app.plugins.ml35_dairy_ann_cleaning_cost.predict_dto import (
 from app.plugins.ml35_dairy_ann_cleaning_cost.train_dto import (
     TrainRequest as Ml35Dairy_TrainReq,
     TrainResponse as Ml35DairyTrainResp,
+)
+from app.plugins.ml46_dairy_fouling_clog_detection.predict_dto import (
+    PredictBatchResponse as Ml46DairyBatchResp,
+    PredictInlineResponse as Ml46DairyInlineResp,
+    PredictRequest as Ml46Dairy_Request,
+    PredictResponse as Ml46Dairy_Response,
+)
+from app.plugins.ml46_dairy_fouling_clog_detection.train_dto import (
+    TrainRequest as Ml46Dairy_TrainReq,
+    TrainResponse as Ml46DairyTrainResp,
 )
 
 # ── ModelEntry dataclass (local copy — avoids importing app.registry which loads real plugins) ───
@@ -536,7 +547,64 @@ def _ml35_dairy_train(plugin: FakePlugin, *, data_path: str) -> Ml35DairyTrainRe
     return Ml35DairyTrainResp(detail="Fine-tuning completado", mae=320.0, r2=0.993, n_samples=500)
 
 
+def _ml46_dairy_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> Ml46DairyInlineResp:
+    """Fake inline prediction response for the ml46 dairy fouling/clog detection plugin."""
+    return Ml46DairyInlineResp(
+        model_id="ml46-dairy-fouling-clog-detection",
+        asset_id="asset_00",
+        timestamp="2026-01-11T08:00:00+00:00",
+        pred_severity=0.000176,
+        pred_stage=0,
+        pred_stage_name="stable",
+        p_stage0=0.999998,
+        p_stage1=0.0000001,
+        p_stage2=0.0000015,
+        p_foul_h=0.0000014,
+        p_actionable_foul_h=0.0000083,
+        p_clog_h=0.00000036,
+        pred_tte_foul_min=166.77,
+        pred_tte_clog_min=86.79,
+        pred_ttu_min=244.25,
+        operator_status="Normal",
+        priority="low",
+        recommended_action="operación normal",
+        activated_predicates="none",
+        is_alert=False,
+        model_name="ml46-dairy-fouling-clog-detection",
+        xai_feature_values={"p_foul_h": 0.0000014, "p_clog_h": 0.00000036},
+    )
+
+
+def _ml46_dairy_batch(plugin: FakePlugin, *, data_path: str) -> Ml46DairyBatchResp:
+    """Fake batch prediction response for the ml46 dairy fouling/clog detection plugin."""
+    return Ml46DairyBatchResp(
+        model_id="ml46-dairy-fouling-clog-detection",
+        predictions=[{
+            "asset_id": "asset_00", "timestamp": "2026-01-11T08:00:00+00:00",
+            "pred_severity": 0.000176, "pred_stage": 0, "pred_stage_name": "stable",
+            "operator_status": "Normal",
+        }],
+        alerts=[],
+        output_path=None,
+    )
+
+
+def _ml46_dairy_train(plugin: FakePlugin, *, data_path: str) -> Ml46DairyTrainResp:
+    """Fake fine-tuning response for the ml46 dairy fouling/clog detection plugin."""
+    return Ml46DairyTrainResp(
+        detail="Fine-tuning completado sobre el checkpoint no_clock servido.",
+        n_windows=500, epochs=8,
+        severity_rmse=0.00012, severity_mae=0.00008,
+        stage_accuracy=0.96, stage_macro_f1=0.94,
+        watch_foul_auc=0.95, watch_foul_ap=0.46,
+        clog_h_auc=0.95, clog_h_ap=0.21,
+        tte_foul_mae_min=69.3, tte_clog_mae_min=32.5, ttu_mae_min=109.6,
+        upload_warning=None,
+    )
+
+
 FAKE_FACTORIES: dict[str, tuple[Callable, Callable]] = {
+    "ml46-dairy-fouling-clog-detection": (_ml46_dairy_inline, _ml46_dairy_batch),
     "ml35-dairy-ann-cleaning-cost": (_ml35_dairy_inline, _ml35_dairy_batch),
     "ml31-cereals-residue-optimizer": (_ml31_residue_inline, _ml31_residue_batch),
     "ml30-meat-traceability-detection": (_ml30_trace_inline, _ml30_trace_batch),
@@ -549,6 +617,7 @@ FAKE_FACTORIES: dict[str, tuple[Callable, Callable]] = {
 }
 
 TRAIN_FACTORIES: dict[str, Callable] = {
+    "ml46-dairy-fouling-clog-detection": _ml46_dairy_train,
     "ml35-dairy-ann-cleaning-cost": _ml35_dairy_train,
     "modelo10-lacteo": _lacteo_train,
     "ml8-cereals-img-anomaly-detector": _ml8_cereals_train,
@@ -650,6 +719,17 @@ TEST_REGISTRY: list[ModelEntry] = [
         extra_predict_exceptions=(PuConstraintViolationError,),
         train_request_type=Ml35Dairy_TrainReq,
         train_response_type=Ml35DairyTrainResp,
+    ),
+    ModelEntry(
+        model_id="ml46-dairy-fouling-clog-detection",
+        prefix="/models/ml46-dairy-fouling-clog-detection",
+        version="1.0.0",
+        plugin_class=FakePlugin,
+        predict_request_type=Ml46Dairy_Request,
+        predict_response_type=Ml46Dairy_Response,
+        extra_predict_exceptions=(InsufficientTelemetryHistoryError,),
+        train_request_type=Ml46Dairy_TrainReq,
+        train_response_type=Ml46DairyTrainResp,
     ),
 ]
 

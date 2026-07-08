@@ -9,6 +9,7 @@ from typing import Any
 
 from app.domain.services.exceptions import (
     InsufficientFramesError,
+    InsufficientTelemetryHistoryError,
     InvalidImageError,
     InvalidVideoError,
     NoValidSimulationPointError,
@@ -90,6 +91,16 @@ from app.plugins.ml35_dairy_ann_cleaning_cost.predict_dto import (
 from app.plugins.ml35_dairy_ann_cleaning_cost.train_dto import (
     TrainRequest as Ml35Dairy_TrainReq,
     TrainResponse as Ml35Dairy_TrainResp,
+)
+
+from app.plugins.ml46_dairy_fouling_clog_detection.plugin import Ml46DairyFoulingClogDetectionPlugin
+from app.plugins.ml46_dairy_fouling_clog_detection.predict_dto import (
+    PredictRequest as Ml46Dairy_Request,
+    PredictResponse as Ml46Dairy_Response,
+)
+from app.plugins.ml46_dairy_fouling_clog_detection.train_dto import (
+    TrainRequest as Ml46Dairy_TrainReq,
+    TrainResponse as Ml46Dairy_TrainResp,
 )
 
 
@@ -200,5 +211,16 @@ REGISTRY: list[ModelEntry] = [
         extra_predict_exceptions=(PuConstraintViolationError,),
         train_request_type=Ml35Dairy_TrainReq,
         train_response_type=Ml35Dairy_TrainResp,
+    ),
+    ModelEntry(
+        model_id="ml46-dairy-fouling-clog-detection",
+        prefix="/models/ml46-dairy-fouling-clog-detection",
+        version="1.0.0",
+        plugin_class=Ml46DairyFoulingClogDetectionPlugin,
+        predict_request_type=Ml46Dairy_Request,
+        predict_response_type=Ml46Dairy_Response,
+        extra_predict_exceptions=(InsufficientTelemetryHistoryError,),
+        train_request_type=Ml46Dairy_TrainReq,
+        train_response_type=Ml46Dairy_TrainResp,
     ),
 ]

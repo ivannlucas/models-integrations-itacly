@@ -1,0 +1,4 @@
+maintenance_type,planned,fault_type,events,duration_min_sum,duration_min_median
+scheduled_CIP,1,preventive,171,6724.0,39.0
+unclog,0,clogging,64,1761.0,26.0
+CIP_extra,0,fouling,9,375.0,42.0

@@ -1,0 +1,73 @@
+column,dtype,role,description,missing_pct,n_unique
+milk_type,object,engineered_feature,Codificación one-hot del tipo de leche/producto.,0.0,4
+Ca_mM_nominal,float64,feature,Descripción heurística generada automáticamente.,0.0,180
+PO4_mM_nominal,float64,feature,Descripción heurística generada automáticamente.,0.0,180
+Q_W,float64,feature,Descripción heurística generada automáticamente.,0.0,198614
+Tc_in_C,float64,feature,Temperatura de entrada del circuito frío/producto.,0.0,196561
+Tc_out_C,float64,feature,Temperatura de salida del circuito frío/producto.,0.0,196452
+Tc_sp_C,float64,feature,Variable térmica expresada en grados Celsius.,0.0,180
+Th_in_C,float64,feature,Temperatura de entrada del circuito caliente.,0.0,196889
+Th_out_C,float64,feature,Temperatura de salida del circuito caliente.,0.0,196691
+Th_sp_C,float64,feature,Variable térmica expresada en grados Celsius.,0.0,180
+Twall_C,float64,feature,Variable térmica expresada en grados Celsius.,0.0,196718
+UA_W_K,float64,feature,Descripción heurística generada automáticamente.,0.0,198544
+ambient_RH_pct,float64,feature,Descripción heurística generada automáticamente.,0.0,197893
+ambient_T_C,float64,feature,Variable térmica expresada en grados Celsius.,0.0,196146
+asset_family,object,feature,Descripción heurística generada automáticamente.,0.0,3
+batch_elapsed_min,float64,feature,Variable temporal expresada en minutos.,0.0,1784
+batch_thermal_history_factor,float64,feature,Descripción heurística generada automáticamente.,0.0,180
+cip_subphase,object,feature,Descripción heurística generada automáticamente.,0.0,3
+clog_alarm,int64,feature,Descripción heurística generada automáticamente.,0.0,2
+cycle_index,int64,feature,Descripción heurística generada automáticamente.,0.0,18
+dP_kPa,float64,feature,Caída de presión estimada.,0.0,198419
+downtime_unplanned,int64,feature,Descripción heurística generada automáticamente.,0.0,2
+episode_progress,float64,feature,Descripción heurística generada automáticamente.,0.0,155724
+fat_g_L_nominal,float64,feature,Descripción heurística generada automáticamente.,0.0,180
+fault_type,object,feature,Descripción heurística generada automáticamente.,0.0,4
+flow_kg_s,float64,feature,Caudal instantáneo.,0.0,190448
+flow_sp_kg_s,float64,feature,Descripción heurística generada automáticamente.,0.0,180
+foul_score,float64,feature,Descripción heurística generada automáticamente.,0.0,155637
+fouling_alarm,int64,feature,Descripción heurística generada automáticamente.,0.0,2
+fouling_critical_alarm,int64,feature,Descripción heurística generada automáticamente.,0.0,2
+fouling_stage_name,object,feature,Descripción heurística generada automáticamente.,0.0,4
+fouling_warning_alarm,int64,feature,Descripción heurística generada automáticamente.,0.0,2
+last_maintenance_type,object,feature,Descripción heurística generada automáticamente.,0.0,4
+m_min_kg_m2,float64,feature,Descripción heurística generada automáticamente.,0.0,198521
+m_org_kg_m2,float64,feature,Descripción heurística generada automáticamente.,0.0,198512
+m_total_kg_m2,float64,feature,Descripción heurística generada automáticamente.,0.0,198524
+maintenance_active,int64,feature,Descripción heurística generada automáticamente.,0.0,2
+maintenance_planned,int64,feature,Descripción heurística generada automáticamente.,0.0,2
+maintenance_type,object,feature,Descripción heurística generada automáticamente.,0.0,4
+next_unplanned_fault_type,object,feature,Descripción heurística generada automáticamente.,0.0,3
+pH_nominal,float64,feature,Descripción heurística generada automáticamente.,0.0,180
+phase,object,feature,Fase operativa del activo.,0.0,4
+planned_event_type,object,feature,Descripción heurística generada automáticamente.,0.0,2
+pressure_in_kPa,float64,feature,Variable hidráulica expresada en kPa.,0.0,198540
+pressure_out_kPa,float64,feature,Variable hidráulica expresada en kPa.,0.0,197211
+protein_g_L_nominal,float64,feature,Descripción heurística generada automáticamente.,0.0,180
+rf_stage_thr_advanced,float64,feature,Descripción heurística generada automáticamente.,0.0,1
+rf_stage_thr_incipient,float64,feature,Descripción heurística generada automáticamente.,0.0,1
+shift_id,int64,feature,Descripción heurística generada automáticamente.,0.0,3
+solids_g_L_nominal,float64,feature,Descripción heurística generada automáticamente.,0.0,180
+stage_progress,float64,feature,Descripción heurística generada automáticamente.,0.0,101882
+time_since_last_cip_min,float64,feature,Variable temporal expresada en minutos.,6.121390630113536,3024
+time_since_last_maintenance_min,float64,feature,Variable temporal expresada en minutos.,6.088160511542432,3032
+unplanned_event_within_60min,int64,feature,Descripción heurística generada automáticamente.,0.0,2
+vibration_mm_s,float64,feature,Nivel de vibración.,0.0,189105
+asset_id,object,metadata,Identificador del activo.,0.0,10
+batch_id,object,metadata,Descripción heurística generada automáticamente.,0.0,180
+cycle_id,object,metadata,Identificador del ciclo de producción.,0.0,180
+episode_id,object,metadata,Descripción heurística generada automáticamente.,0.0,180
+sequence_id,object,metadata,Identificador de la secuencia/ciclo usado para generar ventanas.,0.0,180
+timestamp,object,metadata,Marca temporal de la observación.,0.0,36321
+Rf_m2K_W,float64,target_or_label,Severidad física de fouling (resistencia térmica).,0.0,196313
+clog_event,int64,target_or_label,Descripción heurística generada automáticamente.,0.0,2
+clog_onset_event,int64,target_or_label,Evento puntual de inicio de obstrucción.,0.0,2
+fouling_onset_event,int64,target_or_label,Evento puntual de entrada en fouling incipiente.,0.0,2
+fouling_stage,int64,target_or_label,Clase de stage informada.,0.0,4
+clog_onset_within_15min,int64,target_or_prediction,Descripción heurística generada automáticamente.,0.0,2
+fouling_onset_within_30min,int64,target_or_prediction,Descripción heurística generada automáticamente.,0.0,2
+time_to_clog_onset_min,float64,target_or_prediction,Tiempo restante hasta el siguiente inicio de obstrucción.,66.66364574679656,1754
+time_to_fouling_onset_min,float64,target_or_prediction,Tiempo restante hasta el siguiente inicio de fouling.,33.626866047378094,1311
+ttm_to_planned_cip_min,float64,target_or_prediction,Tiempo hasta la siguiente CIP planificada.,8.363416660373083,1824
+ttm_to_unplanned_event_min,float64,target_or_prediction,Tiempo hasta la siguiente intervención no planificada.,60.72351030888906,1784
