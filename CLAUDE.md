@@ -46,3 +46,6 @@ navegación — el detalle de cada tarea vive en su skill correspondiente, no lo
   o de una tabla de resultados auditada en la memoria — nunca de la imaginación del agente.
 - Si un caso del golden dataset falla la tolerancia, no se silencia ni se ajusta la tolerancia
   para que pase — se investiga y se documenta.
+- La ficha técnica y la ficha funcional se generan siempre con la plantilla paramétrica fija
+  (`docs-generation/ficha-modelo/`, ver su `SKILL.md`), nunca redactando o editando el .docx
+  del modelo anterior a mano — así se garantiza el mismo formato para los 48 modelos.
