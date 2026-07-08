@@ -82,3 +82,6 @@ __pycache__/
 # !/inbox/.gitkeep
 # !/outputs/.gitkeep
 # /.claude/
+
+inbox/a46/codigo/a46-dnsl-dairy-incrustaciones-atascos-maquinaria-procesado/data/processed/*.csv
+inbox/a46/codigo/a46-dnsl-dairy-incrustaciones-atascos-maquinaria-procesado/data/splits/*.csv
