@@ -39,3 +39,7 @@ class NoValidSimulationPointError(ValueError):
 
 class PuConstraintViolationError(ValueError):
     """Raised when the requested setpoints violate the PU ≥ 13 food-safety constraint (ml35)."""
+
+
+class InsufficientTelemetryHistoryError(ValueError):
+    """Raised when fewer than seq_len valid rows of telemetry history are provided (ml46)."""

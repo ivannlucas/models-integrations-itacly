@@ -1,0 +1,726 @@
+model_id: ml46_dairy_fouling_clog_detection
+sector: lacteo
+nombre: "Diseño y entrenamiento de un modelo DNSL para detectar incrustaciones y atascos en la maquinaria del procesado de la leche"
+task_type: timeseries_multitask  # TCN causal multisalida: regresión (severidad, TTE/TTU) + clasificación (stage, 3 binarias) sobre ventanas de 120 pasos
+framework:
+  - numpy>=1.23
+  - pandas>=1.5
+  - matplotlib>=3.6
+  - scikit-learn>=1.1
+  - torch>=2.0
+  - PyYAML>=6.0
+  # requirements.txt no fija versiones exactas (>=); ver known_issues.
+
+artifacts:
+  folder: models/artifacts/
+  files:
+    - selected_model.pt          # copia del checkpoint del escenario seleccionado (no_clock)
+    - model_manifest.json        # contrato: escenario, checkpoint, métricas, hashes
+    - feature_artifacts.json     # medianas/IQR/baselines por activo, pesos de clase, listas de features (full=82, no_clock=76)
+    - training_config.json       # TrainConfig persistida (hiperparámetros reales de esta ejecución)
+    - scenarios/no_clock/best_model.pt   # checkpoint real usado en inferencia (selected_scenario = no_clock)
+    - scenarios/full/best_model.pt       # alternativa conservadora (no seleccionada, no se sirve por defecto)
+  extra_files_metrics:
+    # necesario para reproducir la política de alertas del escenario servido; si falta, predictor.py cae a default_policy(train_cfg)
+    - models/metrics/no_clock_policy_thresholds.json
+
+inputs:
+  # Mínimo técnico común (Tabla 9 de la memoria, verificado contra src/predict/predictor.py::load_telemetry
+  # y src/training/data.py::load_telemetry — son obligatorios de facto porque el resto de columnas de esta
+  # lista se usan directamente en feature engineering sin default numérico si faltan).
+  fixed:
+    - name: timestamp
+      type: datetime
+      description: "Marca temporal de cada muestra, ordenable y consistente por activo."
+    - name: asset_id
+      type: string
+      description: "Identificador estable del activo/intercambiador."
+    - name: flow_kg_s
+      type: float
+      unit: "kg/s"
+    - name: pressure_in_kPa
+      type: float
+      unit: kPa
+    - name: pressure_out_kPa
+      type: float
+      unit: kPa
+    - name: dP_kPa
+      type: float
+      unit: kPa
+      description: "Pérdida de carga; debe ser coherente con pressure_in/out."
+    - name: Th_in_C
+      type: float
+      unit: "°C"
+    - name: Tc_in_C
+      type: float
+      unit: "°C"
+    - name: Th_out_C
+      type: float
+      unit: "°C"
+    - name: Tc_out_C
+      type: float
+      unit: "°C"
+    - name: Twall_C
+      type: float
+      unit: "°C"
+    - name: vibration_mm_s
+      type: float
+      unit: "mm/s"
+    - name: flow_sp_kg_s
+      type: float
+      unit: "kg/s"
+      description: "Consigna de caudal."
+    - name: Th_sp_C
+      type: float
+      unit: "°C"
+    - name: Tc_sp_C
+      type: float
+      unit: "°C"
+    - name: protein_g_L_nominal
+      type: float
+      unit: "g/L"
+    - name: fat_g_L_nominal
+      type: float
+      unit: "g/L"
+    - name: solids_g_L_nominal
+      type: float
+      unit: "g/L"
+    - name: Ca_mM_nominal
+      type: float
+      unit: mM
+    - name: PO4_mM_nominal
+      type: float
+      unit: mM
+    - name: pH_nominal
+      type: float
+      unit: pH
+
+  recommended:
+    - name: phase
+      type: categorical
+      values: [production, CIP_alkaline, CIP_acid, idle, maintenance]
+      description: "Delimita producción, CIP, idle y mantenimiento. Sin ella se asume production por defecto (ensure_columns)."
+    - name: maintenance_active
+      type: boolean
+      description: "Indicador de mantenimiento activo; sin ella se asume 0."
+
+  optional:
+    - asset_family      # standard_phe | robust_phe | compact_phe | unknown — default "unknown"
+    - milk_type          # whole | semi_skim | skim | high_solids | none — default "none"
+    - maintenance_type    # default "none"
+    - ambient_T_C
+    - ambient_RH_pct
+    - batch_thermal_history_factor
+    - last_maintenance_type
+      # none | scheduled_CIP | CIP_extra | unclog | mechanical_clean | other — default "none".
+      # NO aparece en la Tabla 9 de la memoria (omisión real detectada durante la integración),
+      # pero SÍ es una de las 76 features no_clock (one-hot lastmaint_*). Sin ella, todas las
+      # filas se codifican como "none" y las predicciones se desvían de forma medible (verificado
+      # empíricamente: severity ~8% off, p_foul_h >100% off en un caso de prueba). Ver known_issues.
+
+  full_scenario_only:
+    # Solo necesarios si en el futuro se sirve el escenario "full" (hoy no se sirve; el seleccionado es no_clock)
+    - batch_elapsed_min
+    - time_since_last_cip_min
+    - time_since_last_maintenance_min
+
+  prohibited:
+    # Variables oráculo/objetivo del simulador — nunca deben aceptarse como entrada productiva (fuga de información).
+    - Rf_m2K_W
+    - deposit_mass_kg
+    - m_total_kg_m2
+    - m_org_kg_m2
+    - m_min_kg_m2
+    - Rf_org_m2K_W
+    - Rf_min_m2K_W
+    - UA_W_K
+    - Q_W
+    - fouling_stage
+    - fouling_stage_physical
+    - fouling_stage_name
+    - fouling_onset_event
+    - clog_event
+    - clog_onset_event
+    - foul_score
+    - fouling_onset_within_30min
+    - clog_onset_within_15min
+    - unplanned_event_within_60min
+    - unplanned_fouling_within_120min
+    - time_to_fouling_onset_min
+    - time_to_clog_onset_min
+    - time_to_unplanned_fouling_min
+    - ttm_to_unplanned_event_min
+    - ttm_to_planned_cip_min
+    - fault_type
+    - planned_event_type
+    - maintenance_planned
+    - rf_stage_thr_incipient
+    - rf_stage_thr_advanced
+
+  window:
+    # El input funcional NO es una fila aislada: es una ventana temporal por asset_id + cycle_id + sequence_id.
+    seq_len: 120        # pasos (minutos, dt=60s)
+    stride: 5            # pasos entre ventanas consecutivas en modo batch
+    receptive_field_steps: 125   # campo temporal teórico del TCN (5 bloques, dilataciones 1/2/4/8/16, kernel 3)
+    note: >
+      predict() batch construye las ventanas internamente a partir de un CSV de telemetría ordenado
+      por asset_id/timestamp (src/predict/predictor.py::_prepare_sequences + make_sequences). No existe
+      en el código entregado un modo de predicción de "una sola fila"; el mínimo operativo real es
+      un historial continuo de al menos 120 minutos por activo.
+    baseline_history_note: >
+      Para activos NO vistos en entrenamiento (todo activo de producción real, y los propios
+      asset_00/asset_06 de test), los residuos (resid_flow_kg_s, resid_dP_kPa, resid_vibration_mm_s,
+      resid_thermal_eff_proxy) se calculan con estimate_prefix_baseline(): una media de las primeras
+      baseline_prefix_hours=8h (480 filas @1min) del historial del activo, en vez del baseline fijo
+      que sí existe para los 6 activos de entrenamiento (train_asset_baselines en
+      feature_artifacts.json). Verificado empíricamente: con solo la ventana de 120 min el severity
+      predicho se desvía ~8% del valor real del checkpoint; aportando el historial completo del
+      activo (>= 8h) la predicción coincide con precisión de float32 (~1e-6). Para máxima fidelidad
+      en producción, el adaptador debe alimentar el mayor histórico disponible del activo, no solo
+      los 120 minutos mínimos.
+
+outputs:
+  predict_inline:
+    # Una fila de salida por ventana válida (última posición de cada ventana de 120 pasos).
+    - name: pred_severity
+      type: float
+      description: "Severidad física de ensuciamiento actual, desescalada a Rf_m2K_W."
+    - name: pred_stage
+      type: int
+      values: [0, 1, 2]
+      description: "Estado físico: 0=stable, 1=incipient, 2=advanced."
+    - name: pred_stage_name
+      type: string
+      values: [stable, incipient, advanced]
+    - name: p_stage0
+      type: float
+    - name: p_stage1
+      type: float
+    - name: p_stage2
+      type: float
+    - name: p_foul_h
+      type: float
+      alias: p_watch_fouling
+      description: "Probabilidad de inicio de ensuciamiento en 30 min."
+    - name: p_actionable_foul_h
+      type: float
+      alias: p_actionable_fouling
+      description: "Probabilidad de ensuciamiento no planificado en 120 min."
+    - name: p_clog_h
+      type: float
+      description: "Probabilidad de inicio de obstrucción en 15 min."
+    - name: pred_tte_foul_min
+      type: float
+      description: "Tiempo estimado hasta inicio de ensuciamiento (cap 240 min)."
+    - name: pred_tte_clog_min
+      type: float
+      description: "Tiempo estimado hasta inicio de obstrucción (cap 120 min)."
+    - name: pred_ttu_min
+      type: float
+      description: "Tiempo estimado hasta próxima intervención no planificada (cap 360 min)."
+
+  alerts:
+    # Episodios consolidados (evaluation.py::consolidate_alerts) — agregación operativa sobre predict_inline.
+    - alert_episode_id
+    - is_alert_episode
+    - n_signals
+    - predicates: [HighDP, LowFlow, HighVib, ThermalDrop, DPRising, VibSpike]
+      description: "Predicados explicativos legibles combinados con probabilidades/severidad/tiempos."
+
+training:
+  supported: true
+  target_column: Rf_m2K_W  # TrainConfig.severity_col; exigido explícitamente por load_telemetry(require_targets=True)
+  required_columns:
+    # Columnas mínimas que hacen fallar load_telemetry() si faltan (ValueError explícito):
+    hard_required: [timestamp, asset_id, Rf_m2K_W]
+    # Resto del contrato "fixed" de arriba: recomendado con fuerza para reproducir fielmente el entrenamiento
+    # documentado (sin ellas, ensure_columns/feature engineering usa defaults/NaN y degrada las features).
+    recommended: [flow_kg_s, pressure_in_kPa, pressure_out_kPa, dP_kPa, Th_in_C, Tc_in_C, Th_out_C, Tc_out_C,
+                  Twall_C, vibration_mm_s, flow_sp_kg_s, Th_sp_C, Tc_sp_C, protein_g_L_nominal, fat_g_L_nominal,
+                  solids_g_L_nominal, Ca_mM_nominal, PO4_mM_nominal, pH_nominal, phase, maintenance_active]
+    source: codigo_entrenamiento  # src/training/data.py::load_telemetry
+  hyperparams:
+    # Valores REALES persistidos en models/artifacts/training_config.json (no los de la Tabla 15 de la
+    # memoria, que no coinciden — ver known_issues).
+    batch_size: 64
+    epochs: 8
+    lr: 0.001
+    weight_decay: 0.00001
+    seed: 7
+    channels: 64
+    dilations: [1, 2, 4, 8, 16]
+    dropout: 0.15
+    seq_len: 120
+    stride: 5
+    fouling_horizon_min: 30
+    clog_horizon_min: 15
+    unplanned_fouling_horizon_min: 120
+    tte_fouling_cap_min: 240
+    tte_clog_cap_min: 120
+    ttu_cap_min: 360
+    baseline_prefix_hours: 8.0
+    match_window_min: 240
+    split_trials: 3000
+    policy_max_candidates: 400
+    ablate_clocks: true
+    cooldown_min_default: 60
+    source: codigo_entrenamiento  # models/artifacts/training_config.json (persistido por train_pipeline)
+  metrics_returned:
+    - severity_rmse
+    - severity_mae
+    - stage_accuracy
+    - stage_macro_f1
+    - stage_balanced_accuracy
+    - watch_foul_auc
+    - watch_foul_ap
+    - watch_foul_f1
+    - actionable_foul_auc
+    - actionable_foul_ap
+    - actionable_foul_f1
+    - clog_h_auc
+    - clog_h_ap
+    - clog_h_f1
+    - tte_foul_mae_min
+    - tte_clog_mae_min
+    - ttu_mae_min
+  note: >
+    train() (src/main.py::train -> src/training/pipeline.py::train_pipeline) reentrena AMBOS escenarios
+    (full y no_clock) desde cero sobre el CSV de telemetría de entrada — reparte activos en train/val/test,
+    reajusta feature_artifacts, entrena las 8 épocas y reselecciona el escenario ganador por KPI de
+    validación. No es fine-tuning incremental sobre el checkpoint existente.
+
+constraints:
+  scenario_selected: no_clock  # fijo; el checkpoint servido es scenarios/no_clock/best_model.pt, no configurable por request
+  prohibited_input_columns: true  # ver inputs.prohibited — el plugin debe rechazar/ignorar estas columnas si llegan en un CSV de predict
+  descripcion: >
+    No hay una restricción de negocio tipo "rechazar predicción si X" (no hay umbral de seguridad
+    alimentaria como en a35). La única restricción dura es de integridad de datos: las columnas oráculo
+    listadas en inputs.prohibited nunca deben usarse como entrada productiva porque son el propio target
+    del simulador (fuga de información). El plugin-integration debe decidir si esto justifica una excepción
+    de dominio dedicada o basta con validación de esquema en el adaptador de entrada.
+
+# Métricas REALES del model_manifest.json entregado (escenario no_clock, split test = asset_00 + asset_06,
+# 2 de 10 activos, 198.615 filas totales). NO son las métricas de la Tabla 16/17/18 de la memoria — ver
+# known_issues sobre la discrepancia memoria vs. artefactos entregados.
+metrics_reported:
+  scenario: no_clock
+  dataset: test_split
+  test_assets: [asset_00, asset_06]
+  n_total_assets: 10
+  n_telemetry_rows_total: 198615
+  window:
+    severity_rmse: 0.00011608393649876462
+    severity_mae: 8.135631146805206e-05
+    stage_accuracy: 0.9651557655396427
+    stage_macro_f1: 0.9471419241121192
+    stage_balanced_accuracy: 0.961224220827854
+    watch_foul_auc: 0.9527048491980619
+    watch_foul_ap: 0.46423455917949
+    watch_foul_f1: 0.4768
+    actionable_foul_auc: 0.9716387856257745
+    actionable_foul_ap: 0.2400946212680447
+    actionable_foul_f1: 0.2318840579710145
+    clog_h_auc: 0.9551856255780156
+    clog_h_ap: 0.2126166553023802
+    clog_h_f1: 0.22388059701492538
+    tte_foul_mae_min: 69.29759333205156
+    tte_clog_mae_min: 32.53357991520313
+    ttu_mae_min: 109.62735871918072
+  event:
+    total_events: 15
+    tp_events_total: 11
+    fn_events_total: 4
+    false_alarms_total: 17
+    precision_total: 0.39285714285714285
+    recall_total: 0.7333333333333333
+    macro_event_f1: 0.26829268292682923
+    false_alarms_per_day_total: 0.6135953479045518
+  source: codigo_entrenamiento  # models/artifacts/model_manifest.json (summary.test_window_metrics / test_event_metrics)
+
+# 13 casos extraídos de data/predictions/no_clock_test_window_predictions.csv (escenario no_clock,
+# selected_scenario real, split test). expected = salida del modelo (pred_*), NO el true_* — se verifica
+# reproducibilidad numérica del checkpoint, no acierto del modelo frente a la verdad sintética (eso ya
+# está en metrics_reported). El "input" referencia la ventana de 120 filas (asset_id+sequence_id+
+# timestamp final) en data/splits/test_rows.csv en vez de embeber 120 filas crudas en este YAML — ver
+# known_issues. raw_snapshot son solo columnas de contexto de la ÚLTIMA fila de la ventana, útiles para
+# lectura humana, no suficientes por sí solas para reproducir la predicción.
+#
+# VERIFICACIÓN RECOMENDADA: usar predict_batch() sobre data/splits/test_rows.csv completo (o el CSV
+# reconstruido de la ventana + historial del activo) — tolerance float_rtol=1e-4 se cumple ampliamente
+# (diferencia real observada <= 1.2e-9). Si se verifica vía predict_inline (ventana única), aportar
+# last_maintenance_type y, para asset_00/asset_06 (no vistos en entrenamiento), el historial completo
+# del activo hasta window_end_timestamp — no solo 120 filas — o la tolerancia no se cumplirá (ver
+# known_issues e inputs.window.baseline_history_note).
+golden_cases:
+  - id: caso_001
+    source: dataset_test_split
+    input:
+      asset_id: asset_00
+      sequence_id: asset_00_C00008
+      window_end_timestamp: "2026-01-11T08:00:00+00:00"
+      window_source: "data/splits/test_rows.csv filtrado por asset_id+sequence_id, 120 filas @1min terminando en window_end_timestamp"
+      raw_snapshot: {flow_kg_s: 6.610730, dP_kPa: 87.179140, vibration_mm_s: 1.806866, milk_type: high_solids, asset_family: robust_phe, fault_type: none, phase: production}
+    expected:
+      pred_severity: 0.0001760901068
+      pred_stage: 0
+      pred_stage_name: stable
+      p_stage0: 0.9999984503
+      p_stage1: 5.36209015e-08
+      p_stage2: 1.537630737e-06
+      p_foul_h: 1.37468453e-06
+      p_actionable_foul_h: 8.304603398e-06
+      p_clog_h: 3.574095047e-07
+      pred_tte_foul_min: 166.7734222
+      pred_tte_clog_min: 86.78542328
+      pred_ttu_min: 244.2547302
+    tolerance: {float_rtol: 1.0e-4, stage_exact: true}
+
+  - id: caso_002
+    source: dataset_test_split
+    input:
+      asset_id: asset_00
+      sequence_id: asset_00_C00008
+      window_end_timestamp: "2026-01-12T05:25:00+00:00"
+      window_source: "data/splits/test_rows.csv filtrado por asset_id+sequence_id, 120 filas @1min terminando en window_end_timestamp"
+      raw_snapshot: {flow_kg_s: 6.304707, dP_kPa: 372.778021, vibration_mm_s: 2.899664, milk_type: high_solids, asset_family: robust_phe, fault_type: fouling, phase: production}
+    expected:
+      pred_severity: 0.0007443665527
+      pred_stage: 1
+      pred_stage_name: incipient
+      p_stage0: 2.335671161e-05
+      p_stage1: 0.9987533092
+      p_stage2: 0.001223366708
+      p_foul_h: 0.001846518717
+      p_actionable_foul_h: 0.01005373616
+      p_clog_h: 0.003481674939
+      pred_tte_foul_min: 112.3637619
+      pred_tte_clog_min: 58.26641083
+      pred_ttu_min: 129.4649048
+    tolerance: {float_rtol: 1.0e-4, stage_exact: true}
+
+  - id: caso_003
+    source: dataset_test_split
+    input:
+      asset_id: asset_00
+      sequence_id: asset_00_C00011
+      window_end_timestamp: "2026-01-16T12:23:00+00:00"
+      window_source: "data/splits/test_rows.csv filtrado por asset_id+sequence_id, 120 filas @1min terminando en window_end_timestamp"
+      raw_snapshot: {flow_kg_s: 3.686915, dP_kPa: 2391.902150, vibration_mm_s: 15.319798, milk_type: skim, asset_family: robust_phe, fault_type: clogging, phase: production}
+    expected:
+      pred_severity: 0.00184462301
+      pred_stage: 2
+      pred_stage_name: advanced
+      p_stage0: 1.222771306e-08
+      p_stage1: 0.0007839066093
+      p_stage2: 0.9992160797
+      p_foul_h: 8.237932343e-05
+      p_actionable_foul_h: 1.27429276e-08
+      p_clog_h: 4.111513135e-06
+      pred_tte_foul_min: 190.6179657
+      pred_tte_clog_min: 119.9284363
+      pred_ttu_min: 40.14861298
+    tolerance: {float_rtol: 1.0e-4, stage_exact: true}
+
+  - id: caso_004
+    source: dataset_test_split
+    input:
+      asset_id: asset_06
+      sequence_id: asset_06_C00008
+      window_end_timestamp: "2026-01-10T00:30:00+00:00"
+      window_source: "data/splits/test_rows.csv filtrado por asset_id+sequence_id, 120 filas @1min terminando en window_end_timestamp"
+      raw_snapshot: {flow_kg_s: 4.911915, dP_kPa: 103.580507, vibration_mm_s: 1.622392, milk_type: high_solids, asset_family: standard_phe, fault_type: none, phase: production}
+    expected:
+      pred_severity: 0.0001919272472
+      pred_stage: 0
+      pred_stage_name: stable
+      p_stage0: 0.9999997616
+      p_stage1: 2.961355428e-08
+      p_stage2: 2.334002858e-07
+      p_foul_h: 3.060920062e-05
+      p_actionable_foul_h: 1.835687158e-06
+      p_clog_h: 2.113145428e-07
+      pred_tte_foul_min: 216.5177307
+      pred_tte_clog_min: 120.0
+      pred_ttu_min: 359.9999695
+    tolerance: {float_rtol: 1.0e-4, stage_exact: true}
+
+  - id: caso_005
+    source: dataset_test_split
+    input:
+      asset_id: asset_06
+      sequence_id: asset_06_C00011
+      window_end_timestamp: "2026-01-14T01:10:00+00:00"
+      window_source: "data/splits/test_rows.csv filtrado por asset_id+sequence_id, 120 filas @1min terminando en window_end_timestamp"
+      raw_snapshot: {flow_kg_s: 4.890858, dP_kPa: 443.255435, vibration_mm_s: 3.077965, milk_type: skim, asset_family: standard_phe, fault_type: fouling, phase: production}
+    expected:
+      pred_severity: 0.0008447247092
+      pred_stage: 1
+      pred_stage_name: incipient
+      p_stage0: 1.145835427e-06
+      p_stage1: 0.9990478158
+      p_stage2: 0.0009509430383
+      p_foul_h: 0.0005200223532
+      p_actionable_foul_h: 0.0002894538047
+      p_clog_h: 0.0002347812115
+      pred_tte_foul_min: 240.0
+      pred_tte_clog_min: 120.0
+      pred_ttu_min: 331.6550293
+    tolerance: {float_rtol: 1.0e-4, stage_exact: true}
+
+  - id: caso_006
+    source: dataset_test_split
+    input:
+      asset_id: asset_06
+      sequence_id: asset_06_C00007
+      window_end_timestamp: "2026-01-09T01:10:00+00:00"
+      window_source: "data/splits/test_rows.csv filtrado por asset_id+sequence_id, 120 filas @1min terminando en window_end_timestamp"
+      raw_snapshot: {flow_kg_s: 4.651028, dP_kPa: 1231.287835, vibration_mm_s: 6.003518, milk_type: whole, asset_family: standard_phe, fault_type: fouling, phase: production}
+    expected:
+      pred_severity: 0.001847386011
+      pred_stage: 2
+      pred_stage_name: advanced
+      p_stage0: 1.726480647e-08
+      p_stage1: 0.0003851798247
+      p_stage2: 0.9996147156
+      p_foul_h: 1.987574251e-05
+      p_actionable_foul_h: 0.006821524817
+      p_clog_h: 0.1089035273
+      pred_tte_foul_min: 197.1395264
+      pred_tte_clog_min: 90.75221252
+      pred_ttu_min: 208.1654053
+    tolerance: {float_rtol: 1.0e-4, stage_exact: true}
+
+  - id: caso_007
+    source: dataset_test_split
+    input:
+      asset_id: asset_00
+      sequence_id: asset_00_C00001
+      window_end_timestamp: "2026-01-02T03:01:00+00:00"
+      window_source: "data/splits/test_rows.csv filtrado por asset_id+sequence_id, 120 filas @1min terminando en window_end_timestamp"
+      raw_snapshot: {flow_kg_s: 5.391198, dP_kPa: 247.769243, vibration_mm_s: 2.336570, milk_type: semi_skim, asset_family: robust_phe, fault_type: none, phase: production}
+      note: "true_foul_h=1 (evento real de vigilancia de ensuciamiento en curso); pred_stage(1) difiere de true_stage(0) — se conserva como caso porque expected = predicción real del modelo, no la verdad."
+    expected:
+      pred_severity: 0.0006140509504
+      pred_stage: 1
+      pred_stage_name: incipient
+      p_stage0: 5.465228605e-05
+      p_stage1: 0.9999164343
+      p_stage2: 2.896427759e-05
+      p_foul_h: 0.03464368358
+      p_actionable_foul_h: 0.0002231596154
+      p_clog_h: 5.001234604e-05
+      pred_tte_foul_min: 115.5526047
+      pred_tte_clog_min: 69.87522888
+      pred_ttu_min: 170.6432495
+    tolerance: {float_rtol: 1.0e-4, stage_exact: true}
+
+  - id: caso_008
+    source: dataset_test_split
+    input:
+      asset_id: asset_00
+      sequence_id: asset_00_C00018
+      window_end_timestamp: "2026-01-24T20:11:00+00:00"
+      window_source: "data/splits/test_rows.csv filtrado por asset_id+sequence_id, 120 filas @1min terminando en window_end_timestamp"
+      raw_snapshot: {flow_kg_s: 5.280393, dP_kPa: 264.172163, vibration_mm_s: 2.494922, milk_type: skim, asset_family: robust_phe, fault_type: fouling, phase: production}
+    expected:
+      pred_severity: 0.0007071716245
+      pred_stage: 1
+      pred_stage_name: incipient
+      p_stage0: 1.029408759e-05
+      p_stage1: 0.9994652867
+      p_stage2: 0.000524513016
+      p_foul_h: 0.002131835558
+      p_actionable_foul_h: 0.000920721388
+      p_clog_h: 0.0003515107965
+      pred_tte_foul_min: 138.6799164
+      pred_tte_clog_min: 72.2687149
+      pred_ttu_min: 173.0365753
+    tolerance: {float_rtol: 1.0e-4, stage_exact: true}
+
+  - id: caso_009
+    source: dataset_test_split
+    input:
+      asset_id: asset_00
+      sequence_id: asset_00_C00002
+      window_end_timestamp: "2026-01-03T13:03:00+00:00"
+      window_source: "data/splits/test_rows.csv filtrado por asset_id+sequence_id, 120 filas @1min terminando en window_end_timestamp"
+      raw_snapshot: {flow_kg_s: 5.287518, dP_kPa: 523.833096, vibration_mm_s: 3.144800, milk_type: semi_skim, asset_family: robust_phe, fault_type: fouling, phase: production}
+      note: "true_clog_h=1 — caso con obstrucción real inminente."
+    expected:
+      pred_severity: 0.001053289394
+      pred_stage: 1
+      pred_stage_name: incipient
+      p_stage0: 1.316427097e-05
+      p_stage1: 0.8576770425
+      p_stage2: 0.1423097998
+      p_foul_h: 0.0002686669468
+      p_actionable_foul_h: 0.003706477815
+      p_clog_h: 0.003663658164
+      pred_tte_foul_min: 119.9986343
+      pred_tte_clog_min: 60.07135391
+      pred_ttu_min: 134.4719849
+    tolerance: {float_rtol: 1.0e-4, stage_exact: true}
+
+  - id: caso_010
+    source: dataset_test_split
+    input:
+      asset_id: asset_06
+      sequence_id: asset_06_C00001
+      window_end_timestamp: "2026-01-01T16:02:00+00:00"
+      window_source: "data/splits/test_rows.csv filtrado por asset_id+sequence_id, 120 filas @1min terminando en window_end_timestamp"
+      raw_snapshot: {flow_kg_s: 5.172640, dP_kPa: 605.474632, vibration_mm_s: 3.643176, milk_type: high_solids, asset_family: standard_phe, fault_type: fouling, phase: production}
+      note: "true_stage=2 (advanced) pero pred_stage=1 (incipient) — ejemplo de discrepancia real modelo/verdad, útil para no confundir golden_case con acierto perfecto."
+    expected:
+      pred_severity: 0.001050052
+      pred_stage: 1
+      pred_stage_name: incipient
+      p_stage0: 0.000134051108
+      p_stage1: 0.8372424841
+      p_stage2: 0.1626234949
+      p_foul_h: 0.0007783963811
+      p_actionable_foul_h: 0.0002520242415
+      p_clog_h: 0.0002955995442
+      pred_tte_foul_min: 160.0298462
+      pred_tte_clog_min: 86.57796478
+      pred_ttu_min: 216.1183624
+    tolerance: {float_rtol: 1.0e-4, stage_exact: true}
+
+  - id: caso_011
+    source: dataset_test_split
+    input:
+      asset_id: asset_06
+      sequence_id: asset_06_C00004
+      window_end_timestamp: "2026-01-05T10:39:00+00:00"
+      window_source: "data/splits/test_rows.csv filtrado por asset_id+sequence_id, 120 filas @1min terminando en window_end_timestamp"
+      raw_snapshot: {flow_kg_s: 5.638722, dP_kPa: 626.058617, vibration_mm_s: 3.634040, milk_type: high_solids, asset_family: standard_phe, fault_type: fouling, phase: production}
+      note: "true_actionable_foul_h=1; true_stage=2 vs pred_stage=1."
+    expected:
+      pred_severity: 0.001082821866
+      pred_stage: 1
+      pred_stage_name: incipient
+      p_stage0: 1.506765693e-05
+      p_stage1: 0.8927628994
+      p_stage2: 0.1072219983
+      p_foul_h: 0.0003808904439
+      p_actionable_foul_h: 0.002293142723
+      p_clog_h: 0.002090031747
+      pred_tte_foul_min: 149.7530518
+      pred_tte_clog_min: 75.40608978
+      pred_ttu_min: 175.596283
+    tolerance: {float_rtol: 1.0e-4, stage_exact: true}
+
+  - id: caso_012
+    source: dataset_test_split
+    input:
+      asset_id: asset_00
+      sequence_id: asset_00_C00001
+      window_end_timestamp: "2026-01-02T02:06:00+00:00"
+      window_source: "data/splits/test_rows.csv filtrado por asset_id+sequence_id, 120 filas @1min terminando en window_end_timestamp"
+      raw_snapshot: {flow_kg_s: 5.279108, dP_kPa: 207.618645, vibration_mm_s: 2.122370, milk_type: semi_skim, asset_family: robust_phe, fault_type: none, phase: production}
+      note: "true_stage=0 (stable) vs pred_stage=1 (incipient), con p_foul_h=0.97 muy alta — caso límite útil para detectar regresiones de calibración en el reimplementado."
+    expected:
+      pred_severity: 0.00050899497
+      pred_stage: 1
+      pred_stage_name: incipient
+      p_stage0: 0.3617944419
+      p_stage1: 0.6380699277
+      p_stage2: 0.0001356577413
+      p_foul_h: 0.9702340961
+      p_actionable_foul_h: 5.669925667e-05
+      p_clog_h: 0.0002626491769
+      pred_tte_foul_min: 35.3650589
+      pred_tte_clog_min: 64.25323486
+      pred_ttu_min: 160.0359802
+    tolerance: {float_rtol: 1.0e-4, stage_exact: true}
+
+  - id: caso_013
+    source: dataset_test_split
+    input:
+      asset_id: asset_00
+      sequence_id: asset_00_C00018
+      window_end_timestamp: "2026-01-24T19:36:00+00:00"
+      window_source: "data/splits/test_rows.csv filtrado por asset_id+sequence_id, 120 filas @1min terminando en window_end_timestamp"
+      raw_snapshot: {flow_kg_s: 5.188492, dP_kPa: 239.536840, vibration_mm_s: 2.389793, milk_type: skim, asset_family: robust_phe, fault_type: none, phase: production}
+      note: "true_stage=0 vs pred_stage=1, p_foul_h=0.70 — mismo patrón que caso_012, distinto activo/ciclo."
+    expected:
+      pred_severity: 0.0006393925287
+      pred_stage: 1
+      pred_stage_name: incipient
+      p_stage0: 0.007396172266
+      p_stage1: 0.9922302365
+      p_stage2: 0.0003736928047
+      p_foul_h: 0.6977059841
+      p_actionable_foul_h: 7.980348892e-05
+      p_clog_h: 0.0003726515279
+      pred_tte_foul_min: 78.7493515
+      pred_tte_clog_min: 68.46452332
+      pred_ttu_min: 169.2597656
+    tolerance: {float_rtol: 1.0e-4, stage_exact: true}
+
+known_issues:
+  - >
+    DISCREPANCIA MAYOR memoria vs. artefactos entregados (confirmada con el usuario, decisión: usar
+    artefactos reales como fuente de verdad para este manifest). La memoria v1.2 (secciones 3.1, 3.5,
+    9.4, Tabla 2) documenta un dataset de 100 activos / 2.200 ciclos / 2.288.800 filas con split
+    60/20/20 activos. Los artefactos realmente entregados en inbox/a46/codigo/ (config.yaml,
+    data/processed/generation_metadata.json, data/splits/asset_split_report.json,
+    models/artifacts/model_manifest.json) corresponden a una ejecución de 10 activos / 18 ciclos por
+    activo / 198.615 filas, con split 6 train (asset_01,02,03,05,07,09) / 2 val (asset_04,asset_08) /
+    2 test (asset_00,asset_06). Las métricas de test reales son peores que las reportadas en la memoria
+    (p.ej. tte_foul_mae_min real=69.3 min vs. memoria=32.6 min; ttu_mae_min real=109.6 min vs.
+    memoria=45.0 min). Recomendado: pedir al equipo de IA que reconcilie memoria y código, o entregue
+    la ejecución de 100 activos que la memoria describe.
+  - >
+    Tabla 14/15 de la memoria indica batch_size=128 y épocas=4 para el escenario final. El
+    training_config.json realmente persistido dice batch_size=64 y epochs=8. Se ha usado el valor
+    persistido real en training.hyperparams.
+  - >
+    La memoria referencia varios artefactos que no existen en el paquete de código entregado:
+    models/artifacts/inference_input_contract.json, artifact_contract.json, kpi_design_definition.json,
+    models/metrics/stats/qc/sequence_diversity_qc.json y otros ficheros bajo models/metrics/stats/qc/.
+    No se ha podido verificar su contenido; el manifest se apoya únicamente en el código y los
+    artefactos presentes en el paquete.
+  - >
+    requirements.txt no fija versiones exactas (usa >=), documentado también por el propio equipo de
+    IA como limitación conocida en README.md ("no se han fijado versiones exactas... porque los
+    scripts fuente no incluían un entorno bloqueado"). El encoding del fichero es ASCII/UTF-8 normal,
+    sin el problema de UTF-16LE visto en otros modelos del repo.
+  - >
+    Dataset 100% sintético: generado internamente por src/data_processing/synthetic_generator.py, sin
+    ETL de datos reales de planta (confirmado en README.md y memoria secciones 3.2 y 10). Cualquier
+    cifra de negocio derivada de este modelo debe llevar advertencia de validación pendiente frente a
+    telemetría real.
+  - >
+    El "input funcional" del modelo es una ventana temporal de 120 pasos por activo/ciclo/secuencia, no
+    una fila tabular aislada. Los golden_cases referencian la ventana por (asset_id, sequence_id,
+    window_end_timestamp) contra data/splits/test_rows.csv en vez de embeber 120 filas crudas por caso
+    en este YAML; el skill de verification deberá reconstruir la ventana desde ese CSV para ejecutar el
+    plugin end-to-end.
+  - >
+    OMISIÓN REAL en la Tabla 9 de la memoria (contrato de entrada productiva): no menciona
+    last_maintenance_type, pero es una de las 76 features no_clock (one-hot lastmaint_*), calculada
+    normalmente por align_future_labels() a partir del historial de mantenimientos y NO recalculada en
+    predict.py (que asume que ya viene en el CSV de entrada, como ocurre con telemetry_processed.csv y
+    con data/splits/test_rows.csv). Si no se aporta, load_telemetry() la rellena con "none" para todas
+    las filas, lo que se verificó experimentalmente que desvía severity ~8% y las probabilidades raras
+    (p_foul_h, p_clog_h) en >100% relativo para un caso de prueba real. Se ha añadido a
+    inputs.optional del plugin como corrección; el equipo de IA debería actualizar la memoria.
+  - >
+    Reproducibilidad numérica verificada por capas: se comparó el tensor de entrada (120x76) construido
+    por el plugin vendorizado contra el construido por el código original sin modificar (inbox/a46/codigo)
+    para el golden case caso_001 — diferencia máxima 0.0 (bit-exacto). Ejecutando predict_batch() sobre
+    data/splits/test_rows.csv completo, los 13 golden_cases reproducen los valores de
+    no_clock_test_window_predictions.csv con diferencia absoluta <= 1.2e-9 (ruido de float32). En modo
+    predict_inline (una sola ventana), la reproducción exacta depende de aportar last_maintenance_type
+    y, para activos no vistos en entrenamiento, suficiente historial previo (ver
+    inputs.window.baseline_history_note) — con ambos aportados, la diferencia también baja a ~1e-6.
+  - >
+    El split de test real solo contiene 2 activos (asset_00, asset_06) de 10 totales. La cobertura
+    estadística de metrics_reported es limitada frente a lo que la memoria sugiere (20 activos de
+    test); tratar las métricas de test como indicativas, no como validación robusta.
+  - >
+    El escenario servido es fijo: no_clock (seleccionado por mayor KPI de validación real: 1.954 vs.
+    el objetivo del escenario full). El escenario "full" (con relojes directos) queda como alternativa
+    en scenarios/full/best_model.pt pero no se sirve por defecto; no se ha incluido como opción
+    configurable en outputs porque el código de predict.py solo expone --scenario auto/full/no_clock a
+    nivel CLI, no como parámetro documentado en la memoria para producción.
