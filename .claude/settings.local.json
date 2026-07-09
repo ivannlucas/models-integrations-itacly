@@ -39,7 +39,8 @@
       "Bash(time curl -s -m 300 -X POST http://localhost:8009/models/ml46-dairy-fouling-clog-detection/train -H 'Content-Type: application/json' -d '{\"data_path\":\"/mnt/c/Users/PC/Desktop/Repositorios/models-integrations-itacly/inbox/a46/codigo/a46-dnsl-dairy-incrustaciones-atascos-maquinaria-procesado/data/splits/val_rows.csv\",\"mlflow_run_id\":\"\"}')",
       "Bash(kill %1)",
       "Bash(git add *)",
-      "Bash(git commit -m ' *)"
+      "Bash(git commit -m ' *)",
+      "Bash(echo \"grep exit: $?\")"
     ]
   }
 }
