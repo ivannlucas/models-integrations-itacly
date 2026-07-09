@@ -1,0 +1,73 @@
+{
+  "model_id": "a46",
+  "model_slug": "dairy-fouling-clog-detection",
+  "fecha": "Julio 2026",
+  "model_key": "ml46-dairy-fouling-clog-detection",
+  "version": "1.0.0",
+  "descripcion": "Red convolucional temporal (TCN) causal multitarea que procesa ventanas de 120 minutos de telemetría de proceso de un intercambiador de calor de placas lácteo. Combina una cabeza de regresión de severidad, una de clasificación de estado (3 clases) y seis cabezas auxiliares (horizontes binarios de ensuciamiento/obstrucción y tiempos a evento) sobre una representación temporal compartida de 5 bloques causales dilatados.",
+  "task_type": "Serie temporal multitarea (regresión de severidad + clasificación de estado + 6 salidas auxiliares de horizonte/tiempo-a-evento)",
+  "framework": "PyTorch (TCN causal multitarea, 5 bloques, dilataciones 1/2/4/8/16, 64 canales) + pandas / numpy / scikit-learn",
+  "artefacto": "selected_model.pt (checkpoint escenario no_clock) + feature_artifacts.json + training_config.json + policy_thresholds.json",
+  "objetivo": "Anticipar la degradación por ensuciamiento (fouling) y el riesgo de obstrucción (clogging) de un intercambiador de calor de placas con antelación suficiente para programar una limpieza (CIP) en el momento óptimo, evitando tanto limpiezas prematuras como paradas no planificadas.",
+  "caso_uso": "Modo predict_inline: dado el historial reciente de telemetría de un activo (mínimo 120 minutos, idealmente varias horas), devuelve el estado de ensuciamiento actual, probabilidades de alerta a 15/30/120 min y tiempos estimados a evento. Modo predict_batch: procesa el histórico completo de uno o varios activos desde un CSV y consolida las alertas repetidas en episodios. Modo train: permite fine-tuning del checkpoint servido con telemetría real etiquetada (columna Rf_m2K_W) del cliente.",
+  "inputs": [
+    {"nombre": "timestamp", "tipo": "datetime", "descripcion": "Marca temporal de cada muestra, 1 fila por minuto", "obligatorio": "Sí", "valor_defecto": "-"},
+    {"nombre": "asset_id", "tipo": "string", "descripcion": "Identificador del activo/intercambiador", "obligatorio": "Sí", "valor_defecto": "-"},
+    {"nombre": "flow_kg_s, pressure_in_kPa, pressure_out_kPa, dP_kPa", "tipo": "float", "descripcion": "Caudal, presiones y pérdida de carga", "obligatorio": "Sí", "valor_defecto": "-"},
+    {"nombre": "Th_in_C, Tc_in_C, Th_out_C, Tc_out_C, Twall_C", "tipo": "float (°C)", "descripcion": "Temperaturas de entrada/salida de los lados caliente/frío y de pared", "obligatorio": "Sí", "valor_defecto": "-"},
+    {"nombre": "vibration_mm_s, flow_sp_kg_s, Th_sp_C, Tc_sp_C", "tipo": "float", "descripcion": "Vibración y consignas de caudal/temperatura", "obligatorio": "Sí", "valor_defecto": "-"},
+    {"nombre": "protein_g_L_nominal, fat_g_L_nominal, solids_g_L_nominal, Ca_mM_nominal, PO4_mM_nominal, pH_nominal", "tipo": "float", "descripcion": "Composición nominal del producto", "obligatorio": "Sí", "valor_defecto": "-"},
+    {"nombre": "phase, maintenance_active", "tipo": "categórico / booleano", "descripcion": "Fase operativa y mantenimiento activo", "obligatorio": "Recomendado", "valor_defecto": "\"production\" / 0"},
+    {"nombre": "last_maintenance_type", "tipo": "categórico", "descripcion": "Tipo del último mantenimiento completado del activo", "obligatorio": "Recomendado", "valor_defecto": "\"none\" (degrada la precisión si se omite)"},
+    {"nombre": "asset_family, milk_type, maintenance_type, ambient_T_C, ambient_RH_pct, batch_thermal_history_factor", "tipo": "variado", "descripcion": "Contexto adicional del activo y producto", "obligatorio": "Opcional", "valor_defecto": "valores por defecto del generador"}
+  ],
+  "outputs": [
+    {"nombre": "pred_severity", "tipo": "float", "descripcion": "Severidad física de ensuciamiento (Rf_m2K_W)", "rango": "positivo continuo, ~0 a 3e-3", "interpretacion": "valores más altos indican mayor depósito acumulado"},
+    {"nombre": "pred_stage / pred_stage_name", "tipo": "int (0-2) / str", "descripcion": "Estado físico discreto", "rango": "0=stable, 1=incipient, 2=advanced", "interpretacion": "traduce la severidad continua a una categoría operativa"},
+    {"nombre": "p_foul_h", "tipo": "float", "descripcion": "Probabilidad de inicio de ensuciamiento en 30 min", "rango": "0-1", "interpretacion": "valores altos anticipan transición a estado incipiente"},
+    {"nombre": "p_actionable_foul_h", "tipo": "float", "descripcion": "Probabilidad de ensuciamiento no planificado en 120 min", "rango": "0-1", "interpretacion": "señal de apoyo a la decisión de intervención"},
+    {"nombre": "p_clog_h", "tipo": "float", "descripcion": "Probabilidad de inicio de obstrucción en 15 min", "rango": "0-1", "interpretacion": "señal específica y de mayor urgencia que el ensuciamiento"},
+    {"nombre": "pred_tte_foul_min / pred_tte_clog_min", "tipo": "float (min)", "descripcion": "Tiempo estimado hasta el próximo evento", "rango": "0-240 / 0-120 min (capados)", "interpretacion": "ordena el riesgo temporalmente, no es una cuenta atrás exacta"},
+    {"nombre": "pred_ttu_min", "tipo": "float (min)", "descripcion": "Tiempo estimado hasta la próxima intervención no planificada", "rango": "0-360 min (capado)", "interpretacion": "variable transversal de urgencia usada por la política de alertas"}
+  ],
+  "metricas": [
+    {"nombre": "Severity RMSE / MAE", "valor": "1.16e-04 / 8.14e-05", "descripcion": "Error de la regresión de severidad en test (escenario no_clock, artefacto real entregado)", "interpretacion": "error muy pequeño en la escala de Rf_m2K_W (~1e-3 de rango típico)"},
+    {"nombre": "Stage accuracy / macro-F1", "valor": "0.9652 / 0.9471", "descripcion": "Clasificación de estado (stable/incipient/advanced) en test", "interpretacion": "el modelo acierta el estado físico en ~96-97% de las ventanas"},
+    {"nombre": "Watch-fouling AUC / AP", "valor": "0.9527 / 0.4642", "descripcion": "Discriminación de la alerta de vigilancia de ensuciamiento (30 min) en test", "interpretacion": "buena separación (AUC alto); AP más bajo por ser un evento poco frecuente"},
+    {"nombre": "Clog AUC / AP", "valor": "0.9552 / 0.2126", "descripcion": "Discriminación de la alerta de obstrucción (15 min) en test", "interpretacion": "igual patrón que fouling: buena discriminación, precisión moderada por baja prevalencia"},
+    {"nombre": "TTE ensuciamiento / obstrucción MAE", "valor": "69.30 / 32.53 min", "descripcion": "Error del tiempo estimado a evento en test", "interpretacion": "el tiempo estimado se desvía en promedio poco más de una hora / media hora del real"},
+    {"nombre": "Verificación golden dataset (post-integración)", "valor": "13/13 casos, diff. máx. 2.82e-06", "descripcion": "Reproducibilidad numérica del plugin frente al checkpoint real, verificada tras la integración (no es acierto del modelo, es fidelidad del wiring)", "interpretacion": "el servicio reproduce exactamente las predicciones del modelo entrenado"}
+  ],
+  "limitaciones": [
+    {"tipo": "Datos exclusivamente sintéticos", "descripcion": "Todo el ciclo de datos usado para entrenar y evaluar el modelo procede de un generador propio (10 activos, 198.615 filas), sin ETL de telemetría real de planta. Los resultados deben leerse como validación interna controlada, no como rendimiento empírico industrial."},
+    {"tipo": "Discrepancia memoria vs. artefactos entregados", "descripcion": "La memoria v1.2 documenta un dataset y métricas de una escala mayor (100 activos, 2,29M filas) que no coincide con los artefactos de código realmente entregados. Se integró sobre la base de estos últimos, por ser la única evidencia reproducible disponible."},
+    {"tipo": "Cobertura de test limitada", "descripcion": "El split de test real solo cubre 2 de los 10 activos totales (asset_00, asset_06); las métricas de test deben tratarse como indicativas, no como validación estadísticamente robusta."},
+    {"tipo": "Dependencia del historial para activos nuevos", "descripcion": "Para activos no vistos en entrenamiento, el cálculo de residuos frente a la línea base saludable depende de disponer de varias horas de historial; con solo la ventana mínima de 120 minutos, las predicciones pueden desviarse unos puntos porcentuales del valor exacto del checkpoint."},
+    {"tipo": "Métrica de eventos discretos no aceptada", "descripcion": "Según la memoria, el KPI secundario de detección exacta del instante del evento no alcanza el umbral mínimo en ningún escenario/split; el modelo debe usarse para vigilancia y prevención de estado, no como detector exacto del instante del evento."}
+  ],
+  "fichero_nombre": "data/splits/test_rows.csv",
+  "fichero_registros": "6.773 ventanas válidas de 120 min (activos asset_00 y asset_06, escenario no_clock)",
+  "fichero_resultado": "predict_batch() sobre este fichero reproduce los 13 golden_cases del manifest con diferencia relativa máxima de 2.82e-06 frente a las predicciones reales del checkpoint (no_clock_test_window_predictions.csv)",
+  "observaciones_tecnicas": "Ejecutable en CPU estándar (1-4 cores); no requiere GPU. predict_inline (1 ventana) < 200 ms; predict_batch sobre las 6.773 ventanas del test set ≈ 10-15 s; train (fine-tuning, 8 épocas) ≈ 60-65 s sobre ~6.000 ventanas. Checkpoint ≈ 540 KB. Dependencias: PyTorch >=2.0, pandas >=1.5, numpy >=1.23, scikit-learn >=1.1 (sin versiones exactas fijadas por el equipo de IA).",
+
+  "que_no_responde": "El modelo no da una fecha ni hora exacta de fallo garantizada: da una probabilidad y una estimación de tiempo orientativa para ordenar el riesgo, no una cuenta atrás precisa.",
+  "entradas_contexto": "Los datos provienen de los sensores de proceso instalados en el propio intercambiador de calor (caudal, presiones, temperaturas, vibración) y de la composición nominal del producto que se está procesando en cada momento.",
+  "ejemplo_interpretacion": "Si el sistema devuelve pred_stage_name=\"incipient\" con p_foul_h=0.85 y pred_tte_foul_min=20, significa que el activo ya muestra señales de ensuciamiento incipiente y que es muy probable que en unos 20 minutos se confirme el inicio del episodio de ensuciamiento — es el momento de planificar una limpieza antes de que progrese a un estado avanzado.",
+  "margen_error": "En las pruebas realizadas, la estimación de severidad se desvía muy poco del valor real, y el estado (normal/incipiente/avanzado) se acierta en torno al 96-97% de las veces. Los tiempos estimados hasta el próximo evento pueden desviarse en promedio entre media hora y poco más de una hora — se deben usar como orden de prioridad, no como cuenta atrás exacta.",
+  "revisar_manualmente": [
+    "Activos nuevos o recién puestos en marcha, de los que aún no se dispone de varias horas de historial reciente.",
+    "Alertas de obstrucción o ensuciamiento accionable que no coincidan con ninguna otra señal de planta (caudal, presión) — revisar antes de programar una parada.",
+    "Cualquier predicción que se aparte mucho del comportamiento habitual del activo, especialmente en los primeros días de uso del sistema con datos reales."
+  ],
+  "que_no_hace": [
+    "No sustituye los protocolos de limpieza (CIP) ni los controles de calidad obligatorios de la planta.",
+    "No ha sido validado todavía con telemetría real de planta — su entrenamiento es 100% sobre datos sintéticos.",
+    "No garantiza detectar el instante exacto de una obstrucción o ensuciamiento no planificado; su fiabilidad como vigilancia temprana de estado es mayor que como alarma de evento puntual."
+  ],
+  "puede_equivocarse": "Sí, como cualquier modelo predictivo. En las pruebas técnicas acierta el estado físico del activo en torno al 96-97% de los casos, pero el dataset con el que se ha entrenado y evaluado es sintético, no telemetría real de planta — por lo que su fiabilidad en producción debe confirmarse con datos reales antes de confiar en él para decisiones críticas. Es una ayuda para priorizar la vigilancia y las limpiezas, nunca una garantía ni un sustituto del criterio del equipo de mantenimiento.",
+  "kpis": [
+    {"kpi": "Acierto del estado del activo (estable/incipiente/avanzado)", "valor_umbral": "≥ 90%", "descripcion": "En pruebas técnicas se alcanza ~96-97%, por encima del umbral mínimo declarado por el equipo de IA"},
+    {"kpi": "Capacidad de discriminar alertas tempranas de ensuciamiento y obstrucción", "valor_umbral": "Alta separación entre activos sanos y en riesgo", "descripcion": "Confirmada en pruebas técnicas (AUC > 0.95 en ambas señales)"},
+    {"kpi": "Reproducibilidad del servicio frente al modelo entrenado", "valor_umbral": "Diferencia despreciable", "descripcion": "Verificado tras la integración: 13/13 casos de prueba con diferencia inferior a 3 millonésimas"}
+  ]
+}
