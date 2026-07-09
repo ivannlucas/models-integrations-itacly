@@ -104,6 +104,24 @@ from app.plugins.ml31_cereals_residue_optimizer.train_dto import (
     TrainRequest as Ml31Residue_TrainReq,
     TrainResponse as Ml31ResidueTrainResp,
 )
+from app.plugins.ml4_lactic_cnn_thermal_early_disease_detection.predict_dto import (
+    PredictBatchResponse as Ml4ThermalBatchResp,
+    PredictInlineResponse as Ml4ThermalInlineResp,
+    PredictRequest as Ml4Thermal_Request,
+    PredictResponse as Ml4Thermal_Response,
+)
+from app.plugins.ml23_lactic_market_price_forecast.predict_dto import (
+    PredictBatchResponse as Ml23BatchResp,
+    PredictInlineResponse as Ml23InlineResp,
+    PredictRequest as Ml23_Request,
+    PredictResponse as Ml23_Response,
+)
+from app.plugins.ml17_meat_market_price_analysis.predict_dto import (
+    PredictBatchResponse as Ml17BatchResp,
+    PredictInlineResponse as Ml17InlineResp,
+    PredictRequest as Ml17_Request,
+    PredictResponse as Ml17_Response,
+)
 from app.plugins.ml35_dairy_ann_cleaning_cost.predict_dto import (
     PredictBatchResponse as Ml35DairyBatchResp,
     PredictInlineResponse as Ml35DairyInlineResp,
@@ -524,6 +542,91 @@ def _ml31_residue_train(plugin: FakePlugin, *, data_path: str) -> Ml31ResidueTra
     )
 
 
+def _ml4_thermal_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> Ml4ThermalInlineResp:
+    """Fake inline response for the ml4 thermal mastitis model."""
+    return Ml4ThermalInlineResp(
+        model_id="ml4-lactic-cnn-thermal-early-disease-detection",
+        threshold=threshold,
+        prediction="SCM",
+        confidence=0.91,
+        features_used=["image_base64"],
+        predicted_class_index=1,
+        probability_healthy=0.09,
+        probability_scm=0.91,
+    )
+
+
+def _ml4_thermal_batch(plugin: FakePlugin, *, data_path: str) -> Ml4ThermalBatchResp:
+    """Fake batch response for the ml4 thermal mastitis model."""
+    return Ml4ThermalBatchResp(
+        model_id="ml4-lactic-cnn-thermal-early-disease-detection",
+        predictions=[{"filename": "udder_001.jpg", "prediction": "Healthy", "confidence": 0.88,
+                      "predicted_class_index": 0, "probability_healthy": 0.88, "probability_scm": 0.12}],
+        output_path=None,
+    )
+
+
+def _ml23_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> Ml23InlineResp:
+    """Fake inline response for the ml23 GRU dairy price forecast model."""
+    return Ml23InlineResp(
+        model_id="ml23-lactic-market-price-forecast",
+        prediction=0.9187,
+        confidence=None,
+        horizon=6,
+        features_used=["year", "mes", "precio_lag_1", "current_price"],
+        model_version="1.0.0",
+        xai_feature_values={"precio_lag_1": 0.9234, "current_price": 0.9187},
+    )
+
+
+def _ml23_batch(plugin: FakePlugin, *, data_path: str) -> Ml23BatchResp:
+    """Fake batch response for the ml23 GRU dairy price forecast model."""
+    return Ml23BatchResp(
+        model_id="ml23-lactic-market-price-forecast",
+        predictions=[
+            {"fecha": "2023-01-01", "producto": "leche_entera", "canal": "T.ESPAÑA",
+             "current_price": 0.9234, "y_pred": 0.9187, "model_id": "ml23-lactic-market-price-forecast",
+             "horizon": 6},
+        ],
+        output_path=None,
+    )
+
+
+def _ml17_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> Ml17InlineResp:
+    """Fake inline response for the ml17 Ridge pork price forecast model."""
+    return Ml17InlineResp(
+        model_id="ml17-meat-market-price-analysis",
+        line="official_v1_4",
+        prediction=185.32,
+        y_pred=185.32,
+        confidence=None,
+        base_date="2023-01-01",
+        xai_feature_values={
+            "target_price_pigmeat_class_e_es": 173.82,
+            "eurostat_pigmeat_slaughter_tonnes_es": 381.88,
+            "eurostat_pigmeat_slaughter_tonnes_eu": 1795.36,
+            "cereal_feed_barley_price_monthly": 149.72,
+            "cereal_feed_maize_price_monthly": 175.73,
+            "mapa_porcino_otras_razas_price_monthly": 117.16,
+            "month_sin": 0.5,
+            "month_cos": 0.866,
+        },
+    )
+
+
+def _ml17_batch(plugin: FakePlugin, *, data_path: str) -> Ml17BatchResp:
+    """Fake batch response for the ml17 Ridge pork price forecast model."""
+    return Ml17BatchResp(
+        model_id="ml17-meat-market-price-analysis",
+        line="official_v1_4",
+        predictions=[
+            {"row": 0, "date": "2023-01-01", "y_pred": 185.32,
+             "model_id": "ml17-meat-market-price-analysis", "line": "official_v1_4"},
+        ],
+        output_path=None,
+    )
+
+
 def _ml35_dairy_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> Ml35DairyInlineResp:
     """Fake inline prediction response for the ml35 dairy ANN plugin."""
     return Ml35DairyInlineResp(
@@ -606,6 +709,9 @@ def _ml46_dairy_train(plugin: FakePlugin, *, data_path: str) -> Ml46DairyTrainRe
 FAKE_FACTORIES: dict[str, tuple[Callable, Callable]] = {
     "ml46-dairy-fouling-clog-detection": (_ml46_dairy_inline, _ml46_dairy_batch),
     "ml35-dairy-ann-cleaning-cost": (_ml35_dairy_inline, _ml35_dairy_batch),
+    "ml17-meat-market-price-analysis": (_ml17_inline, _ml17_batch),
+    "ml23-lactic-market-price-forecast": (_ml23_inline, _ml23_batch),
+    "ml4-lactic-cnn-thermal-early-disease-detection": (_ml4_thermal_inline, _ml4_thermal_batch),
     "ml31-cereals-residue-optimizer": (_ml31_residue_inline, _ml31_residue_batch),
     "ml30-meat-traceability-detection": (_ml30_trace_inline, _ml30_trace_batch),
     "ml7-cereals-grain-pest-detection": (_ml7_grain_inline, _ml7_grain_batch),
@@ -708,6 +814,33 @@ TEST_REGISTRY: list[ModelEntry] = [
         extra_predict_exceptions=(),
         train_request_type=Ml31Residue_TrainReq,
         train_response_type=Ml31ResidueTrainResp,
+    ),
+    ModelEntry(
+        model_id="ml4-lactic-cnn-thermal-early-disease-detection",
+        prefix="/models/ml4-lactic-cnn-thermal-early-disease-detection",
+        version="1.0.0",
+        plugin_class=FakePlugin,
+        predict_request_type=Ml4Thermal_Request,
+        predict_response_type=Ml4Thermal_Response,
+        extra_predict_exceptions=(InvalidImageError,),
+    ),
+    ModelEntry(
+        model_id="ml23-lactic-market-price-forecast",
+        prefix="/models/ml23-lactic-market-price-forecast",
+        version="1.0.0",
+        plugin_class=FakePlugin,
+        predict_request_type=Ml23_Request,
+        predict_response_type=Ml23_Response,
+        extra_predict_exceptions=(),
+    ),
+    ModelEntry(
+        model_id="ml17-meat-market-price-analysis",
+        prefix="/models/ml17-meat-market-price-analysis",
+        version="1.0.0",
+        plugin_class=FakePlugin,
+        predict_request_type=Ml17_Request,
+        predict_response_type=Ml17_Response,
+        extra_predict_exceptions=(),
     ),
     ModelEntry(
         model_id="ml35-dairy-ann-cleaning-cost",
