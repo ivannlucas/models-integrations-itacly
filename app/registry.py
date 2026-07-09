@@ -83,6 +83,30 @@ from app.plugins.ml31_cereals_residue_optimizer.train_dto import (
     TrainResponse as Ml31Residue_TrainResp,
 )
 
+from app.plugins.ml4_lactic_cnn_thermal_early_disease_detection.plugin import (
+    Ml4LacticCnnThermalEarlyDiseaseDetectionPlugin,
+)
+from app.plugins.ml4_lactic_cnn_thermal_early_disease_detection.predict_dto import (
+    PredictRequest as Ml4Thermal_Request,
+    PredictResponse as Ml4Thermal_Response,
+)
+
+from app.plugins.ml23_lactic_market_price_forecast.plugin import (
+    Ml23LacticMarketPriceForecastPlugin,
+)
+from app.plugins.ml23_lactic_market_price_forecast.predict_dto import (
+    PredictRequest as Ml23_Request,
+    PredictResponse as Ml23_Response,
+)
+
+from app.plugins.ml17_meat_market_price_analysis.plugin import (
+    Ml17MeatMarketPriceAnalysisPlugin,
+)
+from app.plugins.ml17_meat_market_price_analysis.predict_dto import (
+    PredictRequest as Ml17_Request,
+    PredictResponse as Ml17_Response,
+)
+
 from app.plugins.ml35_dairy_ann_cleaning_cost.plugin import Ml35DairyAnnCleaningCostPlugin
 from app.plugins.ml35_dairy_ann_cleaning_cost.predict_dto import (
     PredictRequest as Ml35Dairy_Request,
@@ -200,6 +224,33 @@ REGISTRY: list[ModelEntry] = [
         predict_response_type=Ml31Residue_Response,
         train_request_type=Ml31Residue_TrainReq,
         train_response_type=Ml31Residue_TrainResp,
+    ),
+    ModelEntry(
+        model_id="ml4-lactic-cnn-thermal-early-disease-detection",
+        prefix="/models/ml4-lactic-cnn-thermal-early-disease-detection",
+        version="1.0.0",
+        plugin_class=Ml4LacticCnnThermalEarlyDiseaseDetectionPlugin,
+        predict_request_type=Ml4Thermal_Request,
+        predict_response_type=Ml4Thermal_Response,
+        extra_predict_exceptions=(InvalidImageError,),
+    ),
+    ModelEntry(
+        model_id="ml23-lactic-market-price-forecast",
+        prefix="/models/ml23-lactic-market-price-forecast",
+        version="1.0.0",
+        plugin_class=Ml23LacticMarketPriceForecastPlugin,
+        predict_request_type=Ml23_Request,
+        predict_response_type=Ml23_Response,
+        extra_predict_exceptions=(),
+    ),
+    ModelEntry(
+        model_id="ml17-meat-market-price-analysis",
+        prefix="/models/ml17-meat-market-price-analysis",
+        version="1.0.0",
+        plugin_class=Ml17MeatMarketPriceAnalysisPlugin,
+        predict_request_type=Ml17_Request,
+        predict_response_type=Ml17_Response,
+        extra_predict_exceptions=(),
     ),
     ModelEntry(
         model_id="ml35-dairy-ann-cleaning-cost",
