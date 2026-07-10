@@ -48,3 +48,6 @@ fvcore>=0.1.5
 
 # MLflow integration
 mlflow>=2.20.0
+
+# Added for ml34 (dairy pasteurization energy) — single-objective GA optimizer
+deap==1.4.3

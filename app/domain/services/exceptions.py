@@ -43,3 +43,7 @@ class PuConstraintViolationError(ValueError):
 
 class InsufficientTelemetryHistoryError(ValueError):
     """Raised when fewer than seq_len valid rows of telemetry history are provided (ml46)."""
+
+
+class ThermalSafetyViolationError(ValueError):
+    """Raised when the GA cannot find a feasible solution meeting T_out >= 72.3 °C (ml34)."""
