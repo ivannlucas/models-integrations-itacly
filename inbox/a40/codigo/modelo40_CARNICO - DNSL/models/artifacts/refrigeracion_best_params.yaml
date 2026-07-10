@@ -1,0 +1,7 @@
+best_f1_score: 0.9157266171258105
+optimized_params:
+  max_depth: 15
+  max_features: sqrt
+  min_samples_leaf: 20
+  n_estimators: 200
+system: refrigeracion

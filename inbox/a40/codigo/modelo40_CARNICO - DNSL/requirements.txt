@@ -1,0 +1,31 @@
+# ========================================================================
+# REQUERIMIENTOS DEL SISTEMA DE DIAGNÓSTICO (CARNICO - DNSL)
+# ========================================================================
+
+# --- Procesamiento de Datos ---
+pandas>=2.0.0
+numpy>=1.24.0
+scipy>=1.10.0
+
+# --- Machine Learning & Modelos ---
+scikit-learn>=1.2.0
+joblib>=1.2.0
+optuna>=3.1.0 
+
+# --- Configuración y Utilidades ---
+PyYAML>=6.0
+python-dotenv>=1.0.0
+# Asegura la compatibilidad de rutas en diferentes OS
+pathlib>=1.0.1
+
+# --- Visualización y Reportes ---
+# Necesarios para la Matriz de Confusión y gráficas de métricas
+matplotlib>=3.7.0
+seaborn>=0.12.0
+plotly>=5.13.0
+# Para exportar las gráficas a formatos de imagen de alta calidad
+Pillow>=9.4.0
+
+# --- Calidad de Código (Opcional pero recomendado) ---
+tqdm>=4.65.0      # Para barras de progreso en procesos largos (como el tuning)
+colorama>=0.4.6   # Para que los logs de consola tengan colores (INFO, ERROR)

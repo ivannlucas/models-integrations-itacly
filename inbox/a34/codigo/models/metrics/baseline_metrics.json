@@ -1,0 +1,17 @@
+{
+    "E_consumo_mean_kW": 435.14,
+    "E_consumo_std_kW": 36.34,
+    "E_total_kWh": 1862722.0,
+    "F_flow_mean_Lh": 4917.5,
+    "F_flow_std_Lh": 333.5,
+    "vol_total_L": 21050765.0,
+    "specific_consumption_kW_per_Lh": 0.08845,
+    "T_servicio_mean_C": 81.55,
+    "T_servicio_std_C": 1.18,
+    "T_out_mean_C": 72.6,
+    "T_out_min_C": 72.18,
+    "mean_margin_C": 0.3,
+    "compliance_rate_pct": 99.6,
+    "delta_T_serv_fouling_C": 1.94,
+    "delta_DP_fouling_pct": 39.0
+}

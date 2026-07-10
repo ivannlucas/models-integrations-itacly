@@ -1,0 +1,87 @@
+# ========================================================================
+# CONFIGURACIÓN GLOBAL DEL SISTEMA DE DIAGNÓSTICO
+# ========================================================================
+
+selected_system: "aireado" # "refrigeracion" o "aireado"
+
+paths:
+  processed_data: "data/processed/"
+  predictions_data: "data/predictions/"
+  metrics: "models/metrics/"
+  artifacts: "models/artifacts/"
+  splits_data: "data/splits/"
+  logs: "logs/"
+  to_predict: "data/to_predict/"
+
+# Configuración del Sistema de Refrigeración
+refrigeracion:
+  raw_data: "data/raw/dataset_refrigeracion.csv"
+  target_column: "fault_id"
+  drop_cols: 
+    - 'fault'
+    - 'run_id'
+    - 'fault_id'
+    - 'time_min'
+    - 'fault_numeric'
+    - 'T_cond_sat'
+    - 'T_cab_meas'
+    - 'P_suc_bar'
+  stress_test:
+    active: false          
+    noise_level: 0.10      # Magnitud exacta del ruido Gaussiano (10%)
+    include_spikes: true   # Activa Spikes aleatorios (1 de cada 100 muestras)
+  # Hiperparámetros del Modelo
+  model_params:
+    n_estimators: 200
+    min_samples_leaf: 20
+    max_features: "sqrt"
+    max_depth: 20
+    random_state: 42
+    n_jobs: -1
+  mapping:
+    0: "NORMAL"
+    1: "COND_FOUL_MILD"
+    2: "COND_FOUL_SEVERE"
+    3: "EVAP_FAN_DEG"
+    4: "EVAP_FAN_FAIL"
+    5: "UNDERCHARGE_MILD"
+    6: "UNDERCHARGE_SEVERE"
+    7: "OVERCHARGE"
+    8: "SENSOR_DRIFT_PLUS"
+    9: "SENSOR_DRIFT_MINUS"
+    10: "COMP_INEFFICIENCY"
+    11: "NON_CONDENSABLES"
+    12: "UNDERCHARGE_AND_COND_FOUL"
+  health_threshold: 75.0
+  window_degradation: 50 
+
+# Configuración del Sistema de Aireado
+aireado:
+  raw_data: "data/raw/dataset_aireado.csv"
+  target_column: "fault_id"
+  drop_cols: 
+    - "run_id"
+    - "time_min"
+    - "fault_id"
+    - "fault"
+ 
+  stress_test:
+    active: true         
+    noise_level: 0.70      # Magnitud exacta del ruido Gaussiano 
+    include_spikes: true   # Spikes
+  # Hiperparámetros del Modelo
+  model_params:
+    n_estimators: 200
+    min_samples_split: 5
+    min_samples_leaf: 4
+    max_depth: 20
+    bootstrap: false
+    random_state: 42
+    n_jobs: -1
+  mapping:
+    0: "NORMAL"
+    1: "ENCOSTRAMIENTO"
+    2: "SATURACION_HIELO"
+    3: "FALLO_VENTILADOR"
+  health_threshold: 75.0
+  window_degradation: 50

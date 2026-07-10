@@ -1,0 +1,103 @@
+# =============================================================================
+# DATAGIA — Centralized project configuration
+# =============================================================================
+# This file externalizes all parameters used across the pipeline.
+# Referenced by src/main.py and the scripts in scripts/.
+
+# --- Data paths (relative to project root) ---
+data:
+  raw_path: "data/raw/pasteurizacion_dataset_simulado.csv"
+  processed_path: "data/processed/final_data_sim.csv"
+  splits_dir: "data/splits"
+  predictions_dir: "data/predictions"
+
+# --- Model artifacts ---
+model:
+  weights_path: "models/artifacts/mlp_predictor.pt"
+  config_path: "models/artifacts/model_config.json"
+  scaler_X_path: "models/artifacts/scaler_X.pkl"
+  scaler_y_path: "models/artifacts/scaler_y.pkl"
+
+# --- Metrics output ---
+metrics:
+  train_path: "models/metrics/train_metrics.json"
+  baseline_path: "models/metrics/baseline_metrics.json"
+  ga_v3_report_path: "models/metrics/ga_v3_optimization_report.json"
+  eval_rt_report_path: "models/metrics/evaluation_rt_backtesting_report.json"
+
+# --- Features / Targets (must match CSV column names) ---
+features:
+  - T_in_leche
+  - F_flow
+  - T_servicio
+  - t_ciclo
+  - Delta_P
+
+targets:
+  - E_consumo
+  - T_out_leche
+
+# --- Simulator parameters ---
+simulator:
+  seed: 1
+  num_days: 180
+  sampling_freq: 5        # minutes
+  U_clean: 3500           # W/m²K
+  area: 15                # m²
+  cp_milk: 3890           # J/(kg·K)
+  rho_milk: 1030          # kg/m³
+  eta_boiler: 0.90
+  eta_pump: 0.75
+
+# --- Training hyperparameters (defaults — can be overridden by tuning) ---
+training:
+  epochs: 300
+  batch_size: 128
+  patience: 15
+  lr: 0.0005
+  num_layers: 2
+  neurons: 128
+  activation: "ReLU"
+
+# --- Hyperparameter search ---
+tuning:
+  n_iter: 60
+  param_space:
+    num_layers: [2, 3, 4]
+    neurons: [16, 32, 64, 128]
+    lr: [0.05, 0.01, 0.005, 0.001, 0.0005]
+    activation: ["ReLU", "Tanh"]
+
+# --- Splitting strategy ---
+splitting:
+  n_blocks: 4
+  train_ratio: 0.70
+  val_ratio: 0.85         # cumulative (val = 0.70–0.85, test = 0.85–1.0)
+
+# --- Normalization ---
+normalization:
+  method: "MinMaxScaler"
+  feature_range: [0, 1]
+
+# --- Genetic Algorithm (single-objective v4, min E_consumo/F_flow) ---
+# Reference values only — the code does not read this section; the values
+# actually used at runtime live in src/utils/constants.py (GA_DEFAULT_CONFIG).
+genetic_algorithm:
+  pop_size: 150
+  n_gen: 15               # P95 convergence = 8 gen + safety margin
+  cxpb: 0.8
+  mutpb: 0.2
+  bounds:
+    F_flow: [3500.0, 5500.0]       # L/h
+    T_servicio: [76.0, 95.0]       # °C
+  T_out_min: 72.3                  # °C — food safety constraint (72.0°C + 0.3°C margin for PT100/PMO tolerance)
+  penalty_factor: 10.0
+
+# --- Success criteria (audit requirement) ---
+success_criteria:
+  compliance_rate_min: 100.0       # % T_out >= 72.3 °C (includes +0.3°C safety margin for PT100 sensor uncertainty ±0.3°C per IEC 60751 and FDA PMO tolerance ±0.5°F)
+  specific_consumption_improvement_pct: 3.0  # Minimum % improvement over baseline
+
+# --- Reproducibility ---
+reproducibility:
+  global_seed: 1

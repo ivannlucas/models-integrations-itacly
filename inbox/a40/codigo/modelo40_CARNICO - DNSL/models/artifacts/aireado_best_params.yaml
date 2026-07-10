@@ -1,0 +1,8 @@
+best_f1_score: 1.0
+optimized_params:
+  bootstrap: false
+  max_depth: 20
+  min_samples_leaf: 4
+  min_samples_split: 5
+  n_estimators: 200
+system: aireado
