@@ -36,6 +36,7 @@ from app.domain.services.exceptions import (
     InvalidVideoError,
     NoValidSimulationPointError,
     PuConstraintViolationError,
+    ThermalSafetyViolationError,
     TrainingNotSupportedError,
 )
 from app.domain.services.model_runtime_service import ModelRuntimeService
@@ -125,13 +126,23 @@ from app.plugins.ml17_meat_market_price_analysis.predict_dto import (
 from app.plugins.ml35_dairy_ann_cleaning_cost.predict_dto import (
     PredictBatchResponse as Ml35DairyBatchResp,
     PredictInlineResponse as Ml35DairyInlineResp,
-    PredictOptimizeResponse as Ml35DairyOptimizeResp,
     PredictRequest as Ml35Dairy_Request,
     PredictResponse as Ml35Dairy_Response,
 )
 from app.plugins.ml35_dairy_ann_cleaning_cost.train_dto import (
     TrainRequest as Ml35Dairy_TrainReq,
     TrainResponse as Ml35DairyTrainResp,
+)
+from app.plugins.ml34_dairy_pasteurization_energy_ga.predict_dto import (
+    PredictBatchResponse as Ml34DairyBatchResp,
+    PredictInlineResponse as Ml34DairyInlineResp,
+    PredictOptimizeResponse as Ml34DairyOptimizeResp,
+    PredictRequest as Ml34Dairy_Request,
+    PredictResponse as Ml34Dairy_Response,
+)
+from app.plugins.ml34_dairy_pasteurization_energy_ga.train_dto import (
+    TrainRequest as Ml34Dairy_TrainReq,
+    TrainResponse as Ml34DairyTrainResp,
 )
 from app.plugins.ml46_dairy_fouling_clog_detection.predict_dto import (
     PredictBatchResponse as Ml46DairyBatchResp,
@@ -650,6 +661,46 @@ def _ml35_dairy_train(plugin: FakePlugin, *, data_path: str) -> Ml35DairyTrainRe
     return Ml35DairyTrainResp(detail="Fine-tuning completado", mae=320.0, r2=0.993, n_samples=500)
 
 
+def _ml34_dairy_inline(plugin: FakePlugin, *, features: dict, model_key, threshold):
+    """Fake inline/optimize prediction response for the ml34 pasteurization plugin."""
+    if model_key == "optimize":
+        return Ml34DairyOptimizeResp(
+            model_id="ml34-dairy-pasteurization-energy-ga",
+            IA_F_flow=5422.10,
+            IA_T_servicio=80.40,
+            IA_E_consumo=412.9016,
+            IA_T_out=72.30,
+            IA_consumo_especifico=0.076152,
+            IA_factible=True,
+            fitness_final=0.076152,
+            seed=1,
+        )
+    return Ml34DairyInlineResp(
+        model_id="ml34-dairy-pasteurization-energy-ga",
+        E_consumo_pred=392.9284,
+        T_out_pred=72.6027,
+    )
+
+
+def _ml34_dairy_batch(plugin: FakePlugin, *, data_path: str) -> Ml34DairyBatchResp:
+    """Fake batch prediction response for the ml34 pasteurization plugin."""
+    return Ml34DairyBatchResp(
+        model_id="ml34-dairy-pasteurization-energy-ga",
+        predictions=[{"row": 0, "E_consumo_pred": 392.9284, "T_out_pred": 72.6027}],
+        output_path=None,
+    )
+
+
+def _ml34_dairy_train(plugin: FakePlugin, *, data_path: str) -> Ml34DairyTrainResp:
+    """Fake fine-tuning response for the ml34 pasteurization plugin."""
+    return Ml34DairyTrainResp(
+        detail="Fine-tuning completado",
+        rmse_E_consumo=5.38, mae_E_consumo=4.26, r2_E_consumo=0.9779,
+        rmse_T_out_leche=0.0643, mae_T_out_leche=0.0473, r2_T_out_leche=0.3759,
+        n_samples=500, epochs_executed=42,
+    )
+
+
 def _ml46_dairy_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> Ml46DairyInlineResp:
     """Fake inline prediction response for the ml46 dairy fouling/clog detection plugin."""
     return Ml46DairyInlineResp(
@@ -709,6 +760,7 @@ def _ml46_dairy_train(plugin: FakePlugin, *, data_path: str) -> Ml46DairyTrainRe
 FAKE_FACTORIES: dict[str, tuple[Callable, Callable]] = {
     "ml46-dairy-fouling-clog-detection": (_ml46_dairy_inline, _ml46_dairy_batch),
     "ml35-dairy-ann-cleaning-cost": (_ml35_dairy_inline, _ml35_dairy_batch),
+    "ml34-dairy-pasteurization-energy-ga": (_ml34_dairy_inline, _ml34_dairy_batch),
     "ml17-meat-market-price-analysis": (_ml17_inline, _ml17_batch),
     "ml23-lactic-market-price-forecast": (_ml23_inline, _ml23_batch),
     "ml4-lactic-cnn-thermal-early-disease-detection": (_ml4_thermal_inline, _ml4_thermal_batch),
@@ -725,6 +777,7 @@ FAKE_FACTORIES: dict[str, tuple[Callable, Callable]] = {
 TRAIN_FACTORIES: dict[str, Callable] = {
     "ml46-dairy-fouling-clog-detection": _ml46_dairy_train,
     "ml35-dairy-ann-cleaning-cost": _ml35_dairy_train,
+    "ml34-dairy-pasteurization-energy-ga": _ml34_dairy_train,
     "modelo10-lacteo": _lacteo_train,
     "ml8-cereals-img-anomaly-detector": _ml8_cereals_train,
     "ml30-meat-traceability-detection": _ml30_trace_train,
@@ -852,6 +905,17 @@ TEST_REGISTRY: list[ModelEntry] = [
         extra_predict_exceptions=(PuConstraintViolationError,),
         train_request_type=Ml35Dairy_TrainReq,
         train_response_type=Ml35DairyTrainResp,
+    ),
+    ModelEntry(
+        model_id="ml34-dairy-pasteurization-energy-ga",
+        prefix="/models/ml34-dairy-pasteurization-energy-ga",
+        version="1.0.0",
+        plugin_class=FakePlugin,
+        predict_request_type=Ml34Dairy_Request,
+        predict_response_type=Ml34Dairy_Response,
+        extra_predict_exceptions=(ThermalSafetyViolationError,),
+        train_request_type=Ml34Dairy_TrainReq,
+        train_response_type=Ml34DairyTrainResp,
     ),
     ModelEntry(
         model_id="ml46-dairy-fouling-clog-detection",
