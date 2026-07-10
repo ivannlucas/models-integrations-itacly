@@ -52,7 +52,7 @@
       "Bash(curl -s -X POST http://localhost:8123/models/ml35-dairy-ann-cleaning-cost/train -H \"Content-Type: application/json\" -d '{\"data_path\":\"artifacts/ml35_train_sample.csv\",\"mlflow_run_id\":\"\"}' -w \"\\\\nHTTP %{http_code}\\\\n\")",
       "Bash(curl -s -X POST http://localhost:8123/models/ml46-dairy-fouling-clog-detection/train -H \"Content-Type: application/json\" -d '{\"data_path\":\"artifacts/ml46_train_sample.csv\",\"mlflow_run_id\":\"\"}' -w \"\\\\nHTTP %{http_code}\\\\n\")",
       "Bash(curl -s -X POST http://localhost:8123/models/ml46-dairy-fouling-clog-detection/train -H \"Content-Type: application/json\" -d '{\"data_path\":\"string\",\"mlflow_run_id\":\"\"}' -w \"\\\\nHTTP %{http_code}\\\\n\")",
-      "Bash(curl -s -X POST http://localhost:8123/models/ml35-dairy-ann-cleaning-cost/train -H \"Content-Type: application/json\" -d '{\"data_path\":\"artifacts/ml35_batch_sample.csv\",\"mlflow_run_id\":\"\"}' -w \"\\\\nHTTP %{http_code}\\\\n\")"
+      "Bash(curl -s -X POST http://localhost:8123/models/ml35-dairy-ann-cleaning-cost/train -H \"Content-Type: application/json\" -d '{\"data_path\":\"artifacts/ml35_batch_sample.csv\",\"mlflow_run_id\":\"\"}' -w \"\\\\nHTTP %{http_code}\\\\n\")",
       "Bash(git add *)",
       "Bash(git commit -m ' *)",
       "Bash(echo \"grep exit: $?\")"
