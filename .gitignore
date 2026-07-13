@@ -85,3 +85,7 @@ __pycache__/
 
 inbox/a46/codigo/a46-dnsl-dairy-incrustaciones-atascos-maquinaria-procesado/data/processed/*.csv
 inbox/a46/codigo/a46-dnsl-dairy-incrustaciones-atascos-maquinaria-procesado/data/splits/*.csv
+
+# Model artifacts live in S3 (artifacts/fixed/...) — never commit local copies
+# (refrigeracion_model.pkl for ml40 alone is 171 MB)
+/artifacts/

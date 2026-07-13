@@ -8,9 +8,11 @@ import seaborn as sns
 from sklearn.metrics import confusion_matrix, classification_report
 import matplotlib.pyplot as plt
 import numpy as np
+import datetime
 
 # 1. Utilidades y Logging
 from src.utils.logging import get_logger
+from src.utils.monitor import log_to_monitorization
 from src.get_stats.column_info import get_column_summary, check_data_leakage, get_feature_groups
 
 # 2. Procesamiento de datos
@@ -109,54 +111,67 @@ def tuning():
             return
 
 def predict():
-    """Pipeline de inferencia sobre el set de TEST con reglas neurosimbólicas."""
+    """Pipeline de inferencia con carga atómica y acoplada de artefactos (Modelo, Escalador y Reglas)."""
     cfg = load_config()
     system = cfg["selected_system"]
     paths = cfg["paths"]
+    art_path = Path(paths["artifacts"])
     
-    # 1. CARGA Y PROCESAMIENTO DINÁMICO
+    # ==========================================
+    # 1. CARGA DE DATOS Y PROCESAMIENTO
+    # ==========================================
     input_cliente = Path(paths["to_predict"]) / f"input_{system}.csv"
-    
     if input_cliente.exists():
         logger.info(f"Procesando datos crudos del cliente para {system}...")
         df_raw = pd.read_csv(input_cliente)
-        
-        # APLICAMOS LA MISMA INGENIERÍA QUE EN EL ENTRENAMIENTO
         df_test = apply_feature_engineering(df_raw, system)
     else:
         logger.info("Usando set de TEST por defecto...")
         data_path = Path(paths["splits_data"]) / f"{system}_test.csv"
         df_test = pd.read_csv(data_path)
     
-    # 2. INFERENCIA TÉCNICA (ML puro)
-    model = load_model(system)
-    y_ml, y_probs = run_inference(model, df_test, system)
+    # ==========================================
+    # 2. SELECCIÓN INTERACTIVA Y CARGA DE MODELO
+    # ==========================================
+    # Delegamos el menú y la lógica de carpetas a predictor.load_model
+    model, selected_suffix = load_model(system)
+
+    # ==========================================
+    # 3. INFERENCIA TÉCNICA (ML puro o Calibrado + Escalado alineado)
+    # ==========================================
+    # 'run_inference' se encarga internamente del escalado usando el suffix para buscar las stats correctas
+    y_ml, y_probs = run_inference(model, df_test, system, selected_suffix=selected_suffix)
     
-    # 3. POST-PROCESO EXPERTO (Física corrigiendo a la IA)
+    # ==========================================
+    # 4. POST-PROCESO EXPERTO (Umbrales alineados por Fecha)
+    # ==========================================
     mapping = cfg[system]["mapping"]
     
-    # Aplicar reglas físicas (Swap de NC/CF, Sensor Drift, etc.)
-    y_ns = apply_neurosymbolic_rules(df_test, y_ml, mapping, system)
-    
-    # Aplicar estabilidad temporal (Voto por Run)
+    # Redirigimos la ruta de umbrales en base a lo que se seleccionó de forma interactiva
+    if selected_suffix:
+        thresh_to_load = art_path / f"{system}_thresholds_calibrated_{selected_suffix}.yaml"
+    else:
+        thresh_to_load = art_path / f"{system}_thresholds.yaml"
+        
+    logger.info(f"Aplicando reglas físicas con umbrales desde: {thresh_to_load.name}")
+    y_ns = apply_neurosymbolic_rules(df_test, y_ml, mapping, system, thresh_path=thresh_to_load)
     y_final = apply_run_voting(df_test, y_ns)
     
-    # 4. PREPARAR RESULTADOS
+    # ==========================================
+    # 5. PREPARAR Y GUARDAR RESULTADOS
+    # ==========================================
     df_test['prediction'] = y_final
     confidences = (y_probs.max(axis=1) * 100).round(2)
     df_test['confidence'] = confidences
 
     avg_conf = confidences.mean()
-    # Determinamos el estado de salud (para evitar degradación)
+    # monitor_model_health se encarga internamente de loguear a monitorization_*.csv
     health_status = monitor_model_health(avg_conf) 
     df_test['model_health'] = health_status
     
-    # 5. GUARDAR RESULTADOS 
-    # save_predictions se encarga de filtrar las columnas y usar la ruta del YAML
+    # Salva y colapsa los datos por run_id
     save_predictions(df_test, system)
-    
-    
-    logger.info(f"Evaluación finalizada. Resultados guardados en la carpeta: {paths['predictions_data']}")
+    logger.info("Evaluation finalizada con éxito.")
 
     
 
@@ -192,7 +207,7 @@ def evaluate():
     target_names = [mapping[i] for i in present_classes]
 
     # 2. Obtener Predicciones
-    model = load_model(system)
+    model,_ = load_model(system)
     
     # Nivel 1: ML Puro
     y_ml, _ = run_inference(model, df_test, system)
@@ -235,29 +250,210 @@ def evaluate():
     
     logger.info(f"Reporte de clasificación guardado en: {report_file}")
 
-    # --- B. Generar y Guardar Matriz de Confusión (Imagen) ---
-    plt.figure(figsize=(12, 10))
+    # --- B. Generar y Guardar Matriz de Confusión (Imagen con Números Absolutos Grandes) ---
+    plt.figure(figsize=(13, 11)) # Aumentamos ligeramente el lienzo para dar espacio al texto grande
     cm = confusion_matrix(y_true, y_final, labels=present_classes)
     
-    # Normalizamos para ver porcentajes
-    cm_perc = cm.astype('float') / cm.sum(axis=1)[:, np.newaxis]
+    # annot_kws={'size': 14} hace que los números de dentro de las celdas sean grandes
+    sns.heatmap(cm, annot=True, fmt='d', cmap='Purples',
+                xticklabels=target_names, yticklabels=target_names,
+                annot_kws={'size': 13}) # Números internos grandes y en negrita
     
-    sns.heatmap(cm_perc, annot=True, fmt='.2%', cmap='Blues',
-                xticklabels=target_names, yticklabels=target_names)
+    # Ajustamos el tamaño de las etiquetas de los ejes (nombres de las clases)
+    plt.tick_params(axis='both', which='major', labelsize=12)
     
-    plt.title(f'Matriz de Confusión - {system.upper()} (Modelo Final)')
-    plt.ylabel('Realidad')
-    plt.xlabel('Predicción')
+    # Ajustamos los títulos principales del gráfico
+    plt.title(f'Matriz de Confusión - {system.upper()} (Modelo Final)', fontsize=16, weight='bold', pad=20)
+    plt.ylabel('Realidad', fontsize=14, weight='bold', labelpad=10)
+    plt.xlabel('Predicción', fontsize=14, weight='bold', labelpad=10)
+    
     plt.xticks(rotation=45, ha='right')
+    plt.yticks(rotation=0) # Mantiene los nombres de la izquierda en horizontal para leerlos mejor
     plt.tight_layout()
     
     plot_file = metrics_path / f"confusion_matrix_{system}.png"
-    plt.savefig(plot_file)
-    plt.close() # Cerramos para no consumir memoria
+    plt.savefig(plot_file, dpi=300) 
+    plt.close()
     
     logger.info(f"Matriz de confusión guardada en: {plot_file}")
     
     logger.info("Evaluación comparativa completada con éxito.")
+
+
+def calibrate():
+    """
+    Realiza calibración técnica de probabilidades, registra deriva y actualiza umbrales dinámicos
+    sobre datos nuevos, manteniendo el modelo base intacto y versionado con marcas de tiempo
+    para cumplir estrictamente con los requerimientos de la auditoría.
+    """
+    import datetime
+    import yaml
+    import joblib
+    import pandas as pd
+    from pathlib import Path
+    from sklearn.calibration import CalibratedClassifierCV
+
+    cfg = load_config()
+    system = cfg["selected_system"]
+    
+    # 1. Definición de Rutas desde config.yaml
+    art_path = Path(cfg["paths"]["artifacts"])
+    processed_path = Path(cfg["paths"]["processed_data"]) / f"real_data_processed_{system}.csv"
+    real_data_path = Path(f"data/raw/real_data_{system}.csv")
+    
+    thresh_base_path = art_path / f"{system}_thresholds.yaml"
+    stats_base_path = art_path / f"{system}_stats.yaml"
+    scaler_path = art_path / f"{system}_scaler.pkl" 
+    
+    if not real_data_path.exists():
+        logger.error(f"No se encontró {real_data_path} para calibrar.")
+        return
+
+    # 2. Procesamiento de datos (Feature Engineering esencial)
+    logger.info(f"--- Iniciando Calibración para {system} ---")
+    df_raw = pd.read_csv(real_data_path)
+    df_real = apply_feature_engineering(df_raw, system)
+    save_processed_data(df_real, processed_path)
+    
+    # 3. Registro de Deriva
+    if not stats_base_path.exists():
+        logger.error(f"No se encontró el archivo de estadísticas base {stats_base_path} para calcular la deriva.")
+        return
+        
+    stats_base = yaml.safe_load(open(stats_base_path))
+    features_entrenamiento = list(stats_base['mean'].keys())
+    available_features = [f for f in features_entrenamiento if f in df_real.columns]
+    
+    drift = (df_real[available_features].mean() - pd.Series(stats_base['mean'])[available_features]).abs().mean()
+    log_to_monitorization(system, {'drift': drift}) 
+    logger.info(f"Nivel de deriva registrado en monitorization_{system}.csv: {drift:.4f}")
+
+    # ========================================================================
+    # 4. GESTIÓN CONDICIONAL DEL ESCALADOR (Solo Refrigeración)
+    # ========================================================================
+    if system == "refrigeracion" and scaler_path.exists():
+        logger.info("Cargando y actualizando el escalador original para REFRIGERACIÓN...")
+        scaler = joblib.load(scaler_path)
+        
+        # Identificamos las columnas binarias que NO deben entrar al escalador
+        binary_cols = ['defrost_on', 'door_open']
+        
+        # Filtramos 'available_features' para quedarnos SOLO con las numéricas que el escalador conoce
+        features_numericas = [f for f in available_features if f not in binary_cols]
+        
+        # Nos aseguramos de que mantengan el orden exacto que espera scikit-learn
+        if hasattr(scaler, 'feature_names_in_'):
+            features_finales = [f for f in scaler.feature_names_in_ if f in df_real.columns]
+        else:
+            features_finales = features_numericas
+
+        df_para_escalar = df_real[features_finales]
+        
+        # Ejecutamos el fit parcial con las columnas numéricas limpias
+        if hasattr(scaler, 'partial_fit'):
+            scaler.partial_fit(df_para_escalar)
+        else:
+            scaler.fit(df_para_escalar)
+            
+        # Generamos el DataFrame transformado manteniendo solo el espacio numérico
+        X_calibracion = pd.DataFrame(scaler.transform(df_para_escalar), columns=features_finales)
+        
+        # Reinyectamos el resto de columnas de df_real (incluyendo defrost_on, door_open y fault_id) sin tocar sus valores
+        for col in df_real.columns:
+            if col not in X_calibracion.columns:
+                X_calibracion[col] = df_real[col].values
+                
+        joblib.dump(scaler, scaler_path)
+        logger.info("Escalador de refrigeración actualizado y guardado.")
+    else:
+        if system == "refrigeracion":
+            logger.warning(f"No se detectó el archivo del escalador en {scaler_path} a pesar de ser refrigeración.")
+        X_calibracion = df_real[available_features]
+
+    # 5. ESTRATEGIA DE GUARDADO SEGÚN VOLUMEN DE DATOS
+    min_samples = cfg[system].get("min_samples_for_calibration", 100)
+    fecha_hoy = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    
+    # Diccionario base para actualizar umbrales (Heredamos del base físico)
+    current_thresh = yaml.safe_load(open(thresh_base_path)) if thresh_base_path.exists() else {}
+    
+    # Estructura de las nuevas estadísticas calculadas
+    new_stats = {
+        'mean': df_real[available_features].mean().to_dict(),
+        'std': df_real[available_features].std().to_dict()
+    }
+
+    # Recalculamos los umbrales basados en la física de los nuevos datos
+    if system == "aireado":
+        if 'Encostramiento_Risk' in df_real.columns:
+            current_thresh['encostramiento_risk'] = float(df_real['Encostramiento_Risk'].quantile(0.90))
+        if 'N_fan_Hz' in df_real.columns:
+            current_thresh['fan_fail_hz'] = float(df_real['N_fan_Hz'].quantile(0.05))
+            
+    elif system == "refrigeracion":
+        if 'early_P_dis_error' in df_real.columns:
+            current_thresh['nc_low'] = float(df_real['early_P_dis_error'].quantile(0.1))
+        if 'T_cond_approach' in df_real.columns:
+            current_thresh['cf_high'] = float(df_real['T_cond_approach'].quantile(0.9))
+        if 'P_suc_bar' in df_real.columns:
+            current_thresh['uc_p_gate'] = float(df_real['P_suc_bar'].quantile(0.1))
+        if 'T_cab_meas_diff' in df_real.columns:
+            current_thresh['drift_limit'] = float(df_real['T_cab_meas_diff'].std() * 3)
+        if 'Eff_vol' in df_real.columns:
+            current_thresh['eff_vol_limit'] = float(df_real['Eff_vol'].quantile(0.05))
+
+    # ---- bifurcación de guardado ----
+    if len(df_real) < min_samples:
+        logger.warning(f"⚠️ Muestras insuficientes ({len(df_real)} < {min_samples}). NO se alterará el modelo de ML para evitar Overfitting.")
+        logger.info("Actualizando exclusivamente los artefactos base genéricos (Post-proceso físico).")
+        
+        # Guardamos directamente en las rutas base (sin fecha)
+        with open(stats_base_path, 'w') as f:
+            yaml.dump(new_stats, f)
+        with open(thresh_base_path, 'w') as f:
+            yaml.dump(current_thresh, f)
+            
+        logger.info(f"✅ Artefactos base de {system} actualizados.")
+    else:
+        logger.info(f"Volumen de datos suficiente ({len(df_real)} muestras). Ajustando calibrador de salida...")
+        model_base, _ = load_model(system) 
+
+        # [BLINDAJE CRÍTICO]: Asegurar alineación estricta de columnas con el modelo matemático
+        if hasattr(model_base, 'feature_names_in_'):
+            expected_features = list(model_base.feature_names_in_)
+            X_calibracion_ready = X_calibracion[expected_features]
+        else:
+            drop_meta = ['fault', 'run_id', 'fault_id', 'time_min', 'fault_numeric', 'prediction', 'confidence']
+            X_calibracion_ready = X_calibracion.drop(columns=[c for c in drop_meta if c in X_calibracion.columns], errors='ignore')
+
+        # [APLICACIÓN DE LA DOCUMENTACIÓN OFICIAL]
+        # Envolvemos el modelo base en un FrozenEstimator para indicarle a sklearn que ya está entrenado
+        from sklearn.frozen import FrozenEstimator
+        
+        model_congelado = FrozenEstimator(model_base)
+        
+        # Instanciamos el calibrador nativo. Al usar FrozenEstimator, cv y ensemble se gestionan solos correctamente
+        model_calibrado = CalibratedClassifierCV(
+            estimator=model_congelado, 
+            method='isotonic'
+        )
+        
+        # Ajustamos las funciones de calibración isotónica sobre los datos limpios
+        model_calibrado.fit(X_calibracion_ready, df_real['fault_id'])
+        
+        # Definimos las rutas fechadas para este bloque atómico calibrado
+        model_calib_path = art_path / f"{system}_model_calibrated_{fecha_hoy}.pkl"
+        stats_calib_path = art_path / f"{system}_stats_calibrated_{fecha_hoy}.yaml"
+        thresh_calib_path = art_path / f"{system}_thresholds_calibrated_{fecha_hoy}.yaml"
+        
+        # Guardamos todo el paquete con la misma marca de tiempo
+        joblib.dump(model_calibrado, model_calib_path)
+        with open(stats_calib_path, 'w') as f:
+            yaml.dump(new_stats, f)
+        with open(thresh_calib_path, 'w') as f:
+            yaml.dump(current_thresh, f)
+            
+        logger.info(f"✅ Nueva calibración guardada con fecha de [{fecha_hoy}].")
 
 
 def get_stats():
@@ -456,10 +652,11 @@ if __name__ == "__main__":
         elif cmd == "train": train()
         elif cmd == "tuning": tuning()
         elif cmd == "predict": predict()
+        elif cmd == "calibrate": calibrate()
         elif cmd == "evaluate": evaluate()
         elif cmd == "get_stats": get_stats()
         elif cmd == "get_info": get_info()
         else:
             logger.error(f"Comando no reconocido: {cmd}")
     else:
-        print("Uso: python src/main.py [data_processing|train|tuning|predict|evaluate|get_stats|get_info]")
+        print("Uso: python src/main.py [data_processing|train|tuning|predict|evaluate|calibrate|get_stats|get_info]")

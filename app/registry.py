@@ -8,13 +8,16 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from app.domain.services.exceptions import (
+    InsufficientCycleHistoryError,
     InsufficientFramesError,
     InsufficientTelemetryHistoryError,
     InvalidImageError,
     InvalidVideoError,
     NoValidSimulationPointError,
     PuConstraintViolationError,
+    UnknownDiagnosisSystemError,
     ThermalSafetyViolationError,
+
 )
 
 # ── Plugin imports ────────────────────────────────────────────────────────────
@@ -138,6 +141,18 @@ from app.plugins.ml46_dairy_fouling_clog_detection.predict_dto import (
 from app.plugins.ml46_dairy_fouling_clog_detection.train_dto import (
     TrainRequest as Ml46Dairy_TrainReq,
     TrainResponse as Ml46Dairy_TrainResp,
+)
+
+from app.plugins.ml40_meat_refrigeration_aeration_fault_diagnosis.plugin import (
+    Ml40MeatRefrigerationAerationFaultDiagnosisPlugin,
+)
+from app.plugins.ml40_meat_refrigeration_aeration_fault_diagnosis.predict_dto import (
+    PredictRequest as Ml40Meat_Request,
+    PredictResponse as Ml40Meat_Response,
+)
+from app.plugins.ml40_meat_refrigeration_aeration_fault_diagnosis.train_dto import (
+    TrainRequest as Ml40Meat_TrainReq,
+    TrainResponse as Ml40Meat_TrainResp,
 )
 
 
@@ -297,5 +312,16 @@ REGISTRY: list[ModelEntry] = [
         extra_predict_exceptions=(InsufficientTelemetryHistoryError,),
         train_request_type=Ml46Dairy_TrainReq,
         train_response_type=Ml46Dairy_TrainResp,
+    ),
+    ModelEntry(
+        model_id="ml40-meat-refrigeration-aeration-fault-diagnosis",
+        prefix="/models/ml40-meat-refrigeration-aeration-fault-diagnosis",
+        version="1.0.0",
+        plugin_class=Ml40MeatRefrigerationAerationFaultDiagnosisPlugin,
+        predict_request_type=Ml40Meat_Request,
+        predict_response_type=Ml40Meat_Response,
+        extra_predict_exceptions=(InsufficientCycleHistoryError, UnknownDiagnosisSystemError),
+        train_request_type=Ml40Meat_TrainReq,
+        train_response_type=Ml40Meat_TrainResp,
     ),
 ]

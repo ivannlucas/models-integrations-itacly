@@ -1,0 +1,185 @@
+{
+  "model_id": "a40",
+  "model_slug": "meat-refrigeration-aeration-fault-diagnosis",
+  "fecha": "Julio 2026",
+  "model_key": "ml40-meat-refrigeration-aeration-fault-diagnosis",
+  "version": "1.0.0",
+  "descripcion": "Sistema de vigilancia que revisa, ciclo a ciclo, el funcionamiento de los equipos de refrigeración y de las cámaras de aireado/secado de embutidos, y diagnostica si cada ciclo ha sido normal o presenta un fallo concreto (por ejemplo: condensador sucio, fuga de refrigerante, ventilador averiado, encostramiento del embutido o exceso de humedad/hielo). Combina el aprendizaje sobre datos históricos con reglas físicas del propio proceso para que el diagnóstico sea coherente, y acompaña cada resultado de un nivel de confianza.",
+  "task_type": "Clasificación multiclase sobre series temporales por ciclo (2 subsistemas independientes)",
+  "framework": "scikit-learn (RandomForestClassifier, 200 árboles por subsistema) + capa neurosimbólica de reglas físicas + voto por ciclo; pandas/numpy/joblib/PyYAML",
+  "artefacto": "refrigeracion_model.pkl (171 MB) + refrigeracion_scaler.pkl + refrigeracion_thresholds.yaml + refrigeracion_stats.yaml; aireado_model.pkl (11,6 MB) + aireado_thresholds.yaml + aireado_stats.yaml",
+  "objetivo": "Detectar a tiempo los fallos de los equipos de frío y de secado para poder planificar el mantenimiento antes de que el problema estropee el producto: evitar mermas, proteger la cadena de frío y la calidad del curado, reducir el gasto energético y las paradas imprevistas.",
+  "caso_uso": "Al terminar cada ciclo de funcionamiento (o periódicamente), envías el histórico minuto a minuto de los sensores del equipo. El sistema identifica automáticamente si se trata de un equipo de refrigeración o de una cámara de aireado, analiza el ciclo completo y te devuelve un único diagnóstico por ciclo: el estado detectado (normal o tipo de fallo), la confianza del diagnóstico y un indicador de salud del propio sistema. Con ese resultado, el responsable de mantenimiento decide si intervenir y con qué prioridad.",
+  "inputs": [
+    {
+      "nombre": "run_id, time_min",
+      "tipo": "int",
+      "descripcion": "Identificador del ciclo operativo y minuto dentro del ciclo — obligatorios en ambos subsistemas (ancla del voto y de los lags)",
+      "obligatorio": "Sí",
+      "valor_defecto": "-"
+    },
+    {
+      "nombre": "[refrigeración] T_amb, T_set, T_cab, T_cab_meas, T_evap_sat, T_cond_sat",
+      "tipo": "float (°C)",
+      "descripcion": "Temperaturas ambiente, consigna, cabina (lógica y medida) y de saturación en evaporador/condensador",
+      "obligatorio": "Sí",
+      "valor_defecto": "-"
+    },
+    {
+      "nombre": "[refrigeración] P_suc_bar, P_dis_bar, N_comp_Hz, SH_K, P_comp_W, Q_evap_W, COP",
+      "tipo": "float",
+      "descripcion": "Presiones de succión/descarga, frecuencia del compresor, sobrecalentamiento, potencia, capacidad frigorífica y rendimiento",
+      "obligatorio": "Sí",
+      "valor_defecto": "-"
+    },
+    {
+      "nombre": "[refrigeración] frost_level, valve_open, door_open, defrost_on",
+      "tipo": "float / binario",
+      "descripcion": "Escarcha estimada, apertura de válvula de expansión, puerta abierta y desescarche activo",
+      "obligatorio": "Sí",
+      "valor_defecto": "-"
+    },
+    {
+      "nombre": "[aireado] Kg_embutido, T_amb, T_set, T_cab, RH_cab, N_fan_Hz, T_evap_sat, P_comp_W",
+      "tipo": "float",
+      "descripcion": "Carga de producto, temperaturas, humedad relativa de cámara, frecuencia de ventiladores y potencia del sistema de frío",
+      "obligatorio": "Sí",
+      "valor_defecto": "-"
+    },
+    {
+      "nombre": "fault_id, fault",
+      "tipo": "int / string",
+      "descripcion": "Etiqueta real del ciclo — solo en modo evaluación/entrenamiento; nunca se usa como feature",
+      "obligatorio": "Solo train/evaluación",
+      "valor_defecto": "-"
+    }
+  ],
+  "outputs": [
+    {
+      "nombre": "run_id",
+      "tipo": "int",
+      "descripcion": "Ciclo operativo diagnosticado",
+      "rango": "según entrada",
+      "interpretacion": "un diagnóstico por ciclo, no por minuto"
+    },
+    {
+      "nombre": "prediction / prediction_name",
+      "tipo": "int / str",
+      "descripcion": "Clase final tras Random Forest + reglas físicas + voto por ciclo",
+      "rango": "refrigeración: 0-12 (NORMAL...UNDERCHARGE_AND_COND_FOUL); aireado: 0-3 (NORMAL, ENCOSTRAMIENTO, SATURACION_HIELO, FALLO_VENTILADOR)",
+      "interpretacion": "0 = operación correcta; cualquier otro valor identifica el tipo de fallo diagnosticado"
+    },
+    {
+      "nombre": "confidence",
+      "tipo": "float",
+      "descripcion": "Confianza media del ciclo (media del máximo de probabilidad por minuto)",
+      "rango": "0-1",
+      "interpretacion": "valores < 0,75 indican diagnóstico poco fiable; las clases COND_FOUL_SEVERE/NON_CONDENSABLES operan típicamente en 0,5-0,7"
+    },
+    {
+      "nombre": "model_health",
+      "tipo": "str",
+      "descripcion": "Salud del modelo según la confianza media de la petición frente al umbral del 75%",
+      "rango": "ESTABLE / DEGRADADO",
+      "interpretacion": "DEGRADADO sugiere deriva de sensores o datos fuera de la distribución de entrenamiento"
+    }
+  ],
+  "metricas": [
+    {
+      "nombre": "Accuracy / F1-macro (refrigeración, declarado)",
+      "valor": "0,94 / 0,94",
+      "descripcion": "Test hold-out de 260 ciclos (370.500 filas) del dataset simulado, configuración final RF+NS+Voto (memoria Tabla 4)",
+      "interpretacion": "el sistema acierta el diagnóstico en ~94 de cada 100 ciclos simulados"
+    },
+    {
+      "nombre": "Accuracy / F1-macro (aireado, declarado)",
+      "valor": "1,00 / 1,00",
+      "descripcion": "Test hold-out de 30 ciclos (6.000 filas) del dataset sintético, configuración final RF+NS+Voto (memoria Tabla 4)",
+      "interpretacion": "acierto total en el entorno sintético controlado; no extrapolable directamente a planta"
+    },
+    {
+      "nombre": "F1 clases problemáticas (refrigeración)",
+      "valor": "0,62 / 0,63",
+      "descripcion": "COND_FOUL_SEVERE y NON_CONDENSABLES — clases con firmas físicas casi idénticas (memoria secciones 6.3 y 9)",
+      "interpretacion": "los 14 ciclos mal clasificados del test son todos confusiones entre estas dos clases"
+    },
+    {
+      "nombre": "Accuracy por ciclo re-ejecutada (post-integración)",
+      "valor": "0,9462 (refrigeración) / 1,0000 (aireado)",
+      "descripcion": "Re-ejecución del pipeline entregado sobre los splits de test actuales durante la verificación de integración",
+      "interpretacion": "confirma las métricas declaradas con los artefactos realmente entregados"
+    },
+    {
+      "nombre": "Verificación golden dataset (post-integración)",
+      "valor": "23/23 casos, Δ conf. máx. ≈ 5e-07",
+      "descripcion": "Reproducibilidad del plugin frente al pipeline original sobre los splits de test (13 clases refrigeración + 4 clases aireado + 2 confusiones reales)",
+      "interpretacion": "el servicio integrado reproduce exactamente el comportamiento del código entregado; es fidelidad del wiring, no acierto del modelo"
+    }
+  ],
+  "limitaciones": [
+    {
+      "tipo": "Datos simulados/sintéticos",
+      "descripcion": "El dataset de refrigeración procede de un simulador físico público (refrigerador de propósito general, no específico cárnico) y el de aireado es 100% sintético generado a partir de literatura técnica. Todas las métricas deben leerse como validación interna controlada; el propio equipo de IA exige una fase de calibración con datos reales de planta antes del despliegue productivo."
+    },
+    {
+      "tipo": "Confusión COND_FOUL_SEVERE ↔ NON_CONDENSABLES",
+      "descripcion": "Ambas fallas comparten firma termodinámica (subida de presión de descarga y de T_cond_sat, caída de COP); F1 de 0,62-0,63 pese al esfuerzo neurosimbólico. Un diagnóstico de cualquiera de las dos debe contrastarse manualmente."
+    },
+    {
+      "tipo": "Regla NC/CF dependiente del lote",
+      "descripcion": "La regla que desambigua esas dos clases usa medias del lote completo de datos en conflicto: el mismo ciclo puede recibir distinto diagnóstico según con qué otros ciclos se envíe en la petición (verificado empíricamente en la integración con el run 1100 del test). Se recomienda al equipo de IA una versión por-ciclo de la regla."
+    },
+    {
+      "tipo": "Histórico mínimo por ciclo",
+      "descripcion": "Las variables de tendencia exigen ≥100 minutos por ciclo en refrigeración y ≥60 en aireado; los primeros tramos de cada ciclo son un punto ciego del diagnóstico (el servicio rechaza ciclos más cortos con un error explícito)."
+    },
+    {
+      "tipo": "Umbrales calibrados de ejemplo",
+      "descripcion": "Los umbrales neurosimbólicos entregados están calibrados sobre datos de ejemplo (encostramiento_risk=0,805, fan_fail_hz=12,48); con el input crudo de ejemplo del propio equipo, 13 de 15 ciclos NORMAL de aireado salen diagnosticados como ENCOSTRAMIENTO. Debe decidirse qué umbral servir en producción para datos crudos de cliente."
+    },
+    {
+      "tipo": "Evaluaciones entregadas obsoletas",
+      "descripcion": "Los CSV de evaluación entregados en data/predictions/ corresponden a una versión anterior del dataset de aireado; los golden cases se re-derivaron ejecutando el pipeline entregado sobre los splits actuales."
+    }
+  ],
+  "fichero_nombre": "data/splits/refrigeracion_test.csv y data/splits/aireado_test.csv",
+  "fichero_registros": "370.500 filas / 260 ciclos (refrigeración) + 6.000 filas / 30 ciclos (aireado)",
+  "fichero_resultado": "predict batch sobre ambos ficheros reproduce los 23 golden_cases del manifest (predicción exacta por ciclo, confianza con Δ máx. ≈ 5e-07) y las accuracies por ciclo 0,9462 / 1,0000",
+  "observaciones_tecnicas": "Solo CPU (sin GPU). refrigeracion_model.pkl pesa 171 MB en disco (distribución vía blob/S3, nunca commiteado a git); RAM recomendada ≥ 8 GB. Inferencia batch del split completo de refrigeración (370.500 filas) ≈ 2-3 min en CPU local; aireado < 10 s; reentrenamiento aireado < 1 min. Los artefactos están serializados con scikit-learn 1.8/1.9 y los Random Forest predicen con valores NaN en las filas de calentamiento (warm-up) de cada ciclo, lo que exige scikit-learn ≥ 1.4 (recomendado fijar ≥ 1.8 en despliegue). Salud del modelo monitorizable vía confianza media por petición (umbral 75%).",
+  "que_no_responde": "El sistema no predice cuándo ocurrirá una avería futura ni su causa raíz exacta: diagnostica el estado actual de cada ciclo de funcionamiento ya registrado y lo clasifica en un catálogo cerrado de fallos conocidos.",
+  "entradas_contexto": "Los datos provienen de los sensores ya instalados en el equipo: sondas de temperatura, presión y consumo del circuito frigorífico en el caso de la refrigeración, y sondas de temperatura, humedad y ventilación de la cámara de secado en el caso del aireado. Solo hay que aportarlos como un histórico por ciclo de funcionamiento, minuto a minuto.",
+  "ejemplo_interpretacion": "Si envías el último ciclo completo de una cámara de secado y el sistema devuelve ENCOSTRAMIENTO con confianza 0,97, significa que durante ese ciclo el aire ha estado secando la superficie del embutido demasiado rápido (mucha ventilación con humedad baja) y conviene actuar sobre la humedad/ventilación antes de que el defecto se consolide. Si devuelve NORMAL con confianza 0,95, el ciclo se ha comportado según lo esperado.",
+  "margen_error": "En las pruebas, el sistema acierta el diagnóstico en unos 94-95 de cada 100 ciclos de refrigeración y en la práctica totalidad de los ciclos de aireado. Cuando se equivoca en refrigeración, casi siempre es confundiendo entre sí dos fallos muy parecidos: condensador muy sucio y presencia de aire/gases en el circuito — ambos requieren intervención, pero distinta. Ten en cuenta que estas cifras provienen de datos simulados: hasta que el sistema no se calibre con datos reales de tu planta, deben tomarse como orientativas.",
+  "revisar_manualmente": [
+    "Cualquier diagnóstico de 'condensador muy sucio' (COND_FOUL_SEVERE) o 'gases no condensables' (NON_CONDENSABLES): son las dos clases que el sistema confunde entre sí, y además su resultado puede variar según qué otros ciclos se envíen juntos en la misma petición.",
+    "Diagnósticos con confianza por debajo de 0,75 o con salud del modelo DEGRADADO.",
+    "Alertas de ENCOSTRAMIENTO sobre datos crudos nuevos de planta mientras no se haya revisado el umbral calibrado de esa regla (con los datos de ejemplo del proveedor produce falsas alarmas).",
+    "Los primeros 100 minutos (refrigeración) o 60 minutos (aireado) de cada ciclo: el sistema aún no tiene histórico suficiente y no diagnostica ese tramo.",
+    "Cualquier resultado durante el periodo inicial de uso con datos reales, hasta completar la calibración con datos de la propia planta."
+  ],
+  "que_no_hace": [
+    "No predice averías futuras a semanas o meses vista: diagnostica el estado del ciclo que le entregas.",
+    "No detecta tipos de fallo fuera de su catálogo (13 clases en refrigeración, 4 en aireado).",
+    "No sustituye el plan de mantenimiento ni la inspección física del equipo: es una ayuda para priorizar.",
+    "No funciona sin identificador de ciclo (run_id) ni con ciclos demasiado cortos.",
+    "No garantiza el mismo rendimiento en planta real que en los datos simulados con los que fue entrenado y evaluado."
+  ],
+  "puede_equivocarse": "Sí. En el entorno de pruebas acierta el 94-95% de los ciclos de refrigeración y prácticamente el 100% de los de aireado, pero esas cifras provienen de datos simulados y sintéticos: requieren validación con datos reales de planta antes del despliegue, tal como advierte el propio equipo desarrollador. Su punto débil conocido es distinguir el condensador sucio de la presencia de gases en el circuito. Es una herramienta de apoyo a la decisión de mantenimiento, no una garantía ni un sustituto del criterio técnico.",
+  "kpis": [
+    {
+      "kpi": "F1-Score macro",
+      "valor_umbral": "≥ 0,85",
+      "descripcion": "Equilibrio entre precisión y sensibilidad en todas las clases de fallo. Resultado en test: 0,94 (refrigeración) y 1,00 (aireado) — cumplido sobre datos simulados/sintéticos; validación con datos reales pendiente."
+    },
+    {
+      "kpi": "Sensibilidad (Recall)",
+      "valor_umbral": "≥ 0,90",
+      "descripcion": "Detectar al menos 9 de cada 10 fallos críticos. Resultado en test: 0,94 (refrigeración) y 1,00 (aireado) — cumplido sobre datos simulados/sintéticos; validación con datos reales pendiente."
+    },
+    {
+      "kpi": "Precisión",
+      "valor_umbral": "≥ 0,85",
+      "descripcion": "Minimizar avisos de mantenimiento innecesarios (falsos positivos). Resultado en test: 0,94 (refrigeración) y 1,00 (aireado) — cumplido sobre datos simulados/sintéticos; validación con datos reales pendiente."
+    }
+  ]
+}

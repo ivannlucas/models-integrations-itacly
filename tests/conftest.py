@@ -30,6 +30,7 @@ from app.application.use_cases.predict_model_use_case import PredictModelUseCase
 from app.application.use_cases.train_model_use_case import TrainModelUseCase
 from app.domain.ports.model_plugin_port import ModelPluginPort
 from app.domain.services.exceptions import (
+    InsufficientCycleHistoryError,
     InsufficientFramesError,
     InsufficientTelemetryHistoryError,
     InvalidImageError,
@@ -38,6 +39,7 @@ from app.domain.services.exceptions import (
     PuConstraintViolationError,
     ThermalSafetyViolationError,
     TrainingNotSupportedError,
+    UnknownDiagnosisSystemError,
 )
 from app.domain.services.model_runtime_service import ModelRuntimeService
 from app.infrastructure.http.router_factory import make_model_router
@@ -153,6 +155,16 @@ from app.plugins.ml46_dairy_fouling_clog_detection.predict_dto import (
 from app.plugins.ml46_dairy_fouling_clog_detection.train_dto import (
     TrainRequest as Ml46Dairy_TrainReq,
     TrainResponse as Ml46DairyTrainResp,
+)
+from app.plugins.ml40_meat_refrigeration_aeration_fault_diagnosis.predict_dto import (
+    PredictBatchResponse as Ml40MeatBatchResp,
+    PredictInlineResponse as Ml40MeatInlineResp,
+    PredictRequest as Ml40Meat_Request,
+    PredictResponse as Ml40Meat_Response,
+)
+from app.plugins.ml40_meat_refrigeration_aeration_fault_diagnosis.train_dto import (
+    TrainRequest as Ml40Meat_TrainReq,
+    TrainResponse as Ml40MeatTrainResp,
 )
 
 # ── ModelEntry dataclass (local copy — avoids importing app.registry which loads real plugins) ───
@@ -757,8 +769,57 @@ def _ml46_dairy_train(plugin: FakePlugin, *, data_path: str) -> Ml46DairyTrainRe
     )
 
 
+def _ml40_meat_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> Ml40MeatInlineResp:
+    """Fake inline prediction response for the ml40 refrigeration/aeration fault diagnosis plugin."""
+    return Ml40MeatInlineResp(
+        model_id="ml40-meat-refrigeration-aeration-fault-diagnosis",
+        system="aireado",
+        run_id=0,
+        prediction=0,
+        prediction_name="NORMAL",
+        confidence=0.9987,
+        n_rows_used=100,
+        model_health="ESTABLE",
+        model_name="ml40-meat-refrigeration-aeration-fault-diagnosis",
+        xai_feature_values={"prediction": 0, "confidence": 0.9987, "n_rows": 100},
+    )
+
+
+def _ml40_meat_batch(plugin: FakePlugin, *, data_path: str) -> Ml40MeatBatchResp:
+    """Fake batch prediction response for the ml40 refrigeration/aeration fault diagnosis plugin."""
+    return Ml40MeatBatchResp(
+        model_id="ml40-meat-refrigeration-aeration-fault-diagnosis",
+        system="refrigeracion",
+        predictions=[
+            {"run_id": 1, "fault_id": 0, "prediction": 0, "prediction_name": "NORMAL",
+             "confidence": 0.9539},
+        ],
+        n_runs=1,
+        avg_confidence=0.9539,
+        model_health="ESTABLE",
+        output_path=None,
+    )
+
+
+def _ml40_meat_train(plugin: FakePlugin, *, data_path: str) -> Ml40MeatTrainResp:
+    """Fake retraining response for the ml40 refrigeration/aeration fault diagnosis plugin."""
+    return Ml40MeatTrainResp(
+        detail="Reentrenamiento completado para el sistema aireado con el procedimiento original.",
+        system="aireado",
+        n_samples=24000,
+        n_runs_train=240,
+        n_runs_test=60,
+        accuracy=1.0,
+        f1_macro=1.0,
+        precision_macro=1.0,
+        recall_macro=1.0,
+        upload_warning=None,
+    )
+
+
 FAKE_FACTORIES: dict[str, tuple[Callable, Callable]] = {
     "ml46-dairy-fouling-clog-detection": (_ml46_dairy_inline, _ml46_dairy_batch),
+    "ml40-meat-refrigeration-aeration-fault-diagnosis": (_ml40_meat_inline, _ml40_meat_batch),
     "ml35-dairy-ann-cleaning-cost": (_ml35_dairy_inline, _ml35_dairy_batch),
     "ml34-dairy-pasteurization-energy-ga": (_ml34_dairy_inline, _ml34_dairy_batch),
     "ml17-meat-market-price-analysis": (_ml17_inline, _ml17_batch),
@@ -776,6 +837,7 @@ FAKE_FACTORIES: dict[str, tuple[Callable, Callable]] = {
 
 TRAIN_FACTORIES: dict[str, Callable] = {
     "ml46-dairy-fouling-clog-detection": _ml46_dairy_train,
+    "ml40-meat-refrigeration-aeration-fault-diagnosis": _ml40_meat_train,
     "ml35-dairy-ann-cleaning-cost": _ml35_dairy_train,
     "ml34-dairy-pasteurization-energy-ga": _ml34_dairy_train,
     "modelo10-lacteo": _lacteo_train,
@@ -927,6 +989,17 @@ TEST_REGISTRY: list[ModelEntry] = [
         extra_predict_exceptions=(InsufficientTelemetryHistoryError,),
         train_request_type=Ml46Dairy_TrainReq,
         train_response_type=Ml46DairyTrainResp,
+    ),
+    ModelEntry(
+        model_id="ml40-meat-refrigeration-aeration-fault-diagnosis",
+        prefix="/models/ml40-meat-refrigeration-aeration-fault-diagnosis",
+        version="1.0.0",
+        plugin_class=FakePlugin,
+        predict_request_type=Ml40Meat_Request,
+        predict_response_type=Ml40Meat_Response,
+        extra_predict_exceptions=(InsufficientCycleHistoryError, UnknownDiagnosisSystemError),
+        train_request_type=Ml40Meat_TrainReq,
+        train_response_type=Ml40MeatTrainResp,
     ),
 ]
 

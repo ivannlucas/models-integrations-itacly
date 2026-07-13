@@ -140,4 +140,14 @@ def train_refrigeration(df, config):
     
     print("✅ Entrenamiento de Refrigeración completado con éxito.")
 
+    stats = {
+        'mean': X_train.mean().to_dict(),
+        'std': X_train.std().to_dict()
+    }
+    with open(art_path / "refrigeracion_stats.yaml", "w") as f:
+        yaml.dump(stats, f)
+    
+    print("✅ Estadísticas de Refrigeración guardadas para detección de drift.")
+    return model, scaler
+
     return model, scaler

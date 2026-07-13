@@ -73,8 +73,15 @@ def train_aireado(df):
     split_path.mkdir(parents=True, exist_ok=True)
     test_df.to_csv(split_path / "aireado_test.csv", index=False)
     train_df.to_csv(split_path / "aireado_train.csv", index=False)
+
+    stats = {
+        'mean': X_train.mean().to_dict(),
+        'std': X_train.std().to_dict()
+    }
+    with open(art_path / "aireado_stats.yaml", "w") as f:
+        yaml.dump(stats, f)
     
-    print("✅ Entrenamiento de Refrigeración completado con éxito.")
+    print("✅ Entrenamiento de aireado y guardado de estadísticas completado.")
 
     print(f"Modelo guardado y set de test listo.")
 

@@ -4,6 +4,7 @@ import yaml
 import numpy as np
 from pathlib import Path
 from src.utils.logging import get_logger
+from src.utils.monitor import log_to_monitorization
 
 logger = get_logger("PREDICTOR")
 
@@ -15,64 +16,98 @@ def load_config():
 def monitor_model_health(current_conf):
     cfg = load_config()
     system = cfg["selected_system"]
-    window = cfg[system].get("window_degradation", 50) 
+    window = cfg[system].get("window_degradation", 50)
     
-    logs_dir = Path(cfg["paths"]["logs"])
-    logs_dir.mkdir(parents=True, exist_ok=True) 
-    history_path = logs_dir / f"health_history_{system}.csv"
+    # 1. Leer el historial directamente del archivo unificado
+    log_path = Path(cfg["paths"]["logs"]) / f"monitorization_{system}.csv"
     
-    # 1. Cargar historial existente o crear uno nuevo
-    if history_path.exists():
+    history = []
+    if log_path.exists():
         try:
-            # CORRECCIÓN: Leemos con pandas porque el archivo se guarda como CSV
-            df_hist = pd.read_csv(history_path)
-            history = df_hist['confidence'].tolist()
-        except Exception:
-            # Si el archivo está corrupto (por el error anterior), empezamos de cero
-            logger.warning(f"Historial de salud corrupto o ilegible. Reiniciando historial.")
-            history = []
-    else:
-        history = []
+            df_log = pd.read_csv(log_path)
+            # Filtramos solo registros de tipo 'PREDICT' que tengan columna 'confidence'
+            # y tomamos las últimas 'window' muestras
+            if 'confidence' in df_log.columns:
+                history = df_log['confidence'].dropna().tail(window).tolist()
+        except Exception as e:
+            logger.warning(f"No se pudo leer el histórico de monitorización: {e}")
 
-    # 2. Actualizar
-    history.append(current_conf)
-    if len(history) > window:
-        history.pop(0)
-
-    # 3. Guardar para la próxima ejecución
-    # Mantenemos tu método de guardado que es correcto (CSV)
-    pd.DataFrame({'confidence': history}).to_csv(history_path, index=False)
-
-    # 4. Calcular media y alertar
-    rolling_avg = np.mean(history)
+    # 2. Calcular media y definir estado
+    # Incluimos la predicción actual en el cálculo
+    temp_history = history + [current_conf]
+    rolling_avg = np.mean(temp_history)
     threshold = cfg[system].get("health_threshold", 75.0)
     
-    if rolling_avg < threshold:
-        logger.warning(f"⚠️ DEGRADACIÓN DETECTADA: Salud {rolling_avg:.2f}%")
-        status = "DEGRADADO"
+    status = "DEGRADADO" if rolling_avg < threshold else "ESTABLE"
+    
+    # 3. Guardar el nuevo registro en el archivo unificado
+    log_to_monitorization(system, {
+        'status': status,
+        'confidence': current_conf
+    })
+    
+    if status == "DEGRADADO":
+        logger.warning(f"⚠️ DEGRADACIÓN DETECTADA: Salud (media): {rolling_avg:.2f}%")
     else:
-        logger.info(f"Salud actual: {current_conf:.2f}%, Promedio rolling ({window}): {rolling_avg:.2f}%")
-        logger.info(f"Modelo ESTABLE. Historial actualizado en: {history_path}")
-        status = "ESTABLE"
-
+        logger.info(f"Modelo ESTABLE. Salud actual: {current_conf:.2f}%, Promedio ({len(temp_history)}): {rolling_avg:.2f}%")
+        
     return status
     
 
 def load_model(system_type: str):
-    """Carga el modelo desde la ruta definida en config.yaml."""
+    """
+    Busca modelos disponibles. Si solo existe el base, lo carga automáticamente.
+    Si hay calibraciones, despliega un menú interactivo en terminal para elegir.
+    
+    Returns:
+        tuple: (objeto_modelo, selected_suffix)
+    """
     cfg = load_config()
     artifacts_path = Path(cfg["paths"]["artifacts"])
+    
+    # Buscamos todos los modelos calibrados disponibles para este sistema específico
+    calibrated_models = sorted(list(artifacts_path.glob(f"{system_type}_model_calibrated_*.pkl")))
+    
+    selected_suffix = None  # None representa usar el modelo Base / [INICIAL]
     model_path = artifacts_path / f"{system_type}_model.pkl"
     
+    if calibrated_models:
+        print(f"\nSe han detectado varias versiones para el sistema [{system_type.upper()}].")
+        print("Escoge la fecha del modelo con el que quieres hacer inferencia:")
+        print("0) [INICIAL] Modelo base original de fábrica")
+        
+        for i, path in enumerate(calibrated_models, start=1):
+            fecha_str = path.stem.replace(f"{system_type}_model_calibrated_", "")
+            print(f"{i}) [CALIBRADO] Versión del {fecha_str}")
+            
+        while True:
+            try:
+                opcion = int(input(f"Seleccione una opción (0-{len(calibrated_models)}): "))
+                if 0 <= opcion <= len(calibrated_models):
+                    break
+                print("⚠️ Opción inválida. Intente de nuevo.")
+            except ValueError:
+                print("⚠️ Por favor, introduzca un número válido.")
+                
+        if opcion > 0:
+            chosen_model_path = calibrated_models[opcion - 1]
+            selected_suffix = chosen_model_path.stem.replace(f"{system_type}_model_calibrated_", "")
+            model_path = chosen_model_path
+            logger.info(f"-> Operador seleccionó modelo calibrado: {model_path.name}")
+        else:
+            logger.info("-> Operador seleccionó modelo [INICIAL] original.")
+    else:
+        # Si no hay calibraciones previas, pasa directo de forma automática sin preguntar
+        logger.info(f"No se detectaron calibraciones previas para {system_type}. Usando modelo INICIAL automáticamente.")
+
     if not model_path.exists():
         logger.error(f"Archivo de modelo no encontrado: {model_path}")
         raise FileNotFoundError(f"No se encontró el modelo en {model_path}")
     
-    logger.info(f"Modelo {system_type} cargado correctamente.")
-    return joblib.load(model_path)
+    return joblib.load(model_path), selected_suffix
 
-def run_inference(model, X: pd.DataFrame, system_type: str):
-    """Ejecuta la inferencia asegurando limpieza, alineación y escalado."""
+def run_inference(model, X: pd.DataFrame, system_type: str, selected_suffix=None):
+    """Ejecuta la inferencia asegurando limpieza, alineación y escalado alineado."""
     try:
         cfg = load_config()
         
@@ -81,7 +116,6 @@ def run_inference(model, X: pd.DataFrame, system_type: str):
         metadatos = ['run_id', 'time_min', 'fault_id', 'fault', 'fault_numeric', 'prediction', 'confidence']
         to_drop = list(set(drop_cols_cfg + metadatos))
         
-        # X_cleaned solo contiene las FEATURES para el modelo
         X_cleaned = X.drop(columns=[c for c in to_drop if c in X.columns], errors='ignore')
         
         # 2. Alineación estricta con el entrenamiento
@@ -89,17 +123,24 @@ def run_inference(model, X: pd.DataFrame, system_type: str):
             expected_features = list(model.feature_names_in_)
             X_cleaned = X_cleaned[expected_features]
 
-        # 3. Escalado (Usa path de config.yaml)
+        # 3. Escalado dinámico y sincronizado
         if system_type == "refrigeracion":
             artifacts_path = Path(cfg["paths"]["artifacts"])
             scaler_path = artifacts_path / f"{system_type}_scaler.pkl"
             
+            # Buscamos el archivo de estadísticas del modelo que se haya seleccionado
+            if selected_suffix:
+                stats_path = artifacts_path / f"{system_type}_stats_calibrated_{selected_suffix}.yaml"
+            else:
+                stats_path = artifacts_path / f"{system_type}_stats.yaml"
+            
             if scaler_path.exists():
+                logger.info(f"Cargando escalador empleando referencias de: {stats_path.name}")
                 scaler = joblib.load(scaler_path)
+                
                 if hasattr(scaler, 'feature_names_in_'):
                     X_cleaned.loc[:, scaler.feature_names_in_] = scaler.transform(X_cleaned[scaler.feature_names_in_])
                 else:
-                    # Fallback para scalers sin nombres de columnas
                     binary_cols = ['defrost_on', 'door_open']
                     num_cols = [c for c in X_cleaned.columns if c not in binary_cols]
                     X_cleaned.loc[:, num_cols] = scaler.transform(X_cleaned[num_cols])
