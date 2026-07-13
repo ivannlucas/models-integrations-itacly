@@ -16,6 +16,8 @@ from app.domain.services.exceptions import (
     NoValidSimulationPointError,
     PuConstraintViolationError,
     UnknownDiagnosisSystemError,
+    ThermalSafetyViolationError,
+
 )
 
 # ── Plugin imports ────────────────────────────────────────────────────────────
@@ -117,6 +119,18 @@ from app.plugins.ml35_dairy_ann_cleaning_cost.predict_dto import (
 from app.plugins.ml35_dairy_ann_cleaning_cost.train_dto import (
     TrainRequest as Ml35Dairy_TrainReq,
     TrainResponse as Ml35Dairy_TrainResp,
+)
+
+from app.plugins.ml34_dairy_pasteurization_energy_ga.plugin import (
+    Ml34DairyPasteurizationEnergyGaPlugin,
+)
+from app.plugins.ml34_dairy_pasteurization_energy_ga.predict_dto import (
+    PredictRequest as Ml34Dairy_Request,
+    PredictResponse as Ml34Dairy_Response,
+)
+from app.plugins.ml34_dairy_pasteurization_energy_ga.train_dto import (
+    TrainRequest as Ml34Dairy_TrainReq,
+    TrainResponse as Ml34Dairy_TrainResp,
 )
 
 from app.plugins.ml46_dairy_fouling_clog_detection.plugin import Ml46DairyFoulingClogDetectionPlugin
@@ -276,6 +290,17 @@ REGISTRY: list[ModelEntry] = [
         extra_predict_exceptions=(PuConstraintViolationError,),
         train_request_type=Ml35Dairy_TrainReq,
         train_response_type=Ml35Dairy_TrainResp,
+    ),
+    ModelEntry(
+        model_id="ml34-dairy-pasteurization-energy-ga",
+        prefix="/models/ml34-dairy-pasteurization-energy-ga",
+        version="1.0.0",
+        plugin_class=Ml34DairyPasteurizationEnergyGaPlugin,
+        predict_request_type=Ml34Dairy_Request,
+        predict_response_type=Ml34Dairy_Response,
+        extra_predict_exceptions=(ThermalSafetyViolationError,),
+        train_request_type=Ml34Dairy_TrainReq,
+        train_response_type=Ml34Dairy_TrainResp,
     ),
     ModelEntry(
         model_id="ml46-dairy-fouling-clog-detection",

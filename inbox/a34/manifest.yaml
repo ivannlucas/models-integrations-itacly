@@ -1,0 +1,431 @@
+model_id: ml34_dairy_pasteurization_energy_ga
+sector: lacteo
+nombre: "Modelo basado en algoritmos genéticos para la reducción del consumo energético del proceso de pasteurización"
+task_type: regression_prescriptive  # MLP surrogate (E_consumo, T_out_leche) + GA mono-objetivo v4 (min E/F, DEAP)
+framework:
+  - torch==2.5.1          # el entregable fija 2.5.1+cu121; en el plugin se usa la build CPU equivalente
+  - deap==1.4.3
+  - scikit-learn==1.7.2
+  - joblib==1.5.3
+  - numpy==2.2.6
+  - pandas==2.3.3
+
+artifacts:
+  folder: models/artifacts/
+  files:
+    - mlp_predictor.pt    # state_dict DynamicMLP 5→64→64→64→2, ReLU (según model_config.json)
+    - model_config.json   # topología + features_in_order + targets_in_order
+    - scaler_X.pkl        # MinMaxScaler [0,1] ajustado solo sobre train (5 features)
+    - scaler_y.pkl        # MinMaxScaler [0,1] ajustado solo sobre train (2 targets)
+
+inputs:
+  # Variables no controlables (estado de planta) — necesarias en predict y en optimize
+  fixed:
+    - name: T_in_leche
+      type: float
+      unit: "°C"
+      description: "Temperatura de entrada de la leche cruda (perturbación estacional)"
+      train_range: [0.0, 7.98]
+    - name: t_ciclo
+      type: float
+      unit: min
+      description: "Tiempo acumulado desde la última limpieza CIP"
+      train_range: [5.0, 545.0]
+    - name: Delta_P
+      type: float
+      unit: bar
+      description: "Caída de presión en el intercambiador (proxy de fouling)"
+      train_range: [0.263, 0.906]
+
+  # Variables de control/decisión — en modo predict las aporta el cliente;
+  # en modo optimize las resuelve el GA dentro de ga_range
+  control:
+    - name: F_flow
+      type: float
+      unit: "L/h"
+      description: "Caudal volumétrico de leche (límite operativo de bomba)"
+      ga_range: [3500.0, 5500.0]
+      train_range: [3520.84, 5500.0]
+    - name: T_servicio
+      type: float
+      unit: "°C"
+      description: "Temperatura del fluido de servicio (límite de caldera)"
+      ga_range: [76.0, 95.0]
+      train_range: [77.82, 85.17]
+
+  # No hay campos derivados: el código original exige las 5 features en predict
+  # y las 3 no controlables en optimize, sin defaults.
+  derived_if_missing: {}
+
+outputs:
+  # Modo predict: inferencia directa del MLP surrogate (orden de features de model_config.json:
+  # [T_in_leche, F_flow, T_servicio, t_ciclo, Delta_P])
+  predict_inline:
+    - name: E_consumo_pred
+      type: float
+      unit: kW
+      description: "Consumo energético total predicho (térmico + bombeo + fijo)"
+    - name: T_out_pred
+      type: float
+      unit: "°C"
+      description: "Temperatura de salida de la leche predicha"
+
+  # Modo optimize: GA mono-objetivo v4 por escenario (DEAP, HallOfFame(1)),
+  # min E_consumo/F_flow con penalización si T_out < 72.3 °C
+  optimize:
+    - name: IA_F_flow
+      type: float
+      unit: "L/h"
+      description: "Setpoint óptimo de caudal recomendado"
+    - name: IA_T_servicio
+      type: float
+      unit: "°C"
+      description: "Setpoint óptimo de temperatura de servicio recomendado"
+    - name: IA_E_consumo
+      type: float
+      unit: kW
+      description: "Consumo predicho por el MLP con los setpoints IA"
+    - name: IA_T_out
+      type: float
+      unit: "°C"
+      description: "Temperatura de salida predicha con los setpoints IA"
+    - name: IA_consumo_especifico
+      type: float
+      unit: "kW/(L/h)"
+      description: "Consumo específico IA_E_consumo / IA_F_flow (KPI principal)"
+    - name: IA_factible
+      type: bool
+      description: "True si IA_T_out >= 72.3 °C (restricción de seguridad alimentaria)"
+    - name: fitness_final
+      type: float
+      description: "Fitness del mejor individuo (HallOfFame(1)) al final del GA"
+
+training:
+  supported: true
+  # El modelo es multi-output: el código de entrenamiento (src/main.py::train,
+  # src/training/trainer.py) entrena las 2 columnas objetivo a la vez con MSELoss conjunta.
+  target_column: [E_consumo, T_out_leche]
+  required_columns: [T_in_leche, F_flow, T_servicio, t_ciclo, Delta_P, E_consumo, T_out_leche]
+  hyperparams:
+    # De models/artifacts/model_config.json (búsqueda aleatoria en predict_model_t_h.ipynb,
+    # "no volver a ejecutar la búsqueda" según README) + settings fijos de src/main.py::train
+    num_layers: 3
+    neurons: 64
+    activation: ReLU
+    optimizer: Adam
+    lr: 0.0005
+    epochs_max: 300
+    batch_size: 128
+    early_stopping_patience: 15
+    loss: MSELoss
+    normalization: "MinMaxScaler [0,1] ajustado solo sobre train"
+    seed: 1
+  metrics_returned: [rmse_E_consumo, mae_E_consumo, r2_E_consumo, rmse_T_out_leche, mae_T_out_leche, r2_T_out_leche]
+  source: codigo_entrenamiento  # src/main.py::train + src/training/trainer.py + model_config.json
+
+constraints:
+  T_out_min_celsius: 72.3
+  F_flow_bounds: [3500.0, 5500.0]
+  T_servicio_bounds: [76.0, 95.0]
+  descripcion: >
+    Restricción de seguridad alimentaria HTST: límite legal 72.0 °C (Codex CXC 57-2004)
+    + margen de +0.3 °C por incertidumbre de sensor PT100 Clase A (IEC 60751) y tolerancia
+    PMO-FDA. En el GA se aplica como penalización de fitness
+    (10000 + (E/F) * (1 + 10 * déficit)), no como rechazo duro. El plugin debe exponer la
+    factibilidad (IA_factible) y lanzar excepción de dominio si el GA no encuentra
+    solución factible para un escenario.
+
+# GA config (DEAP, mono-objetivo v4 — src/utils/constants.py GA_DEFAULT_CONFIG y
+# src/predict/optimization.py)
+ga_config:
+  pop_size: 150
+  n_gen: 15               # convergencia P95 = 7-8 gen + margen (tuning_params_ga_v4.ipynb)
+  cxpb: 0.8               # cruce cxBlend alpha=0.5
+  mutpb: 0.2              # mutación mutGaussian mu=0 sigma=0.2 indpb=0.2
+  selection: "torneo (tournsize=3), supervivencia mu+lambda sobre pop+offspring"
+  elitism: "HallOfFame(1)"
+  penalty_factor: 10.0
+  seed_strategy: "seed = seed_base + indice_de_fila (seed_base=1); determinista por escenario"
+
+metrics_reported:
+  # --- MLP surrogate (models/metrics/train_metrics.json, bloque test — coincide con
+  # memoria Tabla 9 y README) ---
+  dataset: test_hold_out_temporal_por_cuartiles
+  split: 70/15/15
+  random_seed: 1
+  n_samples_test: 7708
+  E_consumo:
+    rmse_kw: 5.3838
+    mae_kw: 4.2571
+    r2: 0.9779
+  T_out_leche:
+    rmse_c: 0.0643
+    mae_c: 0.0473
+    r2: 0.3759   # bajo por varianza casi nula de la variable regulada (sigma≈0.08 °C); el MAE es la métrica informativa
+  # --- GA backtesting en tiempo real sobre test completo (7708 escenarios) ---
+  # FUENTE DE VERDAD (decisión del propietario, 2026-07-10): el artefacto entregado
+  # models/metrics/evaluation_rt_backtesting_report.json. La memoria v2.0 (Tabla 10) y el
+  # README citan un run anterior con cifras distintas — ver known_issues.
+  ga_backtesting:
+    fuente: models/metrics/evaluation_rt_backtesting_report.json
+    pct_escenarios_factibles: 100.0
+    ahorro_consumo_absoluto_pct: 1.78
+    delta_caudal_pct: 10.62
+    mejora_consumo_especifico_pct: 11.73
+    consumo_especifico_hist: 0.088448
+    consumo_especifico_ia: 0.07807
+    cumplimiento_T_out_hist_pct: 99.4
+    cumplimiento_T_out_ia_pct: 100.0
+    tiempo_medio_por_escenario_ms: 416.5
+  criterios_exito:
+    cumplimiento_T_out_min_pct: 100.0   # cumplido (100.0)
+    mejora_consumo_especifico_min_pct: 3.0  # cumplido (11.73)
+
+# 15 casos predict extraídos de data/splits/test.csv (filas variadas cubriendo todo el rango
+# de E_consumo) con expected = predicción del MLP entregado (data/predictions/predictions.csv,
+# alineado fila a fila con test.csv) — reproducción numérica de los artefactos.
+# real_* = valores reales del simulador en esa fila (contexto, no criterio de verificación).
+# Tolerancias derivadas de metrics_reported: E_consumo tolerance_pct 2.0 (MAE 4.26 kW ≈ 1% de
+# la media 435 kW, x2 de margen numérico CPU/CUDA); T_out tolerance_abs 0.1 °C (≈ 1.5x RMSE).
+golden_cases:
+  - id: predict_001
+    mode: predict
+    source: dataset_test_split  # fila 1482 de data/splits/test.csv
+    input: {T_in_leche: 6.88, F_flow: 3650.6, T_servicio: 79.16, t_ciclo: 405.0, Delta_P: 0.374}
+    real: {E_consumo: 312.80, T_out_leche: 72.83}
+    expected: {E_consumo_pred: 313.5495, T_out_pred: 72.9252}
+    tolerance: {E_consumo_pred: {pct: 2.0}, T_out_pred: {abs: 0.1}}
+  - id: predict_002
+    mode: predict
+    source: dataset_test_split  # fila 1182
+    input: {T_in_leche: 7.12, F_flow: 4556.88, T_servicio: 80.85, t_ciclo: 540.0, Delta_P: 0.557}
+    real: {E_consumo: 384.02, T_out_leche: 72.56}
+    expected: {E_consumo_pred: 384.9313, T_out_pred: 72.6017}
+    tolerance: {E_consumo_pred: {pct: 2.0}, T_out_pred: {abs: 0.1}}
+  - id: predict_003
+    mode: predict
+    source: dataset_test_split  # fila 332
+    input: {T_in_leche: 6.83, F_flow: 4685.85, T_servicio: 79.93, t_ciclo: 105.0, Delta_P: 0.488}
+    real: {E_consumo: 387.74, T_out_leche: 72.48}
+    expected: {E_consumo_pred: 397.8086, T_out_pred: 72.6107}
+    tolerance: {E_consumo_pred: {pct: 2.0}, T_out_pred: {abs: 0.1}}
+  - id: predict_004
+    mode: predict
+    source: dataset_test_split  # fila 393
+    input: {T_in_leche: 6.82, F_flow: 4800.33, T_servicio: 81.24, t_ciclo: 410.0, Delta_P: 0.612}
+    real: {E_consumo: 399.67, T_out_leche: 72.57}
+    expected: {E_consumo_pred: 406.9790, T_out_pred: 72.5966}
+    tolerance: {E_consumo_pred: {pct: 2.0}, T_out_pred: {abs: 0.1}}
+  - id: predict_005
+    mode: predict
+    source: dataset_test_split  # fila 2440
+    input: {T_in_leche: 4.63, F_flow: 4897.37, T_servicio: 81.37, t_ciclo: 365.0, Delta_P: 0.614}
+    real: {E_consumo: 416.38, T_out_leche: 72.60}
+    expected: {E_consumo_pred: 414.4876, T_out_pred: 72.5922}
+    tolerance: {E_consumo_pred: {pct: 2.0}, T_out_pred: {abs: 0.1}}
+  - id: predict_006
+    mode: predict
+    source: dataset_test_split  # fila 2672
+    input: {T_in_leche: 4.49, F_flow: 4816.06, T_servicio: 81.67, t_ciclo: 435.0, Delta_P: 0.638}
+    real: {E_consumo: 420.14, T_out_leche: 72.68}
+    expected: {E_consumo_pred: 421.1544, T_out_pred: 72.5967}
+    tolerance: {E_consumo_pred: {pct: 2.0}, T_out_pred: {abs: 0.1}}
+  - id: predict_007
+    mode: predict
+    source: dataset_test_split  # fila 3174
+    input: {T_in_leche: 4.11, F_flow: 4804.1, T_servicio: 81.04, t_ciclo: 220.0, Delta_P: 0.572}
+    real: {E_consumo: 435.41, T_out_leche: 72.63}
+    expected: {E_consumo_pred: 427.5305, T_out_pred: 72.5962}
+    tolerance: {E_consumo_pred: {pct: 2.0}, T_out_pred: {abs: 0.1}}
+  - id: predict_008
+    mode: predict
+    source: dataset_test_split  # fila 5024
+    input: {T_in_leche: 1.99, F_flow: 4887.86, T_servicio: 81.49, t_ciclo: 280.0, Delta_P: 0.608}
+    real: {E_consumo: 425.05, T_out_leche: 72.54}
+    expected: {E_consumo_pred: 433.4866, T_out_pred: 72.5977}
+    tolerance: {E_consumo_pred: {pct: 2.0}, T_out_pred: {abs: 0.1}}
+  - id: predict_009
+    mode: predict
+    source: dataset_test_split  # fila 7373
+    input: {T_in_leche: 4.28, F_flow: 5036.32, T_servicio: 81.24, t_ciclo: 115.0, Delta_P: 0.578}
+    real: {E_consumo: 432.86, T_out_leche: 72.64}
+    expected: {E_consumo_pred: 439.9113, T_out_pred: 72.5944}
+    tolerance: {E_consumo_pred: {pct: 2.0}, T_out_pred: {abs: 0.1}}
+  - id: predict_010
+    mode: predict
+    source: dataset_test_split  # fila 5889
+    input: {T_in_leche: 2.94, F_flow: 5060.19, T_servicio: 82.18, t_ciclo: 325.0, Delta_P: 0.649}
+    real: {E_consumo: 435.11, T_out_leche: 72.63}
+    expected: {E_consumo_pred: 446.9276, T_out_pred: 72.5958}
+    tolerance: {E_consumo_pred: {pct: 2.0}, T_out_pred: {abs: 0.1}}
+  - id: predict_011
+    mode: predict
+    source: dataset_test_split  # fila 1639
+    input: {T_in_leche: 7.25, F_flow: 5290.8, T_servicio: 81.63, t_ciclo: 100.0, Delta_P: 0.68}
+    real: {E_consumo: 459.73, T_out_leche: 72.60}
+    expected: {E_consumo_pred: 454.0950, T_out_pred: 72.5931}
+    tolerance: {E_consumo_pred: {pct: 2.0}, T_out_pred: {abs: 0.1}}
+  - id: predict_012
+    mode: predict
+    source: dataset_test_split  # fila 1469
+    input: {T_in_leche: 7.17, F_flow: 5332.0, T_servicio: 82.7, t_ciclo: 340.0, Delta_P: 0.743}
+    real: {E_consumo: 461.45, T_out_leche: 72.64}
+    expected: {E_consumo_pred: 464.0237, T_out_pred: 72.5941}
+    tolerance: {E_consumo_pred: {pct: 2.0}, T_out_pred: {abs: 0.1}}
+  - id: predict_013
+    mode: predict
+    source: dataset_test_split  # fila 7119
+    input: {T_in_leche: 3.36, F_flow: 5263.55, T_servicio: 83.56, t_ciclo: 480.0, Delta_P: 0.754}
+    real: {E_consumo: 479.63, T_out_leche: 72.66}
+    expected: {E_consumo_pred: 475.4329, T_out_pred: 72.5932}
+    tolerance: {E_consumo_pred: {pct: 2.0}, T_out_pred: {abs: 0.1}}
+  - id: predict_014
+    mode: predict
+    source: dataset_test_split  # fila 4427
+    input: {T_in_leche: 1.42, F_flow: 5300.8, T_servicio: 82.09, t_ciclo: 20.0, Delta_P: 0.608}
+    real: {E_consumo: 495.48, T_out_leche: 72.67}
+    expected: {E_consumo_pred: 490.3388, T_out_pred: 72.5939}
+    tolerance: {E_consumo_pred: {pct: 2.0}, T_out_pred: {abs: 0.1}}
+  - id: predict_015
+    mode: predict
+    source: dataset_test_split  # fila 5202
+    input: {T_in_leche: 1.62, F_flow: 5498.68, T_servicio: 83.34, t_ciclo: 80.0, Delta_P: 0.688}
+    real: {E_consumo: 535.47, T_out_leche: 72.60}
+    expected: {E_consumo_pred: 536.8580, T_out_pred: 72.6035}
+    tolerance: {E_consumo_pred: {pct: 2.0}, T_out_pred: {abs: 0.1}}
+
+  # 5 casos optimize extraídos de data/predictions/evaluation_rt_hist_vs_ia.csv (entregado,
+  # alineado fila a fila con test.csv). El GA es determinista por escenario con
+  # seed = 1 + indice_de_fila — el seed va registrado en cada caso y el plugin debe aceptarlo.
+  # Los setpoints exactos solo se reproducen bit a bit con las mismas versiones de deap/python;
+  # el criterio primario de verificación es el objetivo (IA_consumo_especifico) y la
+  # factibilidad; los setpoints llevan tolerancia más holgada (ver known_issues).
+  - id: optimize_001
+    mode: optimize
+    source: dataset_test_split  # fila 0 de test.csv / evaluation_rt_hist_vs_ia.csv
+    seed: 1
+    input: {T_in_leche: 6.78, Delta_P: 0.481, t_ciclo: 80.0}
+    expected:
+      IA_F_flow: 5422.10
+      IA_T_servicio: 80.40
+      IA_E_consumo: 412.9016
+      IA_T_out: 72.30
+      IA_consumo_especifico: 0.076152
+      IA_factible: true
+    tolerance:
+      IA_consumo_especifico: {pct: 2.0}
+      IA_E_consumo: {pct: 2.0}
+      IA_T_out: {abs: 0.1}
+      IA_F_flow: {pct: 2.0}
+      IA_T_servicio: {abs: 1.0}
+  - id: optimize_002
+    mode: optimize
+    source: dataset_test_split  # fila 1927
+    seed: 1928
+    input: {T_in_leche: 4.98, Delta_P: 0.664, t_ciclo: 525.0}
+    expected:
+      IA_F_flow: 5476.12
+      IA_T_servicio: 82.30
+      IA_E_consumo: 428.0721
+      IA_T_out: 72.30
+      IA_consumo_especifico: 0.078171
+      IA_factible: true
+    tolerance:
+      IA_consumo_especifico: {pct: 2.0}
+      IA_E_consumo: {pct: 2.0}
+      IA_T_out: {abs: 0.1}
+      IA_F_flow: {pct: 2.0}
+      IA_T_servicio: {abs: 1.0}
+  - id: optimize_003
+    mode: optimize
+    source: dataset_test_split  # fila 3854
+    seed: 3855
+    input: {T_in_leche: 1.39, Delta_P: 0.554, t_ciclo: 425.0}
+    expected:
+      IA_F_flow: 5362.54
+      IA_T_servicio: 82.23
+      IA_E_consumo: 439.8397
+      IA_T_out: 72.30
+      IA_consumo_especifico: 0.082021
+      IA_factible: true
+    tolerance:
+      IA_consumo_especifico: {pct: 2.0}
+      IA_E_consumo: {pct: 2.0}
+      IA_T_out: {abs: 0.1}
+      IA_F_flow: {pct: 2.0}
+      IA_T_servicio: {abs: 1.0}
+  - id: optimize_004
+    mode: optimize
+    source: dataset_test_split  # fila 5781
+    seed: 5782
+    input: {T_in_leche: 2.96, Delta_P: 0.733, t_ciclo: 330.0}
+    expected:
+      IA_F_flow: 5351.83
+      IA_T_servicio: 81.64
+      IA_E_consumo: 430.3456
+      IA_T_out: 72.30
+      IA_consumo_especifico: 0.080411
+      IA_factible: true
+    tolerance:
+      IA_consumo_especifico: {pct: 2.0}
+      IA_E_consumo: {pct: 2.0}
+      IA_T_out: {abs: 0.1}
+      IA_F_flow: {pct: 2.0}
+      IA_T_servicio: {abs: 1.0}
+  - id: optimize_005
+    mode: optimize
+    source: dataset_test_split  # fila 7707 (última)
+    seed: 7708
+    input: {T_in_leche: 4.12, Delta_P: 0.594, t_ciclo: 150.0}
+    expected:
+      IA_F_flow: 5395.19
+      IA_T_servicio: 80.97
+      IA_E_consumo: 426.5447
+      IA_T_out: 72.30
+      IA_consumo_especifico: 0.079060
+      IA_factible: true
+    tolerance:
+      IA_consumo_especifico: {pct: 2.0}
+      IA_E_consumo: {pct: 2.0}
+      IA_T_out: {abs: 0.1}
+      IA_F_flow: {pct: 2.0}
+      IA_T_servicio: {abs: 1.0}
+
+known_issues:
+  - "DISCREPANCIA memoria/README vs artefacto entregado en KPIs del GA: la memoria v2.0
+     (Tabla 10) y el README citan mejora de consumo específico 10.73%, ahorro absoluto 1.48%,
+     delta caudal +9.72% y tiempo medio ~723 ms/escenario; el
+     models/metrics/evaluation_rt_backtesting_report.json entregado reporta 11.73%, 1.78%,
+     +10.62% y 416.5 ms. Son dos runs distintos (la propia memoria advierte variación ~1%
+     CPU vs CUDA). Decisión del propietario (2026-07-10): el artefacto entregado es la fuente
+     de verdad para metrics_reported; la ficha técnica debe citar ambas cifras con nota.
+     Las métricas del MLP sí coinciden exactamente entre memoria, README y train_metrics.json."
+  - "Todo el dataset es sintético (simulador físico V3.4, seed=1). Las cifras de negocio
+     (mejora 11.73%, cumplimiento 100%) están calculadas sobre datos simulados y requieren
+     validación Sim2Real con datos reales de planta antes de cualquier despliegue — la propia
+     memoria lo declara como limitación principal."
+  - "Determinismo del GA: reproducible por escenario con seed = seed_base + indice_de_fila
+     (seed_base=1, random + numpy). La reproducción bit a bit de los setpoints depende de las
+     versiones de deap/python y de diferencias float de plataforma (el MLP surrogate puede
+     variar ~1e-5 entre BLAS); por eso los golden cases de optimize verifican primariamente
+     el objetivo (consumo específico) y la factibilidad, con tolerancia holgada en setpoints."
+  - "El fitness del GA tiene meseta plana cerca del óptimo (T_out clavada en 72.3 °C):
+     individuos con setpoints distintos pueden tener fitness casi idéntico, lo que amplifica
+     la sensibilidad de los setpoints exactos a diferencias numéricas mínimas."
+  - "requirements.txt está en UTF-8/LF correcto (sin el problema de encoding UTF-16LE de otros
+     entregables), pero fija torch==2.5.1+cu121 con --extra-index-url de PyTorch CUDA 12.1.
+     Para el plugin se usa la build CPU (torch==2.5.1); la memoria advierte que las métricas
+     pueden variar ~1% entre CPU y CUDA."
+  - "La memoria menciona 'DEAP: ejecución del algoritmo NSGA-II' en la sección de librerías,
+     pero la versión final operativa es un GA mono-objetivo con HallOfFame(1) (v4) — el texto
+     de librerías quedó desactualizado de iteraciones anteriores. El código entregado
+     (src/predict/optimization.py) es inequívocamente mono-objetivo."
+  - "R² de T_out_leche = 0.3759 es bajo por diseño (variable regulada por PID/supervisor con
+     sigma≈0.08 °C, varianza casi nula); la memoria y el README indican usar el MAE (0.047 °C)
+     como métrica informativa para esa variable. No es un defecto del modelo."
+  - "El train() original re-genera los splits desde data/processed/final_data_sim.csv y
+     entrena con seed=1; requiere el CSV completo con las 7 columnas (features + 2 targets).
+     La búsqueda de hiperparámetros NO debe re-ejecutarse (no reproducible byte a byte);
+     los hiperparámetros tuneados viven en model_config.json."
+  - "pygad==3.5.0 aparece en requirements.txt pero el código operativo usa deap==1.4.3;
+     pygad parece un residuo de otro entregable/iteración y no se usa en src/."

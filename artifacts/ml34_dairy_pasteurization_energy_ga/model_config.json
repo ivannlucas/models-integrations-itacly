@@ -1,0 +1,19 @@
+{
+    "input_size": 5,
+    "output_size": 2,
+    "features_in_order": [
+        "T_in_leche",
+        "F_flow",
+        "T_servicio",
+        "t_ciclo",
+        "Delta_P"
+    ],
+    "targets_in_order": [
+        "E_consumo",
+        "T_out_leche"
+    ],
+    "num_layers": 3,
+    "neurons": 64,
+    "lr": 0.0005,
+    "activation": "ReLU"
+}
