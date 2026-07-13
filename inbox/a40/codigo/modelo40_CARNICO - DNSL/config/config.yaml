@@ -2,7 +2,7 @@
 # CONFIGURACIÓN GLOBAL DEL SISTEMA DE DIAGNÓSTICO
 # ========================================================================
 
-selected_system: "aireado" # "refrigeracion" o "aireado"
+selected_system: "refrigeracion" # "refrigeracion" o "aireado"
 
 paths:
   processed_data: "data/processed/"
@@ -17,6 +17,7 @@ paths:
 refrigeracion:
   raw_data: "data/raw/dataset_refrigeracion.csv"
   target_column: "fault_id"
+  min_samples_for_calibration: 100
   drop_cols: 
     - 'fault'
     - 'run_id'
@@ -59,6 +60,7 @@ refrigeracion:
 aireado:
   raw_data: "data/raw/dataset_aireado.csv"
   target_column: "fault_id"
+  min_samples_for_calibration: 50
   drop_cols: 
     - "run_id"
     - "time_min"
@@ -66,9 +68,9 @@ aireado:
     - "fault"
  
   stress_test:
-    active: true         
-    noise_level: 0.70      # Magnitud exacta del ruido Gaussiano 
-    include_spikes: true   # Spikes
+    active: false        
+    noise_level: 0.30      # Magnitud exacta del ruido Gaussiano 
+    include_spikes: true  # Spikes
   # Hiperparámetros del Modelo
   model_params:
     n_estimators: 200

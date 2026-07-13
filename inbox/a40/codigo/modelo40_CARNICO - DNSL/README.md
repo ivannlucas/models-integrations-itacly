@@ -28,7 +28,7 @@ El sistema se fundamenta en dos entornos de datos diferenciados para cubrir la c
 │   └── predictions/    # OUTPUT: Resultados finales y diagnósticos por ciclo
 ├── logs/               # Registro de ejecución del sistema en archivos .txt
 ├── models/             
-│   ├── artifacts/      # Modelos (.pkl), escaladores y parámetros óptimos (.yaml)
+│   ├── artifacts/      # Modelos (.pkl), escaladores, parámetros óptimos (.yaml) y umbrales dinámicos (.yaml).
 │   └── metrics/        # Matrices de confusión y reportes de desempeño
 ├── notebooks/          # Notebooks de experimentación y análisis detallado
 │   ├── completo/       # Notebook con el flujo integral de ambos sistemas
@@ -96,6 +96,7 @@ El sistema utiliza un único punto de entrada (`main.py`) para todas las operaci
 | **Información sobre los datasets, caracterísicas y modelos utilizados** | `python -m src.main get_info` |
 | **Optimizar (Tuning)** | `python -m src.main tuning` |
 | **Entrenar Modelo** | `python -m src.main train` |
+| **Calibrar** | `python -m src.main calibrate` |
 | **Ejecutar Diagnóstico** | `python -m src.main predict` |
 | **Evaluación con dataset supervisado** | `python -m src.main evaluate` |
 
@@ -128,16 +129,16 @@ Los resultados se consolidan en `data/predictions/` y el estado de salud del mod
 * **Archivo de Predicciones:** `data/predictions/predictions_{sistema}.csv`
     * `prediction`: Clase de falla detectada (o "Normal").
     * `confidence`: Nivel de certidumbre del modelo (0-100%).
-* **Historial de Salud:** En `logs/health_history_{sistema}.csv` se almacena el tracking de rendimiento para detectar cuándo es necesario un re-entrenamiento.
+* **Log de Monitorización:** En `logs/monitorization_{sistema}.csv` se centralizan los eventos críticos:
+    * **Drift:** Registrado automáticamente tras cada ejecución de `calibrate`.
+    * **Health/Status:** Registrado tras cada inferencia (`predict`), incluyendo la confianza del modelo y el estado de degradación.
 
 ---
 
 ## Trazabilidad y Evidencias
 
-Tras cada ejecución, el sistema genera automáticamente evidencias en la carpeta `models/metrics/`:
+Tras cada ejecución, el sistema genera evidencias clave para garantizar la integridad y calidad del modelo:
 
-* **Reportes de Clasificación:** F1-Score, Recall y Accuracy detallado por cada tipo de falla y sistema (`aireado`/`refrigeracion`).
-* **Matrices de Confusión:** Visualización en formato `.png` para identificar solapamientos entre fallos críticos y validar la capacidad de discriminación.
-* **Parámetros Óptimos:** Los hiperparámetros resultantes del tuning se guardan en formato `.yaml` y `.pkl`  para asegurar la transparencia de la configuración de producción.
-
-Tras ejecutar el comando `predict`, se generará un archivo de predicciones en la carpeta `data/predictions/predictions_{system}.csv`.
+* **Métricas de Rendimiento:** En `models/metrics/` se guardan reportes de clasificación y matrices de confusión generadas mediante `evaluate`.
+* **Salud de los Modelos:** Los archivos `logs/monitorization_{system}.csv` actúan como el registro principal. Permiten correlacionar cronológicamente cuándo el modelo fue recalibrado (Drift) y cómo ha evolucionado su confianza predictiva (Health Status), facilitando la detección proactiva de degradación de sensores.
+* **Artefactos dinámicos:** Los modelos, escaladores y los **umbrales dinámicos** (ajustados mediante la calibración automática) se persisten en `models/artifacts/`, garantizando que el sistema sea auditable y reproducible.
