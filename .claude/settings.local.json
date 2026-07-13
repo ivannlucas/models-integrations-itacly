@@ -55,7 +55,16 @@
       "Bash(curl -s -X POST http://localhost:8123/models/ml35-dairy-ann-cleaning-cost/train -H \"Content-Type: application/json\" -d '{\"data_path\":\"artifacts/ml35_batch_sample.csv\",\"mlflow_run_id\":\"\"}' -w \"\\\\nHTTP %{http_code}\\\\n\")",
       "Bash(git add *)",
       "Bash(git commit -m ' *)",
-      "Bash(echo \"grep exit: $?\")"
+      "Bash(echo \"grep exit: $?\")",
+      "Bash(echo \"flake8 exit: $?\")",
+      "Bash(MODEL=ml40-meat-refrigeration-aeration-fault-diagnosis timeout 240 python3 -m uvicorn main:app --port 8040)",
+      "Bash(MODEL=ml40 python3 -c \"import main\")",
+      "Bash(curl -s -m 2 http://127.0.0.1:8040/models/ml40-meat-refrigeration-aeration-fault-diagnosis/health)",
+      "Bash(curl -s http://127.0.0.1:8040/models/ml40-meat-refrigeration-aeration-fault-diagnosis/health)",
+      "Bash(curl -s http://127.0.0.1:8040/openapi.json)",
+      "Bash(jobs)",
+      "Bash(curl -s http://127.0.0.1:8041/models/ml40-meat-refrigeration-aeration-fault-diagnosis/stats)",
+      "Bash(curl -s -m 500 -X POST http://127.0.0.1:8041/models/ml40-meat-refrigeration-aeration-fault-diagnosis/train -H \"Content-Type: application/json\" -d '{\"data_path\": \"/mnt/c/Users/PC/Desktop/Repositorios/models-integrations-itacly/inbox/a40/codigo/modelo40_CARNICO - DNSL/data/raw/dataset_aireado.csv\"}')"
     ]
   }
 }

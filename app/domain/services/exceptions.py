@@ -43,3 +43,11 @@ class PuConstraintViolationError(ValueError):
 
 class InsufficientTelemetryHistoryError(ValueError):
     """Raised when fewer than seq_len valid rows of telemetry history are provided (ml46)."""
+
+
+class InsufficientCycleHistoryError(ValueError):
+    """Raised when a cycle (run_id) has fewer minutes of history than the lag features need (ml40)."""
+
+
+class UnknownDiagnosisSystemError(ValueError):
+    """Raised when the input columns match neither refrigeracion nor aireado contracts (ml40)."""
