@@ -1,0 +1,154 @@
+{
+ "model_id": "a02",
+ "model_slug": "fungal-cnn-disease-detection",
+ "fecha": "Julio 2026",
+ "model_key": "ml2-fungal-cnn-disease-detection",
+ "version": "1.0.0",
+ "task_type": "image-classification (clasificación multiclase de imágenes, 5 clases)",
+ "framework": "PyTorch (LeafCNN, CNN convolucional propia: 3 bloques Conv2d+BatchNorm+ReLU con MaxPool, global average pooling y clasificador lineal de 128→5)",
+ "artefacto": "leafcnn_best.pth (checkpoint state_dict de LeafCNN, ~600 KB)",
+ "descripcion": "Sistema de análisis de imágenes que, a partir de la fotografía de una hoja de vid, determina si la hoja está sana o afectada por una de cuatro enfermedades fúngicas (podredumbre negra, mildiu, oídio o yesca). Devuelve la enfermedad más probable y el grado de seguridad de esa conclusión.",
+ "objetivo": "Automatizar la detección temprana de enfermedades fúngicas en hoja de vid mediante análisis de imagen, orientado al viñedo de Castilla y León, para apoyar decisiones de tratamiento fitosanitario. La memoria fija como criterio de éxito un Índice de Eficiencia en la Intervención Fitosanitaria (IEIF) > 95%, operativamente equivalente a una accuracy global > 0,95.",
+ "caso_uso": "Le envías la foto de una hoja de vid y el sistema te devuelve la enfermedad (o el estado sano) más probable, junto con su nivel de confianza y el reparto de probabilidad entre las distintas enfermedades. Puedes analizar una imagen suelta o un lote de fotos de una vez. El modelo se sirve ya entrenado; no se reentrena desde la propia herramienta.",
+ "inputs": [
+  {
+   "nombre": "Fotografía de la hoja",
+   "descripcion": "Una imagen de una hoja de vid, nítida y centrada, en formatos habituales (JPG, PNG o BMP)."
+  },
+  {
+   "nombre": "Lote de imágenes",
+   "descripcion": "Un conjunto de fotos comprimido para analizar muchas hojas de una sola vez."
+  }
+ ],
+ "outputs": [
+  {
+   "nombre": "Enfermedad detectada",
+   "descripcion": "La enfermedad más probable, o 'sana' si no detecta patología.",
+   "interpretacion": "Es la conclusión principal: qué le ocurre a la hoja."
+  },
+  {
+   "nombre": "Confianza",
+   "descripcion": "Cuán seguro está el sistema de esa conclusión, de 0 a 1.",
+   "interpretacion": "Cuanto más alta, más fiable; revisa a mano las hojas con confianza baja."
+  },
+  {
+   "nombre": "Reparto de probabilidad",
+   "descripcion": "El grado de probabilidad asignado a cada enfermedad posible.",
+   "interpretacion": "Útil para ver si el sistema duda entre dos enfermedades de aspecto parecido."
+  }
+ ],
+ "metricas": [
+  {
+   "nombre": "Accuracy global (test)",
+   "valor": "≈ 0,98",
+   "descripcion": "Proporción de aciertos sobre el conjunto de test hold-out, declarada por el equipo de IA en la memoria (Sección 7.3). No existe verificación post-integración contra golden dataset para este modelo",
+   "interpretacion": "El modelo acierta la clase en aproximadamente el 98% de las hojas de test; cumple el criterio de éxito IEIF > 95%"
+  },
+  {
+   "nombre": "Precision / Recall / F1 ponderados (test)",
+   "valor": "≈ 0,98",
+   "descripcion": "Promedios weighted sobre las 5 clases en test, declarados en la memoria (Sección 7.3)",
+   "interpretacion": "Desempeño equilibrado entre precisión y sensibilidad considerando la distribución real de clases"
+  },
+  {
+   "nombre": "F1 por clase (test)",
+   "valor": "trunk_disease ≈ 1,00; black_rot ≈ 0,99; healthy ≈ 0,99; downy_mildew ≈ 0,97; powdery_mildew ≈ 0,93",
+   "descripcion": "F1-score por clase declarado en la memoria (Sección 7.3). Valores aproximados: la tabla original (Tabla 6) es una imagen embebida, no texto extraíble",
+   "interpretacion": "powdery_mildew es la clase más débil, por confusión con downy_mildew (sintomatología visual similar); el resto de clases es muy sólido"
+  },
+  {
+   "nombre": "Mean Val Accuracy (5-fold CV)",
+   "valor": "0,9920 (rango 0,9852–0,9979)",
+   "descripcion": "Media de accuracy de validación en 5-fold cross-validation con la mejor configuración de hiperparámetros, declarada en la memoria (Sección 7.2)",
+   "interpretacion": "Baja variabilidad entre folds: el rendimiento no depende de una partición concreta, indicando buena estabilidad y generalización"
+  },
+  {
+   "nombre": "KPI IEIF (test)",
+   "valor": "≈ 0,98 (umbral > 0,95)",
+   "descripcion": "Índice de Eficiencia en la Intervención Fitosanitaria, definido en la memoria como equivalente a la accuracy global. Métrica declarada, no verificada tras integración",
+   "interpretacion": "Supera el umbral de negocio del 95%: decisiones fitosanitarias acertadas en más del 95% de los casos según la evaluación del equipo de IA"
+  }
+ ],
+ "limitaciones": [
+  {
+   "tipo": "Cobertura limitada de enfermedades",
+   "descripcion": "Solo clasifica 5 categorías (black_rot, downy_mildew, healthy, powdery_mildew, trunk_disease/esca). Enfermedades comunes en España como la excoriosis (Phomopsis viticola) no se cubren por falta de imágenes fiables; patologías de racimo o raíz (Botrytis cinerea, Armillaria mellea, Rosellinia necatrix) quedan fuera al analizarse solo hoja. La clase 'leaf blight' de algunos datasets se descartó por no corresponder a una enfermedad fúngica concreta."
+  },
+  {
+   "tipo": "Sin imágenes de origen español",
+   "descripcion": "No existen datasets públicos de hoja de vid de España; el entrenamiento combina colecciones internacionales (subconjunto de PlantVillage y NGLD, viñedos de Nashik, India). El modelo no ha visto datos que reflejen exactamente las condiciones de Castilla y León (clima, variedades, prácticas agrícolas)."
+  },
+  {
+   "tipo": "Sensibilidad a las condiciones de captura",
+   "descripcion": "El rendimiento puede degradarse con imágenes tomadas en condiciones de iluminación, fondo o adquisición distintas a las del entrenamiento (imágenes tipo laboratorio, fondo controlado). Comportamiento esperado por diferencia de dominio, no un fallo del modelo."
+  },
+  {
+   "tipo": "Sin rechazo de fuera de distribución",
+   "descripcion": "El modelo asigna siempre una de las 5 clases conocidas: ante una patología no contemplada o una imagen que no sea una hoja de vid, la clasificará forzosamente en una categoría conocida, con confianza potencialmente alta pero incorrecta."
+  },
+  {
+   "tipo": "Validación de campo solo cualitativa",
+   "descripcion": "Las pruebas sobre imágenes reales de campo (recopiladas manualmente de Internet) son cualitativas; no se dispone de métricas cuantitativas sobre datos de campo por ausencia de datasets estandarizados y bien etiquetados. Las cifras de accuracy/F1 provienen de test hold-out de datasets curados de laboratorio."
+  },
+  {
+   "tipo": "Sin detección automática de degradación",
+   "descripcion": "No se implementa monitorización automática de concept drift en producción; la supervisión prevista es cualitativa (Grad-CAM en la versión CLI de la memoria, no expuesto en el plugin integrado)."
+  },
+  {
+   "tipo": "Reentrenamiento no soportado en el servicio",
+   "descripcion": "El plugin usa un artefacto entrenado externamente; /train devuelve HTTP 501. Para un uso fiable en una zona concreta la memoria recomienda reentrenar sobre imágenes representativas de ese viñedo, tarea fuera del alcance del servicio de inferencia."
+  }
+ ],
+ "fichero_nombre": "Split de test del dataset combinado (data/splits, ~10% del total), generado con semilla fija 42 de forma estratificada por clase",
+ "fichero_registros": "Dataset combinado de 5.279 imágenes (256×256) tras eliminación de duplicados; partición aproximada 74% train / 16% val / 10% test (dos fuentes: subconjunto de PlantVillage-Grape y NGLD)",
+ "fichero_resultado": "No existe verification_report.md ni golden dataset verificado para este modelo. La memoria (Sección 9.4) define la reproducción como exitosa cuando, sobre el conjunto de test, el modelo alcanza accuracy ≈ 0,97 y F1 por clase > 0,9, y se generan el modelo entrenado y las métricas. Las salidas exactas del endpoint no se han contrastado caso a caso tras la integración.",
+ "observaciones_tecnicas": "Entrada: imagen RGB redimensionada a 224×224, tensor normalizado con media/desviación (0,5, 0,5, 0,5) por canal (transform de inferencia equivalente al de validación del repo de entrenamiento). Arquitectura LeafCNN: 3 bloques convolucionales (32→32, 64→64, 128 filtros) con BatchNorm2d y ReLU, MaxPool2d tras los dos primeros bloques, global average pooling y clasificador lineal 128→5. Hiperparámetros de entrenamiento (memoria): batch size 16 (seleccionado por random search; VRAM admite hasta 64), máx. 100 épocas con early stopping (patience 10) sobre val_loss, scheduler ReduceLROnPlateau, semilla 42; learning rate y weight decay se fijaron por random search integrado en 5-fold CV (valores exactos en tabla-imagen no extraíble). Data augmentation solo en train: RandomHorizontalFlip, RandomRotation(±30°), ColorJitter. Entorno de desarrollo: Python 3.10.11, PyTorch, Windows 11; selección automática CPU/GPU (CUDA) — el plugin valida que la GPU sea funcional y cae a CPU si no lo es. Inferencia viable en CPU para volúmenes pequeños. Artefacto leafcnn_best.pth (~600 KB) servido desde artifacts/ml2_fungal_cnn_disease_detection/ (local) o S3. Recomendable monitorizar drift de dominio (iluminación/fondo/origen geográfico) respecto a las imágenes de entrenamiento.",
+ "que_no_responde": "No te dice si la hoja está sana o enferma con certeza absoluta ni sustituye el diagnóstico de un técnico: te da la enfermedad más probable de entre un catálogo fijo de cinco categorías, junto con el grado de seguridad de esa estimación.",
+ "entradas_contexto": "El sistema trabaja con una fotografía de una hoja de vid. Lo ideal es una foto nítida y centrada en la hoja, con fondo neutro (por ejemplo un folio blanco) y sin reflejos directos de luz, tal como se recomienda para obtener resultados fiables.",
+ "outputs_funcional": [
+  {
+   "nombre": "Enfermedad detectada",
+   "descripcion": "La enfermedad (o el estado sano) que el sistema considera más probable para esa hoja.",
+   "interpretacion": "Es una de estas cinco posibilidades: podredumbre negra (black rot), mildiu (downy mildew), hoja sana (healthy), oídio (powdery mildew) o enfermedad de tronco/esca (trunk disease)."
+  },
+  {
+   "nombre": "Nivel de seguridad",
+   "descripcion": "Un valor entre 0 y 1 que indica cuánta seguridad tiene el sistema en su respuesta.",
+   "interpretacion": "Cuanto más cerca de 1, más seguro está. Un valor bajo o repartido entre dos enfermedades es señal de que conviene revisar la foto o consultarlo con un técnico."
+  },
+  {
+   "nombre": "Reparto entre enfermedades",
+   "descripcion": "El detalle de cuánta probabilidad asigna el sistema a cada una de las cinco categorías.",
+   "interpretacion": "Permite ver si el sistema dudaba entre dos enfermedades parecidas (por ejemplo oídio y mildiu, que se confunden con facilidad)."
+  }
+ ],
+ "ejemplo_interpretacion": "Ejemplo: subes una foto de una hoja con manchas oscuras redondeadas y el sistema responde 'podredumbre negra' con una seguridad de 0,97, y en el reparto asigna 0,97 a esa enfermedad y valores pequeños al resto. Se interpreta como una detección clara: el sistema está muy seguro de que es podredumbre negra. Si en cambio respondiera 'oídio' con 0,55 y 'mildiu' con 0,40, la lectura correcta es que duda entre las dos enfermedades y conviene revisar la hoja con más detalle.",
+ "margen_error": "En las pruebas del equipo que lo desarrolló, el sistema acierta la enfermedad en torno al 98% de las hojas evaluadas. La categoría con más fallos es el oídio, que a veces se confunde con el mildiu porque sus síntomas visuales son muy parecidos. Estas cifras se obtuvieron sobre imágenes de buena calidad y fondo controlado; con fotos de campo en peores condiciones el acierto puede bajar.",
+ "revisar_manualmente": [
+  "Cuando el nivel de seguridad sea bajo o la probabilidad esté repartida entre dos enfermedades (típicamente oídio y mildiu): revisa la hoja de cerca o consulta a un técnico.",
+  "Cuando la hoja presente síntomas muy leves o en fase muy temprana: la infección puede ser difícil de percibir incluso a simple vista y el sistema puede equivocarse.",
+  "Cuando la foto se haya tomado con fondo cargado, poca luz o reflejos: repite la foto con fondo neutro (folio blanco) y sin reflejos antes de fiarte del resultado.",
+  "Cuando sospeches una enfermedad que no esté entre las cinco que reconoce (o daños en racimo o raíz): el sistema la encasillará forzosamente en una de sus categorías, así que el resultado no es fiable.",
+  "Al empezar a usarlo en tu viñedo: contrasta las primeras respuestas con la observación en campo, ya que el sistema se entrenó con fotos de otras regiones, no de Castilla y León."
+ ],
+ "que_no_hace": [
+  "No sustituye el diagnóstico de un técnico ni las inspecciones de campo: es una ayuda a la decisión.",
+  "No detecta enfermedades fuera de su catálogo de cinco categorías; ante una patología desconocida, dará igualmente una de las respuestas conocidas.",
+  "No analiza racimos ni raíces: solo trabaja con fotos de hoja.",
+  "No garantiza el mismo acierto con fotos de campo en malas condiciones que con imágenes de laboratorio bien controladas.",
+  "No aprende ni se actualiza solo con tus fotos: el modelo es fijo y su reentrenamiento no está disponible en el servicio."
+ ],
+ "puede_equivocarse": "Sí. Aunque en las pruebas del equipo de desarrollo acierta alrededor del 98% de las veces, esas cifras se midieron sobre imágenes de buena calidad y de otras regiones (no de Castilla y León), y no se han validado con métricas sobre fotos reales de campo. Puede fallar sobre todo distinguiendo oídio de mildiu, con síntomas leves, o con fotos de fondo o iluminación distintos a los del entrenamiento. Es una herramienta de apoyo a la decisión fitosanitaria, no una garantía ni un sustituto del criterio del técnico.",
+ "kpis": [
+  {
+   "kpi": "Índice de Eficiencia en la Intervención Fitosanitaria (acierto global)",
+   "valor_umbral": "> 95% de aciertos — resultado declarado: ≈ 98%",
+   "descripcion": "Porcentaje de hojas en las que el sistema identifica correctamente la enfermedad o el estado sano. Es el indicador principal: cuanto más alto, más fiables son las decisiones de tratamiento basadas en él. Cifra declarada por el equipo de IA, aún no validada con datos reales de campo."
+  },
+  {
+   "kpi": "Estabilidad del rendimiento",
+   "valor_umbral": "acierto consistente entre distintas particiones de datos — resultado: media 99,2% en validación cruzada, con variación mínima",
+   "descripcion": "Mide que el acierto no dependa de qué imágenes concretas se usen para evaluar; un valor estable indica que el sistema generaliza bien."
+  }
+ ]
+}

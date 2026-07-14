@@ -1,0 +1,169 @@
+{
+ "model_id": "a08",
+ "model_slug": "cereals-img-anomaly-detector",
+ "fecha": "Julio 2026",
+ "model_key": "ml8-cereals-img-anomaly-detector",
+ "version": "1.0.0",
+ "task_type": "image-classification (clasificación multitarea multi-clase: categoría sanitaria x tipo de cereal)",
+ "framework": "PyTorch + torchvision (MobileNetV3-Large multitarea con dos cabezas lineales; alternativas soportadas en carga: EfficientNet-B0, ResNet18)",
+ "artefacto": "mobilenet_v3_large_cereales_multitask.pth (checkpoint con model_state_dict, class_to_idx, cereal_to_idx, idx_to_class, idx_to_cereal); servido desde artifacts/modelo8_cereales/ (local) o S3 (ARTIFACT_FOLDER_NAME=modelo8_cereales)",
+ "descripcion": "Sistema de análisis de imágenes que, a partir de una foto de grano u hoja de cereal, determina a la vez dos cosas: su estado sanitario (sano, con hongos, con insectos u otros defectos) y el tipo de cereal (trigo, maíz, arroz o sorgo).",
+ "objetivo": "Automatizar la detección y clasificación temprana de anomalías en cereal (enfermedades fúngicas, daños por insectos y otros defectos) para reducir las pérdidas por afecciones sanitarias, que la memoria estima en hasta un 30% de la producción anual del sector. El sistema convierte una imagen en dos predicciones accionables (estado sanitario + especie), sustituyendo la inspección manual subjetiva por un análisis rápido y consistente (< 40 ms/imagen declarados) que alimenta decisiones de tratamiento, almacenamiento o descarte de lotes.",
+ "caso_uso": "Le das una fotografía del cereal y el sistema devuelve su estado sanitario y de qué cereal se trata, con el grado de seguridad de cada una de las dos conclusiones. Puedes analizar una imagen suelta para una respuesta inmediata o un lote de fotos de una vez. A diferencia de otros modelos, este sí admite reentrenarse con nuevas imágenes etiquetadas para adaptarlo a un caso concreto.",
+ "inputs": [
+  {
+   "nombre": "Fotografía del cereal",
+   "descripcion": "Una imagen de grano u hoja de cereal (JPG, PNG, etc.), procedente de cámaras de inspección en silo, big bag o campo."
+  },
+  {
+   "nombre": "Lote de imágenes",
+   "descripcion": "Un archivo comprimido con muchas fotos para analizar un lote entero de golpe."
+  }
+ ],
+ "outputs": [
+  {
+   "nombre": "Estado sanitario",
+   "descripcion": "Sano, con hongos, con insectos u otros defectos.",
+   "interpretacion": "Indica si el cereal presenta una anomalía y de qué tipo."
+  },
+  {
+   "nombre": "Tipo de cereal",
+   "descripcion": "Trigo, maíz, arroz o sorgo.",
+   "interpretacion": "Identificación de la especie, útil para trazabilidad del lote."
+  },
+  {
+   "nombre": "Confianza del estado sanitario",
+   "descripcion": "Cuán seguro está de la conclusión sanitaria, de 0 a 1.",
+   "interpretacion": "Cuanto más alta, más fiable el diagnóstico de estado."
+  },
+  {
+   "nombre": "Confianza del tipo de cereal",
+   "descripcion": "Cuán seguro está de la especie, de 0 a 1.",
+   "interpretacion": "Confianza baja sugiere especies visualmente parecidas."
+  }
+ ],
+ "metricas": [
+  {
+   "nombre": "Accuracy Categoría (test)",
+   "valor": "92,58%",
+   "descripcion": "Accuracy de la categoría sanitaria sobre el conjunto de test hold-out (15%), MobileNetV3-Large. Métrica declarada por el equipo de IA en la memoria (Tabla 12); no se ejecutó verificación post-integración",
+   "interpretacion": "Supera el umbral operativo declarado (~90%) para el estado sanitario"
+  },
+  {
+   "nombre": "Accuracy Cereal (test)",
+   "valor": "98,98%",
+   "descripcion": "Accuracy del tipo de cereal sobre el test hold-out. Declarada en la memoria (Tabla 12)",
+   "interpretacion": "Muy por encima del umbral (~95%); la especie tiene alta separabilidad morfológica"
+  },
+  {
+   "nombre": "Accuracy Combinada (test)",
+   "valor": "91,82%",
+   "descripcion": "Porcentaje de imágenes con ambas predicciones (categoría y cereal) correctas simultáneamente. Declarada en la memoria (Tabla 12)",
+   "interpretacion": "Supera el umbral (~85%); en ~92% de casos el sistema da información completa y fiable"
+  },
+  {
+   "nombre": "Macro-F1 categoría (test)",
+   "valor": "0,87",
+   "descripcion": "F1 macro sobre las 4 categorías sanitarias (Tabla 10). Declarada en la memoria",
+   "interpretacion": "Refleja equilibrio interclase pese al desbalance; penaliza el peor recall/precision por clase"
+  },
+  {
+   "nombre": "Weighted-F1 categoría (test)",
+   "valor": "0,93",
+   "descripcion": "F1 ponderado por frecuencia de clase en categoría sanitaria (Tabla 10). Declarada en la memoria",
+   "interpretacion": "Alto por el peso de la clase mayoritaria (hongos, ~72% del dataset)"
+  },
+  {
+   "nombre": "Latencia por imagen",
+   "valor": "8 ms (GPU L40) / 34,5 ms (CPU 16 threads)",
+   "descripcion": "Tiempo de inferencia por imagen medido por el equipo de IA (Tablas 7 y 12)",
+   "interpretacion": "Compatible con escenarios de alta carga; muy por debajo del objetivo declarado de 40 ms"
+  },
+  {
+   "nombre": "Verificación post-integración",
+   "valor": "No ejecutada",
+   "descripcion": "No existe verification_report.md para a08; no se ha corrido un golden dataset contra el plugin integrado. Las métricas anteriores son las declaradas por el equipo de IA, no verificadas tras la integración",
+   "interpretacion": "Pendiente de verificación de correctitud contra el dataset real antes de PR"
+  }
+ ],
+ "limitaciones": [
+  {
+   "tipo": "Sorgo solo con clase hongos",
+   "descripcion": "El dataset no contiene muestras de sorgo en categorías distintas de hongos, por lo que el modelo no puede clasificar de forma fiable el estado sanitario real del sorgo (sano, insectos, otros)."
+  },
+  {
+   "tipo": "Desbalance de clases",
+   "descripcion": "La categoría hongos representa ~72% de las imágenes; sano, insectos y otros ~15%, ~6% y ~5%. Las clases minoritarias tienen precision más baja (insectos 0,62; otros 0,68 en test), con riesgo de sesgo hacia la clase mayoritaria."
+  },
+  {
+   "tipo": "Resolución de entrada fija 224x224",
+   "descripcion": "Todas las imágenes se redimensionan a 224x224, con pérdida de detalle en imágenes de alta resolución (mediana del dataset 300x300, percentil 95 ~1600x1391)."
+  },
+  {
+   "tipo": "Dominio acotado a 4 cereales",
+   "descripcion": "Solo clasifica trigo, maíz, arroz y sorgo; no generaliza a otros cultivos sin reentrenamiento."
+  },
+  {
+   "tipo": "Heterogeneidad de fuentes / domain shift",
+   "descripcion": "El dataset integra múltiples fuentes públicas (Kaggle, Mendeley) con condiciones de captura, iluminación y resolución dispares. Datos con distribución distinta a la de entrenamiento (nuevas variedades, imágenes borrosas o con ruido) degradan el rendimiento."
+  },
+  {
+   "tipo": "Balanceo de clases no replicado en el /train integrado",
+   "descripcion": "La memoria describe class_weights, WeightedRandomSampler y submuestreo de hongos (max_samples_hongos); el /train integrado usa CrossEntropyLoss sin pesos y muestreo uniforme (shuffle), por lo que un reentrenamiento por usuario no reproduce la estrategia de balanceo original."
+  },
+  {
+   "tipo": "KPI de negocio no medido empíricamente",
+   "descripcion": "La reducción del 10% de objetos anómalos es un objetivo frente al baseline de inspección manual, no un resultado medido; requiere validación operativa con datos reales antes de reclamarlo."
+  }
+ ],
+ "fichero_nombre": "Conjunto de test hold-out (15% del dataset, partición 70/15/15) descrito en la memoria; no se entregó un fichero de golden dataset para verificación post-integración",
+ "fichero_registros": "~7.936 imágenes de test (Trigo 2.737, Maíz 3.043, Arroz 1.080, Sorgo 1.076); dataset total 52.600 imágenes RGB",
+ "fichero_resultado": "No documentado en la entrega a nivel de caso individual: la memoria reporta las métricas agregadas de test (Accuracy Categoría 92,58%, Cereal 98,98%, Combinada 91,82%) en output/test_metrics.json y las predicciones fila a fila en output/test_predictions.csv, pero no se ejecutó verificación post-integración contra el plugin (verification_report.md no disponible).",
+ "observaciones_tecnicas": "Entorno de referencia Python 3.10 sobre Linux. Hardware declarado: CPU x86-64 (mín. 4 cores), >=16 GB RAM, GPU opcional (referencia GPU L40), 30-35 GB de almacenamiento para datasets y artefactos. Inferencia funciona en CPU (selección automática de dispositivo con fallback CPU si CUDA no es funcional). Librerías núcleo declaradas: torch 2.5.1, torchvision 0.20.1, Pillow, numpy, pandas, scikit-learn, matplotlib, seaborn. Backbone preentrenado IMAGENET1K_V2. Reentrenamiento /train en dos fases (Fase 1: extractor congelado, solo neck+cabezas, Adam lr=1e-3, hasta 10 epochs; Fase 2: fine-tuning completo, Adam lr=1e-5, hasta 5 epochs; early stopping patience=3, batch_size=16, imagen 224x224). Monitorización recomendada por la memoria: alerta si cae >5% la Accuracy de categoría o >0,03 el F1 macro durante 2 evaluaciones consecutivas, revisión cada 10.000 inferencias o mensual.",
+ "que_no_responde": "No dice si un grano concreto es apto o no para consumo ni emite un dictamen fitosanitario oficial: te indica, para cada imagen, qué tipo de cereal ve y en qué estado sanitario lo clasifica, como apoyo a tu decisión.",
+ "entradas_contexto": "Le das una fotografía del cereal (grano u hoja): una imagen suelta cuando quieres una respuesta inmediata, o un archivo comprimido con muchas fotos cuando quieres analizar un lote entero de golpe. Las imágenes proceden de cámaras de inspección en silos, big bags o campo.",
+ "ejemplo_interpretacion": "Ejemplo: subes la foto de un grano de trigo y el sistema responde \"cereal: trigo (confianza 0,99), categoría: hongos (confianza 0,93)\". Se lee como: casi con seguridad es trigo, y muy probablemente presenta una afección fúngica, por lo que ese lote es candidato a revisión o tratamiento antes de almacenarlo.",
+ "margen_error": "En la práctica el sistema acierta el estado sanitario en algo más de 9 de cada 10 imágenes y el tipo de cereal en casi todas. Acierta menos en las anomalías poco frecuentes (daños por insectos u \"otros\" defectos), donde a veces marca anomalía sin que la haya: conviene tratar esas alertas como aviso para mirar la muestra, no como veredicto definitivo.",
+ "revisar_manualmente": [
+  "Cuando la confianza que da el sistema es baja o las dos clases más probables están muy igualadas.",
+  "Siempre que la imagen sea de sorgo: el modelo solo ha aprendido sorgo con hongos, así que cualquier otro estado sanitario en sorgo es poco fiable.",
+  "Cuando la predicción sea 'insectos' u 'otros': son las categorías donde el sistema más se equivoca al marcar anomalías que no lo son.",
+  "Si la foto está borrosa, mal iluminada, tomada desde un ángulo raro o con un fondo muy distinto al habitual.",
+  "Ante un cereal, variedad o tipo de defecto que no estaba en los datos de entrenamiento (solo conoce trigo, maíz, arroz y sorgo)."
+ ],
+ "que_no_hace": [
+  "No decide por ti si tratar, almacenar o descartar el lote: es una ayuda a la inspección, no un sistema de control automático.",
+  "No detecta cereales distintos de trigo, maíz, arroz y sorgo.",
+  "No identifica la enfermedad o plaga concreta: solo agrupa en sano, hongos, insectos u otros.",
+  "No garantiza la reducción del 10% de anomalías: ese objetivo de negocio aún no se ha medido en operación real.",
+  "No sustituye los análisis de laboratorio ni los controles fitosanitarios reglamentarios."
+ ],
+ "puede_equivocarse": "Sí. Aunque en las pruebas acertó el estado sanitario en el 92,6% de las imágenes y el tipo de cereal en el 99%, esos números se midieron sobre un conjunto de imágenes públicas y no se han vuelto a comprobar tras integrar el modelo en el sistema. Se equivoca más con las anomalías poco frecuentes y con imágenes distintas a las que aprendió. Además, la mejora del 10% en detección de anomalías es un objetivo, no un resultado confirmado. Trátalo como una segunda opinión rápida que agiliza la inspección, no como una garantía.",
+ "kpis": [
+  {
+   "kpi": "Reducción de objetos anómalos en el cereal",
+   "valor_umbral": "Objetivo: -10% frente a inspección manual (no medido en operación real todavía)",
+   "descripcion": "Cuántas menos anomalías (hongos, insectos, defectos) quedan sin detectar o mal clasificadas respecto a la inspección humana tradicional. Es el indicador de negocio principal."
+  },
+  {
+   "kpi": "Acierto del estado sanitario",
+   "valor_umbral": "Umbral ~90% — resultado declarado: 92,58%",
+   "descripcion": "Con qué frecuencia clasifica bien si el cereal está sano o afectado. Base de las decisiones de tratamiento o descarte."
+  },
+  {
+   "kpi": "Acierto del tipo de cereal",
+   "valor_umbral": "Umbral ~95% — resultado declarado: 98,98%",
+   "descripcion": "Con qué frecuencia identifica bien la especie. Evita mezclas de lotes y problemas de trazabilidad."
+  },
+  {
+   "kpi": "Acierto conjunto (estado + cereal)",
+   "valor_umbral": "Umbral ~85% — resultado declarado: 91,82%",
+   "descripcion": "Porcentaje de imágenes en que acierta las dos cosas a la vez, es decir, da información completa y fiable."
+  },
+  {
+   "kpi": "Tiempo de análisis por imagen",
+   "valor_umbral": "< 40 ms — resultado declarado: 8 ms (GPU) / 34,5 ms (CPU)",
+   "descripcion": "Rapidez de respuesta por foto, para poder analizar grandes volúmenes sin cuellos de botella."
+  }
+ ]
+}

@@ -1,0 +1,47 @@
+{
+  "model_id": "a10",
+  "model_slug": "cattle-disease-vector-detection",
+  "fecha": "Julio 2026",
+  "model_key": "modelo10-lacteo",
+  "version": "1.0.0",
+
+  "descripcion": "Pipeline de visión artificial de dos etapas para la detección y clasificación de vectores de enfermedades (mosca, mosquito y garrapata) en imágenes de ganado vacuno lechero. La primera etapa localiza cualquier organismo anómalo mediante un detector YOLOv8n (anchor-free, una sola pasada); la segunda recorta cada detección y la clasifica por especie con una red MobileNetV3-Large ajustada por transfer learning. Cada detección solo se acepta si supera de forma independiente los umbrales de confianza de detección y de clasificación.",
+  "task_type": "object-detection + image-classification (pipeline secuencial de dos etapas)",
+  "framework": "PyTorch (MobileNetV3-Large) + Ultralytics YOLOv8n (torchvision, pillow, opencv, numpy)",
+  "artefacto": "detector_best.pt (pesos YOLOv8n) + best_classifier.pth (state_dict MobileNetV3-Large) + class_names.json (mapeo de clases fly/mos/tick)",
+  "objetivo": "Anticipar la presencia de vectores biológicos (moscas, mosquitos y garrapatas) sobre el ganado a partir de imágenes, para permitir una intervención sanitaria temprana antes de que se produzca una infestación en el establo. El objetivo de negocio declarado es reducir en un 10% los costes de tratamiento asociados a estos vectores, cifra que la memoria condiciona a una validación in situ posterior.",
+  "caso_uso": "Modo predict inline: una imagen individual (base64 o ruta en disco) con umbrales de detección y clasificación configurables; devuelve las detecciones con especie, confianzas y bounding box, más la especie dominante del frame. Modo predict batch: CSV con rutas, ZIP o directorio de imágenes; procesa cada imagen y devuelve una fila por fichero. Modo train: reentrena únicamente el clasificador MobileNetV3 (backbone congelado, cabeza entrenable) a partir de un ZIP de crops etiquetados por especie, guardando el nuevo clasificador como artifact; el detector YOLO no se reentrena en línea.",
+
+  "inputs": [
+    {"nombre": "image_base64", "tipo": "str (base64)", "descripcion": "Imagen JPG/PNG codificada en base64 (modo inline)", "obligatorio": "Uno de image_base64 / image_path", "valor_defecto": "-"},
+    {"nombre": "image_path", "tipo": "str", "descripcion": "Ruta a la imagen en disco compartido (modo inline); extensiones .jpg/.jpeg/.png/.bmp/.tif/.tiff", "obligatorio": "Uno de image_base64 / image_path", "valor_defecto": "-"},
+    {"nombre": "det_conf_thresh", "tipo": "float", "descripcion": "Confianza mínima del detector YOLO para conservar una caja", "obligatorio": "No", "valor_defecto": "0.2"},
+    {"nombre": "cls_conf_thresh", "tipo": "float", "descripcion": "Confianza mínima del clasificador MobileNetV3 para aceptar la especie", "obligatorio": "No", "valor_defecto": "0.5"},
+    {"nombre": "data_path", "tipo": "str", "descripcion": "Modo batch: ruta a CSV (columna image_path), ZIP o directorio de imágenes; admite prefijo s3://", "obligatorio": "Sí (modo batch)", "valor_defecto": "-"},
+    {"nombre": "mlflow_run_id", "tipo": "str", "descripcion": "Si se indica, carga un clasificador MobileNetV3 reentrenado por el usuario desde MLflow en lugar del clasificador fijo", "obligatorio": "No", "valor_defecto": "\"\""}
+  ],
+  "outputs": [
+    {"nombre": "prediction", "tipo": "str", "descripcion": "Especie dominante del frame (mayor confianza de clasificación)", "rango": "fly | mos | tick | no_vectors", "interpretacion": "no_vectors indica que no se aceptó ninguna detección por encima de los umbrales"},
+    {"nombre": "confidence", "tipo": "float", "descripcion": "Confianza de clasificación de la detección dominante", "rango": "0-1", "interpretacion": "confianza de la especie asignada al vector dominante; 0.0 si no hay detecciones"},
+    {"nombre": "vectors_count", "tipo": "int", "descripcion": "Número total de vectores detectados y clasificados que superan ambos umbrales", "rango": "≥ 0", "interpretacion": "0 significa imagen sin vectores aceptados"},
+    {"nombre": "detections", "tipo": "list", "descripcion": "Lista por detección con species, det_conf, cls_conf y bbox (x1,y1,x2,y2)", "rango": "0..N objetos", "interpretacion": "detalle por caja para revisión o anotación de la imagen"},
+    {"nombre": "species_summary", "tipo": "dict", "descripcion": "Recuento de detecciones agrupadas por especie", "rango": "{especie: conteo}", "interpretacion": "reparto de vectores por tipo en la imagen"}
+  ],
+  "metricas": [
+    {"nombre": "mAP50 (detección, YOLOv8n)", "valor": "0.790", "descripcion": "Precisión media promedio a IoU 0.5 sobre el conjunto de test de detección (objetivo declarado > 0.7)", "interpretacion": "el detector localiza correctamente la mayoría de los vectores presentes en la imagen"},
+    {"nombre": "Recall (detección, YOLOv8n)", "valor": "0.710", "descripcion": "Sensibilidad de localización sobre el test de detección (objetivo declarado > 0.65)", "interpretacion": "se detecta ~71% de los vectores; ~29% se omiten, especialmente los que ocupan menos del 10% de la imagen"},
+    {"nombre": "Accuracy (clasificación, MobileNetV3)", "valor": "0.981", "descripcion": "Exactitud del clasificador de especie sobre su conjunto de test de crops (objetivo declarado > 0.8)", "interpretacion": "una vez recortado el vector, el modelo acierta la especie en ~98 de cada 100 casos"}
+  ],
+  "limitaciones": [
+    {"tipo": "Sin evaluación end-to-end", "descripcion": "No existían imágenes públicas de vectores etiquetadas sobre ganado real, por lo que el detector y el clasificador se evaluaron por separado en sus propios splits de test. El pipeline completo detección+clasificación no se validó de forma exhaustiva; no hay golden dataset ni informe de verificación de integración para este modelo."},
+    {"tipo": "Brecha de dominio", "descripcion": "Los modelos se entrenaron con datasets de fondos controlados (neutros o vegetación), no sobre la piel/pelaje del ganado. Texturas del pelaje y variaciones cromáticas del animal pueden interpretarse como detecciones espurias al desplegar en campo."},
+    {"tipo": "Escala y resolución del vector", "descripcion": "El recall de 0.710 se degrada con vectores pequeños: el sistema omite ~29% de los vectores cuando ocupan menos del 10% de la superficie de la imagen; la distancia variable cámara-animal agrava el efecto."},
+    {"tipo": "Desbalance de clases", "descripcion": "El dataset de clasificación tenía las garrapatas sobrerrepresentadas (triplicaban a moscas y mosquitos); pese al re-muestreo, la generalización sobre las especies menos representadas es más frágil."},
+    {"tipo": "Variabilidad ambiental", "descripcion": "Iluminación fluctuante, sombras del propio animal, incidencia solar directa y desenfoque por movimiento (motion blur) del ganado pueden reducir puntualmente detección y precisión frente a las condiciones de laboratorio."},
+    {"tipo": "KPI de negocio no validado", "descripcion": "La reducción del 10% en costes de tratamiento es un objetivo de negocio que, según la propia memoria, solo puede confirmarse tras la validación in situ del modelo en condiciones reales de despliegue."}
+  ],
+  "fichero_nombre": "No se entregó fichero de prueba de referencia ni manifest con golden_cases para este modelo. La evaluación declarada se realizó sobre los splits de test independientes de detección y clasificación (notebooks/evaluation).",
+  "fichero_registros": "Detección: ~4.300 imágenes tras deduplicación, split 70/15/15. Clasificación: ~2.700 crops (224x224), split 70/15/15, reequilibrado a ~25/25/50 mosquito/mosca/garrapata.",
+  "fichero_resultado": "Métricas declaradas en test: mAP50=0.790 y Recall=0.710 (detección YOLOv8n); Accuracy=0.981 (clasificación MobileNetV3). Pendiente de verificación de correctitud contra golden dataset tras la integración.",
+  "observaciones_tecnicas": "Ejecutable en CPU x86-64 (mín. 4 vCPU) con RAM ≥ 8 GB (recomendado 16 GB); GPU NVIDIA/CUDA recomendada para entrenamiento y tuning, pero la inferencia del pipeline completo corre en CPU con latencia aceptable. Almacenamiento 5-15 GB. Entorno de referencia Python 3.10.11. Dependencias clave: torch, torchvision, ultralytics (YOLO), opencv-python, pillow, numpy, pandas, scikit-learn (métricas), optuna (tuning), PyYAML. Hiperparámetros óptimos (Optuna): detección lr0=2.66e-3, momentum=0.8724, mosaic=0.266, mixup=0.0571, batch=32; clasificación lr=7.98e-3, optimizer=Adam, weight_decay=3.4e-4, batch=64. Entrenamiento con early stopping (paciencia 15 épocas, máx. 100). El reentrenamiento en línea (modo train) solo afecta al clasificador MobileNetV3 y no sobrescribe el detector; se recomienda un ciclo de ajuste por transfer learning cuando la tasa de error validada manualmente en la explotación supere el 5%."
+}

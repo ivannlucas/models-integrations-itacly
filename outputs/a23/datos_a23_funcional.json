@@ -1,0 +1,53 @@
+{
+  "model_id": "a23",
+  "model_slug": "lactic-market-price-forecast",
+  "fecha": "Julio 2026",
+
+  "descripcion": "Herramienta que estima el precio medio de la leche líquida que se espera dentro de seis meses, para los principales tipos de leche y los distintos canales de venta del mercado español. Parte del histórico reciente de precios y de indicadores económicos y agrarios oficiales, y sirve como apoyo para anticipar hacia dónde se moverá el precio.",
+  "objetivo": "Ayudar a productores, industrias y distribuidores del sector lácteo a anticiparse a la evolución del precio de la leche a medio plazo (seis meses), para tomar mejores decisiones de compra, aprovisionamiento, gestión de inventario y negociación comercial en un mercado sujeto a mucha volatilidad.",
+  "caso_uso": "Le indicas el tipo de leche y el canal de venta que te interesan, junto con el histórico reciente de precios y los indicadores económicos del último mes, y el sistema te devuelve el precio medio que espera para dentro de seis meses. Puedes hacer una consulta puntual o procesar de una vez un fichero con muchas combinaciones de tipo de leche y canal.",
+  "que_no_responde": "No te dice el precio de un día concreto ni el de mañana: da una estimación del precio medio de un mes situado a seis meses vista, no un precio garantizado ni una previsión diaria o dentro del propio mes.",
+  "entradas_contexto": "Los datos proceden de fuentes públicas oficiales (Ministerio de Agricultura, Instituto Nacional de Estadística y datos económicos) más el histórico reciente de precios de cada tipo de leche y canal. El sistema necesita que esos indicadores estén publicados y completos para el último mes disponible.",
+  "inputs": [
+    {"nombre": "Tipo de leche", "descripcion": "Cuál de los tipos de leche líquida quieres consultar: entera, desnatada, semidesnatada o el total de leche líquida."},
+    {"nombre": "Canal de venta", "descripcion": "El canal de distribución: tiendas de descuento, hipermercados, supermercados y autoservicios, o el total del mercado España."},
+    {"nombre": "Histórico reciente de precios", "descripcion": "Los precios de los meses anteriores de esa leche en ese canal, que el sistema utiliza para reconocer la tendencia."},
+    {"nombre": "Precio actual", "descripcion": "El precio medio del mes de referencia, que es el punto de partida desde el que se hace la previsión."},
+    {"nombre": "Época del año", "descripcion": "El mes y la temporada (por ejemplo, verano o campaña de Navidad), porque el consumo de leche varía según la época del año."},
+    {"nombre": "Indicadores económicos y agrarios", "descripcion": "Señales del entorno como la inflación general y la de los alimentos, el coste de la energía y los precios que reciben los ganaderos por la leche y por los piensos y forrajes."}
+  ],
+  "outputs": [
+    {"nombre": "Precio estimado a seis meses", "descripcion": "El precio medio que el sistema espera para esa leche y ese canal dentro de seis meses, en euros por litro.", "interpretacion": "Compáralo con el precio actual: si es más alto, se anticipa una subida; si es más bajo, una bajada; si es parecido, estabilidad."},
+    {"nombre": "Horizonte de la previsión", "descripcion": "Confirma que la estimación se refiere a seis meses vista.", "interpretacion": "La cifra siempre corresponde a dentro de seis meses, nunca a un plazo más corto."}
+  ],
+  "ejemplo_interpretacion": "Si hoy la leche entera en hipermercados está a 1,00 €/L y el sistema estima 1,04 €/L para dentro de seis meses, se interpreta como una tendencia al alza de unos 4 céntimos por litro. Como el margen de error típico es inferior a 2 céntimos, esa subida es una señal significativa que puede justificar adelantar decisiones de compra o negociación. Si la estimación fuera también 1,00 €/L, se leería como estabilidad del precio.",
+  "margen_error": "En las pruebas con datos reales, el sistema se equivoca de media en menos de 2 céntimos por litro (alrededor de un 1,8% del precio) y acierta si el precio va a subir o a bajar en más de 9 de cada 10 casos. Diferencias de uno o dos céntimos entre la estimación y el precio real que acabe ocurriendo entran dentro de lo esperable y no deben tomarse como un fallo del sistema.",
+  "revisar_manualmente": [
+    "Épocas de subidas o bajadas bruscas del precio (como la crisis de costes de 2022): en esos tramos el sistema es bastante menos fiable que en periodos estables.",
+    "Situaciones de mercado nunca vistas antes, como crisis de suministro, conflictos o cambios regulatorios importantes, que quedan fuera de lo que el sistema ha aprendido.",
+    "Cuando los indicadores económicos del último mes todavía no se hayan publicado: no conviene rellenarlos a ojo, porque la estimación dejaría de ser comparable con una previsión completa.",
+    "Antes de una decisión económica importante, contrasta siempre la estimación con tu propio conocimiento del mercado."
+  ],
+  "que_no_hace": [
+    "No garantiza el precio: es una estimación de apoyo, no una cifra segura.",
+    "No da precios diarios ni movimientos dentro de un mismo mes: solo el precio medio mensual a seis meses vista.",
+    "No cubre otros países: se limita al mercado español.",
+    "No tiene en cuenta promociones, campañas comerciales ni cambios de estrategia de precios de las cadenas.",
+    "No se actualiza solo con tus datos desde esta herramienta: la puesta al día del sistema se hace aparte, con datos oficiales nuevos.",
+    "No ofrece un porcentaje de confianza para cada estimación concreta."
+  ],
+  "puede_equivocarse": "Sí. En las pruebas mejora en torno a un 23% al método más simple de suponer que 'el precio seguirá igual', y acierta la dirección del cambio en más de 9 de cada 10 casos; pero su precisión se midió sobre un tramo de mercado concreto y reciente, y en periodos muy volátiles o ante situaciones nuevas puede desviarse más. Además, distintas ejecuciones del ajuste del sistema dan resultados algo diferentes (en una de ellas el resultado quedó por debajo del método simple). Úsalo como una ayuda para anticipar tendencias, no como una garantía del precio futuro.",
+  "kpis": [
+    {"kpi": "Precisión de la estimación", "valor_umbral": "≥ 85% (obtenido ~98%)", "descripcion": "De media, el precio estimado se queda a menos de un 2% del precio real."},
+    {"kpi": "Acierto en la dirección del cambio", "valor_umbral": "> 60% (obtenido ~93%)", "descripcion": "Con qué frecuencia acierta si el precio va a subir o a bajar respecto al momento actual."},
+    {"kpi": "Mejora frente al método simple", "valor_umbral": "Error menor que suponer 'el precio seguirá igual' (mejora ~23%)", "descripcion": "Confirma que el sistema aporta valor real frente a no usar ninguna herramienta de previsión."}
+  ],
+  "limitaciones": [
+    {"tipo": "Se apoya en un histórico corto", "descripcion": "Se basa en unos siete años y medio de precios mensuales de 16 combinaciones de tipo de leche y canal; suficiente para captar patrones estacionales, pero corto para cubrir varios ciclos económicos completos."},
+    {"tipo": "Menos fiable en épocas turbulentas", "descripcion": "En tramos de subidas o bajadas bruscas del precio acierta bastante peor que en periodos estables."},
+    {"tipo": "El precio de partida es una estimación", "descripcion": "Los precios históricos se calculan a partir de datos publicados de forma agregada, no de ventas concretas, lo que suaviza la realidad del mercado."},
+    {"tipo": "Solo España y solo mensual", "descripcion": "No sirve para otros mercados ni para prever movimientos dentro de un mismo mes."},
+    {"tipo": "Depende de datos externos actualizados", "descripcion": "Necesita los indicadores económicos del último mes completos; si faltan, la estimación pierde fiabilidad."},
+    {"tipo": "Conviene actualizarlo con regularidad", "descripcion": "Debe revisarse y ponerse al día con datos nuevos cada pocos meses para no ir perdiendo precisión con el tiempo."}
+  ]
+}

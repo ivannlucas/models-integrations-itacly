@@ -1,0 +1,52 @@
+{
+  "model_id": "a30",
+  "model_slug": "meat-traceability-detection",
+  "fecha": "Julio 2026",
+
+  "descripcion": "Herramienta de apoyo que revisa, uno a uno, los registros de paso de un lote por las distintas etapas de una planta cárnica (recepción, despiece, procesado, envasado, almacenamiento y expedición) y avisa cuando un registro parece tener una incidencia de trazabilidad, es decir, una inconsistencia en el seguimiento del producto. Para cada evento devuelve un aviso de 'con incidencia' o 'sin incidencia', junto con una puntuación de riesgo. Sirve para decidir qué registros conviene revisar primero.",
+  "objetivo": "Ayudar al personal de calidad a localizar antes los registros de trazabilidad que pueden estar mal, para priorizar las revisiones y auditorías, aliviar la carga de inspección manual y reforzar la seguridad alimentaria y el cumplimiento normativo. Importante: la herramienta se ha desarrollado y medido sobre datos simulados por ordenador, no sobre datos reales de una planta concreta, por lo que sus resultados deben confirmarse con datos reales antes de usarla en producción.",
+  "caso_uso": "Le facilitas los datos de un evento (o un fichero con muchos eventos) tal y como los recoge la planta, y la herramienta te indica, para cada uno, si parece tener una incidencia de trazabilidad y con qué nivel de riesgo. Puedes revisar un evento suelto para una respuesta inmediata o procesar un lote entero de registros de golpe y quedarte con los que salen marcados para revisarlos a mano. Opcionalmente puedes ajustar cuán exigente quieres que sea al dar la alarma.",
+  "que_no_responde": "No dice si la carne está en mal estado ni evalúa la calidad o la seguridad del producto en sí. Tampoco diagnostica la causa concreta del problema ni indica qué hacer: solo señala que el registro de seguimiento de ese evento parece tener una inconsistencia que merece que alguien lo revise.",
+  "entradas_contexto": "La herramienta trabaja con los datos que la planta ya recoge de cada paso de un lote: lecturas de los sensores de temperatura, pH y peso del producto, la etapa y la línea en que se encuentra, y el histórico de por dónde ha pasado ese lote. En la fase actual todos estos datos proceden de una simulación por ordenador, no de una planta real.",
+  "inputs": [
+    {"nombre": "Lecturas de los sensores del proceso", "descripcion": "Los valores que miden los sensores en cada paso del lote: temperatura, pH y peso del producto, junto con cuánto han cambiado esas medidas respecto al paso anterior del mismo lote."},
+    {"nombre": "Identificación de la etapa, la ruta y la línea", "descripcion": "En qué fase está el lote (recepción, despiece, procesado, envasado, almacenamiento o expedición) y de dónde viene, qué tipo de producto y de envasado le corresponde, y datos operativos como la línea de producción, el turno, la cámara frigorífica y la báscula empleadas."},
+    {"nombre": "Histórico del lote", "descripcion": "Lo que le ha pasado antes a ese lote: cuántos pasos lleva registrados, cuánto tiempo ha transcurrido entre etapas, si ha habido saltos o irregularidades previas en su recorrido y su rendimiento respecto al lote del que procede."}
+  ],
+  "outputs": [
+    {"nombre": "Aviso de incidencia", "descripcion": "Indica, para cada evento, si parece 'con incidencia' o 'sin incidencia' de trazabilidad.", "interpretacion": "'Con incidencia' significa que ese registro merece revisión; 'sin incidencia' que, a ojos de la herramienta, el seguimiento parece coherente (aunque no lo garantiza al 100%)."},
+    {"nombre": "Puntuación de riesgo", "descripcion": "Un número entre 0 y 1 que refleja cuánto sospecha la herramienta que ese evento tiene una incidencia.", "interpretacion": "Cuanto más cerca de 1, mayor sospecha; sirve para ordenar los eventos y revisar primero los de mayor riesgo. Puedes mover el punto de corte para ser más o menos exigente al dar la alarma."},
+    {"nombre": "Nivel de confianza", "descripcion": "Cómo de segura está la herramienta de la decisión (con o sin incidencia) que ha tomado para ese evento.", "interpretacion": "Valores cercanos a la mitad indican una decisión dudosa que conviene confirmar a mano; valores altos, una decisión más firme."}
+  ],
+  "ejemplo_interpretacion": "Si para un evento de la etapa de almacenamiento la herramienta devuelve 'con incidencia' y una puntuación de riesgo de 0,88, se interpreta como que ese registro tiene una probabilidad alta de contener una inconsistencia de seguimiento (por ejemplo, una lectura de temperatura o una referencia de lote que no cuadran con lo esperado) y debería situarse arriba en la lista de revisiones. Un evento con puntuación 0,20 se consideraría, en principio, coherente y de baja prioridad.",
+  "margen_error": "Sobre los datos simulados con los que se ha medido, de cada 4 avisos que da, unos 3 corresponden realmente a una incidencia. En cambio, solo detecta alrededor de la mitad de las incidencias existentes: la otra mitad se le puede escapar. Por eso conviene tratarla como una ayuda para priorizar, no como un filtro que garantice encontrar todos los problemas; y tener presente que estas cifras están medidas sobre datos simulados y deben reconfirmarse con datos reales de planta.",
+  "revisar_manualmente": [
+    "Eventos marcados con puntuación de riesgo alta: son los candidatos prioritarios a inspección de trazabilidad.",
+    "Eventos con nivel de confianza cercano a la mitad: la decisión es dudosa y conviene confirmarla a mano.",
+    "Registros con datos ausentes en campos importantes: la herramienta no distingue si falta porque es normal en esa etapa o porque ha fallado un sensor.",
+    "Eventos que el sistema da por coherentes pero sobre los que hay sospecha razonable de problema: un resultado 'sin incidencia' no descarta con seguridad que exista.",
+    "Cualquier resultado antes de tomar decisiones sobre el producto: es una señal de priorización, no una decisión de calidad."
+  ],
+  "que_no_hace": [
+    "No decide por sí sola bloquear, retirar o aprobar un lote ni sustituye los procedimientos de calidad y auditoría de la planta.",
+    "No evalúa la calidad ni la seguridad de la carne: solo revisa la coherencia del registro de seguimiento.",
+    "No explica de forma automática qué sensor o qué dato concreto ha provocado el aviso.",
+    "No detecta todas las incidencias: se le escapa aproximadamente la mitad de las presentes.",
+    "No ha sido validada con datos reales de una planta: se ha probado únicamente sobre datos simulados por ordenador."
+  ],
+  "puede_equivocarse": "Sí. Acierta en torno a 3 de cada 4 de sus avisos, pero solo localiza alrededor de la mitad de las incidencias reales presentes en las pruebas, de modo que puede dar falsas alarmas y, sobre todo, pasar por alto problemas. Además, todo su rendimiento se ha medido sobre datos simulados, no sobre una planta real, por lo que las cifras podrían cambiar al aplicarla a datos operativos. Debe usarse como ayuda para priorizar revisiones, nunca como una garantía de que un lote está correcto ni como sustituto de la inspección humana.",
+  "kpis": [
+    {"kpi": "Equilibrio entre aciertos y cobertura", "valor_umbral": "> 0,50 (obtenido 0,60)", "descripcion": "Medida global que combina cuántos de sus avisos son correctos y cuántas incidencias detecta; supera el mínimo fijado para considerar la herramienta útil."},
+    {"kpi": "Mejora sobre el método de referencia", "valor_umbral": "Superar el modelo de referencia (cumplido, mejora leve)", "descripcion": "La herramienta rinde algo mejor que una alternativa más sencilla ya consolidada, sobre todo detectando más incidencias."},
+    {"kpi": "Fiabilidad de los avisos (precisión)", "valor_umbral": "74% sobre datos simulados", "descripcion": "Porcentaje de avisos que corresponden realmente a una incidencia; pendiente de recalcular con datos reales auditados."},
+    {"kpi": "Cobertura de detección", "valor_umbral": "~51% sobre datos simulados", "descripcion": "Porcentaje de las incidencias presentes que la herramienta consigue detectar; deja escapar aproximadamente la otra mitad."}
+  ],
+  "limitaciones": [
+    {"tipo": "Probada solo con datos simulados", "descripcion": "Toda la información con la que ha aprendido y con la que se ha medido procede de una simulación por ordenador, no de una planta real. Sus resultados deben confirmarse con datos reales auditados antes de usarla en producción."},
+    {"tipo": "Se le escapan incidencias", "descripcion": "Con el ajuste por defecto detecta alrededor de la mitad de las incidencias, así que un resultado 'sin incidencia' no garantiza que el registro esté bien."},
+    {"tipo": "No explica el motivo del aviso", "descripcion": "Señala que un evento es sospechoso, pero no indica de forma automática qué dato concreto lo ha provocado; hace falta que una persona lo revise."},
+    {"tipo": "No entiende por qué falta un dato", "descripcion": "Cuando falta información en un campo, no sabe distinguir si es algo normal en esa etapa o si ha fallado un sensor, lo que puede afectar a su juicio."},
+    {"tipo": "Actualización lenta", "descripcion": "Adaptar la herramienta a cambios importantes en la planta (por ejemplo, nuevos sensores) requiere un reajuste que no es inmediato y debe hacerse fuera de línea."},
+    {"tipo": "Es una ayuda, no una decisión", "descripcion": "Su resultado sirve para priorizar qué revisar, no para bloquear producto ni para sustituir los controles de calidad y auditoría de la planta."}
+  ]
+}

@@ -1,0 +1,93 @@
+{
+  "model_id": "a05",
+  "model_slug": "meat-cow-behaviour",
+  "fecha": "Julio 2026",
+  "model_key": "ml5-meat-cow-behaviour",
+  "version": "1.0.0",
+
+  "descripcion": "Pipeline de visión por computador en tres etapas para reconocimiento de comportamiento bovino en vídeo: un detector Faster R-CNN R-101 FPN (Detectron2) localiza cada vaca por frame, ByteTrack (asociación IoU + filtro de Kalman, no entrenable) mantiene la identidad de cada animal entre frames, y un clasificador SlowFast R50 (PyTorchVideo) categoriza el comportamiento sobre clips de 32 frames a 224×224 px. Las predicciones con confianza softmax inferior al umbral (0.5 por defecto) se marcan como anomalía comportamental.",
+  "task_type": "behavior_recognition (detección de objetos + tracking multi-objeto + clasificación de acción en vídeo)",
+  "framework": "PyTorch (torch + detectron2 0.6 + pytorchvideo)",
+  "artefacto": "detector_model.pth (Faster R-CNN R-101 FPN) y classifier_model.pth (SlowFast R50 + mapeo behavior_to_idx), en artifacts/ml5_meat_cow_behaviour/ o S3",
+
+  "objetivo": "Monitorizar de forma automática ganado vacuno en vídeo de vigilancia para detectar, seguir y clasificar el comportamiento de cada animal (la memoria declara 12 clases, p. ej. grazing, drinking, walking, running, resting), y señalar anomalías comportamentales — predicciones de baja confianza — como indicador temprano indirecto de problemas de salud o bienestar. Sustituye la observación manual continua en rebaños grandes. KPIs declarados: AP de detección > 85%, Macro F1 de clasificación > 75%, FPR de alertas < 8%, precisión/recall end-to-end > 65% / > 72%.",
+  "caso_uso": "Dos modos de inferencia expuestos en /models/ml5-meat-cow-behaviour/predict. Modo batch: se pasa data_path a un vídeo (MP4, AVI, MOV, MKV; ruta local o s3://) y el pipeline completo (detección + tracking + clasificación) devuelve, por frame, cada animal con track_id, bbox, score, comportamiento, confianza y flag de anomalía. Modo inline: se pasa frames_base64, un clip ya recortado (ROI de una sola vaca) de mínimo 32 frames JPEG/PNG en base64; solo se ejecuta el clasificador SlowFast sobre los últimos 32 frames y se devuelve el comportamiento, la confianza, el flag de anomalía y las probabilidades por clase (XAI). El reentrenamiento vía API no está soportado (train → HTTP 501): sirve artefactos entrenados externamente.",
+
+  "inputs": [
+    {"nombre": "mode", "tipo": "string", "descripcion": "Selector de modo de inferencia: \"inline\" (clip de una vaca) o \"batch\" (vídeo completo)", "obligatorio": "Sí", "valor_defecto": "-"},
+    {"nombre": "frames_base64", "tipo": "array[string]", "descripcion": "Modo inline. Mínimo 32 frames JPEG/PNG codificados en base64; cada frame debe ser el ROI recortado de una sola vaca (224×224 px recomendado; se redimensiona internamente). SlowFast usa los últimos 32 frames: 8 para la vía lenta y 32 para la rápida (alpha=4)", "obligatorio": "Sí (en inline)", "valor_defecto": "-"},
+    {"nombre": "threshold", "tipo": "float", "descripcion": "Modo inline. Umbral de anomalía: predicciones con confianza softmax por debajo se marcan is_anomaly=true", "obligatorio": "No", "valor_defecto": "0.5"},
+    {"nombre": "data_path", "tipo": "string", "descripcion": "Modo batch. Ruta absoluta local o URI s3:// a un vídeo (.mp4, .avi, .mov, .mkv). El detector aplica umbral de score 0.5 y ByteTrack usa track_thresh=0.5, track_buffer=30, match_thresh=0.8", "obligatorio": "Sí (en batch)", "valor_defecto": "-"},
+    {"nombre": "mlflow_run_id", "tipo": "string", "descripcion": "Aceptado por contrato pero ignorado: el modelo no soporta reentrenamiento por usuario y siempre usa los artefactos estándar", "obligatorio": "No", "valor_defecto": "\"\" (vacío)"}
+  ],
+
+  "outputs": [
+    {"nombre": "prediction", "tipo": "str", "descripcion": "Comportamiento predicho para el clip (modo inline)", "rango": "Una de las clases del artefacto (mapeo behavior_to_idx embebido en classifier_model.pth; la memoria declara 12 clases)", "interpretacion": "Etiqueta de comportamiento del animal, p. ej. 'grazing'"},
+    {"nombre": "confidence", "tipo": "float", "descripcion": "Probabilidad softmax de la clase predicha", "rango": "[0, 1]", "interpretacion": "Certeza del clasificador; valores bajos indican comportamiento atípico o fuera de distribución"},
+    {"nombre": "is_anomaly", "tipo": "bool", "descripcion": "Flag de anomalía comportamental", "rango": "true / false", "interpretacion": "true si confidence < threshold (0.5 por defecto): el clip debe revisarse manualmente"},
+    {"nombre": "behavior_idx", "tipo": "int", "descripcion": "Índice numérico de la clase predicha", "rango": "0 … num_classes-1 (según artefacto)", "interpretacion": "Identificador interno de la clase, útil para integración programática"},
+    {"nombre": "xai_feature_values", "tipo": "dict[str, float]", "descripcion": "Probabilidad softmax de cada comportamiento (modo inline)", "rango": "Cada valor en [0, 1]; suman 1", "interpretacion": "Distribución completa de probabilidades — insumo del servicio XAI"},
+    {"nombre": "predictions", "tipo": "list[dict]", "descripcion": "Modo batch: lista por frame con las detecciones {track_id, bbox [x1,y1,x2,y2], score, behavior, behavior_confidence, is_anomaly}", "rango": "Un elemento por frame del vídeo", "interpretacion": "Trayectoria y comportamiento de cada animal a lo largo del vídeo; track_id persiste entre frames"}
+  ],
+
+  "metricas": [
+    {"nombre": "AP detector (COCO, IoU 0.50:0.95)", "valor": "~88.2% (target 85%)", "descripcion": "Average Precision del detector Faster R-CNN sobre el split de test del dataset CSIRO (~33.600 imágenes), declarada en la memoria v1.5", "interpretacion": "La localización de los animales supera el objetivo mínimo de calidad geométrica"},
+    {"nombre": "AP50 detector", "valor": "~95.3%", "descripcion": "Average Precision con IoU 0.50 en test, declarada en la memoria", "interpretacion": "Prácticamente ningún animal presente queda sin detectar"},
+    {"nombre": "AR detector", "valor": "~91.5%", "descripcion": "Average Recall del detector en test, declarada en la memoria", "interpretacion": "Riesgo bajo de falsos negativos incluso con oclusiones moderadas"},
+    {"nombre": "Macro F1 clasificador", "valor": "~76.4% (target 75%)", "descripcion": "F1 macro del clasificador SlowFast sobre clips de 32 frames en test, declarada en la memoria", "interpretacion": "Las clases minoritarias se reconocen con precisión comparable a las mayoritarias"},
+    {"nombre": "Precisión clase grazing", "valor": "~92.1%", "descripcion": "Precisión en la clase mayoritaria (pastoreo) en test, declarada en la memoria", "interpretacion": "Los reportes de actividad de pastoreo, indicador nutricional clave, son fiables"},
+    {"nombre": "Precision / Recall end-to-end (anomalías)", "valor": "65% / 72%", "descripcion": "Rendimiento del pipeline completo (detección + tracking + clasificación) en la identificación de eventos anómalos sobre el conjunto de prueba, declarado en la memoria", "interpretacion": "El sistema integrado captura aproximadamente 3 de cada 4 incidentes potenciales"},
+    {"nombre": "FPR alertas de anomalía", "valor": "~4.2% (target < 8%)", "descripcion": "Tasa de falsos positivos del sistema de alertas end-to-end, declarada en la memoria", "interpretacion": "Nivel de falsas alarmas bajo, diseñado para evitar la fatiga de alertas del ganadero"},
+    {"nombre": "Verificación post-integración", "valor": "No ejecutada", "descripcion": "No existe verification_report.md ni golden dataset auditado para este plugin: todas las métricas de esta tabla son las declaradas por el equipo de IA en la memoria v1.5, sin reproducción independiente tras la integración", "interpretacion": "Las cifras deben tratarse como declaradas, no como verificadas en el entorno DatagIA"}
+  ],
+
+  "limitaciones": [
+    {"tipo": "Desbalance severo de clases", "descripcion": "Distribución long-tail: grazing (42.9%), resting-lying (18.1%) y resting-standing (11.9%) concentran el 73% del dataset; running tiene solo ~1.000 muestras (ratio 347:1). Pese a Focal Loss y WeightedRandomSampler, el modelo es más robusto en comportamientos comunes que en acciones raras (correr, beber) y puede confundir acciones visualmente similares (caminar con la cabeza baja vs. pastar)."},
+    {"tipo": "Sesgo de iluminación y estacional", "descripcion": "El 90% de las muestras son diurnas y el 51% del verano austral. El AP del detector cae a ~45% en condiciones nocturnas — limitación operativa documentada. Lentes sucias, niebla u oclusiones severas también degradan detección y tracking."},
+    {"tipo": "Contexto geográfico del entrenamiento", "descripcion": "Datos del CSIRO Cow Behavior Dataset (explotaciones de Australia). Cambios drásticos de entorno visual (vegetación de Castilla y León, razas autóctonas, condiciones lumínicas distintas) pueden requerir fine-tuning con datos locales para mantener la precisión declarada."},
+    {"tipo": "Alcance reducido respecto a la especificación inicial", "descripcion": "El alcance original contemplaba detección directa de sintomatología visible (lesiones) en aves. Por inexistencia de datasets públicos adecuados se unificó en un único modelo de comportamiento anómalo en vídeo de vacuno: los problemas de salud se infieren de forma indirecta por alteración de patrones de movimiento, no por signos físicos."},
+    {"tipo": "Lista de clases dependiente del artefacto", "descripcion": "El plugin lee el mapeo de comportamientos (behavior_to_idx) dinámicamente del checkpoint classifier_model.pth; la memoria declara 12 clases pero no enumera la lista completa. La enumeración exacta no está documentada en la entrega."},
+    {"tipo": "Requisito de GPU", "descripcion": "Para inferencia en tiempo real se recomienda GPU con ≥ 12 GB VRAM (10-15 FPS en NVIDIA L40/RTX 4090, ~70-90 ms/frame). En CPU la inferencia es funcional pero muy lenta; no apta para flujo de vídeo en directo."},
+    {"tipo": "Sin reentrenamiento por usuario", "descripcion": "El endpoint de entrenamiento devuelve HTTP 501: el modelo sirve exclusivamente artefactos entrenados externamente por el equipo de IA."}
+  ],
+
+  "fichero_nombre": "test_video.mp4 — vídeo generado con scripts/data/create_test_video.py a partir del split de test del dataset CSIRO (frames nunca vistos en entrenamiento)",
+  "fichero_registros": "450 frames (valor por defecto del script de generación)",
+  "fichero_resultado": "JSON estructurado por frame con track_id, bbox, behavior, behavior_confidence e is_anomaly por animal detectado. No se ha ejecutado verificación post-integración contra un golden dataset (no existe verification_report.md).",
+
+  "observaciones_tecnicas": "Entorno de referencia: Python 3.12, PyTorch 2.9.1 + CUDA 12.8, Detectron2 0.6, PyTorchVideo 0.1.5, OpenCV 4.11.0, sobre Linux. Artefactos: detector_model.pth y classifier_model.pth en artifacts/ml5_meat_cow_behaviour/ (o s3://<bucket>/artifacts/fixed/ml5_meat_cow_behaviour/); la arquitectura SlowFast R50 se instancia vía torch.hub (facebookresearch/pytorchvideo) y el head de proyección se redimensiona al número de clases leído del checkpoint. El plugin detecta CUDA en arranque y hace fallback seguro a CPU si la GPU no es funcional. Inferencia en tiempo real requiere GPU ≥ 12 GB VRAM (12-15 FPS en 2×L40, ~70 ms/frame; 10-12 FPS en RTX 4090). Umbrales por defecto: detección 0.5, anomalía 0.5 (configurable por petición en modo inline). ByteTrack: track_thresh=0.5, track_buffer=30, match_thresh=0.8. Monitorización recomendada: latencia media por predicción y tasa de anomalías (disponibles en /stats).",
+
+  "descripcion_funcional": "N/A — ver claves específicas de la ficha funcional",
+
+  "que_no_responde": "El sistema no diagnostica enfermedades: te avisa de que un animal se comporta de forma inusual, pero no te dice qué le pasa ni confirma que esté enfermo — esa valoración corresponde siempre a un experto o veterinario.",
+  "entradas_contexto": "Los datos salen de las cámaras de vigilancia de la explotación: puedes enviar directamente un vídeo grabado, o bien una secuencia de imágenes ya recortadas de un solo animal si solo quieres analizar a esa vaca.",
+
+  "ejemplo_interpretacion": "Si para la vaca con identificador 7 el sistema devuelve el comportamiento \"pastando\" con una confianza de 0,92 y sin aviso de anomalía, significa que ese animal está pastando con normalidad. Si en cambio la confianza baja de 0,5 (por ejemplo 0,38), el sistema marca el aviso de anomalía: no reconoce con seguridad lo que hace el animal, y conviene que alguien lo revise visualmente.",
+  "margen_error": "Según las cifras declaradas por el equipo que entrenó el modelo, el sistema completo capta aproximadamente 3 de cada 4 incidentes potenciales, y solo alrededor de 4 de cada 100 avisos son falsas alarmas. Esto significa que puede pasar por alto en torno a 1 de cada 4 situaciones anómalas, por lo que no sustituye las rondas de inspección habituales. Estas cifras se midieron con datos de explotaciones australianas y no se han verificado de forma independiente tras la integración en la plataforma.",
+
+  "revisar_manualmente": [
+    "Cualquier aviso de anomalía: es una señal de que algo inusual ocurre, no un diagnóstico — siempre requiere revisión visual de un experto.",
+    "Grabaciones nocturnas o con mala visibilidad (niebla, lente sucia, contraluz): la capacidad de detección cae mucho de noche.",
+    "Comportamientos poco frecuentes como correr o beber: el sistema los vio pocas veces durante su aprendizaje y es menos fiable con ellos.",
+    "Escenas con muchos animales muy juntos u ocultos entre sí: el seguimiento individual puede confundir identidades.",
+    "Las primeras semanas tras el despliegue en una explotación nueva: el sistema aprendió con ganado y paisajes de Australia y puede necesitar un periodo de contraste con la realidad local."
+  ],
+
+  "que_no_hace": [
+    "No diagnostica enfermedades ni identifica qué problema de salud tiene un animal.",
+    "No detecta síntomas físicos visibles (heridas, lesiones, signos externos de enfermedad): trabaja solo con el comportamiento en movimiento.",
+    "No garantiza detectar todos los incidentes: según las cifras declaradas, en torno a 1 de cada 4 eventos anómalos puede pasar desapercibido.",
+    "No funciona con fiabilidad de noche ni con imágenes de mala calidad.",
+    "No sustituye la supervisión del ganadero ni la valoración veterinaria: es una herramienta de apoyo a la decisión.",
+    "No aprende de tus propios datos automáticamente: no se puede reentrenar desde la plataforma."
+  ],
+
+  "puede_equivocarse": "Sí. El sistema reconoce mejor los comportamientos habituales (pastar, descansar) que los poco frecuentes (correr, beber), y puede confundir acciones parecidas, como caminar con la cabeza baja y pastar. Además, todas las cifras de rendimiento provienen de datos de explotaciones de Australia declarados por el equipo de desarrollo y no se han verificado de forma independiente tras la integración: antes de confiar decisiones operativas al sistema conviene validarlo con datos de tu propia explotación. Es una ayuda para vigilar el rebaño y priorizar revisiones, no una garantía ni un diagnóstico.",
+
+  "kpis": [
+    {"kpi": "Cobertura del rebaño (detección de animales)", "valor_umbral": "Objetivo: > 85% de precisión de localización — declarado alcanzado: ~88%", "descripcion": "Garantiza que prácticamente ningún animal queda fuera de la monitorización, incluso cuando se tapan parcialmente entre sí."},
+    {"kpi": "Acierto en el reconocimiento de comportamientos", "valor_umbral": "Objetivo: > 75% de acierto equilibrado entre comportamientos — declarado alcanzado: ~76%", "descripcion": "Asegura que el sistema no solo acierta con lo más común (pastar) sino también con conductas menos frecuentes."},
+    {"kpi": "Falsas alarmas", "valor_umbral": "Objetivo: menos de 8 de cada 100 avisos falsos — declarado alcanzado: ~4 de cada 100", "descripcion": "Evita la fatiga de alertas: si el sistema avisara sin motivo constantemente, el personal dejaría de hacerle caso."},
+    {"kpi": "Eficacia global de la alerta temprana", "valor_umbral": "Objetivo: captar más del 72% de los incidentes con más del 65% de avisos certeros — declarado alcanzado: 72% / 65%", "descripcion": "Mide el ciclo completo: detectar al animal, seguirlo y avisar correctamente cuando su comportamiento es anómalo. Cifras declaradas por el equipo de desarrollo, pendientes de verificación independiente."}
+  ]
+}

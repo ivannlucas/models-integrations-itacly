@@ -56,7 +56,6 @@
       "Bash(git add *)",
       "Bash(git commit -m ' *)",
       "Bash(echo \"grep exit: $?\")",
-
       "Bash(echo \"flake8 exit: $?\")",
       "Bash(MODEL=ml40-meat-refrigeration-aeration-fault-diagnosis timeout 240 python3 -m uvicorn main:app --port 8040)",
       "Bash(MODEL=ml40 python3 -c \"import main\")",
@@ -66,7 +65,6 @@
       "Bash(jobs)",
       "Bash(curl -s http://127.0.0.1:8041/models/ml40-meat-refrigeration-aeration-fault-diagnosis/stats)",
       "Bash(curl -s -m 500 -X POST http://127.0.0.1:8041/models/ml40-meat-refrigeration-aeration-fault-diagnosis/train -H \"Content-Type: application/json\" -d '{\"data_path\": \"/mnt/c/Users/PC/Desktop/Repositorios/models-integrations-itacly/inbox/a40/codigo/modelo40_CARNICO - DNSL/data/raw/dataset_aireado.csv\"}')",
-
       "Bash(pandoc -t markdown \"entregable/34 - Desarrollo de un modelo basado en algoritmos genéticos para la reducción del consumo energético del proceso de pasteurización - v2.0.docx\" -o memoria.md)",
       "Bash(flake8 app/plugins/ml34_dairy_pasteurization_energy_ga/ tests/unit/test_ml34_dairy_pasteurization_energy_ga.py tests/conftest.py app/registry.py app/domain/services/exceptions.py --show-source --statistics)",
       "Bash(echo \"exit=$?\")",
@@ -79,8 +77,9 @@
       "Bash(curl -s -X POST http://localhost:8034/models/ml34-dairy-pasteurization-energy-ga/predict -H \"Content-Type: application/json\" -d '{\"mode\":\"inline\",\"T_in_leche\":6.88,\"F_flow\":3650.6,\"T_servicio\":79.16,\"t_ciclo\":405.0,\"Delta_P\":0.374}')",
       "Bash(curl -s http://localhost:8034/models/ml34-dairy-pasteurization-energy-ga/stats)",
       "Bash(curl -s -X POST http://localhost:8034/models/ml34-dairy-pasteurization-energy-ga/predict -H \"Content-Type: application/json\" -d '{\"mode\":\"optimize\",\"T_in_leche\":6.78,\"Delta_P\":0.481,\"t_ciclo\":80.0,\"seed\":1}')",
-      "Bash(soffice --headless --convert-to pdf --outdir /tmp/claude-1000/-mnt-c-Users-PC-Desktop-Repositorios-models-integrations-itacly/218781d0-7310-4c80-ae9d-322383e24d8d/scratchpad outputs/a34/a34_ficha_tecnica.docx outputs/a34/a34_ficha_funcional.docx outputs/a34/a34_metadatos.docx)"
-
+      "Bash(soffice --headless --convert-to pdf --outdir /tmp/claude-1000/-mnt-c-Users-PC-Desktop-Repositorios-models-integrations-itacly/218781d0-7310-4c80-ae9d-322383e24d8d/scratchpad outputs/a34/a34_ficha_tecnica.docx outputs/a34/a34_ficha_funcional.docx outputs/a34/a34_metadatos.docx)",
+      "Bash(mkdir -p \"/tmp/claude-1000/-mnt-c-Users-PC-Desktop-Repositorios-models-integrations-itacly/40095e82-cac8-442e-89d8-b0f5be5bc660/scratchpad\")",
+      "Bash(python3 -c ' *)"
     ]
   }
 }

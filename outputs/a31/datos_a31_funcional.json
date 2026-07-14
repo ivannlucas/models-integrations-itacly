@@ -1,0 +1,49 @@
+{
+  "model_id": "a31",
+  "model_slug": "cereals-residue-optimizer",
+  "fecha": "Julio 2026",
+
+  "descripcion": "Herramienta de apoyo para el cultivo de cereal que estima cuánta biomasa vegetal (los restos de la planta, principalmente paja) quedaría disponible en el suelo tras la cosecha de una explotación, expresada en toneladas. A partir de la superficie sembrada, la lluvia de primavera, si ha habido o no sequía y el tipo de cultivo, la herramienta calcula el volumen de residuo esperado. Es un paso previo para decidir cómo gestionar ese residuo, no la decisión en sí.",
+  "objetivo": "Ayudar a las explotaciones cerealistas a conocer por adelantado cuánto residuo vegetal va a quedar en el campo, para poder planificar su gestión (retirada, aprovechamiento o venta) y avanzar hacia el objetivo del proyecto: reducir el residuo excedentario sin perder rentabilidad. La herramienta aporta la estimación del residuo; la decisión de qué cultivar y dónde queda en manos del técnico.",
+  "caso_uso": "Introduces los datos de un escenario de cultivo (cuántas hectáreas en secano y en regadío, la lluvia de primavera, si es un año de sequía y qué cultivo es) y la herramienta te devuelve las toneladas de residuo que cabe esperar en el suelo. Puedes consultar un escenario suelto o cargar una tabla con muchos escenarios de golpe y obtener una estimación para cada uno.",
+  "que_no_responde": "No te dice qué cultivo plantar ni cómo repartir la superficie para reducir el residuo, ni calcula el beneficio económico o un plan de acción. Solo estima cuánto residuo quedará en el escenario que le describes.",
+  "entradas_contexto": "Los datos que pide provienen de la propia planificación de la explotación (superficie prevista por cultivo y régimen) y de datos meteorológicos de la campaña (lluvia de primavera). El indicador de sequía se puede deducir directamente de esa lluvia.",
+  "inputs": [
+    {"nombre": "Superficie en secano", "descripcion": "Hectáreas de ese cultivo que se van a sembrar en secano."},
+    {"nombre": "Superficie en regadío", "descripcion": "Hectáreas de ese cultivo que se van a sembrar en regadío."},
+    {"nombre": "Lluvia de primavera", "descripcion": "Lluvia acumulada durante la primavera (marzo a mayo), en milímetros."},
+    {"nombre": "Año de sequía", "descripcion": "Indicación de si la primavera fue seca: se marca cuando la lluvia de primavera queda por debajo de 200 mm. Si no se indica, se asume que no hubo sequía."},
+    {"nombre": "Tipo de cultivo", "descripcion": "El cultivo cerealista del escenario (por ejemplo trigo, cebada, maíz o girasol)."},
+    {"nombre": "Tabla de escenarios (uso por lotes)", "descripcion": "Un fichero con varias filas, cada una con los datos de un escenario, para obtener la estimación de todos de una sola vez."}
+  ],
+  "outputs": [
+    {"nombre": "Residuo estimado (toneladas)", "descripcion": "Las toneladas de biomasa vegetal que se calcula que quedarían disponibles en el suelo tras la cosecha del escenario descrito.", "interpretacion": "Cuanto mayor es la cifra, más residuo habrá que gestionar; sirve para anticipar el excedente y planificar su retirada o aprovechamiento."},
+    {"nombre": "Detalle de los datos usados", "descripcion": "El resumen de los valores numéricos que se han tenido en cuenta para hacer la estimación.", "interpretacion": "Permite comprobar de un vistazo con qué datos se ha calculado el resultado."}
+  ],
+  "ejemplo_interpretacion": "Si para un escenario de trigo con una superficie determinada y una primavera lluviosa la herramienta estima 12.000 toneladas de residuo, se interpreta como el volumen de paja y restos que quedaría en el suelo esa campaña; ese dato ayuda a dimensionar por adelantado la logística de retirada o el aprovechamiento del residuo. En un año marcado como de sequía, para la misma superficie la estimación será menor, porque la planta genera menos biomasa.",
+  "margen_error": "La herramienta no viene acompañada de una medida de su margen de error: en la documentación de entrega no se aporta ninguna cifra que indique cuánto se puede desviar la estimación de la realidad. Por eso sus resultados deben tomarse como una orientación y no como una cifra exacta, y conviene contrastarlos con la experiencia de campo antes de tomar decisiones sobre ellos.",
+  "revisar_manualmente": [
+    "Escenarios fuera de lo habitual en Castilla y León (otras zonas, cultivos poco frecuentes o superficies muy grandes o muy pequeñas), donde la estimación es menos fiable.",
+    "Años con condiciones extremas de lluvia o sequía, en los que conviene contrastar la cifra con la experiencia de campo.",
+    "Cualquier decisión de inversión o de gestión importante basada en el residuo estimado: al no conocerse el margen de error, conviene validar antes con datos reales de la explotación."
+  ],
+  "que_no_hace": [
+    "No decide cómo repartir la superficie entre cultivos ni propone un plan de acción.",
+    "No calcula el beneficio económico ni compara escenarios entre sí.",
+    "No mide el residuo real en el campo: lo estima a partir de los datos que le das.",
+    "No garantiza una cifra exacta: es una estimación de apoyo a la decisión.",
+    "No sustituye el criterio del técnico agrónomo."
+  ],
+  "puede_equivocarse": "Sí. La herramienta ofrece una estimación y puede desviarse de lo que ocurra realmente en el campo, sobre todo en escenarios distintos a los de Castilla y León o en años con condiciones climáticas extremas. Además, la documentación de entrega no incluye ninguna medida de su precisión, por lo que no se sabe con qué margen acierta. Debe usarse como ayuda a la planificación, nunca como una garantía; cualquier cifra debe validarse con datos reales de la explotación antes de basar en ella una decisión.",
+  "kpis": [
+    {"kpi": "Reducción del residuo excedentario", "valor_umbral": "≈ 31 % (resultado del proyecto, año 2023)", "descripcion": "Objetivo del proyecto: dejar menos residuo en el suelo por cada euro de beneficio. Es un resultado del sistema de planificación completo descrito en la memoria, no de esta herramienta de estimación por sí sola."},
+    {"kpi": "Preservación de la rentabilidad", "valor_umbral": "Beneficio mantenido al 100 %", "descripcion": "El proyecto busca reducir el residuo sin que la explotación pierda beneficio ni deje tierra sin cultivar. También es un resultado del sistema de planificación de la memoria, no de esta herramienta."}
+  ],
+  "limitaciones": [
+    {"tipo": "Solo estima, no planifica", "descripcion": "La herramienta calcula el residuo esperado, pero no te dice qué cultivar ni cómo repartir la superficie para reducirlo; esa parte la resuelve otro sistema descrito en la documentación del proyecto."},
+    {"tipo": "Diferencia entre lo entregado y lo integrado", "descripcion": "La documentación final del proyecto describe una herramienta de planificación distinta (que reparte la superficie de cultivo), mientras que lo que se ha integrado aquí es únicamente la estimación del residuo. Conviene tenerlo presente al interpretar los objetivos del proyecto."},
+    {"tipo": "Sin garantía de precisión", "descripcion": "No se entregó ninguna medida de cuánto puede fallar la estimación, así que sus cifras deben tomarse como orientativas."},
+    {"tipo": "Pensada para una zona y unos años concretos", "descripcion": "Los datos de referencia son de Castilla y León (2009-2023, sin 2020) y con detalle anual; fuera de ese ámbito su fiabilidad no está comprobada."},
+    {"tipo": "El residuo no se mide, se calcula", "descripcion": "El residuo no procede de una medición en campo, sino de un cálculo basado en la biomasa de la planta; es una estimación teórica que conviene contrastar con la realidad de la explotación."}
+  ]
+}
