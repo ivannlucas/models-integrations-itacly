@@ -112,8 +112,22 @@ def load_model_bundle() -> dict:
     arch: str = checkpoint.get("model_name", "mobilenet_v3_large")
     num_classes: int = checkpoint.get("num_classes", len(CATEGORY_NAMES))
     num_cereals: int = checkpoint.get("num_cereales", len(CEREAL_NAMES))
+
+    # El mapeo índice->etiqueta es la fuente de verdad del checkpoint. Si no viene,
+    # avisamos fuerte: el fallback por CATEGORY_NAMES/CEREAL_NAMES solo es correcto
+    # si el artefacto se entrenó con ese mismo orden de clases.
+    if "idx_to_class" not in checkpoint or "idx_to_cereal" not in checkpoint:
+        logger.warning(
+            "Checkpoint '%s' sin idx_to_class/idx_to_cereal — usando fallback por "
+            "constantes. Verifica que el orden de clases del artefacto coincide con "
+            "CATEGORY_NAMES/CEREAL_NAMES o las etiquetas saldrán mal.",
+            MODEL_FILENAME,
+        )
     idx_to_class: dict = checkpoint.get("idx_to_class", {i: n for i, n in enumerate(CATEGORY_NAMES)})
     idx_to_cereal: dict = checkpoint.get("idx_to_cereal", {i: n for i, n in enumerate(CEREAL_NAMES)})
+    # Las claves pueden llegar como str tras un round-trip JSON; normalizamos a int.
+    idx_to_class = {int(k): v for k, v in idx_to_class.items()}
+    idx_to_cereal = {int(k): v for k, v in idx_to_cereal.items()}
 
     model_cls = _ARCH_CLASSES.get(arch)
     if model_cls is None:
@@ -124,9 +138,15 @@ def load_model_bundle() -> dict:
     model.to(device)
     model.eval()
 
+    # Señal de identidad del artefacto: un checkpoint entrenado guarda su test accuracy.
+    # Si aparece "N/A" o valores ~aleatorios (≈1/num_clases), el artefacto servido
+    # probablemente NO es el modelo entrenado (síntoma: predicción constante).
     logger.info(
-        "Ml8CerealsImgAnomalyDetectorPlugin bundle ready — arch=%s device=%s",
+        "Ml8CerealsImgAnomalyDetectorPlugin bundle ready — arch=%s device=%s "
+        "test_acc_cat=%s test_acc_cer=%s",
         arch, device,
+        checkpoint.get("test_accuracy_cat", "N/A"),
+        checkpoint.get("test_accuracy_cer", "N/A"),
     )
 
     return {

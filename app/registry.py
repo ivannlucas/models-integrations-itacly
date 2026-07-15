@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from app.domain.services.exceptions import (
+    InfeasibleOptimizationError,
     InsufficientCycleHistoryError,
     InsufficientFramesError,
     InsufficientTelemetryHistoryError,
@@ -81,10 +82,6 @@ from app.plugins.ml31_cereals_residue_optimizer.plugin import Ml31CerealsResidue
 from app.plugins.ml31_cereals_residue_optimizer.predict_dto import (
     PredictRequest as Ml31Residue_Request,
     PredictResponse as Ml31Residue_Response,
-)
-from app.plugins.ml31_cereals_residue_optimizer.train_dto import (
-    TrainRequest as Ml31Residue_TrainReq,
-    TrainResponse as Ml31Residue_TrainResp,
 )
 
 from app.plugins.ml4_lactic_cnn_thermal_early_disease_detection.plugin import (
@@ -250,8 +247,7 @@ REGISTRY: list[ModelEntry] = [
         plugin_class=Ml31CerealsResidueOptimizerPlugin,
         predict_request_type=Ml31Residue_Request,
         predict_response_type=Ml31Residue_Response,
-        train_request_type=Ml31Residue_TrainReq,
-        train_response_type=Ml31Residue_TrainResp,
+        extra_predict_exceptions=(InfeasibleOptimizationError,),
     ),
     ModelEntry(
         model_id="ml4-lactic-cnn-thermal-early-disease-detection",

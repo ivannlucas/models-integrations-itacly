@@ -56,3 +56,12 @@ class UnknownDiagnosisSystemError(ValueError):
 class ThermalSafetyViolationError(ValueError):
     """Raised when the GA cannot find a feasible solution meeting T_out >= 72.3 °C (ml34)."""
 
+
+class InfeasibleOptimizationError(ValueError):
+    """Raised when the LP crop-allocation problem is infeasible/unbounded (ml31).
+
+    Combinations of constraints that are too strict (e.g. a very high min_benefit
+    together with a narrow ±surface band) yield CBC status != OPTIMAL. The plugin
+    translates this to a domain error (HTTP 422) instead of returning an empty plan.
+    """
+
