@@ -30,6 +30,7 @@ from app.application.use_cases.predict_model_use_case import PredictModelUseCase
 from app.application.use_cases.train_model_use_case import TrainModelUseCase
 from app.domain.ports.model_plugin_port import ModelPluginPort
 from app.domain.services.exceptions import (
+    InfeasibleOptimizationError,
     InsufficientCycleHistoryError,
     InsufficientFramesError,
     InsufficientTelemetryHistoryError,
@@ -99,13 +100,9 @@ from app.plugins.ml30_meat_traceability_detection.train_dto import (
 )
 from app.plugins.ml31_cereals_residue_optimizer.predict_dto import (
     PredictBatchResponse as Ml31ResidueBatchResp,
-    PredictInlineResponse as Ml31ResidueInlineResp,
+    PredictOptimizeResponse as Ml31ResidueOptimizeResp,
     PredictRequest as Ml31Residue_Request,
     PredictResponse as Ml31Residue_Response,
-)
-from app.plugins.ml31_cereals_residue_optimizer.train_dto import (
-    TrainRequest as Ml31Residue_TrainReq,
-    TrainResponse as Ml31ResidueTrainResp,
 )
 from app.plugins.ml4_lactic_cnn_thermal_early_disease_detection.predict_dto import (
     PredictBatchResponse as Ml4ThermalBatchResp,
@@ -155,6 +152,12 @@ from app.plugins.ml46_dairy_fouling_clog_detection.predict_dto import (
 from app.plugins.ml46_dairy_fouling_clog_detection.train_dto import (
     TrainRequest as Ml46Dairy_TrainReq,
     TrainResponse as Ml46DairyTrainResp,
+)
+from app.plugins.m47_dnsl_fallas_maquinaria_pasteurizado.predict_dto import (
+    PredictBatchResponse as M47BatchResp,
+    PredictInlineResponse as M47InlineResp,
+    PredictRequest as M47_Request,
+    PredictResponse as M47_Response,
 )
 from app.plugins.ml40_meat_refrigeration_aeration_fault_diagnosis.predict_dto import (
     PredictBatchResponse as Ml40MeatBatchResp,
@@ -539,29 +542,38 @@ def _ml30_trace_train(plugin: FakePlugin, *, data_path: str) -> Ml30TraceTrainRe
     )
 
 
-def _ml31_residue_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> Ml31ResidueInlineResp:
-    """Fake inline response for the ml31 residue optimizer."""
-    return Ml31ResidueInlineResp(
+def _ml31_residue_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> Ml31ResidueOptimizeResp:
+    """Fake inline response for the ml31 LP residue optimizer."""
+    return Ml31ResidueOptimizeResp(
         model_id="ml31-cereals-residue-optimizer",
-        prediction=1234.5,
-        confidence=None,
-        xai_feature_values={"Sup_Secano_ha": 100.0, "Lluvia_Primavera_mm": 180.0},
+        reference_year=2023,
+        optimization_mode="minimize_residue",
+        crop_allocation={
+            "Trigo duro": {"secano_ha": 10.0, "regadio_ha": 2.0,
+                           "production_t": 5.0, "residue_t": 3.0, "benefit_eur": 120.0}
+        },
+        total_production_t=98.0,
+        total_residue_t=45.0,
+        total_benefit_eur=1000.0,
+        baseline_total_production_t=100.0,
+        baseline_total_residue_t=50.0,
+        baseline_total_benefit_eur=1000.0,
+        residue_reduction_pct=10.0,
+        benefit_change_eur=0.0,
+        benefit_change_pct=0.0,
+        production_change_pct=-2.0,
+        solver_status="OPTIMAL",
+        solve_time_seconds=0.01,
+        verdict="PASADO",
     )
 
 
 def _ml31_residue_batch(plugin: FakePlugin, *, data_path: str) -> Ml31ResidueBatchResp:
-    """Fake batch response for the ml31 residue optimizer."""
+    """Fake batch response for the ml31 LP residue optimizer."""
     return Ml31ResidueBatchResp(
         model_id="ml31-cereals-residue-optimizer",
         predictions=[{"row": 0, "prediction": 1234.5, "Cultivo": "Trigo"}],
         output_path=None,
-    )
-
-
-def _ml31_residue_train(plugin: FakePlugin, *, data_path: str) -> Ml31ResidueTrainResp:
-    """Fake training response for the ml31 residue optimizer."""
-    return Ml31ResidueTrainResp(
-        detail="Entrenamiento completado", r2_test=0.83, n_train=800, n_test=200,
     )
 
 
@@ -769,6 +781,46 @@ def _ml46_dairy_train(plugin: FakePlugin, *, data_path: str) -> Ml46DairyTrainRe
     )
 
 
+def _m47_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> M47InlineResp:
+    """Fake inline response for the m47 DNSL model."""
+    return M47InlineResp(
+        model_id="m47-dnsl-fallas-maquinaria-pasteurizado",
+        Enfriador_Fouling=0,
+        Valvula_Switch=0,
+        Bomba_Leakage=0,
+        Acumulador_Gas=0,
+        Confianza_Fouling=0.99,
+        Confianza_Valvula=0.98,
+        Confianza_Bomba=0.97,
+        Confianza_Acumulador=0.96,
+        model_name="m47-dnsl-fallas-maquinaria-pasteurizado",
+    )
+
+
+def _m47_batch(plugin: FakePlugin, *, data_path: str) -> M47BatchResp:
+    """Fake batch response for the m47 DNSL model."""
+    return M47BatchResp(
+        model_id="m47-dnsl-fallas-maquinaria-pasteurizado",
+        predictions=[{
+            "Cycle_ID": 1,
+            "Enfriador_Fouling": 0,
+            "Válvula_Switch": 0,
+            "Bomba_Leakage": 0,
+            "Acumulador_Gas": 0,
+            "Enfriador_Fouling_Texto": "SANO",
+            "Válvula_Switch_Texto": "SANO",
+            "Bomba_Leakage_Texto": "SANO",
+            "Acumulador_Gas_Texto": "SANO",
+            "Confianza_Fouling": 0.99,
+            "Confianza_Valvula": 0.98,
+            "Confianza_Bomba": 0.97,
+            "Confianza_Acumulador": 0.96,
+            "model_name": "m47-dnsl-fallas-maquinaria-pasteurizado",
+        }],
+        output_path=None,
+    )
+
+
 def _ml40_meat_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> Ml40MeatInlineResp:
     """Fake inline prediction response for the ml40 refrigeration/aeration fault diagnosis plugin."""
     return Ml40MeatInlineResp(
@@ -819,6 +871,7 @@ def _ml40_meat_train(plugin: FakePlugin, *, data_path: str) -> Ml40MeatTrainResp
 
 FAKE_FACTORIES: dict[str, tuple[Callable, Callable]] = {
     "ml46-dairy-fouling-clog-detection": (_ml46_dairy_inline, _ml46_dairy_batch),
+    "m47-dnsl-fallas-maquinaria-pasteurizado": (_m47_inline, _m47_batch),
     "ml40-meat-refrigeration-aeration-fault-diagnosis": (_ml40_meat_inline, _ml40_meat_batch),
     "ml35-dairy-ann-cleaning-cost": (_ml35_dairy_inline, _ml35_dairy_batch),
     "ml34-dairy-pasteurization-energy-ga": (_ml34_dairy_inline, _ml34_dairy_batch),
@@ -843,7 +896,6 @@ TRAIN_FACTORIES: dict[str, Callable] = {
     "modelo10-lacteo": _lacteo_train,
     "ml8-cereals-img-anomaly-detector": _ml8_cereals_train,
     "ml30-meat-traceability-detection": _ml30_trace_train,
-    "ml31-cereals-residue-optimizer": _ml31_residue_train,
 }
 
 
@@ -926,9 +978,7 @@ TEST_REGISTRY: list[ModelEntry] = [
         plugin_class=FakePlugin,
         predict_request_type=Ml31Residue_Request,
         predict_response_type=Ml31Residue_Response,
-        extra_predict_exceptions=(),
-        train_request_type=Ml31Residue_TrainReq,
-        train_response_type=Ml31ResidueTrainResp,
+        extra_predict_exceptions=(InfeasibleOptimizationError,),
     ),
     ModelEntry(
         model_id="ml4-lactic-cnn-thermal-early-disease-detection",
@@ -989,6 +1039,15 @@ TEST_REGISTRY: list[ModelEntry] = [
         extra_predict_exceptions=(InsufficientTelemetryHistoryError,),
         train_request_type=Ml46Dairy_TrainReq,
         train_response_type=Ml46DairyTrainResp,
+    ),
+    ModelEntry(
+        model_id="m47-dnsl-fallas-maquinaria-pasteurizado",
+        prefix="/models/m47-dnsl-fallas-maquinaria-pasteurizado",
+        version="1.0.0",
+        plugin_class=FakePlugin,
+        predict_request_type=M47_Request,
+        predict_response_type=M47_Response,
+        extra_predict_exceptions=(),
     ),
     ModelEntry(
         model_id="ml40-meat-refrigeration-aeration-fault-diagnosis",

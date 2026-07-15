@@ -152,19 +152,25 @@ class TestBaseMLflowTrackerConnected:
 
 
 class TestDownloadMlflowArtifacts:
-    """download_mlflow_artifacts helper function."""
+    """download_mlflow_artifacts helper function.
 
-    @patch("app.domain.services.mlflow_tracker.BaseMLflowTracker.download_artifacts")
+    Mocks ``_download_with_uri`` — the function ``_mlflow_try_uris`` actually calls —
+    rather than ``BaseMLflowTracker.download_artifacts``, which this code path never
+    touches. Mocking the wrong target let real HTTP calls through to the (unreachable)
+    tracking URIs and hung the suite.
+    """
+
+    @patch("app.domain.services.mlflow_tracker._download_with_uri")
     def test_success(self, mock_download: MagicMock) -> None:
-        mock_download.return_value = "/tmp/mlflow_xxx/model"
+        mock_download.return_value = ("/tmp/mlflow_xxx/model", "/tmp/mlflow_xxx")
         result = download_mlflow_artifacts("run-1", artifact_path="model")
         assert result is not None
         tmp_dir, local_path = result
         assert local_path == "/tmp/mlflow_xxx/model"
         assert "mlflow_" in tmp_dir
 
-    @patch("app.domain.services.mlflow_tracker.BaseMLflowTracker.download_artifacts")
+    @patch("app.domain.services.mlflow_tracker._download_with_uri")
     def test_failure_cleans_up_temp_dir(self, mock_download: MagicMock) -> None:
-        mock_download.return_value = ""
+        mock_download.side_effect = RuntimeError("download failed")
         result = download_mlflow_artifacts("run-1", artifact_path="model")
         assert result is None

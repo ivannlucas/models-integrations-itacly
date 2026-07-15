@@ -139,6 +139,11 @@ from app.plugins.ml46_dairy_fouling_clog_detection.train_dto import (
     TrainRequest as Ml46Dairy_TrainReq,
     TrainResponse as Ml46Dairy_TrainResp,
 )
+from app.plugins.m47_dnsl_fallas_maquinaria_pasteurizado.plugin import M47DnsFallMaquinariaPasteurizadoPlugin
+from app.plugins.m47_dnsl_fallas_maquinaria_pasteurizado.predict_dto import (
+    PredictRequest as M47_Request,
+    PredictResponse as M47_Response,
+)
 
 from app.plugins.ml40_meat_refrigeration_aeration_fault_diagnosis.plugin import (
     Ml40MeatRefrigerationAerationFaultDiagnosisPlugin,
@@ -308,6 +313,15 @@ REGISTRY: list[ModelEntry] = [
         extra_predict_exceptions=(InsufficientTelemetryHistoryError,),
         train_request_type=Ml46Dairy_TrainReq,
         train_response_type=Ml46Dairy_TrainResp,
+    ),
+    ModelEntry(
+        model_id="m47-dnsl-fallas-maquinaria-pasteurizado",
+        prefix="/models/m47-dnsl-fallas-maquinaria-pasteurizado",
+        version="1.0.0",
+        plugin_class=M47DnsFallMaquinariaPasteurizadoPlugin,
+        predict_request_type=M47_Request,
+        predict_response_type=M47_Response,
+        extra_predict_exceptions=(),
     ),
     ModelEntry(
         model_id="ml40-meat-refrigeration-aeration-fault-diagnosis",
