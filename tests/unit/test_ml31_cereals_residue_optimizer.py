@@ -1,14 +1,21 @@
-"""Endpoint tests for the ``ml31-cereals-residue-optimizer`` model."""
+"""Endpoint (wiring) tests for the ``ml31-cereals-residue-optimizer`` v2.0 LP model.
+
+Correctness against the audited scenarios lives in the verification skill
+(golden dataset); these tests only exercise the router/DTO wiring via FakePlugin.
+"""
 
 PREFIX = "/models/ml31-cereals-residue-optimizer"
 
-INLINE_PAYLOAD = {
-    "mode": "inline",
-    "Sup_Secano_ha": 100.0,
-    "Sup_Regadio_ha": 20.0,
-    "Lluvia_Primavera_mm": 180.0,
-    "Sequia_Primavera": 1,
-    "Cultivo": "Trigo",
+OPTIMIZE_PAYLOAD = {
+    "mode": "optimize",
+    "reference_year": 2023,
+    "optimization_mode": "minimize_residue",
+}
+
+PARETO_PAYLOAD = {
+    "mode": "pareto",
+    "reference_year": 2023,
+    "num_points": 20,
 }
 
 
@@ -23,28 +30,34 @@ def test_stats(client):
     assert client.get(f"{PREFIX}/stats").json()["model_name"] == "ml31-cereals-residue-optimizer"
 
 
-def test_predict_inline(client):
-    resp = client.post(f"{PREFIX}/predict", json=INLINE_PAYLOAD)
+def test_predict_optimize(client):
+    resp = client.post(f"{PREFIX}/predict", json=OPTIMIZE_PAYLOAD)
     assert resp.status_code == 200
     body = resp.json()
     assert body["model_id"] == "ml31-cereals-residue-optimizer"
-    assert isinstance(body["prediction"], (int, float))
+    assert body["solver_status"] == "OPTIMAL"
+    assert isinstance(body["total_residue_t"], (int, float))
+    assert isinstance(body["residue_reduction_pct"], (int, float))
+    assert isinstance(body["crop_allocation"], dict)
 
 
-def test_predict_inline_missing_field(client):
-    payload = {k: v for k, v in INLINE_PAYLOAD.items() if k != "Cultivo"}
-    assert client.post(f"{PREFIX}/predict", json=payload).status_code == 422
+def test_predict_pareto(client):
+    resp = client.post(f"{PREFIX}/predict", json=PARETO_PAYLOAD)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["model_id"] == "ml31-cereals-residue-optimizer"
+    assert isinstance(body["pareto_points"], list)
+    assert isinstance(body["bounds"], dict)
 
 
 def test_predict_batch(client):
-    resp = client.post(f"{PREFIX}/predict", json={"mode": "batch", "data_path": "/tmp/cereal.csv"})
-    assert resp.status_code == 200
-    assert resp.json()["model_id"] == "ml31-cereals-residue-optimizer"
-
-
-def test_train(client):
-    resp = client.post(f"{PREFIX}/train", json={"data_path": "/tmp/train.csv", "mlflow_run_id": "test-run-id"})
+    resp = client.post(f"{PREFIX}/predict", json={"mode": "batch", "data_path": "/tmp/scenarios.csv"})
     assert resp.status_code == 200
     body = resp.json()
-    assert body["detail"] == "Entrenamiento completado"
-    assert isinstance(body["r2_test"], float)
+    assert body["model_id"] == "ml31-cereals-residue-optimizer"
+    assert isinstance(body["predictions"], list)
+
+
+def test_train_returns_501(client):
+    resp = client.post(f"{PREFIX}/train", json={"data_path": "/tmp/train.csv", "mlflow_run_id": ""})
+    assert resp.status_code == 501

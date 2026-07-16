@@ -30,6 +30,7 @@ from app.application.use_cases.predict_model_use_case import PredictModelUseCase
 from app.application.use_cases.train_model_use_case import TrainModelUseCase
 from app.domain.ports.model_plugin_port import ModelPluginPort
 from app.domain.services.exceptions import (
+    InfeasibleOptimizationError,
     InsufficientCycleHistoryError,
     InsufficientFramesError,
     InsufficientTelemetryHistoryError,
@@ -99,13 +100,10 @@ from app.plugins.ml30_meat_traceability_detection.train_dto import (
 )
 from app.plugins.ml31_cereals_residue_optimizer.predict_dto import (
     PredictBatchResponse as Ml31ResidueBatchResp,
-    PredictInlineResponse as Ml31ResidueInlineResp,
+    PredictOptimizeResponse as Ml31ResidueOptimizeResp,
+    PredictParetoResponse as Ml31ResidueParetoResp,
     PredictRequest as Ml31Residue_Request,
     PredictResponse as Ml31Residue_Response,
-)
-from app.plugins.ml31_cereals_residue_optimizer.train_dto import (
-    TrainRequest as Ml31Residue_TrainReq,
-    TrainResponse as Ml31ResidueTrainResp,
 )
 from app.plugins.ml4_lactic_cnn_thermal_early_disease_detection.predict_dto import (
     PredictBatchResponse as Ml4ThermalBatchResp,
@@ -539,29 +537,48 @@ def _ml30_trace_train(plugin: FakePlugin, *, data_path: str) -> Ml30TraceTrainRe
     )
 
 
-def _ml31_residue_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> Ml31ResidueInlineResp:
-    """Fake inline response for the ml31 residue optimizer."""
-    return Ml31ResidueInlineResp(
+def _ml31_residue_inline(plugin: FakePlugin, *, features: dict, model_key, threshold):
+    """Fake optimize/pareto response for the ml31 LP optimizer (dispatch on model_key)."""
+    if model_key == "pareto":
+        return Ml31ResidueParetoResp(
+            model_id="ml31-cereals-residue-optimizer",
+            reference_year=2023,
+            bounds={"min_residue_t": 4.48e6, "benefit_at_min_res_eur": 3.4e8,
+                    "max_benefit_eur": 3.41e8, "residue_at_max_ben_t": 6.5e6},
+            pareto_points=[{"benefit_eur_M": 340.7, "residue_t_M": 4.48, "production_t_M": 5.8, "is_knee": True}],
+            knee_point={"benefit_eur": 3.407e8, "residue_t": 4.48e6, "production_t": 5.8e6},
+            num_sweep_points=20,
+            num_pareto_points=19,
+        )
+    return Ml31ResidueOptimizeResp(
         model_id="ml31-cereals-residue-optimizer",
-        prediction=1234.5,
-        confidence=None,
-        xai_feature_values={"Sup_Secano_ha": 100.0, "Lluvia_Primavera_mm": 180.0},
+        reference_year=2023,
+        optimization_mode="minimize_residue",
+        crop_allocation={"Trigo semiduro y blando": {"secano_ha": 736266.86, "regadio_ha": 179614.1,
+                          "production_t": 1.0e6, "residue_t": 2224614.67, "benefit_eur": 1.5e8}},
+        total_production_t=5808035.43,
+        total_residue_t=4481067.28,
+        total_benefit_eur=340734196.59,
+        baseline_total_production_t=6114000.0,
+        baseline_total_residue_t=6511018.9,
+        baseline_total_benefit_eur=340734197.13,
+        residue_reduction_pct=31.18,
+        benefit_change_eur=-0.54,
+        benefit_change_pct=-0.0,
+        production_change_pct=-5.05,
+        solver_status="OPTIMAL",
+        solve_time_seconds=0.014,
+        verdict="PASADO",
     )
 
 
 def _ml31_residue_batch(plugin: FakePlugin, *, data_path: str) -> Ml31ResidueBatchResp:
-    """Fake batch response for the ml31 residue optimizer."""
+    """Fake batch response for the ml31 LP optimizer (one optimization per scenario row)."""
     return Ml31ResidueBatchResp(
         model_id="ml31-cereals-residue-optimizer",
-        predictions=[{"row": 0, "prediction": 1234.5, "Cultivo": "Trigo"}],
+        predictions=[{"row": 0, "reference_year": 2023, "total_residue_t": 4481067.28,
+                      "residue_reduction_pct": 31.18, "solver_status": "OPTIMAL"}],
         output_path=None,
-    )
-
-
-def _ml31_residue_train(plugin: FakePlugin, *, data_path: str) -> Ml31ResidueTrainResp:
-    """Fake training response for the ml31 residue optimizer."""
-    return Ml31ResidueTrainResp(
-        detail="Entrenamiento completado", r2_test=0.83, n_train=800, n_test=200,
     )
 
 
@@ -843,7 +860,6 @@ TRAIN_FACTORIES: dict[str, Callable] = {
     "modelo10-lacteo": _lacteo_train,
     "ml8-cereals-img-anomaly-detector": _ml8_cereals_train,
     "ml30-meat-traceability-detection": _ml30_trace_train,
-    "ml31-cereals-residue-optimizer": _ml31_residue_train,
 }
 
 
@@ -926,9 +942,7 @@ TEST_REGISTRY: list[ModelEntry] = [
         plugin_class=FakePlugin,
         predict_request_type=Ml31Residue_Request,
         predict_response_type=Ml31Residue_Response,
-        extra_predict_exceptions=(),
-        train_request_type=Ml31Residue_TrainReq,
-        train_response_type=Ml31ResidueTrainResp,
+        extra_predict_exceptions=(InfeasibleOptimizationError,),
     ),
     ModelEntry(
         model_id="ml4-lactic-cnn-thermal-early-disease-detection",
