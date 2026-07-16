@@ -1,0 +1,476 @@
+model_id: ml31_cereals_residue_optimizer
+sector: cerealista
+# El título de la memoria conserva "técnicas neuroevolutivas" por herencia de la v1.x;
+# el modelo v2.0 realmente entregado es un optimizador LP determinista (ver known_issues).
+nombre: "Desarrollo de un modelo basado en técnicas neuroevolutivas para la reducción de residuos vegetales en el sector cerealístico"
+acronimo: "REOLSEC — REducción con Optimización Lineal en el SEctor Cerealístico"
+version_modelo: "2.0"  # rediseño completo v2.0 (08/06/2026): retira MLP surrogate + GA, pasa a LP/CBC
+# Optimizador prescriptivo determinista: dada la asignación histórica de superficies, resuelve
+# un problema de Programación Lineal (Simplex/CBC) que reasigna superficie por cultivo para
+# minimizar residuo (o maximizar beneficio). NO es un predictor con pesos entrenados.
+task_type: optimization  # prescriptivo determinista (regression_prescriptive no aplica: no hay red predictiva)
+framework:
+  - PuLP==3.3.2        # modelado LP; solver CBC embebido (COIN-OR Branch-and-Cut)
+  - numpy==2.4.6
+  - pandas==3.0.3
+  - matplotlib==3.10.9  # solo generación de gráficos/artefactos interpretables
+  - pydantic==2.11.7    # validación de registros en la ETL de PDFs (no en la optimización)
+
+# NO hay artefactos de pesos (.pkl/.pt). El "modelo" es el solver LP + los datos de referencia
+# económico-agronómicos (JSON) + los ficheros de configuración de escenario. Todo texto plano,
+# versionado, determinista. La misma configuración produce siempre el mismo resultado.
+artifacts:
+  folder: null   # no hay carpeta de artefactos serializados; ver files (rutas dentro del código entregado)
+  files:
+    - src/economics/crop_economics.json   # precios (EUR/kg) y costes secano/regadío (EUR/ha) por cultivo — MAPA 2023/24 + COICOP
+    - src/economics/harvest_index.json    # Índice de Cosecha (HI) por cultivo/régimen, con variante bajo estrés hídrico (FAO)
+    - config/inference_config.json         # config principal de escenario (defaults + overrides usuario)
+    - config/optimization_config.json      # config de optimización única
+    - config/pareto_config.json            # config del estudio de Pareto (num_points, rango de beneficio)
+    - config/economics_config.json         # metadatos y fuentes del modelo económico
+  note: >
+    No existe modelo entrenado ni pesos que cargar (memoria Sección 4 y 9.1: "no hay artefacto
+    serializado que cargar, ni semilla aleatoria de la que dependa el resultado"). Los únicos
+    artefactos son estos datos de referencia y configs, legibles en texto plano.
+
+# El dataset agronómico histórico (CSV) tampoco se commitea como artefacto; se reconstruye desde
+# los PDFs oficiales JCyL 2009-2023 si falta (requiere pdftotext/poppler-utils).
+dataset:
+  processed_csv: data/processed/dataset_cereal_lluvia_2009_2023.csv
+  columns_required_by_optimizer:  # las columnas derivadas (Residuo_Disponible_Suelo_t, Sequia_Primavera) NO se requieren: se calculan internamente
+    - Año
+    - Cultivo
+    - Sup_Secano_ha
+    - Sup_Regadio_ha
+    - Rend_Secano_kg_ha
+    - Rend_Regadio_kg_ha
+    - Prod_Paja_Cosechada_t
+    - Lluvia_Primavera_mm
+  note: >
+    Prod_Grano_t existe en el CSV pero el optimizador NO la usa (tiene huecos/ceros de parseo en
+    2011-2015). La producción se recalcula como Sup_* × Rend_* (columnas completas). No hay 2020
+    (PDF corrupto). Rango efectivo: 2009-2023 sin 2020.
+
+crops:  # 10 cultivos => 20 variables de decisión (x_s[i], x_r[i])
+  - Trigo duro
+  - Trigo semiduro y blando
+  - Cebada de 6 carreras
+  - Cebada de 2 carreras
+  - Avena
+  - Centeno
+  - Triticale
+  - Maíz
+  - Sorgo
+  - OTROS CEREALES
+
+inputs:
+  # -------------------------------------------------------------------------------------------
+  # FIJOS: parámetros del escenario que aporta el usuario + datos históricos leídos del CSV.
+  # Definen el problema; NO los decide el optimizador.
+  # -------------------------------------------------------------------------------------------
+  fixed:
+    # --- parámetros de escenario (config JSON / CLI) ---
+    - name: reference_year
+      type: int
+      description: "Año de referencia; fija superficies históricas disponibles y la banda de reasignación. Si no existe en los datos, el código cae al último año disponible."
+      default: 2023
+    - name: climate_factor
+      type: float
+      unit: "-"
+      description: "Multiplicador sobre los rendimientos (aplicado a baseline y optimizador por igual)."
+      default: 1.0
+      range: [0.75, 1.15]
+    - name: expected_spring_rain_mm
+      type: float
+      unit: mm
+      description: "Lluvia de primavera esperada. Si < 100 mm activa estrés hídrico y usa HI reducido en secano (hi_secano_stress)."
+      default: 130.0
+    - name: mode
+      type: str
+      description: "Modo de optimización: 'minimize_residue' (Modo A) o 'maximize_benefit' (Modo B)."
+      default: minimize_residue
+      choices: [minimize_residue, maximize_benefit]
+    - name: min_benefit_eur
+      type: float
+      unit: EUR
+      description: "Beneficio mínimo exigido (restricción R6, Modo A). Si es null se deriva del baseline del año."
+      default: null
+    - name: min_benefit_pct_of_baseline
+      type: float
+      unit: "-"
+      description: "% del beneficio baseline a preservar cuando min_benefit_eur es null (1.0 = 100%)."
+      default: 1.0
+    - name: max_residue_t
+      type: float
+      unit: t
+      description: "Residuo máximo admisible (restricción R7, Modo B)."
+      default: null
+    - name: surface_tolerance_pct
+      type: float
+      unit: "%"
+      description: "Banda ±% sobre la superficie histórica de cada cultivo (restricción R4c; reasignación incremental realista)."
+      default: 25
+    - name: min_secano_use_pct
+      type: float
+      unit: "%"
+      description: "Suelo de secano mínimo a cultivar respecto al disponible (restricción R1b; evita abandono masivo)."
+      default: 95
+    - name: min_regadio_use_pct
+      type: float
+      unit: "%"
+      description: "Suelo de regadío mínimo a cultivar respecto al disponible (restricción R2b)."
+      default: 95
+    - name: crop_constraints.min_production_t
+      type: dict[str,float]
+      unit: t
+      description: "Producción mínima obligatoria por cultivo (restricción R3, opcional). Clave '_default' aplica fallback."
+      default: {}
+    - name: crop_constraints.min_surface_pct / max_surface_pct
+      type: dict[str,float]
+      unit: "%"
+      description: "Banda opcional de % de superficie total por cultivo (restricciones R4/R4b, anti-monocultivo/diversidad)."
+      default: {}
+    - name: price_overrides
+      type: dict[str,float]
+      unit: EUR/kg
+      description: "Sobrescribe el precio de grano de referencia por cultivo."
+      default: {}
+    - name: cost_overrides
+      type: dict[str,dict]
+      unit: EUR/ha
+      description: "Sobrescribe costes secano/regadío de referencia por cultivo."
+      default: {}
+    - name: total_secano_ha / total_regadio_ha
+      type: float
+      unit: ha
+      description: "Superficie total disponible (override). Si null se toma del año de referencia en el CSV."
+      default: null
+    # --- datos históricos leídos del CSV por año y cultivo (constantes del LP) ---
+    - name: Sup_Secano_ha
+      type: float
+      unit: ha
+      source: dataset
+      description: "Superficie histórica de secano por cultivo (fija la banda R4c y la tierra disponible)."
+    - name: Sup_Regadio_ha
+      type: float
+      unit: ha
+      source: dataset
+      description: "Superficie histórica de regadío por cultivo."
+    - name: Rend_Secano_kg_ha
+      type: float
+      unit: kg/ha
+      source: dataset
+      description: "Rendimiento secano; el optimizador usa la MEDIA sobre todo el histórico (no solo el año)."
+    - name: Rend_Regadio_kg_ha
+      type: float
+      unit: kg/ha
+      source: dataset
+      description: "Rendimiento regadío; media sobre todo el histórico."
+    - name: Prod_Paja_Cosechada_t
+      type: float
+      unit: t
+      source: dataset
+      description: "Paja retirada; se convierte en fracción de retirada por cultivo (compute_harvest_fraction) para que el residuo escale con la producción."
+    - name: Lluvia_Primavera_mm
+      type: float
+      unit: mm
+      source: dataset
+      description: "Lluvia de primavera del año; determina estrés hídrico si no se aporta expected_spring_rain_mm."
+
+  # -------------------------------------------------------------------------------------------
+  # DECISIÓN (variables de control que resuelve el LP): 2 por cultivo => 20 variables.
+  # -------------------------------------------------------------------------------------------
+  control:
+    - name: x_s
+      type: "float[10]"
+      unit: ha
+      per_crop: true
+      lower_bound: 0
+      description: "Superficie de secano asignada a cada cultivo (variable de decisión que el LP optimiza)."
+    - name: x_r
+      type: "float[10]"
+      unit: ha
+      per_crop: true
+      lower_bound: 0
+      description: "Superficie de regadío asignada a cada cultivo (variable de decisión que el LP optimiza)."
+
+  # Campos calculados internamente si no vienen informados
+  derived_if_missing:
+    Residuo_Disponible_Suelo_t: "calculado por HI a partir de Sup_*×Rend_* (no se aporta como entrada)"
+    Sequia_Primavera: "1 si Lluvia_Primavera_mm < 100, 0 en otro caso (activa hi_secano_stress)"
+    min_benefit_eur: "baseline.total_benefit_eur * min_benefit_pct_of_baseline si min_benefit_eur es null (Modo A)"
+    under_stress: "spring_rain_mm < 100"
+    harvest_fraction: "sum(Prod_Paja_Cosechada_t)/sum(straw_generated) por cultivo, recortado a [0, 0.95]"
+
+outputs:
+  # -----------------------------------------------------------------------------------------
+  # MODO optimize (minimize_residue / maximize_benefit): un plan de asignación óptimo.
+  # -----------------------------------------------------------------------------------------
+  optimize:
+    - name: crop_allocation
+      type: "dict[crop] -> {secano_ha, regadio_ha, production_t, residue_t, benefit_eur}"
+      description: "Plan de acción: superficie óptima por cultivo/régimen y sus magnitudes derivadas."
+    - name: total_production_t
+      type: float
+      unit: t
+      description: "Producción total de la solución óptima."
+    - name: total_residue_t
+      type: float
+      unit: t
+      description: "Residuo total disponible en suelo de la solución óptima (objetivo del Modo A)."
+    - name: total_benefit_eur
+      type: float
+      unit: EUR
+      description: "Beneficio total de la solución óptima (objetivo del Modo B)."
+    - name: residue_reduction_pct
+      type: float
+      unit: "%"
+      description: "Reducción de residuo vs baseline del año — métrica principal de impacto."
+    - name: benefit_change_pct
+      type: float
+      unit: "%"
+      description: "Variación de beneficio vs baseline (guardarraíl; debe ser ~0% / >=0)."
+    - name: production_change_pct
+      type: float
+      unit: "%"
+      description: "Variación de producción vs baseline."
+    - name: success_criteria.verdict
+      type: str
+      description: "PASADO/FALLADO según reducción de residuo >= objetivo y preservación de beneficio."
+    - name: solver_status
+      type: str
+      description: "Estado CBC: OPTIMAL | INFEASIBLE | UNBOUNDED | NOT_SOLVED."
+
+  # -----------------------------------------------------------------------------------------
+  # MODO pareto: frontera residuo vs beneficio (epsilon-constraint).
+  # -----------------------------------------------------------------------------------------
+  pareto:
+    - name: bounds
+      type: "{min_residue_t, benefit_at_min_res_eur, max_benefit_eur, residue_at_max_ben_t}"
+      description: "Extremos de la frontera (mínimo residuo y máximo beneficio alcanzables)."
+    - name: pareto_points
+      type: "list[{benefit_eur, residue_t, production_t}]"
+      description: "Puntos no dominados de la frontera (barrido de min_benefit minimizando residuo)."
+    - name: knee_point
+      type: "{benefit_eur, residue_t, production_t}"
+      description: "Mejor compromiso (máxima distancia a la recta que une los extremos)."
+
+# Restricciones DURAS del LP (memoria Tabla 9 / README Sección 4). No son outputs.
+# El plugin debe validarlas y lanzar excepción de dominio si el escenario es infactible
+# (status != OPTIMAL) o si un parámetro viola su dominio.
+constraints:
+  R1_total_secano: "sum(x_s[i]) <= total_secano_ha"
+  R2_total_regadio: "sum(x_r[i]) <= total_regadio_ha"
+  R1b_min_secano_use: "sum(x_s[i]) >= min_secano_use_pct/100 * total_secano_ha (default 95%)"
+  R2b_min_regadio_use: "sum(x_r[i]) >= min_regadio_use_pct/100 * total_regadio_ha (default 95%)"
+  R3_min_production: "prod[i] >= crop_constraints.min_production_t[i] (opcional)"
+  R4_max_surface_pct: "(x_s[i]+x_r[i]) <= max_surface_pct/100 * total_surface (opcional)"
+  R4b_min_surface_pct: "(x_s[i]+x_r[i]) >= min_surface_pct/100 * total_surface (opcional)"
+  R4c_historical_band: "hist[i]*(1-tol) <= x_s[i]+x_r[i] <= hist[i]*(1+tol), tol=surface_tolerance_pct/100 (default ±25%)"
+  R5_non_negativity: "x_s[i] >= 0, x_r[i] >= 0"
+  R6_min_benefit: "total_benefit >= min_benefit_eur (solo Modo A minimize_residue)"
+  R7_max_residue: "total_residue <= max_residue_t (solo Modo B maximize_benefit)"
+  infeasibility_handling: >
+    Combinaciones de restricciones demasiado estrictas (p. ej. min_benefit muy alto con banda
+    ±25%) devuelven status INFEASIBLE. El código imprime error y aborta sin generar plan; el
+    plugin debe traducirlo a una excepción de dominio, NO devolver un plan vacío.
+
+# Modelo económico determinista (crop_economics.json / harvest_index.json). Editable por usuario.
+economic_model:
+  prices_eur_kg:
+    Trigo duro: 0.22
+    Trigo semiduro y blando: 0.18
+    Cebada de 6 carreras: 0.14
+    Cebada de 2 carreras: 0.15
+    Avena: 0.16
+    Centeno: 0.17
+    Triticale: 0.15
+    Maíz: 0.16
+    Sorgo: 0.14
+    OTROS CEREALES: 0.15
+  cost_secano_eur_ha: {Trigo duro: 350, Trigo semiduro y blando: 320, Cebada de 6 carreras: 300, Cebada de 2 carreras: 310, Avena: 290, Centeno: 280, Triticale: 300, Maíz: 400, Sorgo: 350, OTROS CEREALES: 300}
+  cost_regadio_eur_ha: {Trigo duro: 800, Trigo semiduro y blando: 750, Cebada de 6 carreras: 700, Cebada de 2 carreras: 720, Avena: 680, Centeno: 650, Triticale: 700, Maíz: 900, Sorgo: 850, OTROS CEREALES: 700}
+  harvest_index:  # hi_secano / hi_secano_stress / hi_regadio
+    Trigo duro: [0.45, 0.35, 0.50]
+    Trigo semiduro y blando: [0.45, 0.35, 0.50]
+    Cebada de 6 carreras: [0.45, 0.35, 0.50]
+    Cebada de 2 carreras: [0.45, 0.35, 0.50]
+    Avena: [0.40, 0.30, 0.40]
+    Centeno: [0.40, 0.30, 0.40]
+    Triticale: [0.42, 0.32, 0.45]
+    Maíz: [0.50, 0.40, 0.50]
+    Sorgo: [0.38, 0.30, 0.42]
+    OTROS CEREALES: [0.45, 0.35, 0.50]
+  formulas:
+    production_t: "prod[i] = (x_s[i]*yield_s[i] + x_r[i]*yield_r[i]) * climate_factor / 1000"
+    residue_t: "residue[i] = (prod_s[i]*(1-HI_s)/HI_s + prod_r[i]*(1-HI_r)/HI_r) * (1 - harvest_fraction[i])"
+    benefit_eur: "benefit[i] = prod[i]*price[i]*1000 - cost_s[i]*x_s[i] - cost_r[i]*x_r[i]"
+
+training:
+  supported: false           # optimizador determinista: no se entrena, no hay target ni pesos
+  target_column: null        # no aplica: el residuo se calcula por fórmula agronómica, no se predice
+  required_columns: null
+  hyperparams: null          # no hay hiperparámetros de aprendizaje; solo parámetros de escenario (ver inputs.fixed)
+  metrics_returned: null
+  source: memoria_seccion_4_9  # "No hay modelo que entrenar, ni artefacto serializado que cargar, ni semilla aleatoria"
+
+# Criterios de éxito objetivos evaluados en cada ejecución (memoria Tabla 10). Referencia de
+# tolerancia, no caso 1:1. El resultado de 2023 es el KPI principal del proyecto.
+metrics_reported:
+  protocolo: "Sin split train/test (no es aprendizaje supervisado). Se compara solución óptima vs baseline histórico del año, calculado con las mismas fórmulas deterministas."
+  kpi_principal_residue_reduction_pct_2023: 31.18   # ~31% (memoria Tabla 12: -31.2%)
+  kpi_benefit_preservation_pct_2023: 100.0
+  kpi_production_change_pct_2023: -5.05
+  kpi_residuo_por_euro_baseline_t_eur: 0.0191
+  kpi_residuo_por_euro_optimo_t_eur: 0.0132
+  criterio_residue_reduction_target_pct: 5.0
+  criterio_benefit_preservation_target_pct: 100.0
+  solver_status_2023: OPTIMAL
+  solve_time_seconds_2023: 0.0138
+
+# =============================================================================================
+# GOLDEN CASES — todos de resultados YA auditados del propio código o de la memoria. Ninguno
+# inventado. Al ser LP determinista, la reproducción debe ser exacta (tolerancias muy pequeñas).
+# =============================================================================================
+golden_cases:
+  # --- Escenario de referencia 2023, Modo A, config por defecto ---
+  - id: caso_optimize_2023_ref
+    source: models/metrics/optimization_metrics.json
+    mode: optimize
+    input:
+      reference_year: 2023
+      mode: minimize_residue
+      climate_factor: 1.0
+      expected_spring_rain_mm: 130
+      surface_tolerance_pct: 25
+      min_secano_use_pct: 95
+      min_regadio_use_pct: 95
+      min_benefit_pct_of_baseline: 1.0
+      min_benefit_eur: null   # derivado del baseline (=340734197.13)
+    expected:
+      total_secano_ha: 1445804.0        # tierra disponible (constraint)
+      total_regadio_ha: 270818.0
+      baseline_total_residue_t: 6511018.9
+      baseline_total_benefit_eur: 340734197.13
+      total_production_t: 5808035.43
+      total_residue_t: 4481067.28
+      total_benefit_eur: 340734196.59
+      residue_reduction_pct: 31.18
+      benefit_change_eur: -0.54
+      production_change_pct: -5.05
+      solver_status: OPTIMAL
+      verdict: PASADO
+    tolerance_pct: 0.5
+    # Comprobación adicional de asignación por cultivo (memoria Tabla 14 / optimization_metrics.json)
+    expected_allocation_sample:
+      "Trigo semiduro y blando": {secano_ha: 736266.86, regadio_ha: 179614.10, residue_t: 2224614.67}
+      "Maíz": {secano_ha: 0.0, regadio_ha: 76446.75, residue_t: 875583.0}
+      "Cebada de 2 carreras": {secano_ha: 501134.25, regadio_ha: 0.0, residue_t: 1072234.22}
+
+  # --- Robustez multiaño (memoria Tabla 16) — misma config por defecto, distinto reference_year ---
+  - id: caso_optimize_2021
+    source: memoria_tabla_16_multiaño
+    mode: optimize
+    input: {reference_year: 2021, mode: minimize_residue, surface_tolerance_pct: 25, min_secano_use_pct: 95, min_regadio_use_pct: 95, min_benefit_pct_of_baseline: 1.0}
+    expected: {residue_reduction_pct: -7.4, benefit_preservation_pct: 100.0, sequia_primavera: false, verdict: PASADO}
+    tolerance_pct: 1.0   # la memoria reporta -7.4% (nota: signo negativo = reducción; ver known_issues)
+
+  - id: caso_optimize_2022
+    source: memoria_tabla_16_multiaño
+    mode: optimize
+    input: {reference_year: 2022, mode: minimize_residue, surface_tolerance_pct: 25, min_secano_use_pct: 95, min_regadio_use_pct: 95, min_benefit_pct_of_baseline: 1.0}
+    expected: {residue_reduction_pct: -7.3, benefit_preservation_pct: 100.0, sequia_primavera: false, verdict: PASADO}
+    tolerance_pct: 1.0
+
+  # --- Extremos de la frontera de Pareto 2023 (pareto_metrics.json -> bounds) ---
+  - id: caso_pareto_bound_min_residue
+    source: models/metrics/pareto_metrics.json (bounds)
+    mode: optimize
+    input: {reference_year: 2023, mode: minimize_residue, min_benefit_eur: 0}
+    expected: {total_residue_t: 3679010.51, total_benefit_eur: 172962089.14}
+    tolerance_pct: 0.5
+
+  - id: caso_pareto_bound_max_benefit
+    source: models/metrics/pareto_metrics.json (bounds)
+    mode: optimize
+    input: {reference_year: 2023, mode: maximize_benefit, max_residue_t: null}
+    expected: {total_benefit_eur: 397321163.38, total_residue_t: 5094873.39}
+    tolerance_pct: 0.5
+
+  # --- Puntos no dominados de la frontera de Pareto 2023 (pareto_metrics.json -> pareto_points) ---
+  # Config: pareto, reference_year=2023, num_points=20, benefit_range pct_of_max [0.50, 1.00],
+  # surface_tolerance_pct=25, land_use 95%. Valores en MILLONES (M).
+  - id: caso_pareto_p01
+    source: models/metrics/pareto_metrics.json (pareto_points[0])
+    mode: pareto
+    input: {reference_year: 2023, num_points: 20, benefit_range_pct_of_max: [0.50, 1.00], surface_tolerance_pct: 25}
+    expected: {point_index: 0, benefit_eur_M: 198.66, residue_t_M: 3.71, production_t_M: 4.99}
+    tolerance_pct: 0.5
+  - id: caso_pareto_p03
+    source: models/metrics/pareto_metrics.json (pareto_points[2])
+    mode: pareto
+    input: {reference_year: 2023, num_points: 20, benefit_range_pct_of_max: [0.50, 1.00], surface_tolerance_pct: 25}
+    expected: {point_index: 2, benefit_eur_M: 219.57, residue_t_M: 3.73, production_t_M: 5.07}
+    tolerance_pct: 0.5
+  - id: caso_pareto_knee
+    source: models/metrics/pareto_metrics.json (knee_point, pareto_points[5])
+    mode: pareto
+    input: {reference_year: 2023, num_points: 20, benefit_range_pct_of_max: [0.50, 1.00], surface_tolerance_pct: 25}
+    expected: {point_index: 5, is_knee: true, benefit_eur_M: 250.94, residue_t_M: 3.78, production_t_M: 5.18}
+    tolerance_pct: 0.5
+  - id: caso_pareto_p09
+    source: models/metrics/pareto_metrics.json (pareto_points[8])
+    mode: pareto
+    input: {reference_year: 2023, num_points: 20, benefit_range_pct_of_max: [0.50, 1.00], surface_tolerance_pct: 25}
+    expected: {point_index: 8, benefit_eur_M: 282.31, residue_t_M: 4.02, production_t_M: 5.39}
+    tolerance_pct: 0.5
+  - id: caso_pareto_p12
+    source: models/metrics/pareto_metrics.json (pareto_points[11])
+    mode: pareto
+    input: {reference_year: 2023, num_points: 20, benefit_range_pct_of_max: [0.50, 1.00], surface_tolerance_pct: 25}
+    expected: {point_index: 11, benefit_eur_M: 313.67, residue_t_M: 4.26, production_t_M: 5.61}
+    tolerance_pct: 0.5
+  - id: caso_pareto_p15
+    source: models/metrics/pareto_metrics.json (pareto_points[14])
+    mode: pareto
+    input: {reference_year: 2023, num_points: 20, benefit_range_pct_of_max: [0.50, 1.00], surface_tolerance_pct: 25}
+    expected: {point_index: 14, benefit_eur_M: 345.04, residue_t_M: 4.52, production_t_M: 5.86}
+    tolerance_pct: 0.5
+  - id: caso_pareto_p19
+    source: models/metrics/pareto_metrics.json (pareto_points[18])
+    mode: pareto
+    input: {reference_year: 2023, num_points: 20, benefit_range_pct_of_max: [0.50, 1.00], surface_tolerance_pct: 25}
+    expected: {point_index: 18, benefit_eur_M: 386.87, residue_t_M: 4.96, production_t_M: 6.26}
+    tolerance_pct: 0.5
+
+known_issues:
+  - "IDENTIDAD DEL MODELO: el título/carpeta ('a31-cnp-cereals-neuroevolutivo', 'técnicas
+     neuroevolutivas') es herencia de la v1.x. El modelo v2.0 REALMENTE entregado es un optimizador
+     de Programación Lineal determinista (PuLP/CBC). NO hay neuroevolución, NO hay algoritmo
+     genético, NO hay red neuronal surrogate. La memoria (Sección 5.3 y registro de cambios v2.0)
+     lo justifica explícitamente: el problema es lineal y convexo, por lo que la LP da el óptimo
+     global exacto y determinista, y el surrogate + GA de la v1.x se retiran por sobreingeniería."
+  - "REEMPLAZA AL PLUGIN INTEGRADO: el plugin actual app/plugins/ml31_cereals_residue_optimizer/
+     corresponde al modelo surrogate v1.x (ANN + GA) que la memoria v2.0 ABANDONÓ. La integración
+     debe sustituir ese plugin por el optimizador LP v2.0 descrito aquí, no ampliarlo."
+  - "SIN ARTEFACTOS SERIALIZADOS: no hay .pkl/.pt/pesos. El 'modelo' es el solver LP + JSON de
+     economía + configs. training.supported=false. mlflow_utils.py será obligatorio igualmente
+     (regla del repo) aunque no haya reentrenamiento por usuario."
+  - "DETERMINISMO TOTAL: sin semillas aleatorias; la misma config produce el mismo resultado hasta
+     el último decimal. Golden cases con tolerancia muy pequeña (0.5%). El redondeo interno del
+     código es a 2 decimales en la solución."
+  - "SIGNO DE residue_reduction_pct: el código calcula res_red_pct = (baseline - optimizado)/baseline*100,
+     que sale POSITIVO cuando hay reducción (31.18% en 2023). La memoria (Tabla 12/16) reporta el
+     mismo dato con signo negativo (-31.2%, -7.4%, -7.3%) leído como 'variación'. Es el mismo
+     resultado con convención de signo distinta; alinear la convención al integrar y verificar."
+  - "DEPENDENCIA DE SISTEMA pdftotext (poppler-utils): solo necesaria para RECONSTRUIR el CSV desde
+     los PDFs de data/raw/. Con el CSV procesado presente (data/processed/) no se usa. En el entorno
+     local WSL puede no estar disponible; incluir el CSV procesado como fixture evita el problema."
+  - "DATASET: sin año 2020 (PDF corrupto). Prod_Grano_t tiene ceros/huecos 2011-2015 pero el
+     optimizador NO la usa (recalcula producción con Sup_*×Rend_*). reference_year inexistente en
+     los datos cae silenciosamente al último año disponible (posible fuente de confusión al verificar)."
+  - "requirements.txt en ASCII/UTF-8 correcto (verificado con `file`): NO presenta el problema
+     UTF-16LE de otros modelos. PuLP==3.3.2 trae CBC embebido."
+  - "El estudio de Pareto configuró num_points=20 pero produjo 19 puntos no dominados (el punto al
+     100% del beneficio máximo resulta infactible/dominado bajo la banda ±25% y el mínimo de tierra).
+     Los golden cases de Pareto usan índices 0-18 sobre esos 19 puntos."
