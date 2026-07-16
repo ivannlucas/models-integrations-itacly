@@ -30,6 +30,7 @@ from app.plugins.ml2_fungal_cnn_disease_detection.model_loader import load_model
 from app.plugins.ml2_fungal_cnn_disease_detection.postprocessing import (
     build_batch_response,
     build_inline_response,
+    compute_and_encode_cam,
 )
 from app.plugins.ml2_fungal_cnn_disease_detection.predict_dto import (
     PredictBatchResponse,
@@ -37,7 +38,7 @@ from app.plugins.ml2_fungal_cnn_disease_detection.predict_dto import (
 )
 from app.plugins.ml2_fungal_cnn_disease_detection.preprocessing import (
     image_base64_to_tensor,
-    image_path_to_tensor,
+    image_path_to_tensor_and_image,
 )
 
 logger = logging.getLogger(__name__)
@@ -128,15 +129,20 @@ class Ml2FungalCnnDiseaseDetectionPlugin(ModelPluginPort):
                 model.eval()
                 for image_path in image_paths:
                     try:
-                        tensor = image_path_to_tensor(image_path, image_size=image_size).to(device)
+                        tensor, image = image_path_to_tensor_and_image(image_path, image_size=image_size)
+                        tensor = tensor.to(device)
                         with torch.no_grad():
-                            logits = model(tensor)
+                            logits, feature_map = model(tensor, return_features=True)
                         result = build_inline_response(
                             logits,
                             classes=bundle["classes"],
                             model_id=bundle["model_id"],
                         )
                         result["filename"] = image_path.name
+                        class_idx = bundle["classes"].index(result["prediction"])
+                        result["heatmap_url"] = compute_and_encode_cam(
+                            feature_map, model.classifier.weight, class_idx, image
+                        )
                         predictions.append(result)
                     except InvalidImageError as exc:
                         predictions.append({"filename": image_path.name, "error": str(exc)})
@@ -225,6 +231,11 @@ class Ml2FungalCnnDiseaseDetectionPlugin(ModelPluginPort):
                     name="probabilities",
                     type="dict",
                     description="Probabilidad softmax por clase",
+                ),
+                OutputField(
+                    name="heatmap_url",
+                    type="str",
+                    description="Mapa de activación de clase (CAM) superpuesto en base64 JPEG data URI (solo en predict_batch)",
                 ),
             ],
             metrics={},

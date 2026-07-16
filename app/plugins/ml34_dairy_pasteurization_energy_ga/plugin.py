@@ -28,6 +28,7 @@ from app.domain.services.exceptions import (
     ThermalSafetyViolationError,
 )
 from app.domain.services.mlflow_tracker import BaseMLflowTracker
+from app.infrastructure.artifact_store import local_file_path
 from app.plugins.ml34_dairy_pasteurization_energy_ga.constants import (
     FEATURES,
     FRAMEWORK,
@@ -203,7 +204,8 @@ class Ml34DairyPasteurizationEnergyGaPlugin(ModelPluginPort):
                 self._model, self._scaler_X, self._scaler_y, self._config, user_temp_dir = loaded
         try:
             self._require_loaded()
-            df = pd.read_csv(data_path)
+            with local_file_path(data_path) as local_path:
+                df = pd.read_csv(local_path)
             missing = [c for c in FEATURES if c not in df.columns]
             if missing:
                 raise ValueError(f"CSV falta columnas requeridas: {missing}")
@@ -255,7 +257,8 @@ class Ml34DairyPasteurizationEnergyGaPlugin(ModelPluginPort):
         else:
             tracker = None
 
-        df = pd.read_csv(data_path)
+        with local_file_path(data_path) as local_path:
+            df = pd.read_csv(local_path)
         missing = [c for c in FEATURES + TARGETS if c not in df.columns]
         if missing:
             raise ValueError(f"CSV falta columnas requeridas: {missing}")

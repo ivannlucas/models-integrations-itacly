@@ -70,12 +70,21 @@ class LeafCNN(nn.Module):
 
         self.classifier = nn.Linear(128, num_classes)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Run the forward pass and return per-class logits of shape ``(B, num_classes)``."""
-        x = self.features(x)
-        x = F.adaptive_avg_pool2d(x, 1)  # Global Average Pooling → (B, 128, 1, 1)
-        x = x.view(x.size(0), -1)        # (B, 128)
-        return self.classifier(x)
+    def forward(self, x: torch.Tensor, return_features: bool = False):
+        """Run the forward pass and return per-class logits of shape ``(B, num_classes)``.
+
+        When ``return_features`` is True, also returns the last conv block's raw feature
+        map ``(B, 128, H, W)`` (before pooling) so a Class Activation Map can be computed
+        from it — the classifier being a single Linear layer applied right after global
+        average pooling makes CAM exact here (Grad-CAM reduces to CAM for this architecture).
+        """
+        feat = self.features(x)
+        pooled = F.adaptive_avg_pool2d(feat, 1)  # Global Average Pooling → (B, 128, 1, 1)
+        pooled = pooled.view(pooled.size(0), -1)  # (B, 128)
+        logits = self.classifier(pooled)
+        if return_features:
+            return logits, feat
+        return logits
 
 
 def load_model_bundle() -> dict:
