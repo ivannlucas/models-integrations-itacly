@@ -51,3 +51,6 @@ mlflow>=2.20.0
 
 # Added for ml34 (dairy pasteurization energy) — single-objective GA optimizer
 deap==1.4.3
+
+# Added for ml31 (cereal residue optimizer) — Linear Programming
+pulp>=2.7.0

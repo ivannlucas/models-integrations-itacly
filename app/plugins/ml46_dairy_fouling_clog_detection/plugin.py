@@ -23,6 +23,7 @@ from app.application.dto.stats_dto import InputField, OutputField, RuntimeStats,
 from app.domain.ports.model_plugin_port import ModelPluginPort
 from app.domain.services.exceptions import InsufficientTelemetryHistoryError, ModelNotLoadedError
 from app.domain.services.mlflow_tracker import BaseMLflowTracker
+from app.infrastructure.artifact_store import local_file_path
 from app.plugins.ml46_dairy_fouling_clog_detection import model_loader
 from app.plugins.ml46_dairy_fouling_clog_detection import preprocessing
 from app.plugins.ml46_dairy_fouling_clog_detection import postprocessing
@@ -84,6 +85,45 @@ def _safe_metric(value: Any) -> float | None:
     return fv if math.isfinite(fv) else None
 
 
+def _raw_xai_columns() -> list[str]:
+    """Raw telemetry columns the explicabilidad service re-derives the 76 no_clock features
+    from (see dairy_fouling_clog/features.py + common.py in that repo). Excludes the
+    clock-source columns (batch_elapsed_min, time_since_last_*) — the served no_clock model
+    was trained without them, so they aren't part of what's being explained."""
+    return [c for c in RAW_FIXED_COLUMNS if c not in ("timestamp", "asset_id")] + RAW_RECOMMENDED_COLUMNS + RAW_OPTIONAL_COLUMNS
+
+
+def _attach_xai_feature_values(explained: pd.DataFrame, raw_df: pd.DataFrame) -> pd.DataFrame:
+    """Join each scored window back to its raw telemetry row (by asset_id + timestamp) and
+    attach the raw feature values as an "xai_feature_values" column, so batch predictions can
+    be sent to SHAP with the same real inputs the model saw (not the partial ~14-column subset
+    that survives into AssetSequence.meta)."""
+    explained = explained.copy()
+    cols = [c for c in _raw_xai_columns() if c in raw_df.columns]
+    if not cols:
+        explained["xai_feature_values"] = None
+        return explained
+
+    lookup = raw_df[["asset_id", "timestamp"] + cols].copy()
+    lookup["asset_id"] = lookup["asset_id"].astype(str)
+    lookup["timestamp"] = pd.to_datetime(lookup["timestamp"], utc=True, errors="coerce")
+    lookup = lookup.dropna(subset=["timestamp"]).drop_duplicates(subset=["asset_id", "timestamp"], keep="last")
+
+    merged = explained[["asset_id", "timestamp"]].merge(lookup, on=["asset_id", "timestamp"], how="left")
+
+    def _row_values(row: pd.Series) -> dict[str, Any] | None:
+        xai: dict[str, Any] = {}
+        for c in cols:
+            val = row.get(c)
+            if val is None or pd.isna(val):
+                continue
+            xai[c] = _clean_scalar(val)
+        return xai or None
+
+    explained["xai_feature_values"] = merged[cols].apply(_row_values, axis=1)
+    return explained
+
+
 class Ml46DairyFoulingClogDetectionPlugin(ModelPluginPort):
     """Causal TCN (no_clock scenario) over 120-minute telemetry windows per asset/cycle."""
 
@@ -126,7 +166,8 @@ class Ml46DairyFoulingClogDetectionPlugin(ModelPluginPort):
                 self._model, self._train_cfg, self._feature_artifacts, self._policy, user_tmp = loaded
         try:
             self._require_loaded()
-            raw_df = pd.read_csv(data_path)
+            with local_file_path(data_path) as local_path:
+                raw_df = pd.read_csv(local_path)
             sequences, feature_indices, asset_ids = preprocessing.prepare_sequences(raw_df, self._train_cfg, self._feature_artifacts)
             pred_df = postprocessing.run_inference(
                 self._model, sequences, feature_indices, asset_ids, self._train_cfg,
@@ -140,6 +181,7 @@ class Ml46DairyFoulingClogDetectionPlugin(ModelPluginPort):
             explained, alerts = postprocessing.explain_and_alert(
                 pred_df, self._policy, self._feature_artifacts.predicate_thresholds, self._train_cfg,
             )
+            explained = _attach_xai_feature_values(explained, raw_df)
             self._record_prediction()
             logger.info("predict_batch done — %d windows scored, %d alert episodes, mlflow=%s",
                         len(explained), len(alerts), bool(mlflow_run_id))
@@ -257,7 +299,8 @@ class Ml46DairyFoulingClogDetectionPlugin(ModelPluginPort):
         from-scratch dual-scenario asset-split retrain.
         """
         self._require_loaded()
-        raw_df = pd.read_csv(data_path)
+        with local_file_path(data_path) as local_path:
+            raw_df = pd.read_csv(local_path)
         missing = [c for c in TRAIN_HARD_REQUIRED_COLUMNS if c not in raw_df.columns]
         if missing:
             raise ValueError(f"CSV falta columnas requeridas: {missing}")

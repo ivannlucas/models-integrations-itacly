@@ -66,6 +66,8 @@ def yolo_results_to_dict(
         for d in detections:
             conf_sums[d["class"]] += d["confidence"]
         prediction = max(species_counts, key=lambda k: (species_counts[k], conf_sums[k]))
+        # "confidence" = highest single-detection confidence among boxes of the predicted
+        # class only (not the max/mean/min across all detected classes in the image).
         confidence = round(max(d["confidence"] for d in detections if d["class"] == prediction), 4)
 
     return {

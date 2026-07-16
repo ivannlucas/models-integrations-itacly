@@ -27,7 +27,11 @@ from app.domain.services.exceptions import InvalidImageError, ModelNotLoadedErro
 from app.domain.services.mlflow_tracker import BaseMLflowTracker
 from app.infrastructure.artifact_store import ArtifactStore
 from app.plugins.modelo10_lacteo.model_loader import load_detector_and_classifier, safe_device
-from app.plugins.modelo10_lacteo.postprocessing import build_inline_result, classify_crop
+from app.plugins.modelo10_lacteo.postprocessing import (
+    build_inline_result,
+    classify_crop,
+    render_annotated_image,
+)
 from app.plugins.modelo10_lacteo.predict_dto import (
     PredictBatchResponse,
     PredictInlineResponse,
@@ -287,6 +291,7 @@ class Modelo10LacteoPlugin(ModelPluginPort):
                     detections = self._run_pipeline(image_pil, DEFAULT_DET_CONF, DEFAULT_CLS_CONF, classifier=user_clf, class_names=user_cls_names)
                     row = build_inline_result(self.MODEL_ID, detections)
                     row.pop("model_id", None)
+                    row["annotated_image"] = render_annotated_image(image_pil, detections)
                     predictions.append({"filename": img_path.name, **row})
                 except Exception as exc:
                     logger.warning("Error procesando %s: %s", img_path.name, exc)

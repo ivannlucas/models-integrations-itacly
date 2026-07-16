@@ -39,6 +39,14 @@ logger = logging.getLogger(__name__)
 MODEL_NAME = "wine-sulphite"
 MODEL_VERSION = "1.2.0"
 
+# Wine analysis inputs accepted from the inline request, in snake_case (matches
+# PredictInlineRequest field names) — echoed back as xai_feature_values.
+WINE_ANALYSIS_KEYS = [
+    "fixed_acidity", "volatile_acidity", "citric_acid", "residual_sugar",
+    "chlorides", "density", "pH", "sulphates", "alcohol",
+    "free_sulfur_dioxide", "total_sulfur_dioxide",
+]
+
 
 class WineSulphitePlugin(ModelPluginPort):
     """Plugin that recommends optimal free SO2 doses for wine preservation."""
@@ -181,18 +189,36 @@ class WineSulphitePlugin(ModelPluginPort):
                 try:
                     res = self._run_inference(row_dict)
                     i = res["rec_idx"]
-                    predictions.append(
-                        {
-                            "row": int(idx),
-                            "intervention_recommended": res["intervention"],
-                            "recommended_free_so2": float(res["valid_free"][i]),
-                            "recommended_bound_so2": float(res["valid_bounds"][i]),
-                            "recommended_total_so2": float(res["valid_totals"][i]),
-                            "recommended_molecular_so2": float(res["valid_moleculars"][i]),
-                            "predicted_quality": float(res["valid_qualities"][i]),
-                            "recommendation_reason": res["reason"],
-                        }
-                    )
+                    prediction_row = {
+                        "row": int(idx),
+                        "intervention_recommended": res["intervention"],
+                        "recommended_free_so2": float(res["valid_free"][i]),
+                        "recommended_bound_so2": float(res["valid_bounds"][i]),
+                        "recommended_total_so2": float(res["valid_totals"][i]),
+                        "recommended_molecular_so2": float(res["valid_moleculars"][i]),
+                        "predicted_quality": float(res["valid_qualities"][i]),
+                        "recommendation_reason": res["reason"],
+                        "xai_feature_values": {
+                            k: float(row_dict[k]) for k in WINE_ANALYSIS_KEYS if k in row_dict
+                        },
+                    }
+                    # Full dose-simulation path, first row only — attaching it to every row
+                    # would multiply the response size by up to ~40 points/row for large
+                    # batches; the platform shows it as a representative sample, same as it
+                    # already does for XAI (see buildXaiContextFromBatchTabular using firstRow).
+                    if idx == 0:
+                        prediction_row["simulation_trajectory"] = [
+                            {
+                                "free_so2": float(res["valid_free"][j]),
+                                "bound_so2": float(res["valid_bounds"][j]),
+                                "total_so2": float(res["valid_totals"][j]),
+                                "molecular_so2": float(res["valid_moleculars"][j]),
+                                "predicted_quality": float(res["valid_qualities"][j]),
+                                "is_recommended": j == i,
+                            }
+                            for j in range(len(res["valid_free"]))
+                        ]
+                    predictions.append(prediction_row)
                 except Exception as exc:
                     predictions.append({"row": int(idx), "error": str(exc)})
 
@@ -253,6 +279,28 @@ class WineSulphitePlugin(ModelPluginPort):
                 bool(mlflow_run_id),
             )
 
+            # Echo the wine analysis inputs actually used for this prediction, so the
+            # platform's XAI panel can show them next to the SHAP contributions instead
+            # of only the recommendation output fields (see WINE_ANALYSIS_KEYS above).
+            xai_feature_values = {
+                k: float(features[k]) for k in WINE_ANALYSIS_KEYS if k in features
+            }
+
+            # Full dose-simulation path (every candidate free SO2 dose evaluated, not just
+            # the recommended point) — computed by _run_inference above but previously
+            # discarded here. Exposed so the platform can plot quality/total SO2 vs dose.
+            simulation_trajectory = [
+                {
+                    "free_so2": float(res["valid_free"][j]),
+                    "bound_so2": float(res["valid_bounds"][j]),
+                    "total_so2": float(res["valid_totals"][j]),
+                    "molecular_so2": float(res["valid_moleculars"][j]),
+                    "predicted_quality": float(res["valid_qualities"][j]),
+                    "is_recommended": j == i,
+                }
+                for j in range(len(res["valid_free"]))
+            ]
+
             return PredictInlineResponse(
                 model_id=MODEL_NAME,
                 threshold=threshold,
@@ -269,6 +317,8 @@ class WineSulphitePlugin(ModelPluginPort):
                 intervention_recommended=res["intervention"],
                 mae_quality=res["mae_quality"],
                 mae_bound=res["mae_bound"],
+                xai_feature_values=xai_feature_values,
+                simulation_trajectory=simulation_trajectory,
             )
         finally:
             if user_temp_dir:

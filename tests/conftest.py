@@ -154,6 +154,12 @@ from app.plugins.ml46_dairy_fouling_clog_detection.train_dto import (
     TrainRequest as Ml46Dairy_TrainReq,
     TrainResponse as Ml46DairyTrainResp,
 )
+from app.plugins.m47_dnsl_fallas_maquinaria_pasteurizado.predict_dto import (
+    PredictBatchResponse as M47BatchResp,
+    PredictInlineResponse as M47InlineResp,
+    PredictRequest as M47_Request,
+    PredictResponse as M47_Response,
+)
 from app.plugins.ml40_meat_refrigeration_aeration_fault_diagnosis.predict_dto import (
     PredictBatchResponse as Ml40MeatBatchResp,
     PredictInlineResponse as Ml40MeatInlineResp,
@@ -786,6 +792,46 @@ def _ml46_dairy_train(plugin: FakePlugin, *, data_path: str) -> Ml46DairyTrainRe
     )
 
 
+def _m47_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> M47InlineResp:
+    """Fake inline response for the m47 DNSL model."""
+    return M47InlineResp(
+        model_id="m47-dnsl-fallas-maquinaria-pasteurizado",
+        Enfriador_Fouling=0,
+        Valvula_Switch=0,
+        Bomba_Leakage=0,
+        Acumulador_Gas=0,
+        Confianza_Fouling=0.99,
+        Confianza_Valvula=0.98,
+        Confianza_Bomba=0.97,
+        Confianza_Acumulador=0.96,
+        model_name="m47-dnsl-fallas-maquinaria-pasteurizado",
+    )
+
+
+def _m47_batch(plugin: FakePlugin, *, data_path: str) -> M47BatchResp:
+    """Fake batch response for the m47 DNSL model."""
+    return M47BatchResp(
+        model_id="m47-dnsl-fallas-maquinaria-pasteurizado",
+        predictions=[{
+            "Cycle_ID": 1,
+            "Enfriador_Fouling": 0,
+            "Válvula_Switch": 0,
+            "Bomba_Leakage": 0,
+            "Acumulador_Gas": 0,
+            "Enfriador_Fouling_Texto": "SANO",
+            "Válvula_Switch_Texto": "SANO",
+            "Bomba_Leakage_Texto": "SANO",
+            "Acumulador_Gas_Texto": "SANO",
+            "Confianza_Fouling": 0.99,
+            "Confianza_Valvula": 0.98,
+            "Confianza_Bomba": 0.97,
+            "Confianza_Acumulador": 0.96,
+            "model_name": "m47-dnsl-fallas-maquinaria-pasteurizado",
+        }],
+        output_path=None,
+    )
+
+
 def _ml40_meat_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> Ml40MeatInlineResp:
     """Fake inline prediction response for the ml40 refrigeration/aeration fault diagnosis plugin."""
     return Ml40MeatInlineResp(
@@ -836,6 +882,7 @@ def _ml40_meat_train(plugin: FakePlugin, *, data_path: str) -> Ml40MeatTrainResp
 
 FAKE_FACTORIES: dict[str, tuple[Callable, Callable]] = {
     "ml46-dairy-fouling-clog-detection": (_ml46_dairy_inline, _ml46_dairy_batch),
+    "m47-dnsl-fallas-maquinaria-pasteurizado": (_m47_inline, _m47_batch),
     "ml40-meat-refrigeration-aeration-fault-diagnosis": (_ml40_meat_inline, _ml40_meat_batch),
     "ml35-dairy-ann-cleaning-cost": (_ml35_dairy_inline, _ml35_dairy_batch),
     "ml34-dairy-pasteurization-energy-ga": (_ml34_dairy_inline, _ml34_dairy_batch),
@@ -1003,6 +1050,15 @@ TEST_REGISTRY: list[ModelEntry] = [
         extra_predict_exceptions=(InsufficientTelemetryHistoryError,),
         train_request_type=Ml46Dairy_TrainReq,
         train_response_type=Ml46DairyTrainResp,
+    ),
+    ModelEntry(
+        model_id="m47-dnsl-fallas-maquinaria-pasteurizado",
+        prefix="/models/m47-dnsl-fallas-maquinaria-pasteurizado",
+        version="1.0.0",
+        plugin_class=FakePlugin,
+        predict_request_type=M47_Request,
+        predict_response_type=M47_Response,
+        extra_predict_exceptions=(),
     ),
     ModelEntry(
         model_id="ml40-meat-refrigeration-aeration-fault-diagnosis",

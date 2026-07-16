@@ -21,6 +21,7 @@ from app.domain.services.exceptions import (
     ModelNotLoadedError,
     TrainingNotSupportedError,
 )
+from app.infrastructure.artifact_store import local_file_path
 from app.plugins.ml4_lactic_cnn_thermal_early_disease_detection.constants import (
     BACKBONE,
     DROPOUT,
@@ -109,39 +110,48 @@ class Ml4LacticCnnThermalEarlyDiseaseDetectionPlugin(ModelPluginPort):
         )
 
     def predict_batch(self, *, data_path: str, mlflow_run_id: str = "") -> PredictBatchResponse:
-        """Classify every thermal image in a directory or ZIP."""
+        """Classify every thermal image in a directory or ZIP (local path or ``s3://`` URI)."""
         _ = mlflow_run_id
         self._require_loaded()
         temp_dir: str | None = None
-        image_dir = data_path
-        if data_path.lower().endswith(".zip"):
-            temp_dir = tempfile.mkdtemp(prefix="ml4_thermal_batch_")
-            with zipfile.ZipFile(data_path, "r") as zf:
-                zf.extractall(temp_dir)
-            entries = os.listdir(temp_dir)
-            if len(entries) == 1 and os.path.isdir(os.path.join(temp_dir, entries[0])):
-                image_dir = os.path.join(temp_dir, entries[0])
-            else:
-                image_dir = temp_dir
-
         predictions: list[dict] = []
-        try:
-            image_files = sorted(
-                (root, fname)
-                for root, _, files in os.walk(image_dir)
-                for fname in files
-                if os.path.splitext(fname)[1].lower() in IMAGE_EXTENSIONS
-            )
-            for root, fname in image_files:
-                try:
-                    with open(os.path.join(root, fname), "rb") as fh:
-                        result = self._infer_image(fh.read())
-                    predictions.append({"filename": fname, **result})
-                except Exception as exc:
-                    predictions.append({"filename": fname, "error": str(exc)})
-        finally:
-            if temp_dir:
-                shutil.rmtree(temp_dir, ignore_errors=True)
+        with local_file_path(data_path) as local_data_path:
+            image_dir = local_data_path
+            if local_data_path.lower().endswith(".zip"):
+                temp_dir = tempfile.mkdtemp(prefix="ml4_thermal_batch_")
+                with zipfile.ZipFile(local_data_path, "r") as zf:
+                    zf.extractall(temp_dir)
+                entries = os.listdir(temp_dir)
+                if len(entries) == 1 and os.path.isdir(os.path.join(temp_dir, entries[0])):
+                    image_dir = os.path.join(temp_dir, entries[0])
+                else:
+                    image_dir = temp_dir
+
+            try:
+                image_files = sorted(
+                    (root, fname)
+                    for root, _, files in os.walk(image_dir)
+                    for fname in files
+                    if os.path.splitext(fname)[1].lower() in IMAGE_EXTENSIONS
+                )
+                for idx, (root, fname) in enumerate(image_files):
+                    try:
+                        with open(os.path.join(root, fname), "rb") as fh:
+                            image_bytes = fh.read()
+                        result = self._infer_image(image_bytes)
+                        row = {"filename": fname, **result}
+                        if idx == 0:
+                            # Echo the first image back so the platform can request a real
+                            # GradCAM explanation for the batch (mirrors the inline flow,
+                            # which has a single image_path to read from — batch has none
+                            # once this temp dir is removed below).
+                            row["image_base64"] = base64.b64encode(image_bytes).decode("ascii")
+                        predictions.append(row)
+                    except Exception as exc:
+                        predictions.append({"filename": fname, "error": str(exc)})
+            finally:
+                if temp_dir:
+                    shutil.rmtree(temp_dir, ignore_errors=True)
 
         self._record()
         return PredictBatchResponse(model_id=MODEL_ID, predictions=predictions, output_path=None)

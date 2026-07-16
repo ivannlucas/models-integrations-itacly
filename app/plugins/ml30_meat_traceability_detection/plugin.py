@@ -7,10 +7,13 @@ import shutil
 import time
 from datetime import datetime, timezone
 
+import pandas as pd
+
 from app.application.dto.stats_dto import InputField, OutputField, RuntimeStats, StatsResponse
 from app.domain.ports.model_plugin_port import ModelPluginPort
 from app.domain.services.exceptions import ModelNotLoadedError
 from app.domain.services.mlflow_tracker import BaseMLflowTracker
+from app.infrastructure.artifact_store import local_file_path
 from app.plugins.ml30_meat_traceability_detection.constants import (
     DEFAULT_THRESHOLD,
     FEATURE_COLUMNS,
@@ -40,6 +43,19 @@ _ID_COLUMNS = ("row_id", "event_uid")
 def _to_native(value):
     """Convert a numpy scalar to a native Python type so pydantic can serialize it."""
     return value.item() if hasattr(value, "item") else value
+
+
+def _xai_values_from_row(row, feature_columns: list[str]) -> dict[str, float] | None:
+    """Build xai_feature_values from a features dict (inline) or DataFrame row (batch)."""
+    xai: dict[str, float] = {}
+    for col in feature_columns:
+        val = row.get(col)
+        if val is not None and pd.notna(val):
+            try:
+                xai[col] = float(val)
+            except (TypeError, ValueError):
+                pass
+    return xai or None
 
 
 class Ml30MeatTraceabilityDetectionPlugin(ModelPluginPort):
@@ -99,15 +115,6 @@ class Ml30MeatTraceabilityDetectionPlugin(ModelPluginPort):
             pred = int(score >= thr)
             confidence = score if pred == 1 else 1.0 - score
 
-            xai: dict[str, float] = {}
-            for col in self._feature_columns:
-                val = features.get(col)
-                if val is not None:
-                    try:
-                        xai[col] = float(val)
-                    except (TypeError, ValueError):
-                        pass
-
             self._record()
             return PredictInlineResponse(
                 model_id=MODEL_ID,
@@ -115,7 +122,7 @@ class Ml30MeatTraceabilityDetectionPlugin(ModelPluginPort):
                 pred_score=score,
                 confidence=confidence,
                 model_name=MODEL_ID,
-                xai_feature_values=xai or None,
+                xai_feature_values=_xai_values_from_row(features, self._feature_columns),
             )
         finally:
             if user_temp_dir:
@@ -135,16 +142,19 @@ class Ml30MeatTraceabilityDetectionPlugin(ModelPluginPort):
                 self._preprocessor, self._mlp, self._feature_columns, user_temp_dir = loaded
         try:
             self._require_loaded()
-            df = build_dataframe_from_csv(data_path)
+            with local_file_path(data_path) as local_path:
+                df = build_dataframe_from_csv(local_path)
             id_cols = [c for c in _ID_COLUMNS if c in df.columns]
             y_pred, y_score = run_inference(self._preprocessor, self._mlp, df[self._feature_columns])
 
             predictions: list[dict] = []
             for i in range(len(df)):
-                row = {c: _to_native(df.iloc[i][c]) for c in id_cols}
+                df_row = df.iloc[i]
+                row = {c: _to_native(df_row[c]) for c in id_cols}
                 row["pred_traceability_incident"] = int(y_pred[i])
                 row["pred_score"] = float(y_score[i])
                 row["model_name"] = MODEL_ID
+                row["xai_feature_values"] = _xai_values_from_row(df_row, self._feature_columns)
                 predictions.append(row)
 
             self._record()
@@ -189,7 +199,8 @@ class Ml30MeatTraceabilityDetectionPlugin(ModelPluginPort):
 
         self._require_loaded()
         t0 = time.perf_counter()
-        df = build_dataframe_from_csv(data_path)
+        with local_file_path(data_path) as local_path:
+            df = build_dataframe_from_csv(local_path)
         target = "target_traceability_incident"
         if target not in df.columns:
             raise ValueError(f"CSV must contain '{target}' column for training")

@@ -21,7 +21,18 @@ class BaseMLflowTracker:
     downloaded weight files) stays in the plugin and is not part of this class.
     """
 
-    TRACKING_URI = os.getenv("MLFLOW_TRACKING_URI", "http://mlflow.mlflow:5000")
+    TRACKING_URI = os.getenv("MLFLOW_TRACKING_URI", "http://mlflow:5000")
+
+    FALLBACK_URIS = [
+        "http://mlflow:5000",
+        "http://mlflow.mlflow:5000",
+        "http://mlflow.mlflow.svc.cluster.local:5000",
+        "https://mlflow:5000",
+        "https://mlflow.mlflow:5000",
+        "https://mlflow.mlflow.svc.cluster.local:5000",
+        "http://mlflow.mlflow.svc.cluster.local",
+        "https://mlflow.mlflow.svc.cluster.local",
+    ]
 
     def __init__(self, run_id: str = "") -> None:
         self.run_id = run_id
@@ -40,11 +51,12 @@ class BaseMLflowTracker:
             self._client = self._build_client()
         return self._client
 
-    def _build_client(self):
+    def _build_client(self, uri: str | None = None):
         import mlflow
         from mlflow.tracking import MlflowClient
-        mlflow.set_tracking_uri(self.TRACKING_URI)
-        return MlflowClient(tracking_uri=self.TRACKING_URI)
+        uri = uri or self.TRACKING_URI
+        mlflow.set_tracking_uri(uri)
+        return MlflowClient(tracking_uri=uri)
 
     def is_connected(self) -> bool:
         """Return True if a non-empty run_id has been set."""
@@ -147,6 +159,51 @@ class BaseMLflowTracker:
             return {}
 
 
+def _mlflow_try_uris(operation_fn, *args, **kwargs):
+    """Try *operation_fn* with each FALLBACK_URI until one succeeds."""
+    from mlflow.exceptions import MlflowException
+
+    uris = [BaseMLflowTracker.TRACKING_URI]
+    for fb in BaseMLflowTracker.FALLBACK_URIS:
+        if fb not in uris:
+            uris.append(fb)
+
+    attempts = []
+    last_error = None
+    for uri in uris:
+        try:
+            result = operation_fn(uri, *args, **kwargs)
+            attempts.append(f"{uri}=OK")
+            logger.info("MLflow operation succeeded using uri=%s", uri)
+            return result
+        except MlflowException as exc:
+            logger.warning("MLflow operation failed for uri=%s: %s", uri, exc)
+            attempts.append(f"{uri}=403({exc})")
+            last_error = exc
+        except Exception as exc:
+            logger.warning("MLflow operation failed for uri=%s (unexpected): %s", uri, exc)
+            attempts.append(f"{uri}=ERR({exc})")
+            last_error = exc
+
+    raise RuntimeError(f"MLflow connection failed. Tried: {'; '.join(attempts)}")
+
+
+def _download_with_uri(uri: str, run_id: str, artifact_path: str, prefix: str):
+    import mlflow
+    from mlflow.tracking import MlflowClient
+
+    mlflow.set_tracking_uri(uri)
+    client = MlflowClient(tracking_uri=uri)
+    tmp = tempfile.mkdtemp(prefix=prefix)
+    try:
+        client.download_artifacts(run_id, artifact_path, dst_path=tmp)
+        local_path = os.path.join(tmp, artifact_path) if artifact_path else tmp
+        return os.path.normpath(local_path), tmp
+    except Exception:
+        shutil.rmtree(tmp, ignore_errors=True)
+        raise
+
+
 def download_mlflow_artifacts(
     run_id: str,
     artifact_path: str = "",
@@ -162,10 +219,9 @@ def download_mlflow_artifacts(
     The caller **must** call ``shutil.rmtree(temp_dir, ignore_errors=True)``
     after the loaded model is no longer needed.
     """
-    tracker = BaseMLflowTracker(run_id)
-    tmp = tempfile.mkdtemp(prefix=prefix)
-    local_path = tracker.download_artifacts(tmp, artifact_path=artifact_path)
-    if not local_path:
-        shutil.rmtree(tmp, ignore_errors=True)
+    try:
+        local_path, tmp = _mlflow_try_uris(_download_with_uri, run_id, artifact_path, prefix)
+        return tmp, local_path
+    except Exception as exc:
+        logger.error("MLflow download failed on all URIs: %s", exc)
         return None
-    return tmp, local_path

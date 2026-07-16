@@ -32,6 +32,21 @@ from app.plugins.ml23_lactic_market_price_forecast.rnn_models import GRUModel
 logger = logging.getLogger(__name__)
 
 
+def _xai_values_from_row(row, feature_cols: list[str]) -> dict[str, float]:
+    """Build xai_feature_values from a features dict (inline) or DataFrame row (batch)."""
+    xai: dict[str, float] = {}
+    for col in feature_cols:
+        val = row.get(col)
+        if val is not None:
+            try:
+                fv = float(val)
+                if not np.isnan(fv):
+                    xai[col] = fv
+            except (TypeError, ValueError):
+                pass
+    return xai
+
+
 class Ml23LacticMarketPriceForecastPlugin(ModelPluginPort):
     """GRU plugin for monthly dairy price forecasting at 6-month horizon."""
 
@@ -99,6 +114,7 @@ class Ml23LacticMarketPriceForecastPlugin(ModelPluginPort):
                     "fecha": str(r.get("fecha", "")),
                     "current_price": float(r.get("current_price", float("nan"))),
                     "y_pred": round(pred, 4),
+                    "xai_feature_values": _xai_values_from_row(r, feature_cols),
                 })
             return rows
 
@@ -123,6 +139,7 @@ class Ml23LacticMarketPriceForecastPlugin(ModelPluginPort):
                     "canal": str(canal),
                     "current_price": float(r.get("current_price", float("nan"))),
                     "y_pred": round(pred, 4),
+                    "xai_feature_values": _xai_values_from_row(r, feature_cols),
                 })
         return rows
 
@@ -143,25 +160,10 @@ class Ml23LacticMarketPriceForecastPlugin(ModelPluginPort):
         elapsed_ms = (time.perf_counter() - t0) * 1000
         self._record(elapsed_ms)
 
-        feature_cols: list[str] = self._manifest["feature_cols"]
         horizon: int = self._manifest.get("horizon", 6)
-        xai_fv: dict[str, float] = {}
-        if not df.empty:
-            last = df.iloc[-1]
-            for col in feature_cols:
-                if col in last.index:
-                    try:
-                        v = float(last[col])
-                        if not np.isnan(v):
-                            xai_fv[col] = v
-                    except (TypeError, ValueError):
-                        pass
-
-        for i, p in enumerate(predictions):
+        for p in predictions:
             p["model_id"] = MODEL_ID
             p["horizon"] = horizon
-            if i == 0:
-                p["xai_feature_values"] = xai_fv
 
         logger.info(
             "predict_batch done — %d preds in %.1fms count=%d",
@@ -193,17 +195,6 @@ class Ml23LacticMarketPriceForecastPlugin(ModelPluginPort):
         elapsed_ms = (time.perf_counter() - t0) * 1000
         self._record(elapsed_ms)
 
-        xai_fv: dict[str, float] = {}
-        for col in feature_cols:
-            val = features.get(col)
-            if val is not None:
-                try:
-                    fv = float(val)
-                    if not np.isnan(fv):
-                        xai_fv[col] = fv
-                except (TypeError, ValueError):
-                    pass
-
         logger.info("predict_inline done — y_pred=%.4f count=%d", pred, self._predict_count)
         return PredictInlineResponse(
             model_id=MODEL_ID,
@@ -212,7 +203,7 @@ class Ml23LacticMarketPriceForecastPlugin(ModelPluginPort):
             horizon=self._manifest.get("horizon", 6),
             features_used=feature_cols,
             model_version=VERSION,
-            xai_feature_values=xai_fv or None,
+            xai_feature_values=_xai_values_from_row(features, feature_cols) or None,
         )
 
     def train(self, *, data_path: str = "", mlflow_run_id: str = "") -> None:
