@@ -12,8 +12,12 @@ INLINE_PAYLOAD = {
     "Delta_P": 0.481,
 }
 
+# Optimize travels as an inline request differentiated by model_key="optimize"
+# (the transport contract only exposes inline/batch; the plugin dispatches to the
+# GA branch internally). F_flow/T_servicio are omitted — the GA chooses them.
 OPTIMIZE_PAYLOAD = {
-    "mode": "optimize",
+    "mode": "inline",
+    "model_key": "optimize",
     "T_in_leche": 6.78,
     "Delta_P": 0.481,
     "t_ciclo": 80.0,

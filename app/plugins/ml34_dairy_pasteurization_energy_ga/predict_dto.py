@@ -1,14 +1,24 @@
 """Pydantic DTOs for the ml34 dairy pasteurization energy GA /predict endpoint.
 
-Three modes via discriminated union:
-  - "inline":   MLP surrogate prediction (E_consumo, T_out) from the 5 features
-  - "optimize": single-objective GA recommends (F_flow, T_servicio) setpoints
-                for a scenario given the 3 non-controllable inputs
-  - "batch":    run inline prediction on each row of a CSV
+The transport contract exposes only two modes (discriminated union on ``mode``),
+matching the platform/orchestrator flow which only ever sends ``inline`` or
+``batch``:
+  - "inline":  single-sample request. The plugin's ``predict_inline`` then
+               dispatches by ``model_key``:
+                 * model_key != "optimize" (default) → MLP surrogate prediction
+                   (E_consumo, T_out) from the 5 process features.
+                 * model_key == "optimize" → single-objective GA recommends
+                   (F_flow, T_servicio) setpoints for the scenario given the 3
+                   non-controllable inputs (+ optional seed).
+  - "batch":   run the MLP inline prediction on each row of a CSV.
+
+Keeping the "optimize" operation inside the "inline" mode (differentiated by
+model_key) means the whole upstream flow stays on inline/batch and the
+GA-vs-MLP decision lives here, in the model container.
 """
 from typing import Annotated, Any, Literal, Union
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class PredictBatchRequest(BaseModel):
@@ -30,19 +40,53 @@ class PredictBatchResponse(BaseModel):
 
 
 class PredictInlineRequest(BaseModel):
-    """Single-sample MLP prediction: provide the 5 process features."""
+    """Single-sample request. ``predict_inline`` dispatches by ``model_key``:
+
+      - model_key != "optimize" (default): MLP surrogate → needs all 5 features.
+      - model_key == "optimize": single-objective GA recommends (F_flow,
+        T_servicio); only the 3 non-controllable inputs + optional ``seed`` are
+        needed, so ``F_flow``/``T_servicio`` are optional at the schema level and
+        enforced for the MLP path by the validator below.
+    """
 
     model_config = ConfigDict(protected_namespaces=())
     mode: Literal["inline"] = "inline"
+    # model_key="optimize" tells predict_inline to dispatch to the GA branch;
+    # any other value (or None) runs the MLP surrogate prediction.
     model_key: str | None = None
     threshold: float | None = None
     mlflow_run_id: str = ""
 
+    # Non-controllable scenario inputs — required by both operations.
     T_in_leche: float = Field(..., description="Temperatura de entrada de la leche cruda (°C)")
-    F_flow: float = Field(..., description="Caudal volumétrico de leche (L/h)")
-    T_servicio: float = Field(..., description="Temperatura del fluido de servicio (°C)")
     t_ciclo: float = Field(..., description="Tiempo desde la última limpieza CIP (min)")
     Delta_P: float = Field(..., description="Caída de presión en el intercambiador (bar)")
+
+    # Controllable setpoints — required for the MLP inline prediction; in optimize
+    # mode the GA chooses them, so they are optional here (see validator).
+    F_flow: float | None = Field(
+        default=None,
+        description="Caudal volumétrico de leche (L/h) — requerido en inline MLP; lo decide el GA en optimize",
+    )
+    T_servicio: float | None = Field(
+        default=None,
+        description="Temperatura del fluido de servicio (°C) — requerido en inline MLP; lo decide el GA en optimize",
+    )
+
+    # GA reproducibility — used only when model_key == "optimize".
+    seed: int = Field(default=1, description="Semilla del GA para reproducibilidad por escenario (solo optimize)")
+
+    @model_validator(mode="after")
+    def _require_setpoints_for_mlp(self) -> "PredictInlineRequest":
+        """MLP inline needs the two setpoints; the GA optimize path does not."""
+        if self.model_key != "optimize":
+            missing = [n for n, v in (("F_flow", self.F_flow), ("T_servicio", self.T_servicio)) if v is None]
+            if missing:
+                raise ValueError(
+                    f"En modo inline (MLP) los setpoints {missing} son obligatorios; "
+                    f"para recomendar setpoints use model_key='optimize'."
+                )
+        return self
 
 
 class PredictInlineResponse(BaseModel):
@@ -54,29 +98,13 @@ class PredictInlineResponse(BaseModel):
     T_out_pred: float = Field(..., description="Temperatura de salida de la leche predicha (°C)")
 
 
-class PredictOptimizeRequest(BaseModel):
-    """Optimization mode: provide the 3 non-controllable scenario inputs.
-
-    The GA searches (F_flow, T_servicio) minimizing E_consumo/F_flow subject
-    to T_out >= 72.3 °C. ``seed`` makes each scenario deterministic — the AI
-    team's backtesting used seed = 1 + row_index over the test CSV.
-    """
-
-    model_config = ConfigDict(protected_namespaces=())
-    mode: Literal["optimize"] = "optimize"
-    # model_key="optimize" tells predict_inline to dispatch to the GA branch
-    model_key: str = "optimize"
-    threshold: float | None = None
-    mlflow_run_id: str = ""
-
-    T_in_leche: float = Field(..., description="Temperatura de entrada de la leche cruda (°C)")
-    Delta_P: float = Field(..., description="Caída de presión en el intercambiador (bar)")
-    t_ciclo: float = Field(..., description="Tiempo desde la última limpieza CIP (min)")
-    seed: int = Field(default=1, description="Semilla del GA para reproducibilidad por escenario")
-
-
 class PredictOptimizeResponse(BaseModel):
-    """Optimization response: recommended setpoints + predicted outcome."""
+    """Optimization response: recommended setpoints + predicted outcome.
+
+    Returned by ``predict_inline`` when ``model_key == "optimize"``. There is no
+    separate optimize *request* type — the operation travels as an inline request
+    with model_key="optimize".
+    """
 
     model_config = ConfigDict(protected_namespaces=())
     model_id: str
@@ -91,7 +119,7 @@ class PredictOptimizeResponse(BaseModel):
 
 
 PredictRequest = Annotated[
-    Union[PredictBatchRequest, PredictInlineRequest, PredictOptimizeRequest],
+    Union[PredictBatchRequest, PredictInlineRequest],
     Field(discriminator="mode"),
 ]
 

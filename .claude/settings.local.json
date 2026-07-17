@@ -81,7 +81,9 @@
       "Bash(mkdir -p \"/tmp/claude-1000/-mnt-c-Users-PC-Desktop-Repositorios-models-integrations-itacly/40095e82-cac8-442e-89d8-b0f5be5bc660/scratchpad\")",
       "Bash(python3 -c ' *)",
       "Bash(sed -n 1,120p __TRACKED_VAR__/scripts/predict.py)",
-      "Bash(grep -n -iE 'resize|crop|normalize|totensor|mean|std|transform|Compose' __TRACKED_VAR__/src/data_processing/preprocess.py)"
+      "Bash(grep -n -iE 'resize|crop|normalize|totensor|mean|std|transform|Compose' __TRACKED_VAR__/src/data_processing/preprocess.py)",
+      "Bash(flake8 app/plugins/m47_dnsl_fallas_maquinaria_pasteurizado/ --show-source --statistics)",
+      "Bash(echo \"EXIT flake8: $?\")"
     ]
   }
 }
