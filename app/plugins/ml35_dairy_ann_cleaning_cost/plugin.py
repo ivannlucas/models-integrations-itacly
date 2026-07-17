@@ -39,7 +39,7 @@ from app.plugins.ml35_dairy_ann_cleaning_cost.constants import (
     VOLUMEN_RETENCION_L,
     Z_VALUE,
 )
-from app.plugins.ml35_dairy_ann_cleaning_cost.model_loader import PasteurizationANN, load_artifacts, _store
+from app.plugins.ml35_dairy_ann_cleaning_cost.model_loader import PasteurizationANN, load_artifacts
 from app.plugins.ml35_dairy_ann_cleaning_cost.mlflow_utils import download_user_model_from_mlflow
 from app.plugins.ml35_dairy_ann_cleaning_cost.predict_dto import (
     PredictBatchResponse,
@@ -348,9 +348,6 @@ class Ml35DairyAnnCleaningCostPlugin(ModelPluginPort):
         ss_tot = np.sum((y_real - np.mean(y_real)) ** 2)
         r2 = float(1 - ss_res / ss_tot) if ss_tot else 0.0
 
-        _store.local_dir.mkdir(parents=True, exist_ok=True)
-        torch.save(fine_model.state_dict(), _store.local_dir / MODEL_FILENAME)
-
         if tracker:
             tracker.log_metrics({"mae": mae, "r2": r2, "n_samples": len(df)})
             try:
@@ -363,7 +360,6 @@ class Ml35DairyAnnCleaningCostPlugin(ModelPluginPort):
             except Exception as exc:  # pylint: disable=broad-exception-caught
                 logger.error("MLflow artifact upload failed: %s", exc)
 
-        self.load()
         logger.info("train() done — mae=%.2f r2=%.4f n=%d mlflow=%s", mae, r2, len(df), bool(mlflow_run_id))
         return TrainResponse(
             detail="Fine-tuning completado",

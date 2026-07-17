@@ -83,7 +83,12 @@
       "Bash(sed -n 1,120p __TRACKED_VAR__/scripts/predict.py)",
       "Bash(grep -n -iE 'resize|crop|normalize|totensor|mean|std|transform|Compose' __TRACKED_VAR__/src/data_processing/preprocess.py)",
       "Bash(flake8 app/plugins/m47_dnsl_fallas_maquinaria_pasteurizado/ --show-source --statistics)",
-      "Bash(echo \"EXIT flake8: $?\")"
+      "Bash(echo \"EXIT flake8: $?\")",
+      "Bash(env)",
+      "Bash(git check-ignore *)",
+      "Bash(pkill -f run_ml46_train.py)",
+      "Bash(flake8 app/plugins/ml34_dairy_pasteurization_energy_ga/plugin.py app/plugins/ml35_dairy_ann_cleaning_cost/plugin.py app/plugins/ml46_dairy_fouling_clog_detection/plugin.py --select=F,E9)",
+      "Bash(PYTHONPATH=. python3 __TRACKED_VAR__/smoke_ml34.py)"
     ]
   }
 }
