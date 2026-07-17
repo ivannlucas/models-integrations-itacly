@@ -7,7 +7,7 @@ import os
 import joblib
 import yaml
 
-from app.domain.services.mlflow_tracker import download_mlflow_artifacts
+from app.domain.services.mlflow_tracker import BaseMLflowTracker
 from app.plugins.ml40_meat_refrigeration_aeration_fault_diagnosis.constants import (
     MODEL_FILENAMES,
     SCALER_FILENAMES,
@@ -29,10 +29,11 @@ def download_user_model_from_mlflow(run_id: str):
     Returns (system, bundle_dict, temp_dir) or None if the download fails.
     Caller MUST shutil.rmtree(temp_dir) after inference — use try/finally.
     """
-    result = download_mlflow_artifacts(run_id, artifact_path="model", prefix="mlflow_ml40_")
-    if result is None:
+    import tempfile
+    tmp = tempfile.mkdtemp(prefix="mlflow_ml40_")
+    local_path = BaseMLflowTracker(run_id).download_artifacts(tmp, artifact_path="model")
+    if not local_path:
         return None
-    tmp, local_path = result
 
     system = next(
         (s for s in SYSTEMS if os.path.exists(os.path.join(local_path, MODEL_FILENAMES[s]))),

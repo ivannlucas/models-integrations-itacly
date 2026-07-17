@@ -14,7 +14,7 @@ import os
 
 import pandas as pd
 
-from app.domain.services.mlflow_tracker import download_mlflow_artifacts
+from app.domain.services.mlflow_tracker import BaseMLflowTracker
 from app.plugins.ml31_cereals_residue_optimizer.constants import (
     CROP_ECONOMICS_FILENAME,
     DATASET_FILENAME,
@@ -32,10 +32,11 @@ def download_user_model_from_mlflow(run_id: str):
     the fixed reference artifacts. Caller MUST shutil.rmtree(temp_dir) after use
     (try/finally) if a non-None result is returned.
     """
-    result = download_mlflow_artifacts(run_id, artifact_path="model", prefix="mlflow_ml31_")
-    if result is None:
+    import tempfile
+    tmp = tempfile.mkdtemp(prefix="mlflow_ml31_")
+    local_path = BaseMLflowTracker(run_id).download_artifacts(tmp, artifact_path="model")
+    if not local_path:
         return None
-    tmp, local_path = result
 
     try:
         with open(os.path.join(local_path, CROP_ECONOMICS_FILENAME), "r", encoding="utf-8") as f:

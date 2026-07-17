@@ -9,7 +9,7 @@ import torch
 from torch import nn
 from torchvision import models
 
-from app.domain.services.mlflow_tracker import download_mlflow_artifacts
+from app.domain.services.mlflow_tracker import BaseMLflowTracker
 from app.plugins.modelo10_lacteo.constants import (
     CLASSIFIER_FILENAME,
     CLASS_NAMES_FILENAME,
@@ -24,10 +24,11 @@ def download_user_classifier_from_mlflow(run_id: str):
     Returns (model, class_names, temp_dir).
     Caller MUST shutil.rmtree(temp_dir) after inference.
     """
-    result = download_mlflow_artifacts(run_id, artifact_path="classifier", prefix="mlflow_modelo10_")
-    if result is None:
+    import tempfile
+    tmp = tempfile.mkdtemp(prefix="mlflow_modelo10_")
+    local_path = BaseMLflowTracker(run_id).download_artifacts(tmp, artifact_path="classifier")
+    if not local_path:
         return None
-    tmp, local_path = result
 
     state_dict_path = os.path.join(local_path, CLASSIFIER_FILENAME)
     class_names_path = os.path.join(local_path, CLASS_NAMES_FILENAME)

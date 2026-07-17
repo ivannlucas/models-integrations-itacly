@@ -7,7 +7,7 @@ from dataclasses import fields
 
 import torch
 
-from app.domain.services.mlflow_tracker import download_mlflow_artifacts
+from app.domain.services.mlflow_tracker import BaseMLflowTracker
 from app.plugins.ml46_dairy_fouling_clog_detection._vendor.common import FeatureArtifacts, TrainConfig
 from app.plugins.ml46_dairy_fouling_clog_detection.constants import (
     FEATURE_ARTIFACTS_FILENAME,
@@ -26,10 +26,11 @@ def download_user_model_from_mlflow(run_id: str):
     Returns (model, train_cfg, feature_artifacts, policy, temp_dir).
     Caller MUST shutil.rmtree(temp_dir) after inference — use try/finally.
     """
-    result = download_mlflow_artifacts(run_id, artifact_path="model", prefix="mlflow_ml46_")
-    if result is None:
+    import tempfile
+    tmp = tempfile.mkdtemp(prefix="mlflow_ml46_")
+    local_path = BaseMLflowTracker(run_id).download_artifacts(tmp, artifact_path="model")
+    if not local_path:
         return None
-    tmp, local_path = result
 
     train_cfg_data = _load_json(os.path.join(local_path, TRAINING_CONFIG_FILENAME))
     train_cfg_data["device"] = "cpu"

@@ -7,7 +7,7 @@ import os
 import joblib
 import torch
 
-from app.domain.services.mlflow_tracker import download_mlflow_artifacts
+from app.domain.services.mlflow_tracker import BaseMLflowTracker
 from app.plugins.ml35_dairy_ann_cleaning_cost.constants import (
     FEATURES,
     MODEL_FILENAME,
@@ -25,10 +25,11 @@ def download_user_model_from_mlflow(run_id: str):
     Returns (model, scaler_X, scaler_y, temp_dir).
     Caller MUST shutil.rmtree(temp_dir) after inference — use try/finally.
     """
-    result = download_mlflow_artifacts(run_id, artifact_path="model", prefix="mlflow_ml35_")
-    if result is None:
+    import tempfile
+    tmp = tempfile.mkdtemp(prefix="mlflow_ml35_")
+    local_path = BaseMLflowTracker(run_id).download_artifacts(tmp, artifact_path="model")
+    if not local_path:
         return None
-    tmp, local_path = result
 
     model = PasteurizationANN(input_size=len(FEATURES))
     model.load_state_dict(

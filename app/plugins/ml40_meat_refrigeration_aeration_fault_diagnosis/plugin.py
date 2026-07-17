@@ -23,6 +23,7 @@ from app.application.dto.stats_dto import InputField, OutputField, RuntimeStats,
 from app.domain.ports.model_plugin_port import ModelPluginPort
 from app.domain.services.exceptions import ModelNotLoadedError, UnknownDiagnosisSystemError
 from app.domain.services.mlflow_tracker import BaseMLflowTracker
+from app.infrastructure.artifact_store import local_file_path
 from app.plugins.ml40_meat_refrigeration_aeration_fault_diagnosis import (
     model_loader,
     postprocessing,
@@ -156,7 +157,8 @@ class Ml40MeatRefrigerationAerationFaultDiagnosisPlugin(ModelPluginPort):
             if resolved is not None:
                 bundle_override, user_tmp = resolved
         try:
-            raw_df = pd.read_csv(data_path)
+            with local_file_path(data_path) as local_path:
+                raw_df = pd.read_csv(local_path)
             runs_df, system = self._diagnose(raw_df, None, bundle_override)
             avg_conf = float(runs_df["confidence"].mean())
             health = postprocessing.health_status(avg_conf)
@@ -245,7 +247,8 @@ class Ml40MeatRefrigerationAerationFaultDiagnosisPlugin(ModelPluginPort):
         canonical filenames so mlflow_utils can rebuild the bundle).
         """
         self._require_loaded()
-        raw_df = pd.read_csv(data_path)
+        with local_file_path(data_path) as local_path:
+            raw_df = pd.read_csv(local_path)
         system = preprocessing.detect_system(raw_df.columns)
 
         required = CYCLE_COLUMNS + [TARGET_COLUMN] + RAW_INPUT_COLUMNS[system]

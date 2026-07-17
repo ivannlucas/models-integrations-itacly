@@ -6,7 +6,7 @@ import os
 
 import torch
 
-from app.domain.services.mlflow_tracker import download_mlflow_artifacts
+from app.domain.services.mlflow_tracker import BaseMLflowTracker
 from app.plugins.ml8_cereals_img_anomaly_detector.constants import (
     MODEL_FILENAME,
 )
@@ -20,10 +20,11 @@ def download_user_model_from_mlflow(run_id: str):
     Returns (model_bundle_dict, temp_dir).
     Caller MUST shutil.rmtree(temp_dir) after inference.
     """
-    result = download_mlflow_artifacts(run_id, artifact_path="model", prefix="mlflow_ml8_")
-    if result is None:
+    import tempfile
+    tmp = tempfile.mkdtemp(prefix="mlflow_ml8_")
+    local_path = BaseMLflowTracker(run_id).download_artifacts(tmp, artifact_path="model")
+    if not local_path:
         return None
-    tmp, local_path = result
 
     from app.plugins.ml8_cereals_img_anomaly_detector.model_loader import MultiTaskMobileNetV3Large, _safe_device
 

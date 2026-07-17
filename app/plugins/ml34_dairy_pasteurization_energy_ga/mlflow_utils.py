@@ -8,7 +8,7 @@ import os
 import joblib
 import torch
 
-from app.domain.services.mlflow_tracker import download_mlflow_artifacts
+from app.domain.services.mlflow_tracker import BaseMLflowTracker
 from app.plugins.ml34_dairy_pasteurization_energy_ga.constants import (
     MODEL_CONFIG_FILENAME,
     MODEL_FILENAME,
@@ -30,10 +30,11 @@ def download_user_model_from_mlflow(run_id: str):
     model_config.json, so a retrained model with a different topology
     still loads correctly.
     """
-    result = download_mlflow_artifacts(run_id, artifact_path="model", prefix="mlflow_ml34_")
-    if result is None:
+    import tempfile
+    tmp = tempfile.mkdtemp(prefix="mlflow_ml34_")
+    local_path = BaseMLflowTracker(run_id).download_artifacts(tmp, artifact_path="model")
+    if not local_path:
         return None
-    tmp, local_path = result
 
     with open(os.path.join(local_path, MODEL_CONFIG_FILENAME), "r", encoding="utf-8") as f:
         config = json.load(f)

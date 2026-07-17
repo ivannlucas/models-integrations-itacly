@@ -6,7 +6,7 @@ import logging
 import os
 import pickle
 
-from app.domain.services.mlflow_tracker import download_mlflow_artifacts
+from app.domain.services.mlflow_tracker import BaseMLflowTracker
 from app.plugins.ml25_wine_sulphites.constants import (
     BOUND_RF_MODEL_FILENAME,
     METADATA_FILENAME,
@@ -22,10 +22,11 @@ def download_user_predictor_from_mlflow(run_id: str):
     Returns (model_qual, model_bound, metadata, temp_dir).
     Caller MUST shutil.rmtree(temp_dir) after inference.
     """
-    result = download_mlflow_artifacts(run_id, artifact_path="model", prefix="mlflow_wine_")
-    if result is None:
+    import tempfile
+    tmp = tempfile.mkdtemp(prefix="mlflow_wine_")
+    local_path = BaseMLflowTracker(run_id).download_artifacts(tmp, artifact_path="model")
+    if not local_path:
         return None
-    tmp, local_path = result
 
     qual_path = os.path.join(local_path, QUALITY_RF_MODEL_FILENAME)
     bound_path = os.path.join(local_path, BOUND_RF_MODEL_FILENAME)

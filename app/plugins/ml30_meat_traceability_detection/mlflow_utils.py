@@ -7,7 +7,7 @@ import pickle
 
 import torch
 
-from app.domain.services.mlflow_tracker import download_mlflow_artifacts
+from app.domain.services.mlflow_tracker import BaseMLflowTracker
 from app.plugins.ml30_meat_traceability_detection.constants import (
     MODEL_FILENAME,
     PREPROCESSOR_FILENAME,
@@ -22,10 +22,11 @@ def download_user_model_from_mlflow(run_id: str):
     Returns (preprocessor, mlp, feature_columns, temp_dir).
     Caller MUST shutil.rmtree(temp_dir) after inference.
     """
-    result = download_mlflow_artifacts(run_id, artifact_path="model", prefix="mlflow_ml30_")
-    if result is None:
+    import tempfile
+    tmp = tempfile.mkdtemp(prefix="mlflow_ml30_")
+    local_path = BaseMLflowTracker(run_id).download_artifacts(tmp, artifact_path="model")
+    if not local_path:
         return None
-    tmp, local_path = result
 
     from app.plugins.ml30_meat_traceability_detection.model_loader import build_torch_mlp, load_payload
     from app.plugins.ml30_meat_traceability_detection.constants import FEATURE_COLUMNS
