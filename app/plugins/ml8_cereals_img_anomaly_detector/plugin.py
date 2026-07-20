@@ -26,13 +26,20 @@ from app.plugins.ml8_cereals_img_anomaly_detector.constants import (
     MODEL_ID,
 )
 from app.plugins.ml8_cereals_img_anomaly_detector.model_loader import load_model_bundle
-from app.plugins.ml8_cereals_img_anomaly_detector.postprocessing import build_batch_response, build_inline_response
+from app.plugins.ml8_cereals_img_anomaly_detector.postprocessing import (
+    build_batch_response,
+    build_inline_response,
+    encode_image_base64,
+)
 from app.plugins.ml8_cereals_img_anomaly_detector.predict_dto import (
     PredictBatchResponse,
     PredictInlineResponse,
 )
 from app.plugins.ml8_cereals_img_anomaly_detector.mlflow_utils import download_user_model_from_mlflow
-from app.plugins.ml8_cereals_img_anomaly_detector.preprocessing import image_base64_to_tensor, image_path_to_tensor
+from app.plugins.ml8_cereals_img_anomaly_detector.preprocessing import (
+    image_base64_to_tensor,
+    image_path_to_tensor_and_image,
+)
 from app.plugins.ml8_cereals_img_anomaly_detector.train_dto import TrainResponse
 
 logger = logging.getLogger(__name__)
@@ -238,7 +245,8 @@ class Ml8CerealsImgAnomalyDetectorPlugin(ModelPluginPort):
                     model.eval()
                     for image_path in image_paths:
                         try:
-                            tensor = image_path_to_tensor(image_path, image_size=image_size).to(device)
+                            tensor, image = image_path_to_tensor_and_image(image_path, image_size=image_size)
+                            tensor = tensor.to(device)
                             with torch.no_grad():
                                 logits_cat, logits_cer = model(tensor)
                             result = build_inline_response(
@@ -249,6 +257,7 @@ class Ml8CerealsImgAnomalyDetectorPlugin(ModelPluginPort):
                                 model_id=bundle["model_id"],
                             )
                             result["filename"] = image_path.name
+                            result["annotated_image"] = encode_image_base64(image)
                             predictions.append(result)
                         except InvalidImageError as exc:
                             predictions.append({"filename": image_path.name, "error": str(exc)})
@@ -298,6 +307,8 @@ class Ml8CerealsImgAnomalyDetectorPlugin(ModelPluginPort):
                 OutputField(name="confianza_cereal", type="float", description="Confianza del cereal [0, 1]"),
                 OutputField(name="probabilidades_categoria", type="dict", description="Probabilidad por categoría"),
                 OutputField(name="probabilidades_cereal", type="dict", description="Probabilidad por cereal"),
+                OutputField(name="annotated_image", type="str",
+                            description="Imagen re-escalada en base64 JPEG (solo en predict_batch)"),
             ],
             metrics={"arch": arch},
             runtime_stats=RuntimeStats(

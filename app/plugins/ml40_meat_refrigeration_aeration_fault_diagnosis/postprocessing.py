@@ -40,11 +40,15 @@ def run_inference(model, scaler, df: pd.DataFrame, system: str) -> tuple[np.ndar
 
     if system == "refrigeracion" and scaler is not None:
         if hasattr(scaler, "feature_names_in_"):
-            x_cleaned.loc[:, scaler.feature_names_in_] = scaler.transform(
-                x_cleaned[scaler.feature_names_in_]
-            )
+            cols = list(scaler.feature_names_in_)
+            # Scaled values are float64; the source columns can be int64 (e.g. whole-number
+            # sensor readings), so assigning back in place silently keeps the old dtype and
+            # truncates/corrupts the scaled floats instead of raising — cast first.
+            x_cleaned = x_cleaned.astype({c: "float64" for c in cols})
+            x_cleaned.loc[:, cols] = scaler.transform(x_cleaned[cols])
         else:
             num_cols = [c for c in x_cleaned.columns if c not in REFRIGERACION_BINARY_COLS]
+            x_cleaned = x_cleaned.astype({c: "float64" for c in num_cols})
             x_cleaned.loc[:, num_cols] = scaler.transform(x_cleaned[num_cols])
 
     y_pred = model.predict(x_cleaned)

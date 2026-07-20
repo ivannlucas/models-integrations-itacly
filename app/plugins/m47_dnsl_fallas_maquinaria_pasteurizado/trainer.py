@@ -98,7 +98,7 @@ def train_model_from_csv(
     csv_path: str,
     learning_rate: float = 1e-3,
     dropout_rate: float = 0.5,
-    epochs: int = 50,
+    epochs: int = 25,
     max_lambda: float = 1.0,
     warmup_epochs: int = 5,
     ramp_up_epochs: int = 10,

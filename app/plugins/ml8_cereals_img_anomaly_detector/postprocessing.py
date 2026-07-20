@@ -1,5 +1,33 @@
+import base64
+import io
+
 import torch
 import torch.nn.functional as F
+from PIL import Image
+
+# Same sizing/quality as ml7_cereals_grain_pest_detection's annotated_image, for a
+# consistent per-image payload size across the batch grids in the platform UI.
+MAX_THUMBNAIL_SIZE = 640
+JPEG_QUALITY = 70
+
+
+def encode_image_base64(image: Image.Image) -> str:
+    """Resize (if needed) and JPEG-encode a decoded image as base64.
+
+    ml8 is a pure classifier with no bounding boxes to draw, so — unlike ml7's
+    annotated_image — this just re-encodes the already-decoded image instead of
+    reopening it from disk, so the platform's batch results grid can show a
+    per-row thumbnail the same way it does for grain_pest_detection.
+    """
+    img = image.convert("RGB")
+    w, h = img.size
+    if max(w, h) > MAX_THUMBNAIL_SIZE:
+        scale = MAX_THUMBNAIL_SIZE / max(w, h)
+        img = img.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
+
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=JPEG_QUALITY)
+    return base64.b64encode(buf.getvalue()).decode()
 
 
 def build_inline_response(
