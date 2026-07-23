@@ -20,6 +20,7 @@ from app.domain.services.exceptions import (
     ModelNotLoadedError,
     TrainingNotSupportedError,
 )
+from app.infrastructure.artifact_store import local_file_path
 from app.plugins.ml7_cereals_grain_pest_detection.constants import (
     CONF_THRESHOLD,
     FRAMEWORK,
@@ -123,52 +124,48 @@ class Ml7CerealsGrainPestDetectionPlugin(ModelPluginPort):
             logger.warning("mlflow_run_id=%s provided but model '%s' does not support user training — using standard model",
                            mlflow_run_id, MODEL_ID)
         model = self._require_model()
-        data_p = Path(data_path)
         tmp_dir: str | None = None
 
-        if data_p.suffix.lower() == ".zip":
-            if not zipfile.is_zipfile(data_p):
-                raise ValueError(f"data_path is not a valid ZIP file: {data_path}")
-            tmp_dir = tempfile.mkdtemp(prefix="grain_pest_batch_")
-            with zipfile.ZipFile(data_p) as zf:
-                zf.extractall(tmp_dir)
-            data_p = Path(tmp_dir)
-        elif not data_p.is_dir():
-            raise ValueError(f"data_path must be a directory or .zip file, got: {data_path}")
+        with local_file_path(data_path) as local_data_path:
+            data_p = Path(local_data_path)
 
-        try:
-            image_files = sorted(
-                f for f in data_p.rglob("*") if f.suffix.lower() in IMAGE_EXTENSIONS
-            )
-            if not image_files:
-                raise ValueError(f"No images found in: {data_path}")
+            if data_p.suffix.lower() == ".zip":
+                if not zipfile.is_zipfile(data_p):
+                    raise ValueError(f"data_path is not a valid ZIP file: {data_path}")
+                tmp_dir = tempfile.mkdtemp(prefix="grain_pest_batch_")
+                with zipfile.ZipFile(data_p) as zf:
+                    zf.extractall(tmp_dir)
+                data_p = Path(tmp_dir)
+            elif not data_p.is_dir():
+                raise ValueError(f"data_path must be a directory or .zip file, got: {data_path}")
 
-            predictions: list[dict] = []
-            for img_file in image_files:
-                try:
-                    img_np = image_path_to_numpy(str(img_file))
-                    results = model.predict(
-                        _to_bgr(img_np), verbose=False, conf=CONF_THRESHOLD, device=_DEVICE
-                    )
-                    result = yolo_results_to_dict(results[0], img_np)
-                    predictions.append({
-                        "filename": img_file.name,
-                        "prediction": result["prediction"],
-                        "confidence": result["confidence"],
-                        "total_detections": result["total_detections"],
-                        "species_counts": result["species_counts"],
-                    })
-                except Exception as exc:
-                    logger.warning("Error processing %s: %s", img_file.name, exc)
-                    predictions.append({"filename": img_file.name, "error": str(exc)})
+            try:
+                image_files = sorted(
+                    f for f in data_p.rglob("*") if f.suffix.lower() in IMAGE_EXTENSIONS
+                )
+                if not image_files:
+                    raise ValueError(f"No images found in: {data_path}")
 
-            self._record()
-            return PredictBatchResponse(
-                model_id=MODEL_ID, predictions=predictions, output_path=None
-            )
-        finally:
-            if tmp_dir is not None:
-                shutil.rmtree(tmp_dir, ignore_errors=True)
+                predictions: list[dict] = []
+                for img_file in image_files:
+                    try:
+                        img_np = image_path_to_numpy(str(img_file))
+                        results = model.predict(
+                            _to_bgr(img_np), verbose=False, conf=CONF_THRESHOLD, device=_DEVICE
+                        )
+                        result = yolo_results_to_dict(results[0], img_np)
+                        predictions.append({"filename": img_file.name, **result})
+                    except Exception as exc:
+                        logger.warning("Error processing %s: %s", img_file.name, exc)
+                        predictions.append({"filename": img_file.name, "error": str(exc)})
+
+                self._record()
+                return PredictBatchResponse(
+                    model_id=MODEL_ID, predictions=predictions, output_path=None
+                )
+            finally:
+                if tmp_dir is not None:
+                    shutil.rmtree(tmp_dir, ignore_errors=True)
 
     def train(self, *, data_path: str, mlflow_run_id: str = "") -> PredictInlineResponse:
         """Training is not supported: the model uses externally trained artifacts (HTTP 501)."""

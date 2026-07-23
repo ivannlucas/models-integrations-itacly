@@ -59,6 +59,7 @@ from app.plugins.ml34_dairy_pasteurization_energy_ga.mlflow_utils import (
     download_user_model_from_mlflow,
 )
 from app.plugins.ml34_dairy_pasteurization_energy_ga.model_loader import (
+    _store,
     build_model_from_config,
     load_artifacts,
 )
@@ -70,6 +71,26 @@ from app.plugins.ml34_dairy_pasteurization_energy_ga.predict_dto import (
 from app.plugins.ml34_dairy_pasteurization_energy_ga.train_dto import TrainResponse
 
 logger = logging.getLogger(__name__)
+
+
+def _xai_values_from_features(data: dict) -> dict[str, float] | None:
+    """Build xai_feature_values from a predict_batch row dict.
+
+    Without this, predict_batch rows only carry row/E_consumo_pred/T_out_pred —
+    the platform's XAI-context builder filters those out as known output columns,
+    is left with zero input features, and silently skips calling the explain
+    service (no error, no request — just no explanation). See
+    ml35_dairy_ann_cleaning_cost's _xai_values_from_features for the same fix.
+    """
+    xai: dict[str, float] = {}
+    for f in FEATURES:
+        val = data.get(f)
+        if val is not None and pd.notna(val):
+            try:
+                xai[f] = float(val)
+            except (TypeError, ValueError):
+                pass
+    return xai or None
 
 
 class Ml34DairyPasteurizationEnergyGaPlugin(ModelPluginPort):
@@ -211,11 +232,13 @@ class Ml34DairyPasteurizationEnergyGaPlugin(ModelPluginPort):
             predictions: list[dict] = []
             for idx, row in df.iterrows():
                 try:
-                    pred = self._run_predict(row.to_dict())
+                    row_dict = row.to_dict()
+                    pred = self._run_predict(row_dict)
                     predictions.append({
                         "row": int(idx),
                         "E_consumo_pred": pred.E_consumo_pred,
                         "T_out_pred": pred.T_out_pred,
+                        "xai_feature_values": _xai_values_from_features(row_dict),
                     })
                 except Exception as exc:  # pylint: disable=broad-exception-caught
                     logger.warning("Error en fila %s: %s", idx, exc)
@@ -338,6 +361,9 @@ class Ml34DairyPasteurizationEnergyGaPlugin(ModelPluginPort):
             metrics[f"mae_{target}"] = mae
             metrics[f"r2_{target}"] = r2
 
+        _store.local_dir.mkdir(parents=True, exist_ok=True)
+        torch.save(fine_model.state_dict(), _store.local_dir / MODEL_FILENAME)
+
         if tracker:
             tracker.log_metrics({**metrics, "n_samples": len(df)})
             try:
@@ -352,6 +378,7 @@ class Ml34DairyPasteurizationEnergyGaPlugin(ModelPluginPort):
             except Exception as exc:  # pylint: disable=broad-exception-caught
                 logger.error("MLflow artifact upload failed: %s", exc)
 
+        self.load()
         logger.info(
             "train() done — mae_E=%.2f r2_E=%.4f n=%d epochs=%d mlflow=%s",
             metrics["mae_E_consumo"], metrics["r2_E_consumo"], len(df),

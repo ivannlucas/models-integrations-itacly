@@ -30,10 +30,8 @@ from app.domain.services.exceptions import (
     ModelNotLoadedError,
     TrainingNotSupportedError,
 )
-from app.domain.services.mlflow_tracker import BaseMLflowTracker
 from app.plugins.ml31_cereals_residue_optimizer.constants import (
     BENEFIT_PRESERVATION_TARGET_PCT,
-    CROPS,
     FRAMEWORK,
     MIN_BENEFIT_CHANGE_EUR,
     MODEL_ID,

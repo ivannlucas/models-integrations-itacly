@@ -45,8 +45,8 @@ def _build_s3_client():
     return boto3.client(
         "s3",
         endpoint_url=os.getenv("CUSTOM_S3_ENDPOINT"),
-        aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
-        aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_ID"),
+        aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID_XAI"),
+        aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY_XAI"),
         config=Config(signature_version="s3v4"),
         region_name=os.getenv("CUSTOM_REGION"),
     )
