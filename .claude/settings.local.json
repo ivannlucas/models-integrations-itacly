@@ -148,7 +148,19 @@
       "Read(//home/alejandro/proyectos/Bitbucket/itacyl-pan-modelsinference-svc/app/domain/ports/**)",
       "Read(//home/alejandro/proyectos/Bitbucket/itacyl-pan-modelsinference-svc/app/application/**)",
       "Bash(diff -u /home/alejandro/proyectos/AIR/models-integrations-itacly/app/application/use_cases/predict_model_use_case.py ~/proyectos/Bitbucket/itacyl-pan-modelsinference-svc/app/application/use_cases/predict_model_use_case.py)",
-      "Read(//home/alejandro/proyectos/Bitbucket/itacyl-pan-modelsinference-svc/app/application/use_cases/**)"
+      "Read(//home/alejandro/proyectos/Bitbucket/itacyl-pan-modelsinference-svc/app/application/use_cases/**)",
+      "Bash(sed -i '420s/AWS_ACCESS_KEY_ID/AWS_ACCESS_KEY_ID_XAI/; 421s/AWS_SECRET_ACCESS_KEY/AWS_SECRET_ACCESS_KEY_XAI/' app/plugins/modelo10_lacteo/plugin.py)",
+      "Bash(grep -n \"Ml31Residue\\\\|PredictOptimizeRequest\\\\|PredictParetoRequest\" /home/alejandro/proyectos/AIR/models-integrations-itacly/app/registry.py *)",
+      "Read(//home/alejandro/proyectos/Bitbucket/itacyl-pan-modelsinference-svc/app/**)",
+      "Bash(grep -n \"^PredictRequest\\\\|^class PredictRequest\\\\|^PredictResponse\\\\|^class PredictResponse\\\\|PredictRequest =\\\\|PredictResponse =\" ~/proyectos/Bitbucket/itacyl-pan-modelsinference-svc/app/plugins/ml31_cereals_residue_optimizer/predict_dto.py)",
+      "Read(//home/alejandro/proyectos/Bitbucket/itacyl-pan-modelsinference-svc/app/plugins/ml31_cereals_residue_optimizer/**)",
+      "Bash(cp ~/proyectos/Bitbucket/itacyl-pan-modelsinference-svc/app/plugins/ml31_cereals_residue_optimizer/plugin.py app/plugins/ml31_cereals_residue_optimizer/plugin.py)",
+      "Bash(cp ~/proyectos/Bitbucket/itacyl-pan-modelsinference-svc/app/plugins/ml31_cereals_residue_optimizer/predict_dto.py app/plugins/ml31_cereals_residue_optimizer/predict_dto.py)",
+      "Bash(cp ~/proyectos/Bitbucket/itacyl-pan-modelsinference-svc/tests/unit/test_ml31_cereals_residue_optimizer.py tests/unit/test_ml31_cereals_residue_optimizer.py)",
+      "Bash(cp ~/proyectos/Bitbucket/itacyl-pan-modelsinference-svc/app/plugins/ml4_lactic_cnn_thermal_early_disease_detection/model_loader.py app/plugins/ml4_lactic_cnn_thermal_early_disease_detection/model_loader.py)",
+      "Bash(cp ~/proyectos/Bitbucket/itacyl-pan-modelsinference-svc/app/plugins/ml4_lactic_cnn_thermal_early_disease_detection/plugin.py app/plugins/ml4_lactic_cnn_thermal_early_disease_detection/plugin.py)",
+      "Bash(cp ~/proyectos/Bitbucket/itacyl-pan-modelsinference-svc/app/plugins/ml4_lactic_cnn_thermal_early_disease_detection/postprocessing.py app/plugins/ml4_lactic_cnn_thermal_early_disease_detection/postprocessing.py)",
+      "Read(//home/alejandro/proyectos/Bitbucket/itacyl-pan-modelsinference-svc/app/plugins/ml4_lactic_cnn_thermal_early_disease_detection/**)"
     ],
     "additionalDirectories": [
       "/home/alejandro/proyectos/AIR/models-integrations-itacly/.claude/skills"

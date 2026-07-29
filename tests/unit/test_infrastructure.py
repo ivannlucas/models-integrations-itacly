@@ -254,8 +254,8 @@ class TestArtifactStoreS3:
     def test_build_s3_client_reads_env_vars(self, monkeypatch):
         """Verify _build_s3_client passes environment credentials to boto3."""
         monkeypatch.setenv("CUSTOM_S3_ENDPOINT", "http://minio:9000")
-        monkeypatch.setenv("AWS_ACCESS_KEY_ID_XAI", "testkey")
-        monkeypatch.setenv("AWS_SECRET_ACCESS_KEY_XAI", "testsecret")
+        monkeypatch.setenv("AWS_ACCESS_KEY_ID", "testkey")
+        monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "testsecret")
         monkeypatch.setenv("CUSTOM_REGION", "eu-west-1")
         with patch_unit("boto3.client") as mock_boto3:
             from app.infrastructure.artifact_store import _build_s3_client

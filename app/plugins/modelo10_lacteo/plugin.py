@@ -245,8 +245,8 @@ class Modelo10LacteoPlugin(ModelPluginPort):
             s3 = boto3.client(
                 "s3",
                 endpoint_url=os.environ.get("CUSTOM_S3_ENDPOINT"),
-                aws_access_key_id=os.environ.get("AWS_ACCESS_KEY_ID_XAI"),
-                aws_secret_access_key=os.environ.get("AWS_SECRET_ACCESS_KEY_XAI"),
+                aws_access_key_id=os.environ.get("AWS_ACCESS_KEY_ID"),
+                aws_secret_access_key=os.environ.get("AWS_SECRET_ACCESS_KEY"),
                 config=BotoConfig(signature_version="s3v4"),
                 region_name=os.environ.get("CUSTOM_REGION", "us-east-1"),
             )

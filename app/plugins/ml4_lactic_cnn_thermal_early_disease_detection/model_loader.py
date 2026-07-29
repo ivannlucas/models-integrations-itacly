@@ -52,12 +52,22 @@ class BaselineModel(nn.Module):
         self.global_pool = nn.AdaptiveAvgPool2d(1)
         self.classifier = nn.Sequential(nn.Dropout(dropout), nn.Linear(feature_dim, num_classes))
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Run the backbone, global pool and classifier; return per-class logits."""
+    def forward(self, x: torch.Tensor, return_features: bool = False):
+        """Run the backbone, global pool and classifier; return per-class logits.
+
+        When ``return_features`` is True, also returns the backbone's raw spatial
+        feature map ``(B, C, H, W)`` (before pooling) so a Class Activation Map can
+        be computed from it — the classifier being Dropout (a no-op in eval mode)
+        followed by a single Linear layer right after global average pooling makes
+        CAM exact here (Grad-CAM reduces to CAM for this architecture).
+        """
         features = self.backbone(x)
-        if features.ndim == 4:
-            features = self.global_pool(features)
-        return self.classifier(features.flatten(1))
+        feature_map = features if features.ndim == 4 else None
+        pooled = self.global_pool(features) if features.ndim == 4 else features
+        logits = self.classifier(pooled.flatten(1))
+        if return_features:
+            return logits, feature_map
+        return logits
 
 
 def load_model() -> tuple[nn.Module, torch.device]:
