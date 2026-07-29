@@ -1,0 +1,64 @@
+{
+    "version": "v1",
+    "methodology": "NSGA-II (Multi-Objective, Yang et al. 2023)",
+    "objectives": [
+        "min E_consumo (kW)",
+        "max T_out_leche (C)"
+    ],
+    "constraint": "T_out_leche >= 72.3 C (filtro post-Pareto)",
+    "selection_criterion": "min E_consumo con T_out >= 72.3 C",
+    "scenario_base": {
+        "T_in_leche": 4.0,
+        "t_ciclo": 300,
+        "Delta_P": 0.65
+    },
+    "ga_config": {
+        "pop_size": 120,
+        "lambda_": 100,
+        "n_gen": 1000,
+        "cxpb": 0.9,
+        "mutpb": 0.1
+    },
+    "bounds": {
+        "F_flow": [
+            3500.0,
+            5500.0
+        ],
+        "T_servicio": [
+            76.0,
+            95.0
+        ]
+    },
+    "constraint_T_out_min": 72.3,
+    "pareto_front": {
+        "n_solutions": 120,
+        "n_feasible": 120,
+        "E_consumo_range": [
+            363.74,
+            440.9
+        ],
+        "T_out_range": [
+            74.82,
+            83.67
+        ]
+    },
+    "selected_solution": {
+        "criterion": "min E_consumo with T_out >= 72.3 C",
+        "F_flow_opt_Lh": 3500.0,
+        "T_servicio_opt_C": 80.0,
+        "E_consumo_opt_kW": 363.74,
+        "T_out_leche_C": 74.82,
+        "consumo_especifico_kW_per_Lh": 0.10393,
+        "constraint_satisfied": true
+    },
+    "comparison_vs_historical": {
+        "E_consumo_historico_kW": 435.71,
+        "F_flow_historico_Lh": 4999.8,
+        "ahorro_kW": 71.97,
+        "ahorro_pct": 16.52,
+        "cambio_flow_Lh": -1499.8,
+        "cambio_flow_pct": -30.0,
+        "consumo_esp_historico": 0.08715,
+        "consumo_esp_optimo": 0.10393
+    }
+}

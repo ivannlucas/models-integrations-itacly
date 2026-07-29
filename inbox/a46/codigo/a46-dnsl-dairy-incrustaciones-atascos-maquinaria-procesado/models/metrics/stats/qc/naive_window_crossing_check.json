@@ -1,0 +1,59 @@
+{
+  "seq_len": 120,
+  "stride": 5,
+  "naive_asset_windows_total": 39490,
+  "naive_cross_cycle_windows_total": 4044,
+  "naive_cross_cycle_window_pct": 10.240567232210687,
+  "by_asset": [
+    {
+      "asset_id": "asset_00",
+      "naive_windows": 3877,
+      "crossing_windows": 406
+    },
+    {
+      "asset_id": "asset_01",
+      "naive_windows": 4252,
+      "crossing_windows": 405
+    },
+    {
+      "asset_id": "asset_02",
+      "naive_windows": 3664,
+      "crossing_windows": 405
+    },
+    {
+      "asset_id": "asset_03",
+      "naive_windows": 3828,
+      "crossing_windows": 403
+    },
+    {
+      "asset_id": "asset_04",
+      "naive_windows": 3640,
+      "crossing_windows": 403
+    },
+    {
+      "asset_id": "asset_05",
+      "naive_windows": 4151,
+      "crossing_windows": 404
+    },
+    {
+      "asset_id": "asset_06",
+      "naive_windows": 4062,
+      "crossing_windows": 404
+    },
+    {
+      "asset_id": "asset_07",
+      "naive_windows": 4134,
+      "crossing_windows": 402
+    },
+    {
+      "asset_id": "asset_08",
+      "naive_windows": 3796,
+      "crossing_windows": 406
+    },
+    {
+      "asset_id": "asset_09",
+      "naive_windows": 4086,
+      "crossing_windows": 406
+    }
+  ]
+}

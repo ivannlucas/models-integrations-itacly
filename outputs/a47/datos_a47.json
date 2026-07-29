@@ -1,0 +1,92 @@
+{
+  "model_id": "a47",
+  "model_slug": "m47-dnsl-fallas-maquinaria-pasteurizado",
+  "fecha": "Julio 2026",
+  "model_key": "m47-dnsl-fallas-maquinaria-pasteurizado",
+  "version": "1.0.0",
+
+  "descripcion": "Modelo de clasificación multi-etiqueta basado en Deep Neurosymbolic Learning (DNSL): una red convolucional 1D combinada con una función de pérdida guiada por la física (conservación de energía hidráulica y calorimetría). A partir de un ciclo completo de sensores de la maquinaria de pasteurizado, diagnostica simultáneamente el estado de salud de 4 componentes (enfriador/fouling, válvula, bomba y acumulador) en 3 niveles: sano, advertencia y crítico.",
+
+  "task_type": "Clasificación multi-etiqueta multiclase (4 componentes × 3 estados), sobre series temporales multivariantes",
+
+  "framework": "PyTorch (1D-CNN + Physics-Guided Loss) + scikit-learn (StandardScaler)",
+
+  "artefacto": "neurosymbolic_cnn.pth (pesos DNSL), scaler_cnn_dns.pkl (normalizador), feature_columns.pkl (orden de columnas), ts1_mean_train.pkl (baseline térmico)",
+
+  "objetivo": "Anticipar y clasificar fallos funcionales en la maquinaria de pasteurización láctea (incrustaciones/fouling, atascos de válvula, cavitación/fugas de bomba y pérdida de presión de gas en el acumulador) antes de que comprometan la esterilidad del producto o detengan la línea. Sustituye a los sistemas de umbral estático, que suelen alertar tarde, por un diagnóstico que además audita internamente sus predicciones contra las leyes de la termodinámica.",
+
+  "caso_uso": "Monitorización continua: el sistema consume un ciclo de trabajo de la máquina (~60 s de telemetría a 10 Hz, 600 registros por los 7 sensores) y devuelve un diagnóstico por minuto del estado de los 4 componentes con su nivel de confianza. Se ofrece en modo inline (un ciclo, sensores como arrays o CSV) y en modo batch (CSV con varios ciclos, un diagnóstico por Cycle_ID). Permite planificar paradas de mantenimiento y optimizar los ciclos de limpieza CIP.",
+
+  "inputs": [
+    {"nombre": "PS1", "tipo": "list[float] (bar)", "descripcion": "Serie temporal de presión del circuito principal / entrada", "obligatorio": "Sí", "valor_defecto": "-"},
+    {"nombre": "PS3", "tipo": "list[float] (bar)", "descripcion": "Serie temporal de presión en punto secundario / retorno", "obligatorio": "Sí", "valor_defecto": "-"},
+    {"nombre": "EPS1", "tipo": "list[float] (W)", "descripcion": "Potencia activa del motor eléctrico; crítica para la regla física de la bomba", "obligatorio": "Sí", "valor_defecto": "-"},
+    {"nombre": "FS1", "tipo": "list[float] (L/min)", "descripcion": "Caudal volumétrico principal; crítico para las reglas termodinámica e hidráulica", "obligatorio": "Sí", "valor_defecto": "-"},
+    {"nombre": "TS1", "tipo": "list[float] (°C)", "descripcion": "Serie temporal de temperatura de entrada", "obligatorio": "Sí", "valor_defecto": "-"},
+    {"nombre": "TS2", "tipo": "list[float] (°C)", "descripcion": "Serie temporal de temperatura de salida", "obligatorio": "Sí", "valor_defecto": "-"},
+    {"nombre": "VS1", "tipo": "list[float] (mm/s)", "descripcion": "Serie temporal de vibración mecánica", "obligatorio": "Sí", "valor_defecto": "-"},
+    {"nombre": "Time_Segundos", "tipo": "list[float] (s)", "descripcion": "Marca temporal (0,0–60,0 s) para ordenar las 600 observaciones del ciclo", "obligatorio": "Sí", "valor_defecto": "-"},
+    {"nombre": "Cycle_ID", "tipo": "int", "descripcion": "Identificador de ciclo; habilita el modo batch (un diagnóstico por ciclo)", "obligatorio": "No", "valor_defecto": "-"}
+  ],
+
+  "outputs": [
+    {"nombre": "Enfriador_Fouling", "tipo": "int (0/1/2)", "descripcion": "Estado del enfriador / incrustaciones", "rango": "0=SANO, 1=WARNING, 2=CRÍTICO", "interpretacion": "2 indica fouling que degrada la transferencia de calor"},
+    {"nombre": "Valvula_Switch", "tipo": "int (0/1/2)", "descripcion": "Estado de la válvula de conmutación", "rango": "0=SANO, 1=WARNING, 2=CRÍTICO", "interpretacion": "niveles altos indican degradación en los tiempos de conmutación"},
+    {"nombre": "Bomba_Leakage", "tipo": "int (0/1/2)", "descripcion": "Estado de la bomba / fugas internas", "rango": "0=SANO, 1=WARNING, 2=CRÍTICO", "interpretacion": "niveles altos indican pérdida de eficiencia hidráulica"},
+    {"nombre": "Acumulador_Gas", "tipo": "int (0/1/2)", "descripcion": "Estado del acumulador / presión de gas", "rango": "0=SANO, 1=WARNING, 2=CRÍTICO", "interpretacion": "niveles altos indican pérdida de presión de precarga"},
+    {"nombre": "Confianza_Fouling / _Valvula / _Bomba / _Acumulador", "tipo": "float", "descripcion": "Probabilidad softmax de la clase ganadora de cada componente", "rango": "0–1", "interpretacion": "valores próximos a 1 indican un diagnóstico de alta certeza"}
+  ],
+
+  "metricas": [
+    {"nombre": "Exact Match (declarado, memoria v2.0)", "valor": "98,79 %", "descripcion": "Ciclos del test hold-out con los 4 componentes correctos a la vez (métrica más estricta)", "interpretacion": "de cada 100 ciclos, ~99 se diagnostican perfectamente en los 4 componentes"},
+    {"nombre": "F1-Score Macro (declarado, memoria v2.0)", "valor": "0,9970", "descripcion": "Media de F1 por clase; métrica fundamental de éxito del proyecto (umbral exigido ≥ 0,95)", "interpretacion": "supera con holgura el criterio de aceptación acordado"},
+    {"nombre": "Recall Macro (declarado, memoria v2.0)", "valor": "0,9972", "descripcion": "Sensibilidad promedio; prioridad de negocio = minimizar falsos negativos (no dejar pasar un fallo real)", "interpretacion": "el modelo detecta casi todos los fallos presentes en el conjunto de test"},
+    {"nombre": "Métricas por componente (artefacto entregado test_metrics_confusion.csv)", "valor": "Fouling 100 % · Válvula 100 % · Bomba 99,40 % · Acumulador 99,40 %", "descripcion": "Accuracy por componente sobre 331 ciclos de test; los únicos errores son 2 falsas alarmas (Sano→Warning) en Bomba y 2 en Acumulador", "interpretacion": "los pocos errores son sobre clases contiguas y de bajo coste (revisión innecesaria, nunca fallo no detectado)"},
+    {"nombre": "Verificación golden tras integración (skill verification, 2026-07-16)", "valor": "15/15 ciclos reproducidos exactamente", "descripcion": "Ejecución del plugin integrado sobre 15 ciclos diversos del test split (9 combinaciones de estado); las 4 clases de componente coinciden con la predicción de referencia en los 15 casos, incluida la reproducción exacta de la única falsa alarma contigua del acumulador (ciclo 211). Evidencia distinta a las métricas declaradas: confirma que el plugin replica fielmente el pipeline original", "interpretacion": "el modelo integrado reproduce el comportamiento del código de la IA; coherente con el 98,79 % de Exact Match declarado"}
+  ],
+
+  "limitaciones": [
+    {"tipo": "Datos de laboratorio, no de planta láctea real", "descripcion": "El modelo se entrenó y validó con el banco experimental UCI Condition Monitoring of Hydraulic Systems (fluido = aceite hidráulico, fallos inyectados de forma controlada), no con telemetría de un pasteurizador lácteo. Las métricas son optimistas; en producción serán netamente inferiores. Requiere validación con datos reales antes de despliegue."},
+    {"tipo": "Requiere reentrenamiento/calibración antes de producción", "descripcion": "Las propiedades físicas de la leche (densidad, viscosidad, calor específico) difieren del aceite, por lo que los umbrales aprendidos no son directamente válidos. Es obligatorio recalibrar (fine-tuning por transferencia de aprendizaje, 200–500 ciclos reales) antes de usarlo en planta."},
+    {"tipo": "Gemelo térmico y escala de presiones", "descripcion": "El dataset opera a alta presión (hasta 200 bar) y temperaturas de ~45 °C; un pasteurizador trabaja a baja presión (<5 bar) y 70–74 °C. En laboratorio se aplica un offset térmico (gemelo digital); en producción DEBE desactivarse (auditoría biosanitaria de la temperatura real)."},
+    {"tipo": "Ventana fija de un ciclo", "descripcion": "El modelo espera un ciclo de ~600 pasos (60 s a 10 Hz). Secuencias más cortas se rellenan con ceros (padding) y más largas se truncan, lo que puede degradar el diagnóstico si el muestreo no es homogéneo."},
+    {"tipo": "KPI de negocio no cuantificado", "descripcion": "El objetivo original de reducir un 15 % los costes de mantenimiento no pudo medirse por falta de datos de costes de una planta real; se sustituyó por un criterio técnico (F1-Score Macro ≥ 0,95). Requiere validación económica con datos reales antes de despliegue."}
+  ],
+
+  "fichero_nombre": "data/splits/test_split.csv (partición de test hold-out del dataset UCI, con etiquetas Target_* por ciclo)",
+  "fichero_registros": "331 ciclos (15 % de los 2.205 totales), ~601 filas por ciclo a 10 Hz; split por Cycle_ID sin fuga de datos",
+  "fichero_resultado": "Diagnóstico de los 4 componentes por ciclo. En la verificación tras integración (skill verification, 15 ciclos diversos del test split), el plugin integrado reprodujo exactamente los 4 estados en los 15 casos —incluida la única falsa alarma contigua del acumulador—, confirmando la fidelidad respecto al código original y la coherencia con el 98,79 % de Exact Match declarado.",
+
+  "observaciones_tecnicas": "Entorno de referencia: Python 3.13 / PyTorch (probado también en torch 2.1.2). Entrenamiento acelerado por GPU NVIDIA CUDA recomendado; la inferencia unitaria corre eficientemente en CPU. Mínimos: 4–8 núcleos x86-64, 16 GB de RAM, ~5 GB de disco. Artefactos ligeros (~600 KB en total). Reproducibilidad determinista con semilla global 42; el versionado de CUDA puede alterar levemente los decimales de confianza. Dependencias núcleo de producción: torch, pandas, numpy, scikit-learn, joblib, pyyaml. Monitorización recomendada: vigilar la deriva de las distribuciones de sensores y reentrenar/calibrar si decae el rendimiento.",
+
+  "que_no_responde": "No indica la causa raíz ni la reparación concreta de un fallo, ni predice cuánto tiempo queda hasta la avería: informa del estado de salud actual (sano, advertencia o crítico) de cada componente, como apoyo a la decisión de mantenimiento.",
+
+  "entradas_contexto": "Los datos provienen de los sensores IIoT ya instalados en la máquina de pasteurizado (presión, caudal, potencia del motor, temperaturas de entrada y salida, y vibración), registrados durante un ciclo de trabajo de aproximadamente un minuto.",
+
+  "ejemplo_interpretacion": "Si al analizar el último ciclo el sistema devuelve enfriador=CRÍTICO con un 99 % de confianza y el resto de componentes SANO, se interpreta como que hay incrustaciones (fouling) reduciendo la eficiencia del intercambiador: conviene programar una limpieza CIP o una revisión del enfriador, aunque la bomba, la válvula y el acumulador funcionen con normalidad.",
+
+  "margen_error": "En las pruebas de laboratorio el sistema acierta el estado completo de la máquina en aproximadamente 99 de cada 100 ciclos. Los pocos fallos consisten en dar una advertencia cuando el componente en realidad estaba sano (una falsa alarma que, como mucho, provoca una revisión innecesaria); no se han observado casos en que dejara pasar un fallo real. Aun así, estas cifras son de un entorno de laboratorio y serán menores con una máquina real.",
+
+  "revisar_manualmente": [
+    "Cuando el nivel de confianza de un componente sea bajo, conviene contrastar el diagnóstico con una inspección física.",
+    "Antes de usar el sistema en una planta real: debe recalibrarse con datos de esa máquina; los resultados de laboratorio no son directamente extrapolables.",
+    "Si los sensores de temperatura provienen del banco de laboratorio (no de la planta), hay que activar el ajuste térmico correspondiente; con datos reales debe permanecer desactivado.",
+    "Si un ciclo no tiene aproximadamente un minuto de datos continuos, el diagnóstico puede ser menos fiable por el relleno/recorte automático de la ventana."
+  ],
+
+  "que_no_hace": [
+    "No sustituye las inspecciones de mantenimiento ni las auditorías de seguridad alimentaria obligatorias.",
+    "No garantiza la detección de todos los fallos posibles: solo diagnostica los 4 componentes para los que fue entrenado.",
+    "No estima el tiempo restante hasta la avería ni recomienda la reparación concreta.",
+    "No debe usarse en producción sin un reentrenamiento previo con datos reales etiquetados de la planta."
+  ],
+
+  "puede_equivocarse": "Sí. Es una herramienta de apoyo a la decisión, no una garantía. Sus métricas (≈99 % de acierto por ciclo) provienen de un banco de pruebas de laboratorio con fluido distinto a la leche, por lo que en una planta real el rendimiento será inferior hasta que se recalibre con datos propios. Requiere validación con datos reales antes de cualquier despliegue, y su diagnóstico siempre debe acompañarse del criterio del personal de mantenimiento.",
+
+  "kpis": [
+    {"kpi": "Fiabilidad global del diagnóstico (Exact Match)", "valor_umbral": "≈ 99 % en laboratorio", "descripcion": "Porcentaje de ciclos en que acierta simultáneamente el estado de los 4 componentes"},
+    {"kpi": "Equilibrio acierto/falsas alarmas (F1-Score Macro)", "valor_umbral": "≥ 0,95 exigido — alcanzado ≈ 0,997", "descripcion": "Garantiza que no se detecten fallos a costa de generar demasiadas alertas falsas"},
+    {"kpi": "Sensibilidad ante fallos reales (Recall)", "valor_umbral": "≈ 0,997 en laboratorio", "descripcion": "Prioridad de negocio: es preferible una falsa alarma a dejar pasar un fallo real"},
+    {"kpi": "Reducción de costes de mantenimiento", "valor_umbral": "Objetivo del 15 % (pendiente de validar)", "descripcion": "Meta económica no cuantificada por falta de datos de costes reales; requiere validación con datos de planta antes de despliegue"}
+  ]
+}

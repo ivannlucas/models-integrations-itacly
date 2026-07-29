@@ -16,6 +16,8 @@ ArtifactStore downloads them before returning the path.
 
 import logging
 import os
+import tempfile
+from contextlib import contextmanager
 from pathlib import Path
 
 from botocore.client import Config
@@ -44,7 +46,7 @@ def _build_s3_client():
         "s3",
         endpoint_url=os.getenv("CUSTOM_S3_ENDPOINT"),
         aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
-        aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_ID"),
+        aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY"),
         config=Config(signature_version="s3v4"),
         region_name=os.getenv("CUSTOM_REGION"),
     )
@@ -55,6 +57,34 @@ def _file_needs_download(local_path: Path, remote_size: int) -> bool:
     if not local_path.exists():
         return True
     return local_path.stat().st_size != remote_size
+
+
+def download_s3_file(s3_uri: str) -> str:
+    """Download an ``s3://bucket/key`` object to a local temp file and return its path."""
+    without_prefix = s3_uri[len("s3://"):]
+    bucket, _, key = without_prefix.partition("/")
+    s3 = _build_s3_client()
+    fd, tmp_path = tempfile.mkstemp(suffix=Path(key).suffix)
+    os.close(fd)
+    logger.info("Downloading s3://%s/%s to %s", bucket, key, tmp_path)
+    s3.download_file(bucket, key, tmp_path)
+    return tmp_path
+
+
+@contextmanager
+def local_file_path(data_path: str):
+    """Yield a local filesystem path for *data_path*, downloading it first if it's an ``s3://`` URI.
+
+    Any downloaded temp file is removed on exit. Local paths are yielded unchanged.
+    """
+    if not data_path.startswith("s3://"):
+        yield data_path
+        return
+    tmp_path = download_s3_file(data_path)
+    try:
+        yield tmp_path
+    finally:
+        os.unlink(tmp_path)
 
 
 class ArtifactStore:

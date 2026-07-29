@@ -1,0 +1,98 @@
+{
+  "model_id": "a34",
+  "model_slug": "dairy-pasteurization-energy-ga",
+  "fecha": "Julio 2026",
+  "model_key": "ml34-dairy-pasteurization-energy-ga",
+  "version": "1.0.0",
+  "task_type": "regression_prescriptive (regresión multi-salida + optimización evolutiva)",
+  "framework": "PyTorch (MLP DynamicMLP, 3 capas ocultas x 64 neuronas, ReLU) + DEAP (GA mono-objetivo v4)",
+  "artefacto": "mlp_predictor.pt + model_config.json + scaler_X.pkl + scaler_y.pkl (~41 KB en total)",
+
+  "descripcion": "Sistema híbrido de gemelo digital y optimizador evolutivo para el proceso de pasteurización HTST de leche. Un MLP (PyTorch) predice el consumo energético (E_consumo, kW) y la temperatura de salida de la leche (T_out_leche, °C) a partir de 5 variables de proceso; sobre ese surrogate, un algoritmo genético mono-objetivo (DEAP) busca por escenario los setpoints de caudal y temperatura de servicio que minimizan el consumo específico E_consumo/F_flow, penalizando toda solución con T_out < 72,3 °C.",
+
+  "objetivo": "Reducir el consumo específico de energía (kW por L/h procesado) del intercambiador de pasteurización manteniendo la seguridad alimentaria (T_out >= 72,3 °C: límite legal HTST 72,0 °C + margen de 0,3 °C por incertidumbre PT100/PMO-FDA). En backtesting sobre las 7.708 instancias de test, el sistema mejora el consumo específico un 11,73% frente a la operación histórica PID (criterio de éxito: >= 3%), con cumplimiento térmico del 100%.",
+
+  "caso_uso": "Dos modos vía POST /predict. Modo inline: dado un estado completo de planta (5 features), devuelve E_consumo_pred y T_out_pred del gemelo digital. Modo optimize: dadas las 3 variables no controlables del escenario (T_in_leche, Delta_P, t_ciclo) y una semilla opcional, ejecuta el GA (pop=150, gen=15, ~0,4-0,7 s) y devuelve los setpoints recomendados (IA_F_flow, IA_T_servicio) con su predicción asociada y el flag de factibilidad térmica. Modo batch: inferencia inline sobre cada fila de un CSV. Soporta además /train (fine-tuning del MLP con datos nuevos) y /stats.",
+
+  "inputs": [
+    {"nombre": "T_in_leche", "tipo": "float (°C)", "descripcion": "Temperatura de entrada de la leche cruda (perturbación estacional). Rango de entrenamiento: 0,0-7,98 °C", "obligatorio": "Sí", "valor_defecto": "-"},
+    {"nombre": "F_flow", "tipo": "float (L/h)", "descripcion": "Caudal volumétrico de leche. Rango operativo: 3.500-5.500 L/h", "obligatorio": "Sí (inline) / No aplica (optimize: lo decide el GA)", "valor_defecto": "-"},
+    {"nombre": "T_servicio", "tipo": "float (°C)", "descripcion": "Temperatura del fluido de servicio (caldera). Rango operativo: 76-95 °C", "obligatorio": "Sí (inline) / No aplica (optimize: lo decide el GA)", "valor_defecto": "-"},
+    {"nombre": "t_ciclo", "tipo": "float (min)", "descripcion": "Tiempo desde la última limpieza CIP (indicador de fouling acumulado). Rango de entrenamiento: 5-545 min", "obligatorio": "Sí", "valor_defecto": "-"},
+    {"nombre": "Delta_P", "tipo": "float (bar)", "descripcion": "Caída de presión en el intercambiador, proxy físico del ensuciamiento. Rango de entrenamiento: 0,263-0,906 bar", "obligatorio": "Sí", "valor_defecto": "-"},
+    {"nombre": "seed", "tipo": "int", "descripcion": "Semilla del GA para reproducibilidad determinista por escenario (solo modo optimize)", "obligatorio": "No", "valor_defecto": "1"}
+  ],
+
+  "outputs": [
+    {"nombre": "E_consumo_pred", "tipo": "float (kW)", "descripcion": "[inline] Consumo energético total predicho (térmico + bombeo + fijo)", "rango": "~300-550 kW (rango del dataset)", "interpretacion": "MAE 4,26 kW (~1% del consumo medio); permite comparar el coste energético de escenarios"},
+    {"nombre": "T_out_pred", "tipo": "float (°C)", "descripcion": "[inline] Temperatura de salida de la leche predicha", "rango": "~72,2-73,9 °C (banda estrecha por control PID)", "interpretacion": "MAE 0,047 °C; si < 72,3 °C el escenario no cumple el margen de seguridad alimentaria"},
+    {"nombre": "IA_F_flow", "tipo": "float (L/h)", "descripcion": "[optimize] Setpoint de caudal recomendado por el GA", "rango": "3.500-5.500 L/h", "interpretacion": "Setpoint accionable para la bomba de alimentación"},
+    {"nombre": "IA_T_servicio", "tipo": "float (°C)", "descripcion": "[optimize] Setpoint de temperatura de servicio recomendado", "rango": "76-95 °C", "interpretacion": "Setpoint accionable para la consigna de caldera"},
+    {"nombre": "IA_E_consumo", "tipo": "float (kW)", "descripcion": "[optimize] Consumo predicho con los setpoints IA", "rango": "~360-550 kW", "interpretacion": "Media con IA: 424,94 kW vs 435,40 kW histórico (-1,78% de consumo absoluto)"},
+    {"nombre": "IA_T_out", "tipo": "float (°C)", "descripcion": "[optimize] Temperatura de salida predicha con los setpoints IA", "rango": ">= 72,3 °C (restricción)", "interpretacion": "Cumplimiento térmico del 100% en backtesting; si el GA no logra >= 72,3 °C el servicio devuelve error 422 en lugar de una recomendación insegura"},
+    {"nombre": "IA_consumo_especifico", "tipo": "float (kW/(L/h))", "descripcion": "[optimize] Consumo específico E/F — KPI principal", "rango": "~0,073-0,095", "interpretacion": "Media con IA: 0,07807 vs 0,08845 histórico (-11,73%)"},
+    {"nombre": "IA_factible", "tipo": "bool", "descripcion": "[optimize] Cumplimiento de la restricción T_out >= 72,3 °C", "rango": "True/False", "interpretacion": "Siempre True en las respuestas (los escenarios infactibles devuelven error 422)"},
+    {"nombre": "fitness_final", "tipo": "float", "descripcion": "[optimize] Fitness del mejor individuo al final del GA", "rango": "= consumo específico si factible", "interpretacion": "Trazabilidad del optimizador; valores >= 10.000 indicarían penalización por infactibilidad"}
+  ],
+
+  "metricas": [
+    {"nombre": "MAE E_consumo (test, IA)", "valor": "4,2571 kW", "descripcion": "Error absoluto medio del gemelo digital sobre el hold-out de test (7.708 filas), declarado por el equipo de IA (train_metrics.json)", "interpretacion": "Error relativo ~1% sobre el consumo medio de 435 kW"},
+    {"nombre": "RMSE E_consumo (test, IA)", "valor": "5,3838 kW", "descripcion": "Raíz del error cuadrático medio del consumo energético", "interpretacion": "Las desviaciones puntuales grandes se mantienen en ~1,2% del consumo medio"},
+    {"nombre": "R² E_consumo (test, IA)", "valor": "0,9779", "descripcion": "Coeficiente de determinación del consumo energético", "interpretacion": "El modelo explica el 97,8% de la varianza; valida su uso como surrogate del GA"},
+    {"nombre": "MAE T_out_leche (test, IA)", "valor": "0,0473 °C", "descripcion": "Error absoluto medio de la temperatura de salida", "interpretacion": "Muy por debajo de la incertidumbre del sensor PT100 Clase A (±0,15 °C)"},
+    {"nombre": "RMSE T_out_leche (test, IA)", "valor": "0,0643 °C", "descripcion": "Raíz del error cuadrático medio de la temperatura de salida", "interpretacion": "Justifica el margen de seguridad de +0,3 °C del optimizador"},
+    {"nombre": "R² T_out_leche (test, IA)", "valor": "0,3759", "descripcion": "Coeficiente de determinación de la temperatura de salida", "interpretacion": "Bajo por diseño: la variable está regulada por PID en una banda de σ≈0,08 °C; el MAE es la métrica informativa"},
+    {"nombre": "Mejora consumo específico (GA, test)", "valor": "-11,73%", "descripcion": "Reducción del ratio E/F vs. operación histórica PID en backtesting sobre 7.708 escenarios (evaluation_rt_backtesting_report.json entregado). Nota: la memoria v2.0 cita un run anterior con -10,73%; se adopta el artefacto entregado como fuente de verdad", "interpretacion": "KPI principal: de 0,08845 a 0,07807 kW/(L/h); supera x3,9 el umbral de éxito del 3%. Cifra sobre datos sintéticos — requiere validación con datos reales antes de despliegue"},
+    {"nombre": "Ahorro consumo absoluto (GA, test)", "valor": "-1,78%", "descripcion": "Reducción del consumo medio absoluto (435,40 → 424,94 kW). La memoria v2.0 cita -1,48% del run anterior", "interpretacion": "Métrica secundaria de diagnóstico; la mejora principal viene de procesar +10,62% de caudal con menos energía por litro"},
+    {"nombre": "Cumplimiento térmico (GA, test)", "valor": "100%", "descripcion": "Porcentaje de escenarios de test cuya recomendación mantiene T_out >= 72,3 °C (vs. 99,4% histórico)", "interpretacion": "Condición innegociable de seguridad alimentaria (Codex 2004, HTST >= 72 °C)"},
+    {"nombre": "Verificación post-integración (golden dataset)", "valor": "20/20 casos OK", "descripcion": "15 casos de predicción + 5 de optimización extraídos del split de test y del backtesting entregado, ejecutados contra el endpoint real del plugin integrado (2026-07-10)", "interpretacion": "Reproducción exacta de las salidas del pipeline original (diferencia máx. 0,0001 kW en predicción; optimización bit a bit con la misma semilla). Ver outputs/a34/verification_report.md"}
+  ],
+
+  "limitaciones": [
+    {"tipo": "Dataset 100% sintético (Sim2Real gap)", "descripcion": "El modelo se entrenó con datos del simulador físico V3.4, no con datos reales de planta. Todas las cifras de negocio (mejora del 11,73%, cumplimiento 100%) requieren validación con datos reales antes de cualquier despliegue productivo."},
+    {"tipo": "Optimiza consumo específico, no absoluto", "descripcion": "El GA minimiza E/F: puede recomendar operar con mayor consumo total si el aumento de caudal lo compensa por litro. Supervisar el consumo absoluto en plantas con potencia contratada o capacidad de caldera limitadas."},
+    {"tipo": "Sin modelado de desgaste mecánico", "descripcion": "El GA tiende a recomendar caudales próximos al límite superior (~5.400 L/h); el posible desgaste acelerado de bombas no está en la función de fitness."},
+    {"tipo": "Rango de validez acotado", "descripcion": "Usar solo con entradas dentro del rango de entrenamiento (T_in 0-8 °C, F_flow 3.500-5.500 L/h, T_servicio 76-95 °C, Delta_P 0,26-0,91 bar); fuera de él las predicciones son extrapolaciones no validadas."},
+    {"tipo": "Solo pasteurización HTST de leche", "descripcion": "Simulador y modelo parametrizados para leche (Cp≈3.890 J/kgK, ρ≈1.030 kg/m³) e intercambiador de placas en contracorriente; no transferible a otros productos o equipos sin reentrenar."},
+    {"tipo": "Determinismo ligado a versiones", "descripcion": "La reproducción exacta de los setpoints del GA está verificada con deap 1.4.3 y semilla por escenario; otras versiones de la librería podrían dar setpoints distintos (con objetivo equivalente)."},
+    {"tipo": "Latencia del GA", "descripcion": "~0,4-0,7 s por escenario (150 individuos x 15 generaciones). Adecuado para recomendación casi en tiempo real; no para lazos de control de alta frecuencia."}
+  ],
+
+  "fichero_nombre": "data/splits/test.csv (split temporal de test del dataset sintético)",
+  "fichero_registros": "7.708 registros (instantáneas de operación cada 5 min, solo producción)",
+  "fichero_resultado": "La primera fila (T_in=6,78; F_flow=4.675,09; T_serv=79,73; t_ciclo=80; ΔP=0,481) debe devolver E_consumo_pred=392,9284 kW y T_out_pred=72,6027 °C en modo inline; en modo optimize con seed=1, setpoints IA_F_flow=5.422,10 L/h e IA_T_servicio=80,40 °C con consumo específico 0,076152. Verificado 20/20 golden cases (2026-07-10).",
+
+  "observaciones_tecnicas": "CPU x86-64 (mín. 2 vCPU; el GA se beneficia de buen rendimiento por núcleo), 4 GB RAM (8 GB recomendado), sin GPU en inferencia. Librerías núcleo: torch 2.5.1 (build CPU válida; verificado también con 2.1.2), deap 1.4.3, scikit-learn 1.7.x, joblib, pandas/numpy. Artefactos ligeros (~41 KB): mlp_predictor.pt, model_config.json, scaler_X.pkl, scaler_y.pkl, servidos desde artifacts/ml34_dairy_pasteurization_energy_ga/ (local) o S3. Soporta fine-tuning vía /train (Adam lr=5e-4, batch 128, early stopping patience 15) con artefactos de usuario en MLflow. Monitorizar data drift respecto a los rangos de entrenamiento y el consumo absoluto en planta.",
+
+  "que_no_responde": "No dice cuánto consumirá realmente tu planta ni garantiza el ahorro: recomienda consignas de operación estimadas sobre un modelo entrenado con datos simulados, y la decisión final de aplicarlas es siempre del operario.",
+
+  "entradas_contexto": "Los datos de entrada provienen de la instrumentación estándar de planta (sondas de temperatura, caudalímetro, transmisor de presión diferencial y registro de limpiezas CIP del sistema SCADA/PLC).",
+
+  "ejemplo_interpretacion": "Ejemplo: introduces el estado actual de planta (leche entrando a 6,8 °C, presión diferencial 0,48 bar, 80 minutos desde la última limpieza) y el sistema recomienda subir el caudal a unos 5.420 L/h con el agua de servicio a 80,4 °C. Con esas consignas predice un consumo de 413 kW y una temperatura de salida de 72,3 °C: procesas más leche con menos energía por litro y sin bajar del umbral de seguridad.",
+
+  "margen_error": "En la predicción de consumo el sistema se equivoca de media unos 4 kW sobre consumos típicos de 435 kW (en torno al 1%): diferencias de menos de 5 kW entre dos escenarios no son significativas. En la temperatura de salida el error medio es de 0,05 °C, menor que el propio margen de error de las sondas industriales.",
+
+  "revisar_manualmente": [
+    "Si las condiciones de planta están fuera de los rangos habituales (leche por debajo de 0 °C o por encima de 8 °C, presión diferencial mayor de 0,9 bar, más de 9 horas sin limpieza CIP), la recomendación es una extrapolación y debe revisarse.",
+    "Si la recomendación implica un cambio brusco respecto a la operación actual (por ejemplo, subir el caudal más de 500 L/h de golpe), aplicar el cambio de forma gradual y supervisada.",
+    "Si la temperatura de salida real medida se acerca a 72,3 °C, verificar con la sonda de planta antes de mantener la consigna: el margen legal es innegociable.",
+    "Durante los primeros meses de uso con datos reales, contrastar sistemáticamente el consumo real contra el predicho para detectar desviaciones del modelo (entrenado en simulación)."
+  ],
+
+  "que_no_hace": [
+    "No actúa directamente sobre la planta: propone consignas, no las aplica; el lazo de control sigue siendo del PLC/operario.",
+    "No garantiza el ahorro energético en tu planta real: las cifras de mejora proceden de un entorno simulado y están pendientes de validación con datos reales.",
+    "No minimiza el consumo total a cualquier precio: optimiza la energía por litro procesado, y puede recomendar consumir más en total si se procesa proporcionalmente más leche.",
+    "No considera el coste eléctrico/térmico por franjas horarias, la huella de carbono ni el desgaste mecánico de bombas y válvulas.",
+    "No sustituye los controles de seguridad alimentaria reglamentarios ni al sistema de desvío de flujo (FDV)."
+  ],
+
+  "puede_equivocarse": "Sí. El sistema se entrenó con datos generados por un simulador físico, no con historial real de planta: aunque en la evaluación mejoró la eficiencia energética un 11,7% cumpliendo la temperatura de seguridad en el 100% de los casos, ese resultado está pendiente de validación con datos reales (advertencia que mantiene el propio equipo de desarrollo). Puede fallar más cuanto más se alejen las condiciones reales de las simuladas. Es una ayuda a la decisión para el responsable de planta, no una garantía ni un sustituto de su criterio.",
+
+  "kpis": [
+    {"kpi": "Mejora del consumo específico (energía por litro)", "valor_umbral": ">= 3% de mejora — resultado: 11,73% (validado en simulación; la memoria del proyecto cita 10,73% de un run anterior)", "descripcion": "Cuánta menos energía se gasta por cada litro de leche pasteurizada frente a la operación histórica. Es el indicador principal de rentabilidad."},
+    {"kpi": "Cumplimiento de la temperatura de seguridad", "valor_umbral": "100% — resultado: 100%", "descripcion": "Ninguna recomendación puede dejar la leche por debajo de 72,3 °C a la salida. Es la condición innegociable de seguridad alimentaria."},
+    {"kpi": "Precisión del predictor de consumo", "valor_umbral": "error medio < 5% del consumo — resultado: ~1%", "descripcion": "El sistema debe predecir el consumo con precisión suficiente para que sus comparaciones entre escenarios sean fiables."},
+    {"kpi": "Tiempo de respuesta de la recomendación", "valor_umbral": "< 1 segundo por escenario — resultado: 0,4-0,7 s", "descripcion": "La recomendación debe llegar a tiempo para ser útil en la operación del turno."}
+  ]
+}

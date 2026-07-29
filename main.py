@@ -7,7 +7,8 @@ import logging
 import os
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 
 from app.infrastructure.http.dependencies.container import ModelContainer
 from app.infrastructure.http.router_factory import make_model_router
@@ -32,14 +33,16 @@ async def lifespan(app: FastAPI):
     """Manage the application lifespan: load models on startup, clean up on shutdown."""
     logger.info("Starting up — loading %d model(s)...", len(_active_entries))
     app.state.containers = {}
+    app.state.load_errors = {}
     for entry in _active_entries:
         try:
             container = ModelContainer(plugin=entry.plugin_class())
             container.init()
             app.state.containers[entry.model_id] = container
             logger.info("Model '%s' loaded successfully.", entry.model_id)
-        except Exception:
+        except Exception as exc:
             logger.exception("Failed to load model '%s' — it will be unavailable.", entry.model_id)
+            app.state.load_errors[entry.model_id] = str(exc)
     logger.info("Startup complete. %d/%d models ready.", len(app.state.containers), len(_active_entries))
     yield
     logger.info("Shutting down.")
@@ -57,15 +60,41 @@ app = FastAPI(
 
 
 @app.get("/health", tags=["health"])
-async def health() -> dict:
-    """Global health check used by Kubernetes liveness and readiness probes."""
+async def health() -> JSONResponse:
+    """Global health check used by Kubernetes liveness and readiness probes.
+
+    Returns a non-2xx status if any active model failed to load, so K8s probes
+    actually detect and act on it — a pod stuck permanently reporting HTTP 200
+    while every model call 503s is what caused failures to go unnoticed before.
+    """
     containers = getattr(app.state, "containers", {})
+    load_errors = getattr(app.state, "load_errors", {})
     models_status = {mid: c.service.is_loaded() for mid, c in containers.items()}
-    all_loaded = all(models_status.values()) if models_status else False
-    return {
-        "status": "ok" if all_loaded else "loading",
-        "models": models_status,
-    }
+    all_active_loaded = len(containers) == len(_active_entries) and all(models_status.values())
+    return JSONResponse(
+        status_code=200 if all_active_loaded else 503,
+        content={
+            "status": "ok" if all_active_loaded else "error",
+            "models": models_status,
+            "load_errors": load_errors,
+        },
+    )
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    """Return a diagnosable JSON body for any otherwise-unhandled exception.
+
+    Without this, e.g. indexing a missing model container raises a bare
+    KeyError that FastAPI's default handling turns into an opaque
+    "Internal Server Error" with no detail — making load/routing bugs
+    indistinguishable from real prediction errors to callers.
+    """
+    logger.exception("Unhandled exception on %s %s", request.method, request.url.path)
+    return JSONResponse(
+        status_code=500,
+        content={"detail": f"{type(exc).__name__}: {exc}"},
+    )
 
 
 for _entry in _active_entries:

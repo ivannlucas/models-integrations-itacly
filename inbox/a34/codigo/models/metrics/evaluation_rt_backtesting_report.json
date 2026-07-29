@@ -1,0 +1,40 @@
+{
+    "descripcion": "Backtesting en tiempo real: GA ejecutado sobre cada instancia de test",
+    "metodologia": "GA uni-objetivo (pop=150, n_gen=15, cxpb=0.8, mutpb=0.2) per scenario",
+    "datos": {
+        "n_instancias_test": 7708,
+        "pct_factibles": 100.0,
+        "tiempo_total_s": 3210.6,
+        "tiempo_medio_ms": 416.5
+    },
+    "kpi_energia": {
+        "E_consumo_hist_medio_kW": 435.4,
+        "E_consumo_ia_medio_kW": 424.94,
+        "ahorro_medio_kW": 10.46,
+        "ahorro_medio_pct": 1.78,
+        "ahorro_total_kW": 80628.9
+    },
+    "kpi_eficiencia_especifica": {
+        "E_F_hist_medio": 0.088448,
+        "E_F_ia_medio": 0.07807,
+        "mejora_absoluta": 0.010378,
+        "mejora_pct": 11.73
+    },
+    "kpi_produccion": {
+        "F_flow_hist_medio_Lh": 4920.6,
+        "F_flow_ia_medio_Lh": 5443.1,
+        "delta_F_flow_medio": 522.5,
+        "delta_F_flow_pct": 10.62
+    },
+    "kpi_seguridad": {
+        "cumplimiento_hist_pct": 99.4,
+        "cumplimiento_ia_pct": 100.0,
+        "T_out_ia_min": 72.3,
+        "T_out_ia_medio": 72.3
+    },
+    "kpi_T_servicio": {
+        "T_serv_hist_medio": 81.55,
+        "T_serv_ia_medio": 81.31,
+        "delta_T_servicio": -0.24
+    }
+}

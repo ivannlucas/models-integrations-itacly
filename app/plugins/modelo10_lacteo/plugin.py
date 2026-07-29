@@ -27,7 +27,11 @@ from app.domain.services.exceptions import InvalidImageError, ModelNotLoadedErro
 from app.domain.services.mlflow_tracker import BaseMLflowTracker
 from app.infrastructure.artifact_store import ArtifactStore
 from app.plugins.modelo10_lacteo.model_loader import load_detector_and_classifier, safe_device
-from app.plugins.modelo10_lacteo.postprocessing import build_inline_result, classify_crop
+from app.plugins.modelo10_lacteo.postprocessing import (
+    build_inline_result,
+    classify_crop,
+    render_annotated_image,
+)
 from app.plugins.modelo10_lacteo.predict_dto import (
     PredictBatchResponse,
     PredictInlineResponse,
@@ -242,7 +246,7 @@ class Modelo10LacteoPlugin(ModelPluginPort):
                 "s3",
                 endpoint_url=os.environ.get("CUSTOM_S3_ENDPOINT"),
                 aws_access_key_id=os.environ.get("AWS_ACCESS_KEY_ID"),
-                aws_secret_access_key=os.environ.get("AWS_SECRET_ACCESS_ID"),
+                aws_secret_access_key=os.environ.get("AWS_SECRET_ACCESS_KEY"),
                 config=BotoConfig(signature_version="s3v4"),
                 region_name=os.environ.get("CUSTOM_REGION", "us-east-1"),
             )
@@ -287,6 +291,7 @@ class Modelo10LacteoPlugin(ModelPluginPort):
                     detections = self._run_pipeline(image_pil, DEFAULT_DET_CONF, DEFAULT_CLS_CONF, classifier=user_clf, class_names=user_cls_names)
                     row = build_inline_result(self.MODEL_ID, detections)
                     row.pop("model_id", None)
+                    row["annotated_image"] = render_annotated_image(image_pil, detections)
                     predictions.append({"filename": img_path.name, **row})
                 except Exception as exc:
                     logger.warning("Error procesando %s: %s", img_path.name, exc)
@@ -412,8 +417,8 @@ class Modelo10LacteoPlugin(ModelPluginPort):
             s3 = boto3.client(
                 "s3",
                 endpoint_url=os.environ.get("CUSTOM_S3_ENDPOINT"),
-                aws_access_key_id=os.environ.get("AWS_ACCESS_KEY_ID"),
-                aws_secret_access_key=os.environ.get("AWS_SECRET_ACCESS_ID"),
+                aws_access_key_id=os.environ.get("AWS_ACCESS_KEY_ID_XAI"),
+                aws_secret_access_key=os.environ.get("AWS_SECRET_ACCESS_KEY_XAI"),
                 config=BotoConfig(signature_version="s3v4"),
                 region_name=os.environ.get("CUSTOM_REGION", "us-east-1"),
             )

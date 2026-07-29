@@ -50,10 +50,20 @@ def image_path_to_tensor(
     image_size: int = IMAGE_SIZE,
 ) -> torch.Tensor:
     """Load an image from disk and return a ``(1, C, H, W)`` float tensor."""
+    return image_path_to_tensor_and_image(image_path, image_size=image_size)[0]
+
+
+def image_path_to_tensor_and_image(
+    image_path: str | Path,
+    image_size: int = IMAGE_SIZE,
+) -> tuple[torch.Tensor, Image.Image]:
+    """Load an image from disk and return both its ``(1, C, H, W)`` tensor and the decoded
+    PIL image — batch prediction reuses the same decoded image to overlay the per-row CAM
+    heatmap, instead of opening the file from disk twice."""
     try:
         image = Image.open(str(image_path)).convert("RGB")
     except Exception as exc:
         raise InvalidImageError(f"Cannot open image at {image_path}: {exc}") from exc
 
     transform = _DEFAULT_TRANSFORM if image_size == IMAGE_SIZE else _build_transform(image_size)
-    return transform(image).unsqueeze(0)
+    return transform(image).unsqueeze(0), image

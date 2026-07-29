@@ -1,0 +1,13 @@
+Integra el modelo {MODEL_ID} en este repo (inference-pan-model) siguiendo el proceso completo definido en CLAUDE.md y sus skills, en este orden estricto, sin saltarte pasos ni gates:
+
+manifest-extraction — Genera inbox/{MODEL_ID}/manifest.yaml a partir de inbox/{MODEL_ID}/codigo/ y inbox/{MODEL_ID}/entregable/. Incluye el bloque training (soporte de reentrenamiento, target_column, required_columns, hyperparams — solo si hay evidencia real en el código/memoria). Los golden_cases deben salir del split de test del dataset o de una tabla auditada de la memoria, nunca inventados. Cualquier campo sin evidencia queda en null con motivo en known_issues. Si la memoria no sigue la estructura esperada, para y pídeme confirmación antes de continuar.
+
+plugin-integration — Con el manifest ya generado, escribe app/plugins/<nombre>/ implementando el contrato ModelPluginPort completo (incluyendo mlflow_utils.py siempre, y train() según lo que diga manifest.training — fine-tuning real o TrainingNotSupportedError explícito). Registra el modelo en app/registry.py. Añade excepciones de dominio si el modelo tiene restricciones de negocio. Escribe tests/unit/test_<nombre>.py con FakePlugin. No toques app/domain, app/application, app/infrastructure ni main.py.
+
+verification — Ejecuta el checklist técnico completo (flake8, pytest, pylint, pip-audit, arranque local + health/predict/stats/train) en bucle hasta que todo esté en verde, corrigiendo el plugin cuando algo falle. Luego valida correctitud contra cada golden_case del manifest con la tolerancia derivada de metrics_reported. Si algún caso falla la tolerancia, investígalo y documéntalo — no ajustes la tolerancia ni lo silencies. Genera outputs/{MODEL_ID}/verification_report.md.
+
+docs-generation — Con el manifest y el verification_report.md ya listos, genera los 3 documentos institucionales ({MODEL_ID}_metadatos.docx, {MODEL_ID}_ficha_tecnica.docx, {MODEL_ID}_ficha_funcional.docx) en outputs/{MODEL_ID}/, partiendo de la plantilla corporativa ITACYL existente. Incluye en la ficha técnica el resultado real de verificación, no solo las métricas declaradas por el equipo de IA. Cualquier cifra de negocio basada en datos sintéticos lleva la advertencia de validación pendiente.
+
+No abras PR ni hagas merge. Deja la rama, el manifest, el plugin, el verification_report y los 3 documentos listos para revisión humana, y resume al final qué quedó pendiente o requiere mi decisión (known_issues, casos fuera de tolerancia, ambigüedades de la memoria).
+
+Ve avisándome de hallazgos importantes según avanzas (encoding raro en requirements.txt, memoria sin estructura estándar, golden cases fuera de tolerancia, etc.) — no esperes al final para reportarlos.

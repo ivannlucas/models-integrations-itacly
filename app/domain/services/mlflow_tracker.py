@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import logging
 import os
-import shutil
-import tempfile
 
 logger = logging.getLogger(__name__)
 
@@ -40,11 +38,12 @@ class BaseMLflowTracker:
             self._client = self._build_client()
         return self._client
 
-    def _build_client(self):
+    def _build_client(self, uri: str | None = None):
         import mlflow
         from mlflow.tracking import MlflowClient
-        mlflow.set_tracking_uri(self.TRACKING_URI)
-        return MlflowClient(tracking_uri=self.TRACKING_URI)
+        uri = uri or self.TRACKING_URI
+        mlflow.set_tracking_uri(uri)
+        return MlflowClient(tracking_uri=uri)
 
     def is_connected(self) -> bool:
         """Return True if a non-empty run_id has been set."""
@@ -145,27 +144,3 @@ class BaseMLflowTracker:
         except Exception as exc:
             logger.warning("MLflow get_tags failed: %s", exc)
             return {}
-
-
-def download_mlflow_artifacts(
-    run_id: str,
-    artifact_path: str = "",
-    prefix: str = "mlflow_",
-) -> tuple[str, str] | None:
-    """Download MLflow *artifact_path* from *run_id* to a temporary directory.
-
-    Returns ``(temp_dir, local_path)`` on success.
-    *local_path* is the directory containing the downloaded files
-    (e.g. ``temp_dir/model/`` when artifact_path="model").
-
-    On failure, *temp_dir* is cleaned up and ``None`` is returned.
-    The caller **must** call ``shutil.rmtree(temp_dir, ignore_errors=True)``
-    after the loaded model is no longer needed.
-    """
-    tracker = BaseMLflowTracker(run_id)
-    tmp = tempfile.mkdtemp(prefix=prefix)
-    local_path = tracker.download_artifacts(tmp, artifact_path=artifact_path)
-    if not local_path:
-        shutil.rmtree(tmp, ignore_errors=True)
-        return None
-    return tmp, local_path

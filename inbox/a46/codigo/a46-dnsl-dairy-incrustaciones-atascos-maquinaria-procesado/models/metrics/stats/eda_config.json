@@ -1,0 +1,15 @@
+{
+  "telemetry": "data/processed/telemetry_processed.csv",
+  "maintenance": "data/processed/maintenance_processed.csv",
+  "outdir": "models/metrics/stats",
+  "seq_len": 120,
+  "stride": 5,
+  "sample_cycles": 10,
+  "sample_rows_scatter": 50000,
+  "random_seed": 7,
+  "severity_col": "Rf_m2K_W",
+  "fouling_horizon_min": 30,
+  "clog_horizon_min": 15,
+  "unplanned_horizon_min": 60,
+  "top_cycles_table_rows": 50
+}

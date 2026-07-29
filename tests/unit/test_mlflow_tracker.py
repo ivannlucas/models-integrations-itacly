@@ -1,4 +1,4 @@
-"""Unit tests for BaseMLflowTracker and download_mlflow_artifacts helper."""
+"""Unit tests for BaseMLflowTracker."""
 from __future__ import annotations
 
 import os
@@ -6,7 +6,7 @@ import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from app.domain.services.mlflow_tracker import BaseMLflowTracker, download_mlflow_artifacts
+from app.domain.services.mlflow_tracker import BaseMLflowTracker
 
 
 class TestBaseMLflowTrackerEmptyRunId:
@@ -149,22 +149,3 @@ class TestBaseMLflowTrackerConnected:
         self.tracker.connect("new-run-456")
         assert self.tracker.run_id == "new-run-456"
         mock_build.assert_called_once()
-
-
-class TestDownloadMlflowArtifacts:
-    """download_mlflow_artifacts helper function."""
-
-    @patch("app.domain.services.mlflow_tracker.BaseMLflowTracker.download_artifacts")
-    def test_success(self, mock_download: MagicMock) -> None:
-        mock_download.return_value = "/tmp/mlflow_xxx/model"
-        result = download_mlflow_artifacts("run-1", artifact_path="model")
-        assert result is not None
-        tmp_dir, local_path = result
-        assert local_path == "/tmp/mlflow_xxx/model"
-        assert "mlflow_" in tmp_dir
-
-    @patch("app.domain.services.mlflow_tracker.BaseMLflowTracker.download_artifacts")
-    def test_failure_cleans_up_temp_dir(self, mock_download: MagicMock) -> None:
-        mock_download.return_value = ""
-        result = download_mlflow_artifacts("run-1", artifact_path="model")
-        assert result is None

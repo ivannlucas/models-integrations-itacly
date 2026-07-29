@@ -1,0 +1,151 @@
+{
+ "model_id": "a04",
+ "model_slug": "ml4-lactic-cnn-thermal-early-disease-detection",
+ "fecha": "Julio 2026",
+ "model_key": "ml4-lactic-cnn-thermal-early-disease-detection",
+ "version": "1.0.0",
+ "descripcion": "Sistema que analiza una fotografía térmica de la ubre de una oveja para detectar de forma temprana indicios de mastitis subclínica, una inflamación de la mama que no se aprecia a simple vista. Clasifica la imagen como 'sana' o 'sospecha de mastitis' e indica su grado de seguridad.",
+ "task_type": "classification (clasificación binaria)",
+ "framework": "PyTorch + timm (EfficientNet-B0)",
+ "artefacto": "baseline_efficientnet_final_model.pth (checkpoint EfficientNet-B0, ~16 MB)",
+ "objetivo": "Apoyar el diagnóstico precoz de mastitis subclínica en ovino lechero mediante un cribado por imagen térmica de la ubre, no invasivo y de bajo coste, integrable en los protocolos rutinarios de manejo. Persigue reducir el coste y el tiempo del diagnóstico frente a los métodos de laboratorio (recuento de células somáticas) y limitar los falsos positivos para no saturar la explotación con pruebas de confirmación innecesarias.",
+ "caso_uso": "Tomas una imagen térmica de la ubre del animal y el sistema te dice si presenta un patrón compatible con mastitis subclínica o no, con su nivel de confianza. Puedes analizar una imagen o un lote. Es un cribado no invasivo pensado para complementar, no sustituir, las pruebas de laboratorio.",
+ "inputs": [
+  {
+   "nombre": "Imagen térmica de la ubre",
+   "descripcion": "Una fotografía tomada con cámara termográfica y encuadrada sobre la ubre del animal."
+  },
+  {
+   "nombre": "Lote de imágenes térmicas",
+   "descripcion": "Una carpeta o archivo comprimido de imágenes térmicas para analizar varios animales de una vez."
+  }
+ ],
+ "outputs": [
+  {
+   "nombre": "Resultado",
+   "descripcion": "'Sana' o 'sospecha de mastitis subclínica'.",
+   "interpretacion": "La conclusión del cribado para ese animal."
+  },
+  {
+   "nombre": "Confianza",
+   "descripcion": "Cuán seguro está el sistema de la clasificación, de 0 a 1.",
+   "interpretacion": "Valores próximos a 0,5 indican decisión dudosa y aconsejan confirmar con laboratorio."
+  },
+  {
+   "nombre": "Probabilidad de cada estado",
+   "descripcion": "El grado de probabilidad de 'sana' y de 'sospecha de mastitis' (suman 1).",
+   "interpretacion": "Cuanto mayor la probabilidad de sospecha, más justificada una prueba de confirmación."
+  }
+ ],
+ "metricas": [
+  {
+   "nombre": "F1-Score",
+   "valor": "0,6047",
+   "descripcion": "F1 en test hold-out (n=42) declarado por el equipo de IA; no verificado post-integración (no existe verification_report.md)",
+   "interpretacion": "balance moderado precision/recall; por debajo del objetivo SOTA (DenseNet-121: 0,6575)"
+  },
+  {
+   "nombre": "Recall",
+   "valor": "0,6190",
+   "descripcion": "Sensibilidad en test hold-out (n=42) declarada por el equipo de IA",
+   "interpretacion": "detecta ~6 de cada 10 animales realmente enfermos; ~4 de cada 10 SCM pueden pasar inadvertidos"
+  },
+  {
+   "nombre": "Precision",
+   "valor": "0,5909",
+   "descripcion": "Precisión en test hold-out (n=42) declarada por el equipo de IA",
+   "interpretacion": "~3 de cada 5 alertas emitidas son verdaderos positivos"
+  },
+  {
+   "nombre": "Accuracy",
+   "valor": "0,5952",
+   "descripcion": "Exactitud global en test hold-out (n=42) declarada por el equipo de IA",
+   "interpretacion": "+1,55% frente al EfficientNet-B0 de referencia de Botsoglou et al. (2025)"
+  },
+  {
+   "nombre": "AUC-ROC",
+   "valor": "0,6168",
+   "descripcion": "Área bajo la curva ROC en test hold-out declarada por el equipo de IA",
+   "interpretacion": "capacidad discriminativa modesta pero superior al azar y estable frente a validación cruzada (0,6014)"
+  }
+ ],
+ "limitaciones": [
+  {
+   "tipo": "Volumen de datos reducido",
+   "descripcion": "Entrenado con el dataset TIDS de solo 418 imágenes (211 Healthy / 207 SCM), volumen bajo para deep learning; mitigado con data augmentation, dropout, early stopping y validación cruzada 5-fold, pero con capacidad limitada de generalización."
+  },
+  {
+   "tipo": "Sesgo geográfico y de explotación",
+   "descripcion": "Datos de 16 granjas de una única región (Grecia central), sesgados hacia su clima, razas y manejo. Requiere fase de calibración local (validación y posible fine-tuning con imágenes de la comunidad autónoma) antes del despliegue en Castilla y León."
+  },
+  {
+   "tipo": "Aprendido con imágenes normales, no térmicas",
+   "descripcion": "El sistema se entrenó primero con fotografías corrientes de objetos cotidianos y después se adaptó a las imágenes térmicas de ubre; por eso puede no captar de forma óptima diferencias de temperatura muy sutiles, aunque las comprobaciones realizadas confirman que se fija en la zona de la mama."
+  },
+  {
+   "tipo": "Imágenes recortadas de laboratorio",
+   "descripcion": "Entrenado solo con imágenes cropped centradas en la ubre. En campo es prerrequisito que el operario encuadre y centre la región mamaria; capturas panorámicas o de cuerpo completo introducen ruido de fondo y degradan el rendimiento."
+  },
+  {
+   "tipo": "Dependencia del hardware de captura",
+   "descripcion": "Adquisición estandarizada con cámara FLIR E96 (ángulos y distancia consistentes). Cambios de sensor, resolución, ángulo o distancia degradan la predicción de forma no cuantificada (no hay dataset externo de distorsiones)."
+  },
+  {
+   "tipo": "Señal térmica débil y ruido de etiquetado",
+   "descripcion": "La diferencia térmica media entre sano y SCM es de apenas 0,5-1,5 ºC y ~23% de los casos SCM tienen SCC basal en al menos una ubre, generando label noise que acota el límite teórico de aprendizaje."
+  },
+  {
+   "tipo": "Sensibilidad de decisión no ajustable",
+   "descripcion": "La entrega describía la posibilidad de hacer el cribado más o menos estricto (para inclinarlo hacia detectar más casos o hacia dar menos falsas alarmas), pero la versión integrada usa un punto de decisión fijo: la opción de ajuste se acepta pero no tiene efecto."
+  },
+  {
+   "tipo": "Herramienta de cribado, no diagnóstico",
+   "descripcion": "Rendimiento moderado (F1 ~0,60); es un filtro primario no invasivo que debe complementarse con confirmación clínica (CMT, recuento de células somáticas)."
+  }
+ ],
+ "fichero_nombre": "test_ids_20260526_074452.txt (conjunto hold-out declarado en la memoria; sin golden dataset integrado ni verification_report.md)",
+ "fichero_registros": "42 muestras (10% del dataset TIDS, aislado para evaluación ciega)",
+ "fichero_resultado": "Métricas declaradas por el equipo de IA sobre ese hold-out: F1=0,6047, Recall=0,6190, Precision=0,5909, Accuracy=0,5952, AUC-ROC=0,6168. No reproducidas de forma independiente tras la integración.",
+ "observaciones_tecnicas": "Python 3.10. Stack: PyTorch + timm (instancia EfficientNet-B0 sin pesos ImageNet en carga; se cargan los del checkpoint), albumentations + PIL para preprocesado (Resize 224x224 + Normalize ImageNet), scikit-learn en experimentación. Preprocesado en inferencia: RGB, 224x224, media [0,485,0,456,0,406] y std [0,229,0,224,0,225]. Artefacto .pth ~16 MB. Entrenamiento recomienda GPU CUDA 12.1+ (~2 GB VRAM); inferencia viable en CPU con >=8 GB RAM. El loader usa CUDA solo si supera una prueba de conv2d, con fallback a CPU. Hiperparámetros de entrenamiento (memoria): Adam, LR 1e-4, batch 16, Focal Loss (alpha=0,25, gamma=2,0), ReduceLROnPlateau (factor 0,5, patience 5), dropout 0,3, ~15 épocas efectivas por early stopping. Monitorización sugerida: revisar 5% mensual de predicciones y vigilar concentración de probabilidades cerca de 0,5. Discrepancia código-memoria: el campo threshold no se aplica (decisión por argmax); train() no soportado (HTTP 501).",
+ "que_no_responde": "No te dice el nivel exacto de células somáticas ni el grado de gravedad de la mastitis: solo indica si la imagen de la ubre es compatible o no con mastitis subclínica.",
+ "entradas_contexto": "El modelo trabaja con una fotografía térmica de la ubre del animal, tomada con una cámara termográfica y encuadrada sobre la zona de la mama.",
+ "ejemplo_interpretacion": "Si al analizar la imagen de una oveja el sistema devuelve 'SCM' con una confianza del 62%, significa que la ubre muestra un patrón térmico compatible con mastitis subclínica y conviene confirmarlo con una prueba en el establo (por ejemplo, el Test de Mastitis de California). Si devuelve 'Healthy' con confianza del 61%, la ubre no muestra ese patrón, pero una confianza cercana al 50% siempre aconseja revisar el caso a mano.",
+ "margen_error": "El modelo acierta algo más de la mitad de los casos y detecta aproximadamente 6 de cada 10 animales enfermos. No es una medición de precisión sanitaria: piensa en él como una primera señal de alerta, no como un veredicto. Cuando la confianza queda cerca del 50%, la predicción es poco fiable y debe revisarse.",
+ "revisar_manualmente": [
+  "Cuando la confianza del resultado esté cerca del 50% (predicción dudosa).",
+  "Cuando la imagen no esté bien encuadrada y centrada sobre la ubre.",
+  "Cuando la foto se tome con una cámara, ángulo o distancia distintos a los habituales.",
+  "Antes de usar el sistema en tus explotaciones por primera vez: valida con imágenes locales, porque fue entrenado con datos de otra región.",
+  "De forma rutinaria, revisa a mano una muestra (en torno al 5%) de las predicciones de cada mes."
+ ],
+ "que_no_hace": [
+  "No sustituye al diagnóstico veterinario ni a las pruebas de laboratorio (recuento de células somáticas, cultivos).",
+  "No garantiza detectar todos los animales enfermos: unos 4 de cada 10 casos pueden pasar inadvertidos.",
+  "No mide el nivel de células somáticas ni la gravedad de la mastitis.",
+  "No funciona bien con fotos de cuerpo completo o con mucho fondo: necesita la ubre encuadrada.",
+  "No permite ajustar la sensibilidad del aviso: aunque el envío admite un parámetro de umbral, no tiene efecto (decide siempre con el criterio por defecto)."
+ ],
+ "puede_equivocarse": "Sí, se equivoca con cierta frecuencia: acierta algo más de la mitad de los casos y no detecta a todos los animales enfermos. Además, las cifras de rendimiento provienen de un conjunto de datos de otra región y de un tipo de cámara concreto, por lo que requieren validación con datos reales locales antes de un despliegue en producción. Úsalo como una ayuda de cribado rápida y de bajo coste que orienta qué animales revisar, nunca como una garantía diagnóstica.",
+ "kpis": [
+  {
+   "kpi": "F1-Score (equilibrio detección / falsas alarmas)",
+   "valor_umbral": "Objetivo: igualar o superar 0,6575 (mejor referencia publicada). Obtenido: 0,6047 (no alcanzado)",
+   "descripcion": "Mide el equilibrio entre encontrar los animales enfermos y no dar demasiadas falsas alarmas."
+  },
+  {
+   "kpi": "Recall (sensibilidad: enfermos detectados)",
+   "valor_umbral": "Objetivo: >=70% de los casos SCM. Obtenido: 61,9% (no alcanzado)",
+   "descripcion": "Proporción de animales realmente enfermos que el sistema consigue señalar."
+  },
+  {
+   "kpi": "Precision (fiabilidad de la alerta)",
+   "valor_umbral": "Objetivo: falsos positivos por debajo del 40% (precisión >=57%). Obtenido: 59,09% (alcanzado)",
+   "descripcion": "De cada aviso de enfermedad, cuántos corresponden a animales realmente enfermos."
+  },
+  {
+   "kpi": "Accuracy (aciertos globales)",
+   "valor_umbral": "Obtenido: 59,52% (+1,55% frente a la referencia comparable)",
+   "descripcion": "Porcentaje total de imágenes clasificadas correctamente."
+  }
+ ]
+}

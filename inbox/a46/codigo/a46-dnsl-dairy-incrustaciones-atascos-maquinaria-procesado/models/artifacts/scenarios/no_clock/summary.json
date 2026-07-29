@@ -1,0 +1,127 @@
+{
+  "scenario": "no_clock",
+  "best_val_objective": 1.9543833507798742,
+  "val_window_metrics_best": {
+    "severity_rmse": 0.00010164840314168662,
+    "severity_mae": 6.8511806444958e-05,
+    "stage_accuracy": 0.9812161731932506,
+    "stage_macro_f1": 0.9724617448944007,
+    "stage_balanced_accuracy": 0.9739852350800712,
+    "watch_foul_auc": 0.9870098841491214,
+    "watch_foul_ap": 0.7700327124339479,
+    "watch_foul_f1": 0.6413373860182371,
+    "foul_h_auc": 0.9870098841491214,
+    "foul_h_ap": 0.7700327124339479,
+    "foul_h_f1": 0.6413373860182371,
+    "actionable_foul_auc": 0.9615691914349632,
+    "actionable_foul_ap": 0.04815197945920063,
+    "actionable_foul_f1": 0.0,
+    "clog_h_auc": 0.9419256962020598,
+    "clog_h_ap": 0.1454559682198858,
+    "clog_h_f1": 0.16666666666666666,
+    "tte_foul_mae_min": 52.46347527639079,
+    "tte_clog_mae_min": 22.29683184874206,
+    "ttu_mae_min": 77.86814311020544
+  },
+  "test_window_metrics": {
+    "severity_rmse": 0.00011608393649876462,
+    "severity_mae": 8.135631146805206e-05,
+    "stage_accuracy": 0.9651557655396427,
+    "stage_macro_f1": 0.9471419241121192,
+    "stage_balanced_accuracy": 0.961224220827854,
+    "watch_foul_auc": 0.9527048491980619,
+    "watch_foul_ap": 0.46423455917949,
+    "watch_foul_f1": 0.4768,
+    "foul_h_auc": 0.9527048491980619,
+    "foul_h_ap": 0.46423455917949,
+    "foul_h_f1": 0.4768,
+    "actionable_foul_auc": 0.9716387856257745,
+    "actionable_foul_ap": 0.2400946212680447,
+    "actionable_foul_f1": 0.2318840579710145,
+    "clog_h_auc": 0.9551856255780156,
+    "clog_h_ap": 0.2126166553023802,
+    "clog_h_f1": 0.22388059701492538,
+    "tte_foul_mae_min": 69.29759333205156,
+    "tte_clog_mae_min": 32.53357991520313,
+    "ttu_mae_min": 109.62735871918072
+  },
+  "val_event_metrics_best": {
+    "total_events": 14,
+    "tp_events_total": 12,
+    "fn_events_total": 2,
+    "false_alarms_total": 1,
+    "precision_total": 0.9230769230769231,
+    "recall_total": 0.8571428571428571,
+    "macro_event_f1": 0.46153846153846156,
+    "false_alarms_per_day_total": 0.038527397260273974,
+    "per_type": {
+      "clogging": {
+        "tp_events": 12,
+        "fn_events": 1,
+        "false_alarms": 1,
+        "precision": 0.9230769230769231,
+        "recall": 0.9230769230769231,
+        "f1": 0.9230769230769231,
+        "avg_lead_min": 29.083333333333332
+      },
+      "fouling": {
+        "tp_events": 0,
+        "fn_events": 1,
+        "false_alarms": 0,
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "avg_lead_min": NaN
+      }
+    }
+  },
+  "test_event_metrics": {
+    "total_events": 15,
+    "tp_events_total": 11,
+    "fn_events_total": 4,
+    "false_alarms_total": 17,
+    "precision_total": 0.39285714285714285,
+    "recall_total": 0.7333333333333333,
+    "macro_event_f1": 0.26829268292682923,
+    "false_alarms_per_day_total": 0.6135953479045518,
+    "per_type": {
+      "clogging": {
+        "tp_events": 11,
+        "fn_events": 2,
+        "false_alarms": 17,
+        "precision": 0.39285714285714285,
+        "recall": 0.8461538461538461,
+        "f1": 0.5365853658536585,
+        "avg_lead_min": 83.63636363636364
+      },
+      "fouling": {
+        "tp_events": 0,
+        "fn_events": 2,
+        "false_alarms": 0,
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "avg_lead_min": NaN
+      }
+    }
+  },
+  "policy": {
+    "clog_prob_thr": 0.7,
+    "watch_foul_prob_thr": 0.45,
+    "actionable_foul_prob_thr": 0.7,
+    "tau_clog": 60.0,
+    "tau_foul_watch": 30.0,
+    "tau_unplanned": 120.0,
+    "foul_urgency_ttu": 30.0,
+    "severity_incipient_thr": 0.000495,
+    "severity_advanced_thr": 0.0011550000000000002,
+    "cooldown_min": 90.0,
+    "objective": 0.46038263962065334
+  },
+  "n_features": 76,
+  "state_primary": true,
+  "outputs": {
+    "watch_fouling": "p_foul_h / fouling_onset_within_30min",
+    "actionable_fouling": "p_actionable_foul_h / unplanned_fouling_within_120min"
+  }
+}

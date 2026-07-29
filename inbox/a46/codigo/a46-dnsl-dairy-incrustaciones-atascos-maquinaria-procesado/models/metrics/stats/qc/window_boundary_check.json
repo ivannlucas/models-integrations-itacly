@@ -1,0 +1,1270 @@
+{
+  "seq_len": 120,
+  "stride": 5,
+  "num_sequences": 180,
+  "sequences_shorter_than_seq_len": 0,
+  "sequence_aware_windows_total": 35508,
+  "bad_windows_crossing_cycle_boundary": 0,
+  "per_sequence": [
+    {
+      "sequence_id": "asset_00_C00001",
+      "asset_id": "asset_00",
+      "cycle_id": "asset_00_C00001",
+      "rows": 1570,
+      "windows": 291
+    },
+    {
+      "sequence_id": "asset_00_C00002",
+      "asset_id": "asset_00",
+      "cycle_id": "asset_00_C00002",
+      "rows": 767,
+      "windows": 130
+    },
+    {
+      "sequence_id": "asset_00_C00003",
+      "asset_id": "asset_00",
+      "cycle_id": "asset_00_C00003",
+      "rows": 797,
+      "windows": 136
+    },
+    {
+      "sequence_id": "asset_00_C00004",
+      "asset_id": "asset_00",
+      "cycle_id": "asset_00_C00004",
+      "rows": 1092,
+      "windows": 195
+    },
+    {
+      "sequence_id": "asset_00_C00005",
+      "asset_id": "asset_00",
+      "cycle_id": "asset_00_C00005",
+      "rows": 1200,
+      "windows": 217
+    },
+    {
+      "sequence_id": "asset_00_C00006",
+      "asset_id": "asset_00",
+      "cycle_id": "asset_00_C00006",
+      "rows": 628,
+      "windows": 102
+    },
+    {
+      "sequence_id": "asset_00_C00007",
+      "asset_id": "asset_00",
+      "cycle_id": "asset_00_C00007",
+      "rows": 782,
+      "windows": 133
+    },
+    {
+      "sequence_id": "asset_00_C00008",
+      "asset_id": "asset_00",
+      "cycle_id": "asset_00_C00008",
+      "rows": 1637,
+      "windows": 304
+    },
+    {
+      "sequence_id": "asset_00_C00009",
+      "asset_id": "asset_00",
+      "cycle_id": "asset_00_C00009",
+      "rows": 1355,
+      "windows": 248
+    },
+    {
+      "sequence_id": "asset_00_C00010",
+      "asset_id": "asset_00",
+      "cycle_id": "asset_00_C00010",
+      "rows": 1474,
+      "windows": 271
+    },
+    {
+      "sequence_id": "asset_00_C00011",
+      "asset_id": "asset_00",
+      "cycle_id": "asset_00_C00011",
+      "rows": 997,
+      "windows": 176
+    },
+    {
+      "sequence_id": "asset_00_C00012",
+      "asset_id": "asset_00",
+      "cycle_id": "asset_00_C00012",
+      "rows": 452,
+      "windows": 67
+    },
+    {
+      "sequence_id": "asset_00_C00013",
+      "asset_id": "asset_00",
+      "cycle_id": "asset_00_C00013",
+      "rows": 787,
+      "windows": 134
+    },
+    {
+      "sequence_id": "asset_00_C00014",
+      "asset_id": "asset_00",
+      "cycle_id": "asset_00_C00014",
+      "rows": 689,
+      "windows": 114
+    },
+    {
+      "sequence_id": "asset_00_C00015",
+      "asset_id": "asset_00",
+      "cycle_id": "asset_00_C00015",
+      "rows": 1498,
+      "windows": 276
+    },
+    {
+      "sequence_id": "asset_00_C00016",
+      "asset_id": "asset_00",
+      "cycle_id": "asset_00_C00016",
+      "rows": 1529,
+      "windows": 282
+    },
+    {
+      "sequence_id": "asset_00_C00017",
+      "asset_id": "asset_00",
+      "cycle_id": "asset_00_C00017",
+      "rows": 928,
+      "windows": 162
+    },
+    {
+      "sequence_id": "asset_00_C00018",
+      "asset_id": "asset_00",
+      "cycle_id": "asset_00_C00018",
+      "rows": 1322,
+      "windows": 241
+    },
+    {
+      "sequence_id": "asset_01_C00001",
+      "asset_id": "asset_01",
+      "cycle_id": "asset_01_C00001",
+      "rows": 967,
+      "windows": 170
+    },
+    {
+      "sequence_id": "asset_01_C00002",
+      "asset_id": "asset_01",
+      "cycle_id": "asset_01_C00002",
+      "rows": 1483,
+      "windows": 273
+    },
+    {
+      "sequence_id": "asset_01_C00003",
+      "asset_id": "asset_01",
+      "cycle_id": "asset_01_C00003",
+      "rows": 1298,
+      "windows": 236
+    },
+    {
+      "sequence_id": "asset_01_C00004",
+      "asset_id": "asset_01",
+      "cycle_id": "asset_01_C00004",
+      "rows": 1248,
+      "windows": 226
+    },
+    {
+      "sequence_id": "asset_01_C00005",
+      "asset_id": "asset_01",
+      "cycle_id": "asset_01_C00005",
+      "rows": 1486,
+      "windows": 274
+    },
+    {
+      "sequence_id": "asset_01_C00006",
+      "asset_id": "asset_01",
+      "cycle_id": "asset_01_C00006",
+      "rows": 1398,
+      "windows": 256
+    },
+    {
+      "sequence_id": "asset_01_C00007",
+      "asset_id": "asset_01",
+      "cycle_id": "asset_01_C00007",
+      "rows": 1169,
+      "windows": 210
+    },
+    {
+      "sequence_id": "asset_01_C00008",
+      "asset_id": "asset_01",
+      "cycle_id": "asset_01_C00008",
+      "rows": 1462,
+      "windows": 269
+    },
+    {
+      "sequence_id": "asset_01_C00009",
+      "asset_id": "asset_01",
+      "cycle_id": "asset_01_C00009",
+      "rows": 783,
+      "windows": 133
+    },
+    {
+      "sequence_id": "asset_01_C00010",
+      "asset_id": "asset_01",
+      "cycle_id": "asset_01_C00010",
+      "rows": 1224,
+      "windows": 221
+    },
+    {
+      "sequence_id": "asset_01_C00011",
+      "asset_id": "asset_01",
+      "cycle_id": "asset_01_C00011",
+      "rows": 1100,
+      "windows": 197
+    },
+    {
+      "sequence_id": "asset_01_C00012",
+      "asset_id": "asset_01",
+      "cycle_id": "asset_01_C00012",
+      "rows": 1224,
+      "windows": 221
+    },
+    {
+      "sequence_id": "asset_01_C00013",
+      "asset_id": "asset_01",
+      "cycle_id": "asset_01_C00013",
+      "rows": 826,
+      "windows": 142
+    },
+    {
+      "sequence_id": "asset_01_C00014",
+      "asset_id": "asset_01",
+      "cycle_id": "asset_01_C00014",
+      "rows": 1702,
+      "windows": 317
+    },
+    {
+      "sequence_id": "asset_01_C00015",
+      "asset_id": "asset_01",
+      "cycle_id": "asset_01_C00015",
+      "rows": 1292,
+      "windows": 235
+    },
+    {
+      "sequence_id": "asset_01_C00016",
+      "asset_id": "asset_01",
+      "cycle_id": "asset_01_C00016",
+      "rows": 920,
+      "windows": 161
+    },
+    {
+      "sequence_id": "asset_01_C00017",
+      "asset_id": "asset_01",
+      "cycle_id": "asset_01_C00017",
+      "rows": 1094,
+      "windows": 195
+    },
+    {
+      "sequence_id": "asset_01_C00018",
+      "asset_id": "asset_01",
+      "cycle_id": "asset_01_C00018",
+      "rows": 699,
+      "windows": 116
+    },
+    {
+      "sequence_id": "asset_02_C00001",
+      "asset_id": "asset_02",
+      "cycle_id": "asset_02_C00001",
+      "rows": 1408,
+      "windows": 258
+    },
+    {
+      "sequence_id": "asset_02_C00002",
+      "asset_id": "asset_02",
+      "cycle_id": "asset_02_C00002",
+      "rows": 1093,
+      "windows": 195
+    },
+    {
+      "sequence_id": "asset_02_C00003",
+      "asset_id": "asset_02",
+      "cycle_id": "asset_02_C00003",
+      "rows": 1288,
+      "windows": 234
+    },
+    {
+      "sequence_id": "asset_02_C00004",
+      "asset_id": "asset_02",
+      "cycle_id": "asset_02_C00004",
+      "rows": 797,
+      "windows": 136
+    },
+    {
+      "sequence_id": "asset_02_C00005",
+      "asset_id": "asset_02",
+      "cycle_id": "asset_02_C00005",
+      "rows": 1418,
+      "windows": 260
+    },
+    {
+      "sequence_id": "asset_02_C00006",
+      "asset_id": "asset_02",
+      "cycle_id": "asset_02_C00006",
+      "rows": 930,
+      "windows": 163
+    },
+    {
+      "sequence_id": "asset_02_C00007",
+      "asset_id": "asset_02",
+      "cycle_id": "asset_02_C00007",
+      "rows": 1008,
+      "windows": 178
+    },
+    {
+      "sequence_id": "asset_02_C00008",
+      "asset_id": "asset_02",
+      "cycle_id": "asset_02_C00008",
+      "rows": 493,
+      "windows": 75
+    },
+    {
+      "sequence_id": "asset_02_C00009",
+      "asset_id": "asset_02",
+      "cycle_id": "asset_02_C00009",
+      "rows": 1133,
+      "windows": 203
+    },
+    {
+      "sequence_id": "asset_02_C00010",
+      "asset_id": "asset_02",
+      "cycle_id": "asset_02_C00010",
+      "rows": 1040,
+      "windows": 185
+    },
+    {
+      "sequence_id": "asset_02_C00011",
+      "asset_id": "asset_02",
+      "cycle_id": "asset_02_C00011",
+      "rows": 1736,
+      "windows": 324
+    },
+    {
+      "sequence_id": "asset_02_C00012",
+      "asset_id": "asset_02",
+      "cycle_id": "asset_02_C00012",
+      "rows": 1374,
+      "windows": 251
+    },
+    {
+      "sequence_id": "asset_02_C00013",
+      "asset_id": "asset_02",
+      "cycle_id": "asset_02_C00013",
+      "rows": 481,
+      "windows": 73
+    },
+    {
+      "sequence_id": "asset_02_C00014",
+      "asset_id": "asset_02",
+      "cycle_id": "asset_02_C00014",
+      "rows": 1362,
+      "windows": 249
+    },
+    {
+      "sequence_id": "asset_02_C00015",
+      "asset_id": "asset_02",
+      "cycle_id": "asset_02_C00015",
+      "rows": 654,
+      "windows": 107
+    },
+    {
+      "sequence_id": "asset_02_C00016",
+      "asset_id": "asset_02",
+      "cycle_id": "asset_02_C00016",
+      "rows": 1116,
+      "windows": 200
+    },
+    {
+      "sequence_id": "asset_02_C00017",
+      "asset_id": "asset_02",
+      "cycle_id": "asset_02_C00017",
+      "rows": 729,
+      "windows": 122
+    },
+    {
+      "sequence_id": "asset_02_C00018",
+      "asset_id": "asset_02",
+      "cycle_id": "asset_02_C00018",
+      "rows": 376,
+      "windows": 52
+    },
+    {
+      "sequence_id": "asset_03_C00001",
+      "asset_id": "asset_03",
+      "cycle_id": "asset_03_C00001",
+      "rows": 1697,
+      "windows": 316
+    },
+    {
+      "sequence_id": "asset_03_C00002",
+      "asset_id": "asset_03",
+      "cycle_id": "asset_03_C00002",
+      "rows": 675,
+      "windows": 112
+    },
+    {
+      "sequence_id": "asset_03_C00003",
+      "asset_id": "asset_03",
+      "cycle_id": "asset_03_C00003",
+      "rows": 1865,
+      "windows": 350
+    },
+    {
+      "sequence_id": "asset_03_C00004",
+      "asset_id": "asset_03",
+      "cycle_id": "asset_03_C00004",
+      "rows": 940,
+      "windows": 165
+    },
+    {
+      "sequence_id": "asset_03_C00005",
+      "asset_id": "asset_03",
+      "cycle_id": "asset_03_C00005",
+      "rows": 971,
+      "windows": 171
+    },
+    {
+      "sequence_id": "asset_03_C00006",
+      "asset_id": "asset_03",
+      "cycle_id": "asset_03_C00006",
+      "rows": 701,
+      "windows": 117
+    },
+    {
+      "sequence_id": "asset_03_C00007",
+      "asset_id": "asset_03",
+      "cycle_id": "asset_03_C00007",
+      "rows": 1147,
+      "windows": 206
+    },
+    {
+      "sequence_id": "asset_03_C00008",
+      "asset_id": "asset_03",
+      "cycle_id": "asset_03_C00008",
+      "rows": 1314,
+      "windows": 239
+    },
+    {
+      "sequence_id": "asset_03_C00009",
+      "asset_id": "asset_03",
+      "cycle_id": "asset_03_C00009",
+      "rows": 1436,
+      "windows": 264
+    },
+    {
+      "sequence_id": "asset_03_C00010",
+      "asset_id": "asset_03",
+      "cycle_id": "asset_03_C00010",
+      "rows": 1172,
+      "windows": 211
+    },
+    {
+      "sequence_id": "asset_03_C00011",
+      "asset_id": "asset_03",
+      "cycle_id": "asset_03_C00011",
+      "rows": 846,
+      "windows": 146
+    },
+    {
+      "sequence_id": "asset_03_C00012",
+      "asset_id": "asset_03",
+      "cycle_id": "asset_03_C00012",
+      "rows": 1116,
+      "windows": 200
+    },
+    {
+      "sequence_id": "asset_03_C00013",
+      "asset_id": "asset_03",
+      "cycle_id": "asset_03_C00013",
+      "rows": 644,
+      "windows": 105
+    },
+    {
+      "sequence_id": "asset_03_C00014",
+      "asset_id": "asset_03",
+      "cycle_id": "asset_03_C00014",
+      "rows": 1301,
+      "windows": 237
+    },
+    {
+      "sequence_id": "asset_03_C00015",
+      "asset_id": "asset_03",
+      "cycle_id": "asset_03_C00015",
+      "rows": 693,
+      "windows": 115
+    },
+    {
+      "sequence_id": "asset_03_C00016",
+      "asset_id": "asset_03",
+      "cycle_id": "asset_03_C00016",
+      "rows": 612,
+      "windows": 99
+    },
+    {
+      "sequence_id": "asset_03_C00017",
+      "asset_id": "asset_03",
+      "cycle_id": "asset_03_C00017",
+      "rows": 1310,
+      "windows": 239
+    },
+    {
+      "sequence_id": "asset_03_C00018",
+      "asset_id": "asset_03",
+      "cycle_id": "asset_03_C00018",
+      "rows": 818,
+      "windows": 140
+    },
+    {
+      "sequence_id": "asset_04_C00001",
+      "asset_id": "asset_04",
+      "cycle_id": "asset_04_C00001",
+      "rows": 1159,
+      "windows": 208
+    },
+    {
+      "sequence_id": "asset_04_C00002",
+      "asset_id": "asset_04",
+      "cycle_id": "asset_04_C00002",
+      "rows": 1316,
+      "windows": 240
+    },
+    {
+      "sequence_id": "asset_04_C00003",
+      "asset_id": "asset_04",
+      "cycle_id": "asset_04_C00003",
+      "rows": 1095,
+      "windows": 196
+    },
+    {
+      "sequence_id": "asset_04_C00004",
+      "asset_id": "asset_04",
+      "cycle_id": "asset_04_C00004",
+      "rows": 705,
+      "windows": 118
+    },
+    {
+      "sequence_id": "asset_04_C00005",
+      "asset_id": "asset_04",
+      "cycle_id": "asset_04_C00005",
+      "rows": 1286,
+      "windows": 234
+    },
+    {
+      "sequence_id": "asset_04_C00006",
+      "asset_id": "asset_04",
+      "cycle_id": "asset_04_C00006",
+      "rows": 1136,
+      "windows": 204
+    },
+    {
+      "sequence_id": "asset_04_C00007",
+      "asset_id": "asset_04",
+      "cycle_id": "asset_04_C00007",
+      "rows": 840,
+      "windows": 145
+    },
+    {
+      "sequence_id": "asset_04_C00008",
+      "asset_id": "asset_04",
+      "cycle_id": "asset_04_C00008",
+      "rows": 1101,
+      "windows": 197
+    },
+    {
+      "sequence_id": "asset_04_C00009",
+      "asset_id": "asset_04",
+      "cycle_id": "asset_04_C00009",
+      "rows": 1190,
+      "windows": 215
+    },
+    {
+      "sequence_id": "asset_04_C00010",
+      "asset_id": "asset_04",
+      "cycle_id": "asset_04_C00010",
+      "rows": 823,
+      "windows": 141
+    },
+    {
+      "sequence_id": "asset_04_C00011",
+      "asset_id": "asset_04",
+      "cycle_id": "asset_04_C00011",
+      "rows": 1364,
+      "windows": 249
+    },
+    {
+      "sequence_id": "asset_04_C00012",
+      "asset_id": "asset_04",
+      "cycle_id": "asset_04_C00012",
+      "rows": 726,
+      "windows": 122
+    },
+    {
+      "sequence_id": "asset_04_C00013",
+      "asset_id": "asset_04",
+      "cycle_id": "asset_04_C00013",
+      "rows": 562,
+      "windows": 89
+    },
+    {
+      "sequence_id": "asset_04_C00014",
+      "asset_id": "asset_04",
+      "cycle_id": "asset_04_C00014",
+      "rows": 1024,
+      "windows": 181
+    },
+    {
+      "sequence_id": "asset_04_C00015",
+      "asset_id": "asset_04",
+      "cycle_id": "asset_04_C00015",
+      "rows": 883,
+      "windows": 153
+    },
+    {
+      "sequence_id": "asset_04_C00016",
+      "asset_id": "asset_04",
+      "cycle_id": "asset_04_C00016",
+      "rows": 1428,
+      "windows": 262
+    },
+    {
+      "sequence_id": "asset_04_C00017",
+      "asset_id": "asset_04",
+      "cycle_id": "asset_04_C00017",
+      "rows": 575,
+      "windows": 92
+    },
+    {
+      "sequence_id": "asset_04_C00018",
+      "asset_id": "asset_04",
+      "cycle_id": "asset_04_C00018",
+      "rows": 1102,
+      "windows": 197
+    },
+    {
+      "sequence_id": "asset_05_C00001",
+      "asset_id": "asset_05",
+      "cycle_id": "asset_05_C00001",
+      "rows": 1037,
+      "windows": 184
+    },
+    {
+      "sequence_id": "asset_05_C00002",
+      "asset_id": "asset_05",
+      "cycle_id": "asset_05_C00002",
+      "rows": 1195,
+      "windows": 216
+    },
+    {
+      "sequence_id": "asset_05_C00003",
+      "asset_id": "asset_05",
+      "cycle_id": "asset_05_C00003",
+      "rows": 896,
+      "windows": 156
+    },
+    {
+      "sequence_id": "asset_05_C00004",
+      "asset_id": "asset_05",
+      "cycle_id": "asset_05_C00004",
+      "rows": 953,
+      "windows": 167
+    },
+    {
+      "sequence_id": "asset_05_C00005",
+      "asset_id": "asset_05",
+      "cycle_id": "asset_05_C00005",
+      "rows": 1479,
+      "windows": 272
+    },
+    {
+      "sequence_id": "asset_05_C00006",
+      "asset_id": "asset_05",
+      "cycle_id": "asset_05_C00006",
+      "rows": 1513,
+      "windows": 279
+    },
+    {
+      "sequence_id": "asset_05_C00007",
+      "asset_id": "asset_05",
+      "cycle_id": "asset_05_C00007",
+      "rows": 1132,
+      "windows": 203
+    },
+    {
+      "sequence_id": "asset_05_C00008",
+      "asset_id": "asset_05",
+      "cycle_id": "asset_05_C00008",
+      "rows": 842,
+      "windows": 145
+    },
+    {
+      "sequence_id": "asset_05_C00009",
+      "asset_id": "asset_05",
+      "cycle_id": "asset_05_C00009",
+      "rows": 1585,
+      "windows": 294
+    },
+    {
+      "sequence_id": "asset_05_C00010",
+      "asset_id": "asset_05",
+      "cycle_id": "asset_05_C00010",
+      "rows": 1110,
+      "windows": 199
+    },
+    {
+      "sequence_id": "asset_05_C00011",
+      "asset_id": "asset_05",
+      "cycle_id": "asset_05_C00011",
+      "rows": 1434,
+      "windows": 263
+    },
+    {
+      "sequence_id": "asset_05_C00012",
+      "asset_id": "asset_05",
+      "cycle_id": "asset_05_C00012",
+      "rows": 1045,
+      "windows": 186
+    },
+    {
+      "sequence_id": "asset_05_C00013",
+      "asset_id": "asset_05",
+      "cycle_id": "asset_05_C00013",
+      "rows": 779,
+      "windows": 132
+    },
+    {
+      "sequence_id": "asset_05_C00014",
+      "asset_id": "asset_05",
+      "cycle_id": "asset_05_C00014",
+      "rows": 735,
+      "windows": 124
+    },
+    {
+      "sequence_id": "asset_05_C00015",
+      "asset_id": "asset_05",
+      "cycle_id": "asset_05_C00015",
+      "rows": 1698,
+      "windows": 316
+    },
+    {
+      "sequence_id": "asset_05_C00016",
+      "asset_id": "asset_05",
+      "cycle_id": "asset_05_C00016",
+      "rows": 1371,
+      "windows": 251
+    },
+    {
+      "sequence_id": "asset_05_C00017",
+      "asset_id": "asset_05",
+      "cycle_id": "asset_05_C00017",
+      "rows": 1045,
+      "windows": 186
+    },
+    {
+      "sequence_id": "asset_05_C00018",
+      "asset_id": "asset_05",
+      "cycle_id": "asset_05_C00018",
+      "rows": 1023,
+      "windows": 181
+    },
+    {
+      "sequence_id": "asset_06_C00001",
+      "asset_id": "asset_06",
+      "cycle_id": "asset_06_C00001",
+      "rows": 909,
+      "windows": 158
+    },
+    {
+      "sequence_id": "asset_06_C00002",
+      "asset_id": "asset_06",
+      "cycle_id": "asset_06_C00002",
+      "rows": 786,
+      "windows": 134
+    },
+    {
+      "sequence_id": "asset_06_C00003",
+      "asset_id": "asset_06",
+      "cycle_id": "asset_06_C00003",
+      "rows": 832,
+      "windows": 143
+    },
+    {
+      "sequence_id": "asset_06_C00004",
+      "asset_id": "asset_06",
+      "cycle_id": "asset_06_C00004",
+      "rows": 1226,
+      "windows": 222
+    },
+    {
+      "sequence_id": "asset_06_C00005",
+      "asset_id": "asset_06",
+      "cycle_id": "asset_06_C00005",
+      "rows": 1199,
+      "windows": 216
+    },
+    {
+      "sequence_id": "asset_06_C00006",
+      "asset_id": "asset_06",
+      "cycle_id": "asset_06_C00006",
+      "rows": 1231,
+      "windows": 223
+    },
+    {
+      "sequence_id": "asset_06_C00007",
+      "asset_id": "asset_06",
+      "cycle_id": "asset_06_C00007",
+      "rows": 839,
+      "windows": 144
+    },
+    {
+      "sequence_id": "asset_06_C00008",
+      "asset_id": "asset_06",
+      "cycle_id": "asset_06_C00008",
+      "rows": 1281,
+      "windows": 233
+    },
+    {
+      "sequence_id": "asset_06_C00009",
+      "asset_id": "asset_06",
+      "cycle_id": "asset_06_C00009",
+      "rows": 773,
+      "windows": 131
+    },
+    {
+      "sequence_id": "asset_06_C00010",
+      "asset_id": "asset_06",
+      "cycle_id": "asset_06_C00010",
+      "rows": 1527,
+      "windows": 282
+    },
+    {
+      "sequence_id": "asset_06_C00011",
+      "asset_id": "asset_06",
+      "cycle_id": "asset_06_C00011",
+      "rows": 628,
+      "windows": 102
+    },
+    {
+      "sequence_id": "asset_06_C00012",
+      "asset_id": "asset_06",
+      "cycle_id": "asset_06_C00012",
+      "rows": 1705,
+      "windows": 318
+    },
+    {
+      "sequence_id": "asset_06_C00013",
+      "asset_id": "asset_06",
+      "cycle_id": "asset_06_C00013",
+      "rows": 1449,
+      "windows": 266
+    },
+    {
+      "sequence_id": "asset_06_C00014",
+      "asset_id": "asset_06",
+      "cycle_id": "asset_06_C00014",
+      "rows": 1642,
+      "windows": 305
+    },
+    {
+      "sequence_id": "asset_06_C00015",
+      "asset_id": "asset_06",
+      "cycle_id": "asset_06_C00015",
+      "rows": 1403,
+      "windows": 257
+    },
+    {
+      "sequence_id": "asset_06_C00016",
+      "asset_id": "asset_06",
+      "cycle_id": "asset_06_C00016",
+      "rows": 876,
+      "windows": 152
+    },
+    {
+      "sequence_id": "asset_06_C00017",
+      "asset_id": "asset_06",
+      "cycle_id": "asset_06_C00017",
+      "rows": 1084,
+      "windows": 193
+    },
+    {
+      "sequence_id": "asset_06_C00018",
+      "asset_id": "asset_06",
+      "cycle_id": "asset_06_C00018",
+      "rows": 1036,
+      "windows": 184
+    },
+    {
+      "sequence_id": "asset_07_C00001",
+      "asset_id": "asset_07",
+      "cycle_id": "asset_07_C00001",
+      "rows": 1412,
+      "windows": 259
+    },
+    {
+      "sequence_id": "asset_07_C00002",
+      "asset_id": "asset_07",
+      "cycle_id": "asset_07_C00002",
+      "rows": 1076,
+      "windows": 192
+    },
+    {
+      "sequence_id": "asset_07_C00003",
+      "asset_id": "asset_07",
+      "cycle_id": "asset_07_C00003",
+      "rows": 1543,
+      "windows": 285
+    },
+    {
+      "sequence_id": "asset_07_C00004",
+      "asset_id": "asset_07",
+      "cycle_id": "asset_07_C00004",
+      "rows": 922,
+      "windows": 161
+    },
+    {
+      "sequence_id": "asset_07_C00005",
+      "asset_id": "asset_07",
+      "cycle_id": "asset_07_C00005",
+      "rows": 1182,
+      "windows": 213
+    },
+    {
+      "sequence_id": "asset_07_C00006",
+      "asset_id": "asset_07",
+      "cycle_id": "asset_07_C00006",
+      "rows": 941,
+      "windows": 165
+    },
+    {
+      "sequence_id": "asset_07_C00007",
+      "asset_id": "asset_07",
+      "cycle_id": "asset_07_C00007",
+      "rows": 1609,
+      "windows": 298
+    },
+    {
+      "sequence_id": "asset_07_C00008",
+      "asset_id": "asset_07",
+      "cycle_id": "asset_07_C00008",
+      "rows": 1148,
+      "windows": 206
+    },
+    {
+      "sequence_id": "asset_07_C00009",
+      "asset_id": "asset_07",
+      "cycle_id": "asset_07_C00009",
+      "rows": 887,
+      "windows": 154
+    },
+    {
+      "sequence_id": "asset_07_C00010",
+      "asset_id": "asset_07",
+      "cycle_id": "asset_07_C00010",
+      "rows": 860,
+      "windows": 149
+    },
+    {
+      "sequence_id": "asset_07_C00011",
+      "asset_id": "asset_07",
+      "cycle_id": "asset_07_C00011",
+      "rows": 958,
+      "windows": 168
+    },
+    {
+      "sequence_id": "asset_07_C00012",
+      "asset_id": "asset_07",
+      "cycle_id": "asset_07_C00012",
+      "rows": 849,
+      "windows": 146
+    },
+    {
+      "sequence_id": "asset_07_C00013",
+      "asset_id": "asset_07",
+      "cycle_id": "asset_07_C00013",
+      "rows": 778,
+      "windows": 132
+    },
+    {
+      "sequence_id": "asset_07_C00014",
+      "asset_id": "asset_07",
+      "cycle_id": "asset_07_C00014",
+      "rows": 785,
+      "windows": 134
+    },
+    {
+      "sequence_id": "asset_07_C00015",
+      "asset_id": "asset_07",
+      "cycle_id": "asset_07_C00015",
+      "rows": 1548,
+      "windows": 286
+    },
+    {
+      "sequence_id": "asset_07_C00016",
+      "asset_id": "asset_07",
+      "cycle_id": "asset_07_C00016",
+      "rows": 1233,
+      "windows": 223
+    },
+    {
+      "sequence_id": "asset_07_C00017",
+      "asset_id": "asset_07",
+      "cycle_id": "asset_07_C00017",
+      "rows": 1667,
+      "windows": 310
+    },
+    {
+      "sequence_id": "asset_07_C00018",
+      "asset_id": "asset_07",
+      "cycle_id": "asset_07_C00018",
+      "rows": 1389,
+      "windows": 254
+    },
+    {
+      "sequence_id": "asset_08_C00001",
+      "asset_id": "asset_08",
+      "cycle_id": "asset_08_C00001",
+      "rows": 1261,
+      "windows": 229
+    },
+    {
+      "sequence_id": "asset_08_C00002",
+      "asset_id": "asset_08",
+      "cycle_id": "asset_08_C00002",
+      "rows": 1033,
+      "windows": 183
+    },
+    {
+      "sequence_id": "asset_08_C00003",
+      "asset_id": "asset_08",
+      "cycle_id": "asset_08_C00003",
+      "rows": 1307,
+      "windows": 238
+    },
+    {
+      "sequence_id": "asset_08_C00004",
+      "asset_id": "asset_08",
+      "cycle_id": "asset_08_C00004",
+      "rows": 547,
+      "windows": 86
+    },
+    {
+      "sequence_id": "asset_08_C00005",
+      "asset_id": "asset_08",
+      "cycle_id": "asset_08_C00005",
+      "rows": 622,
+      "windows": 101
+    },
+    {
+      "sequence_id": "asset_08_C00006",
+      "asset_id": "asset_08",
+      "cycle_id": "asset_08_C00006",
+      "rows": 1057,
+      "windows": 188
+    },
+    {
+      "sequence_id": "asset_08_C00007",
+      "asset_id": "asset_08",
+      "cycle_id": "asset_08_C00007",
+      "rows": 1241,
+      "windows": 225
+    },
+    {
+      "sequence_id": "asset_08_C00008",
+      "asset_id": "asset_08",
+      "cycle_id": "asset_08_C00008",
+      "rows": 1006,
+      "windows": 178
+    },
+    {
+      "sequence_id": "asset_08_C00009",
+      "asset_id": "asset_08",
+      "cycle_id": "asset_08_C00009",
+      "rows": 1161,
+      "windows": 209
+    },
+    {
+      "sequence_id": "asset_08_C00010",
+      "asset_id": "asset_08",
+      "cycle_id": "asset_08_C00010",
+      "rows": 1306,
+      "windows": 238
+    },
+    {
+      "sequence_id": "asset_08_C00011",
+      "asset_id": "asset_08",
+      "cycle_id": "asset_08_C00011",
+      "rows": 1308,
+      "windows": 238
+    },
+    {
+      "sequence_id": "asset_08_C00012",
+      "asset_id": "asset_08",
+      "cycle_id": "asset_08_C00012",
+      "rows": 1539,
+      "windows": 284
+    },
+    {
+      "sequence_id": "asset_08_C00013",
+      "asset_id": "asset_08",
+      "cycle_id": "asset_08_C00013",
+      "rows": 778,
+      "windows": 132
+    },
+    {
+      "sequence_id": "asset_08_C00014",
+      "asset_id": "asset_08",
+      "cycle_id": "asset_08_C00014",
+      "rows": 611,
+      "windows": 99
+    },
+    {
+      "sequence_id": "asset_08_C00015",
+      "asset_id": "asset_08",
+      "cycle_id": "asset_08_C00015",
+      "rows": 959,
+      "windows": 168
+    },
+    {
+      "sequence_id": "asset_08_C00016",
+      "asset_id": "asset_08",
+      "cycle_id": "asset_08_C00016",
+      "rows": 1165,
+      "windows": 210
+    },
+    {
+      "sequence_id": "asset_08_C00017",
+      "asset_id": "asset_08",
+      "cycle_id": "asset_08_C00017",
+      "rows": 1040,
+      "windows": 185
+    },
+    {
+      "sequence_id": "asset_08_C00018",
+      "asset_id": "asset_08",
+      "cycle_id": "asset_08_C00018",
+      "rows": 1154,
+      "windows": 207
+    },
+    {
+      "sequence_id": "asset_09_C00001",
+      "asset_id": "asset_09",
+      "cycle_id": "asset_09_C00001",
+      "rows": 738,
+      "windows": 124
+    },
+    {
+      "sequence_id": "asset_09_C00002",
+      "asset_id": "asset_09",
+      "cycle_id": "asset_09_C00002",
+      "rows": 1084,
+      "windows": 193
+    },
+    {
+      "sequence_id": "asset_09_C00003",
+      "asset_id": "asset_09",
+      "cycle_id": "asset_09_C00003",
+      "rows": 1310,
+      "windows": 239
+    },
+    {
+      "sequence_id": "asset_09_C00004",
+      "asset_id": "asset_09",
+      "cycle_id": "asset_09_C00004",
+      "rows": 1261,
+      "windows": 229
+    },
+    {
+      "sequence_id": "asset_09_C00005",
+      "asset_id": "asset_09",
+      "cycle_id": "asset_09_C00005",
+      "rows": 973,
+      "windows": 171
+    },
+    {
+      "sequence_id": "asset_09_C00006",
+      "asset_id": "asset_09",
+      "cycle_id": "asset_09_C00006",
+      "rows": 715,
+      "windows": 120
+    },
+    {
+      "sequence_id": "asset_09_C00007",
+      "asset_id": "asset_09",
+      "cycle_id": "asset_09_C00007",
+      "rows": 954,
+      "windows": 167
+    },
+    {
+      "sequence_id": "asset_09_C00008",
+      "asset_id": "asset_09",
+      "cycle_id": "asset_09_C00008",
+      "rows": 1169,
+      "windows": 210
+    },
+    {
+      "sequence_id": "asset_09_C00009",
+      "asset_id": "asset_09",
+      "cycle_id": "asset_09_C00009",
+      "rows": 1345,
+      "windows": 246
+    },
+    {
+      "sequence_id": "asset_09_C00010",
+      "asset_id": "asset_09",
+      "cycle_id": "asset_09_C00010",
+      "rows": 1539,
+      "windows": 284
+    },
+    {
+      "sequence_id": "asset_09_C00011",
+      "asset_id": "asset_09",
+      "cycle_id": "asset_09_C00011",
+      "rows": 879,
+      "windows": 152
+    },
+    {
+      "sequence_id": "asset_09_C00012",
+      "asset_id": "asset_09",
+      "cycle_id": "asset_09_C00012",
+      "rows": 1389,
+      "windows": 254
+    },
+    {
+      "sequence_id": "asset_09_C00013",
+      "asset_id": "asset_09",
+      "cycle_id": "asset_09_C00013",
+      "rows": 625,
+      "windows": 102
+    },
+    {
+      "sequence_id": "asset_09_C00014",
+      "asset_id": "asset_09",
+      "cycle_id": "asset_09_C00014",
+      "rows": 1116,
+      "windows": 200
+    },
+    {
+      "sequence_id": "asset_09_C00015",
+      "asset_id": "asset_09",
+      "cycle_id": "asset_09_C00015",
+      "rows": 682,
+      "windows": 113
+    },
+    {
+      "sequence_id": "asset_09_C00016",
+      "asset_id": "asset_09",
+      "cycle_id": "asset_09_C00016",
+      "rows": 1521,
+      "windows": 281
+    },
+    {
+      "sequence_id": "asset_09_C00017",
+      "asset_id": "asset_09",
+      "cycle_id": "asset_09_C00017",
+      "rows": 1663,
+      "windows": 309
+    },
+    {
+      "sequence_id": "asset_09_C00018",
+      "asset_id": "asset_09",
+      "cycle_id": "asset_09_C00018",
+      "rows": 1584,
+      "windows": 293
+    }
+  ]
+}

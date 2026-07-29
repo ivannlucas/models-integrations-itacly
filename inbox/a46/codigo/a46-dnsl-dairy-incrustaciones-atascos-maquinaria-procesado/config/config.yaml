@@ -1,0 +1,87 @@
+paths:
+  raw_dir: data/raw
+  processed_dir: data/processed
+  predictions_dir: data/predictions
+  splits_dir: data/splits
+  artifacts_dir: models/artifacts
+  metrics_dir: models/metrics
+  processed_telemetry: data/processed/telemetry_processed.csv
+  processed_maintenance: data/processed/maintenance_processed.csv
+  processed_metadata: data/processed/generation_metadata.json
+  stats_output_dir: models/metrics/stats
+
+data_processing:
+  assets: 10
+  cycles_per_asset: 18
+  dt: 60
+  seed: 7
+  fouling_anchor_rf: 0.00085
+  rf_stage_thr_incipient: null
+  rf_stage_thr_advanced: null
+  fouling_horizon_min: 30
+  clog_horizon_min: 15
+  unplanned_horizon_min: 60
+  stable_hours_min: 2.0
+  stable_hours_max: 18.0
+  incipient_hours_min: 1.0
+  incipient_hours_max: 8.0
+  advanced_hours_min: 0.5
+  advanced_hours_max: 6.0
+  idle_hours_min: 0.25
+  idle_hours_max: 2.0
+  inter_cycle_gap_min: 180
+  inter_cycle_gap_max: 1440
+  emit_idle_phase: false
+  no_noise: false
+  no_cip_logs: false
+
+training:
+  severity_col: Rf_m2K_W
+  stage_thr_incipient: null
+  stage_thr_advanced: null
+  fouling_horizon_min: 30
+  clog_horizon_min: 15
+  unplanned_fouling_horizon_min: 120
+  tte_fouling_cap_min: 240
+  tte_clog_cap_min: 120
+  ttu_cap_min: 360
+  dt: 60
+  seq_len: 120
+  stride: 5
+  batch_size: 64
+  epochs: 8
+  lr: 0.001
+  weight_decay: 0.00001
+  seed: 7
+  device: auto
+  channels: 64
+  dilations: [1, 2, 4, 8, 16]
+  dropout: 0.15
+  baseline_prefix_hours: 8.0
+  match_window_min: 240
+  split_trials: 3000
+  policy_max_candidates: 400
+  ablate_clocks: true
+  cooldown_min_default: 60
+
+inference:
+  telemetry_input: data/processed/telemetry_processed.csv
+  scenario: auto
+  batch_size: 256
+  device: auto
+  output_name: null
+
+stats:
+  telemetry: data/processed/telemetry_processed.csv
+  maintenance: data/processed/maintenance_processed.csv
+  outdir: models/metrics/stats
+  seq_len: 120
+  stride: 5
+  sample_cycles: 10
+  sample_rows_scatter: 50000
+  random_seed: 7
+  severity_col: Rf_m2K_W
+  fouling_horizon_min: 30
+  clog_horizon_min: 15
+  unplanned_horizon_min: 60
+  top_cycles_table_rows: 50

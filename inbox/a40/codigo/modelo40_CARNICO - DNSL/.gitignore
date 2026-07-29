@@ -1,0 +1,68 @@
+# --- Carpeta de Datos ---
+# Ignoramos todo el contenido de la carpeta data
+data/raw/
+data/processed/
+data/predictions/
+data/splits/
+# Aseguramos que se ignoren archivos CSV y otros formatos de datos en cualquier nivel
+*.csv
+*.xlsx
+*.parquet
+*.jsonl
+*.json
+
+
+# LOGS Y EJECUCIÓN
+logs/
+*.log
+
+# --- Modelos y Artefactos Pesados ---
+# Ignoramos modelos guardados en Keras/TensorFlow y otros formatos binarios
+*.keras
+*.h5
+*.hdf5
+*.tflite
+*.pt
+*.pth
+*.onnx
+*.pb
+*.joblib
+#*.pkl
+*.onnx
+
+
+# Modelos y metricas
+#models/artifacts/*
+models/metrics/*
+
+# --- Archivos de Python y Sistema ---
+__pycache__/
+*.py[cod]
+*$py.class
+.env
+.venv
+env/
+venv/
+ENV/
+
+# --- Notebooks ---
+# Ignoramos los puntos de control de Jupyter
+.ipynb_checkpoints
+
+# --- IDEs ---
+.vscode/
+.idea/
+
+models/artifacts/refrigeracion_model.pkl
+
+# Excepción: Queremos mantener las carpetas en el repo aunque estén vacías
+!data/**/.gitkeep
+!models/artifacts/.gitkeep
+!models/metrics/.gitkeep
+!logs/.gitkeep
+
+# --- Excepciones ---
+# Si quieres que las carpetas existan en el repo pero vacías, 
+# puedes subir un archivo .gitkeep en cada una y descomentar esto:
+# !data/**/.gitkeep
+# !models/artifacts/.gitkeep

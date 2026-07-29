@@ -1,0 +1,287 @@
+model_id: ml40_meat_refrigeration_aeration_fault_diagnosis
+sector: carnico
+nombre: "Desarrollo de un modelo de DNSL para la predicción de fallas inminentes en los equipos de refrigeración y aireado de embutidos"
+task_type: classification_multiclass_timeseries  # 2 subsistemas independientes (refrigeracion: 13 clases, aireado: 4 clases); RF + reglas físicas neurosimbólicas + voto por ciclo (run_id)
+framework:
+  - pandas>=2.0.0
+  - numpy>=1.24.0
+  - scikit-learn>=1.2.0
+  - joblib>=1.2.0
+  - PyYAML>=6.0
+  # requirements.txt no fija versiones exactas (usa >=) y está en UTF-8 con CRLF; incluye además
+  # 'pathlib>=1.0.1' (backport obsoleto de py2 que NO debe instalarse en py3) — ver known_issues.
+
+artifacts:
+  folder: models/artifacts/
+  files:
+    - refrigeracion_model.pkl        # RandomForestClassifier 13 clases — 171 MB (la memoria lo distribuye por blob externo; aquí viene en la entrega)
+    - refrigeracion_scaler.pkl       # StandardScaler ajustado en train (solo numéricas; binarias defrost_on/door_open sin escalar)
+    - refrigeracion_thresholds.yaml  # umbrales neurosimbólicos dinámicos (nc_low, cf_high, uc_p_gate, eff_vol_limit, drift_limit)
+    - refrigeracion_stats.yaml       # medias/std de referencia para detección de drift (calibrate)
+    - refrigeracion_best_params.yaml # registro del tuning (best_f1_score CV = 0.9157) — informativo, no se carga en inferencia
+    - aireado_model.pkl              # RandomForestClassifier 4 clases — 11.6 MB (sin escalador, por diseño del equipo de IA)
+    - aireado_thresholds.yaml        # umbrales neurosimbólicos (encostramiento_risk, fan_fail_hz)
+    - aireado_stats.yaml             # medias/std de referencia para drift
+    - aireado_best_params.yaml       # registro del tuning (best_f1_score CV = 0.9732) — informativo
+  config:
+    - config/config.yaml             # selected_system, drop_cols, mapping id->nombre de clase, hiperparámetros, health_threshold=75.0, window_degradation=50
+
+inputs:
+  # El input funcional NO es una fila aislada: es la serie temporal de un ciclo operativo (run_id).
+  # El diagnóstico final se emite POR CICLO (voto por mayoría sobre las predicciones por minuto).
+  system_selector:
+    name: system
+    type: categorical
+    values: [refrigeracion, aireado]
+    description: "Subsistema a diagnosticar. Cada uno tiene su propio modelo, features y reglas físicas."
+
+  refrigeracion:
+    fixed:  # columnas crudas de sensores requeridas (README + memoria sección 4.2 + src/data_processing/preprocess.py)
+      - {name: run_id,      type: int,    description: "Identificador del ciclo de encendido/apagado. Obligatorio: ancla del voto y de los lags."}
+      - {name: time_min,    type: int,    unit: min, description: "Minuto de operación dentro del ciclo. Obligatorio para ordenar la serie."}
+      - {name: T_amb,       type: float,  unit: "°C"}
+      - {name: T_set,       type: float,  unit: "°C"}
+      - {name: T_cab,       type: float,  unit: "°C"}
+      - {name: T_evap_sat,  type: float,  unit: "°C"}
+      - {name: T_cond_sat,  type: float,  unit: "°C", description: "Se elimina como feature directa (multicolinealidad) pero es imprescindible para la ingeniería (T_cond_approach, T_lift, Eff_vol...)."}
+      - {name: P_suc_bar,   type: float,  unit: bar,  description: "Eliminada como feature directa pero usada por las reglas físicas (regla UNDERCHARGE_SEVERE) y derivadas."}
+      - {name: P_dis_bar,   type: float,  unit: bar}
+      - {name: N_comp_Hz,   type: float,  unit: Hz}
+      - {name: SH_K,        type: float,  unit: K, description: "Sobrecalentamiento; usada también en la regla física de subcarga."}
+      - {name: P_comp_W,    type: float,  unit: W}
+      - {name: Q_evap_W,    type: float,  unit: W}
+      - {name: COP,         type: float}
+      - {name: frost_level, type: float}
+      - {name: T_cab_meas,  type: float,  unit: "°C", description: "Eliminada como feature directa pero necesaria para Sensor_error/T_cab_meas_diff (reglas SENSOR_DRIFT)."}
+      - {name: valve_open,  type: float}
+      - {name: door_open,   type: binary}
+      - {name: defrost_on,  type: binary}
+    optional:
+      - {name: fault,    type: string, description: "Etiqueta textual. Solo en modo evaluación."}
+      - {name: fault_id, type: int,    description: "Etiqueta 0-12. Solo en modo evaluación; nunca se usa como feature (drop_cols)."}
+    history_min_minutes: 100  # lags de hasta 100 min (P_dis_error_lag_100) + dropna inicial: los primeros ~15 min de cada run se descartan; memoria sección 9 exige >=100 min de histórico por ciclo
+
+  aireado:
+    fixed:
+      - {name: run_id,      type: int}
+      - {name: time_min,    type: int, unit: min}
+      - {name: Kg_embutido, type: float, unit: kg}
+      - {name: T_amb,       type: float, unit: "°C"}
+      - {name: T_set,       type: float, unit: "°C"}
+      - {name: N_fan_Hz,    type: float, unit: Hz, description: "Usada además por la regla física FALLO_VENTILADOR."}
+      - {name: RH_cab,      type: float, unit: "%", description: "Usada además por la regla física ENCOSTRAMIENTO (RH_cab < 68)."}
+      - {name: T_cab,       type: float, unit: "°C"}
+      - {name: T_evap_sat,  type: float, unit: "°C"}
+      - {name: P_comp_W,    type: float, unit: W}
+    optional:
+      - {name: fault_id, type: int, description: "Etiqueta 0-3. Solo evaluación; nunca feature."}
+    history_min_minutes: 60  # lags de hasta 60 pasos; memoria sección 9 exige >=60 min por ciclo
+
+  modes:
+    raw: "CSV crudo de sensores (equivalente a data/to_predict/input_{system}.csv): el pipeline aplica la ingeniería de variables completa antes de inferir (src/main.py::predict + apply_feature_engineering)."
+    engineered: "CSV ya procesado con las features de ingeniería (equivalente a data/splits/{system}_test.csv): se infiere directamente sin re-generar features. Es el modo con el que se validan los golden_cases."
+
+outputs:
+  predict_inline:  # una fila por ciclo (run_id) — salida colapsada por voto (src/predict/predictor.py::save_predictions)
+    - {name: run_id,      type: int}
+    - {name: prediction,  type: int,    description: "Clase final tras RF + reglas neurosimbólicas + voto por mayoría del ciclo."}
+    - {name: prediction_name, type: string, description: "Nombre de la clase según config.yaml::mapping (refrigeracion: NORMAL..UNDERCHARGE_AND_COND_FOUL; aireado: NORMAL, ENCOSTRAMIENTO, SATURACION_HIELO, FALLO_VENTILADOR)."}
+    - {name: confidence,  type: float,  description: "Media por ciclo del máximo de predict_proba del RF. En el código original se reporta 0-100 (predict) o 0-1 (evaluacion_test_*.csv); los golden_cases usan la escala 0-1."}
+  health:
+    - {name: model_health, type: string, values: [ESTABLE, DEGRADADO], description: "Media móvil (ventana 50) de la confianza vs. health_threshold=75.0. Estado stateful: depende del histórico logs/monitorization_{system}.csv."}
+
+  class_mapping:
+    refrigeracion: {0: NORMAL, 1: COND_FOUL_MILD, 2: COND_FOUL_SEVERE, 3: EVAP_FAN_DEG, 4: EVAP_FAN_FAIL, 5: UNDERCHARGE_MILD, 6: UNDERCHARGE_SEVERE, 7: OVERCHARGE, 8: SENSOR_DRIFT_PLUS, 9: SENSOR_DRIFT_MINUS, 10: COMP_INEFFICIENCY, 11: NON_CONDENSABLES, 12: UNDERCHARGE_AND_COND_FOUL}
+    aireado: {0: NORMAL, 1: ENCOSTRAMIENTO, 2: SATURACION_HIELO, 3: FALLO_VENTILADOR}
+
+training:
+  supported: true  # código de entrenamiento completo entregado: src/training/refrig_trainer.py::train_refrigeration y src/training/aireado_trainer.py::train_aireado, orquestados por src/main.py::train
+  target_column: fault_id  # config.yaml::{system}.target_column; refrig_trainer lo convierte a fault_numeric internamente
+  required_columns:
+    refrigeracion:
+      # dataset crudo completo (data/raw/dataset_refrigeracion.csv) + fault_id; el trainer consume el CSV
+      # YA PROCESADO por data_processing (ingeniería de variables), por lo que el train del plugin debe
+      # aplicar apply_feature_engineering antes de entrenar:
+      [run_id, time_min, fault_id, T_amb, T_set, T_cab, T_evap_sat, T_cond_sat, P_suc_bar, P_dis_bar,
+       N_comp_Hz, SH_K, P_comp_W, Q_evap_W, COP, frost_level, T_cab_meas, valve_open, door_open, defrost_on]
+    aireado:
+      [run_id, time_min, fault_id, Kg_embutido, T_amb, T_set, N_fan_Hz, RH_cab, T_cab, T_evap_sat, P_comp_W]
+    source: codigo_entrenamiento  # src/training/*.py + src/data_processing/preprocess.py + cabeceras reales de data/raw/*.csv
+  hyperparams:
+    refrigeracion:  # config.yaml::refrigeracion.model_params (coincide con memoria sección 5.3)
+      n_estimators: 200
+      min_samples_leaf: 20
+      max_features: sqrt
+      max_depth: 20
+      random_state: 42
+      n_jobs: -1
+      scaler: StandardScaler  # solo numéricas; binarias defrost_on/door_open excluidas
+      sample_weights: "balanceados por clase x multiplicadores expertos (x1.5 si early_P_dis_error>p90, x1.2 si mean_P_dis_bar>p90) — refrig_trainer.py::compute_sample_weights"
+      split: "80/20 estratificado por run_id (train_test_split sobre runs, random_state=42)"
+    aireado:  # config.yaml::aireado.model_params (coincide con memoria sección 5.3)
+      n_estimators: 200
+      min_samples_split: 5
+      min_samples_leaf: 4
+      max_depth: 20
+      bootstrap: false
+      random_state: 42
+      n_jobs: -1
+      scaler: null  # sin escalado, por diseño ("tal como se definió en el notebook original")
+      split: "80/20 estratificado por run_id (random_state=42)"
+    source: codigo_entrenamiento  # config/config.yaml::model_params + src/training/*.py
+  metrics_returned: [accuracy, f1_macro, precision_macro, recall_macro]  # classification_report sobre el 20% de test por runs
+  note: >
+    El train original reentrena el RF desde cero sobre el CSV completo (no fine-tuning incremental).
+    Existe además un modo 'calibrate' (src/main.py::calibrate) que ajusta CalibratedClassifierCV isotónico
+    y umbrales dinámicos sobre datos reales de planta sin tocar el modelo base; queda documentado pero
+    fuera del contrato train() del plugin salvo decisión contraria.
+
+constraints:
+  run_id_required: "Sin run_id no hay voto por ciclo ni lags: entrada rechazable (excepción de dominio)."
+  min_history:
+    refrigeracion: "100 min por ciclo (lags hasta 100 + dropna inicial de ~15 filas). Con menos histórico el diagnóstico es degradado o imposible (memoria sección 9)."
+    aireado: "60 min por ciclo (lags hasta 60)."
+  system_valid: "system debe ser 'refrigeracion' o 'aireado'."
+  target_leak: "fault/fault_id/fault_numeric nunca entran al modelo como features (drop_cols); las columnas oráculo deben ignorarse si llegan."
+  descripcion: >
+    No hay restricción de negocio de tipo umbral de seguridad alimentaria (estilo "PU >= 13" de a35).
+    Las restricciones duras son de integridad de entrada (run_id + histórico mínimo por ciclo). El skill
+    plugin-integration debería materializar min_history/run_id como excepción de dominio propia.
+
+metrics_reported:
+  # Fuente primaria: artefactos entregados models/metrics/classification_report_{system}.txt
+  # (modelo final RF + NS + Voto por run, sobre data/splits/{system}_test.csv). Coinciden con la
+  # Tabla 4 de la memoria (fila "+ NS + Voto por Run" sin ruido).
+  aireado:
+    dataset: "data/splits/aireado_test.csv (6.000 filas, 30 runs de 200 pasos, 20% de 150 runs)"
+    accuracy: 1.00
+    f1_macro: 1.00
+    precision_macro: 1.00
+    recall_macro: 1.00
+    per_run_accuracy: 1.00   # 30/30 runs — recomputado ejecutando el pipeline original entregado sobre el split actual
+    tuning_cv_best_f1: 0.9732  # models/artifacts/aireado_best_params.yaml (CV en train, sin NS ni voto)
+  refrigeracion:
+    dataset: "data/splits/refrigeracion_test.csv (370.500 filas, 260 runs, 20% de 1.300 runs)"
+    accuracy: 0.94
+    f1_macro: 0.94
+    precision_macro: 0.94
+    recall_macro: 0.94
+    per_run_accuracy: 0.9462   # 246/260 runs — recomputado ejecutando el pipeline original entregado (umbrales actuales)
+    problem_classes: "COND_FOUL_SEVERE (f1=0.62) y NON_CONDENSABLES (f1=0.63) se confunden entre sí (los 14 runs mal clasificados son todos entre estas dos clases); documentado en memoria secciones 6.3 y 9."
+    tuning_cv_best_f1: 0.9157  # models/artifacts/refrigeracion_best_params.yaml
+  source: codigo_entrenamiento  # models/metrics/classification_report_*.txt + memoria Tabla 4 + re-ejecución propia del pipeline entregado sobre data/splits/*_test.csv
+
+# 23 casos por run_id contra data/splits/{system}_test.csv (modo engineered). expected = salida REAL
+# del pipeline entregado (prediction tras NS+voto y confidence media 0-1 por run), obtenida
+# RE-EJECUTANDO el código original entregado (sin modificar) sobre los splits y artefactos actuales
+# de la entrega — los data/predictions/evaluacion_test_*.csv entregados estaban OBSOLETOS para
+# aireado (split de una ejecución anterior; ver known_issues), aunque para refrigeración coinciden
+# valor a valor con la re-ejecución. Consistencia agregada verificada contra la memoria Tabla 4:
+# acc por run 1.00 (aireado) y 0.9462 (refrigeración). No se embeben las filas crudas (1.425 filas
+# x 76 cols por run en refrigeración): el skill verification debe filtrar el split por run_id (o
+# pasar el split completo en batch), ejecutar predict del plugin y comparar. prediction se exige
+# exacta; confidence con tolerancia float_atol=0.005 (media por run de max(predict_proba),
+# determinista dado el mismo artefacto; el margen cubre diferencias de versión de sklearn).
+golden_cases:
+  # --- AIREADO (8 casos, 4 clases x 2) ---
+  - {id: air_001, source: dataset_test_split, input: {system: aireado, run_id: 28, split_file: data/splits/aireado_test.csv}, expected: {prediction: 0, prediction_name: NORMAL,           confidence: 0.956912}, tolerance: {prediction_exact: true, confidence_atol: 0.005}}
+  - {id: air_002, source: dataset_test_split, input: {system: aireado, run_id: 40, split_file: data/splits/aireado_test.csv}, expected: {prediction: 0, prediction_name: NORMAL,           confidence: 0.959454}, tolerance: {prediction_exact: true, confidence_atol: 0.005}}
+  - {id: air_003, source: dataset_test_split, input: {system: aireado, run_id: 13, split_file: data/splits/aireado_test.csv}, expected: {prediction: 1, prediction_name: ENCOSTRAMIENTO,   confidence: 0.981020}, tolerance: {prediction_exact: true, confidence_atol: 0.005}}
+  - {id: air_004, source: dataset_test_split, input: {system: aireado, run_id: 25, split_file: data/splits/aireado_test.csv}, expected: {prediction: 1, prediction_name: ENCOSTRAMIENTO,   confidence: 0.966762}, tolerance: {prediction_exact: true, confidence_atol: 0.005}}
+  - {id: air_005, source: dataset_test_split, input: {system: aireado, run_id: 30, split_file: data/splits/aireado_test.csv}, expected: {prediction: 2, prediction_name: SATURACION_HIELO, confidence: 0.982461}, tolerance: {prediction_exact: true, confidence_atol: 0.005}}
+  - {id: air_006, source: dataset_test_split, input: {system: aireado, run_id: 38, split_file: data/splits/aireado_test.csv}, expected: {prediction: 2, prediction_name: SATURACION_HIELO, confidence: 0.988564}, tolerance: {prediction_exact: true, confidence_atol: 0.005}}
+  - {id: air_007, source: dataset_test_split, input: {system: aireado, run_id: 19, split_file: data/splits/aireado_test.csv}, expected: {prediction: 3, prediction_name: FALLO_VENTILADOR, confidence: 0.959579}, tolerance: {prediction_exact: true, confidence_atol: 0.005}}
+  - {id: air_008, source: dataset_test_split, input: {system: aireado, run_id: 27, split_file: data/splits/aireado_test.csv}, expected: {prediction: 3, prediction_name: FALLO_VENTILADOR, confidence: 0.961430}, tolerance: {prediction_exact: true, confidence_atol: 0.005}}
+
+  # --- REFRIGERACION (15 casos: 13 clases + 2 confusiones reales COND_FOUL_SEVERE<->NON_CONDENSABLES) ---
+  - {id: ref_001, source: dataset_test_split, input: {system: refrigeracion, run_id: 1,    split_file: data/splits/refrigeracion_test.csv}, expected: {prediction: 0,  prediction_name: NORMAL,                    confidence: 0.953922}, tolerance: {prediction_exact: true, confidence_atol: 0.005}}
+  - {id: ref_002, source: dataset_test_split, input: {system: refrigeracion, run_id: 104,  split_file: data/splits/refrigeracion_test.csv}, expected: {prediction: 1,  prediction_name: COND_FOUL_MILD,            confidence: 0.913105}, tolerance: {prediction_exact: true, confidence_atol: 0.005}}
+  - {id: ref_003, source: dataset_test_split, input: {system: refrigeracion, run_id: 201,  split_file: data/splits/refrigeracion_test.csv}, expected: {prediction: 2,  prediction_name: COND_FOUL_SEVERE,          confidence: 0.574579}, tolerance: {prediction_exact: true, confidence_atol: 0.005}}
+  - {id: ref_004, source: dataset_test_split, input: {system: refrigeracion, run_id: 303,  split_file: data/splits/refrigeracion_test.csv}, expected: {prediction: 3,  prediction_name: EVAP_FAN_DEG,              confidence: 0.999154}, tolerance: {prediction_exact: true, confidence_atol: 0.005}}
+  - {id: ref_005, source: dataset_test_split, input: {system: refrigeracion, run_id: 404,  split_file: data/splits/refrigeracion_test.csv}, expected: {prediction: 4,  prediction_name: EVAP_FAN_FAIL,             confidence: 0.999873}, tolerance: {prediction_exact: true, confidence_atol: 0.005}}
+  - {id: ref_006, source: dataset_test_split, input: {system: refrigeracion, run_id: 501,  split_file: data/splits/refrigeracion_test.csv}, expected: {prediction: 5,  prediction_name: UNDERCHARGE_MILD,          confidence: 0.968246}, tolerance: {prediction_exact: true, confidence_atol: 0.005}}
+  - {id: ref_007, source: dataset_test_split, input: {system: refrigeracion, run_id: 603,  split_file: data/splits/refrigeracion_test.csv}, expected: {prediction: 6,  prediction_name: UNDERCHARGE_SEVERE,        confidence: 0.974143}, tolerance: {prediction_exact: true, confidence_atol: 0.005}}
+  - {id: ref_008, source: dataset_test_split, input: {system: refrigeracion, run_id: 700,  split_file: data/splits/refrigeracion_test.csv}, expected: {prediction: 7,  prediction_name: OVERCHARGE,                confidence: 0.961318}, tolerance: {prediction_exact: true, confidence_atol: 0.005}}
+  - {id: ref_009, source: dataset_test_split, input: {system: refrigeracion, run_id: 803,  split_file: data/splits/refrigeracion_test.csv}, expected: {prediction: 8,  prediction_name: SENSOR_DRIFT_PLUS,         confidence: 0.994084}, tolerance: {prediction_exact: true, confidence_atol: 0.005}}
+  - {id: ref_010, source: dataset_test_split, input: {system: refrigeracion, run_id: 903,  split_file: data/splits/refrigeracion_test.csv}, expected: {prediction: 9,  prediction_name: SENSOR_DRIFT_MINUS,        confidence: 0.992502}, tolerance: {prediction_exact: true, confidence_atol: 0.005}}
+  - {id: ref_011, source: dataset_test_split, input: {system: refrigeracion, run_id: 1003, split_file: data/splits/refrigeracion_test.csv}, expected: {prediction: 10, prediction_name: COMP_INEFFICIENCY,         confidence: 0.963926}, tolerance: {prediction_exact: true, confidence_atol: 0.005}}
+  - {id: ref_012, source: dataset_test_split, input: {system: refrigeracion, run_id: 1100, split_file: data/splits/refrigeracion_test.csv}, expected: {prediction: 11, prediction_name: NON_CONDENSABLES,          confidence: 0.677540}, tolerance: {prediction_exact: true, confidence_atol: 0.005}}
+  - {id: ref_013, source: dataset_test_split, input: {system: refrigeracion, run_id: 1202, split_file: data/splits/refrigeracion_test.csv}, expected: {prediction: 12, prediction_name: UNDERCHARGE_AND_COND_FOUL, confidence: 0.917532}, tolerance: {prediction_exact: true, confidence_atol: 0.005}}
+  # Confusiones reales del modelo (expected = predicción del modelo, NO la etiqueta verdadera; sirven
+  # para verificar reproducibilidad, no acierto — el acierto ya está en metrics_reported):
+  - {id: ref_014, source: dataset_test_split, input: {system: refrigeracion, run_id: 200,  split_file: data/splits/refrigeracion_test.csv, note: "fault_id verdadero = 2 (COND_FOUL_SEVERE)"}, expected: {prediction: 11, prediction_name: NON_CONDENSABLES, confidence: 0.581579}, tolerance: {prediction_exact: true, confidence_atol: 0.005}}
+  - {id: ref_015, source: dataset_test_split, input: {system: refrigeracion, run_id: 1135, split_file: data/splits/refrigeracion_test.csv, note: "fault_id verdadero = 11 (NON_CONDENSABLES)"}, expected: {prediction: 2,  prediction_name: COND_FOUL_SEVERE, confidence: 0.602035}, tolerance: {prediction_exact: true, confidence_atol: 0.005}}
+
+known_issues:
+  - >
+    TAMAÑO DE ARTEFACTO: refrigeracion_model.pkl pesa 171 MB. La propia memoria (sección 8.1) indica que
+    se distribuye por blob externo por superar los límites de git; en esta entrega viene incluido. Hay que
+    decidir el mecanismo de despliegue (artifact store local vs. S3) y NO commitearlo al repo.
+  - >
+    EVALUACIONES ENTREGADAS OBSOLETAS (aireado): el commit del equipo de IA que actualizó la entrega
+    (aireado_model.pkl 346 KB -> 11.6 MB, splits regenerados con runs de 200 pasos) NO regeneró
+    data/predictions/evaluacion_test_aireado.csv, que quedó con los run_id del split anterior (60 runs
+    de 100 pasos que ya no existen en data/splits/aireado_test.csv). Los golden_cases de aireado se han
+    extraído re-ejecutando el pipeline original entregado sobre el split actual (acc por run 1.00,
+    consistente con la memoria). Para refrigeración, evaluacion_test_refrigeracion.csv SÍ coincide valor
+    a valor con la re-ejecución (el modelo de refrigeración no cambió en ese commit). Además, el código
+    que genera esos evaluacion_test_*.csv no está en la entrega, y su columna confidence va en escala
+    0-1 mientras que main.py::predict exporta 0-100. Recomendado: pedir al equipo de IA que regenere o
+    retire los CSV obsoletos.
+  - >
+    VERSIONES DE SKLEARN INCONSISTENTES EN LOS PKL: aireado_model.pkl y refrigeracion_scaler.pkl están
+    serializados con scikit-learn 1.9.0 y refrigeracion_model.pkl con 1.8.0; requirements.txt solo pide
+    scikit-learn>=1.2.0 (y el del repo >=1.3.0). Cargarlos con una versión anterior (p. ej. 1.7.0 en el
+    entorno local de verificación) emite InconsistentVersionWarning, aunque las predicciones reproducen
+    las métricas de la memoria (verificado: acc por run 1.00/0.9462). Además los RF predicen con NaN en
+    las features de lags (primeras filas de cada run), lo que requiere scikit-learn >= 1.4. Recomendado:
+    fijar scikit-learn >= 1.8 en el despliegue de este plugin.
+  - >
+    UMBRALES ENTREGADOS != DEFAULTS: los {system}_thresholds.yaml entregados están calibrados (p. ej.
+    aireado: encostramiento_risk=0.805, fan_fail_hz=12.48) y difieren de los defaults hardcodeados en
+    postprocess.py (0.90 y 5.0). No está documentado con qué umbrales se generaron las métricas de la
+    memoria ni los evaluacion_test_*.csv. La verificación debe determinar qué combinación reproduce los
+    golden cases y dejar fijada esa combinación en el plugin.
+  - >
+    ANOMALÍA EN EL INPUT DE EJEMPLO DE AIREADO: ejecutando el modo producción sobre el input crudo de
+    ejemplo entregado (data/to_predict/input_aireado.csv, 21 runs), 13 de los 15 runs etiquetados NORMAL
+    salen predichos como ENCOSTRAMIENTO (data/predictions/predictions_aireado.csv entregado). Puede deberse
+    a los umbrales calibrados, a distribución distinta del input de ejemplo, o a un problema real del modo
+    raw + feature engineering on-the-fly. NO afecta al split de test (acc 1.00) pero requiere investigación
+    y decisión humana antes de fiarse del modo raw en producción.
+  - >
+    CARGA DE MODELO INTERACTIVA: src/predict/predictor.py::load_model despliega un menú input() en consola
+    si existen modelos calibrados ({system}_model_calibrated_*.pkl). El plugin no debe heredar esa
+    interactividad: servirá siempre el modelo base (o parametrizará la versión), nunca stdin.
+  - >
+    ESTADO STATEFUL DE SALUD: model_health (ESTABLE/DEGRADADO) depende del histórico acumulado en
+    logs/monitorization_{system}.csv (media móvil de 50 predicciones vs. umbral 75). En el plugin este
+    estado debe reubicarse (stats/MLflow) y no depender de CSVs locales mutables.
+  - >
+    requirements.txt: UTF-8 con CRLF (sin problema UTF-16 esta vez), versiones no fijadas (>=) e incluye
+    'pathlib>=1.0.1', un backport obsoleto de Python 2 que no debe instalarse en Python 3 (puede romper
+    la stdlib); excluirlo de cualquier instalación del plugin.
+  - >
+    DATOS NO REALES: el dataset de refrigeración es simulado (Kaggle, refrigerador de propósito general,
+    no cárnico) y el de aireado es 100% sintético (generado por scripts/generate_dataset_aireado.py a
+    partir de literatura). La memoria (sección 9) exige interpretar el sistema como demostrador que
+    requiere calibración con datos de planta. Cualquier cifra de negocio derivada debe llevar advertencia
+    de validación pendiente.
+  - >
+    La memoria (sección 8.4) menciona classification_report_{system}.csv pero la entrega contiene .txt
+    (menor, solo trazabilidad documental).
+  - >
+    Python: la memoria recomienda 3.12 (compatibilidad hacia atrás hasta 3.9). Los .pkl se deserializan
+    con la versión de scikit-learn del entorno; al no haber versiones exactas fijadas, la verificación
+    debe confirmar que la versión instalada carga los artefactos sin warnings de incompatibilidad.
+  - >
+    REGLA NC/CF DEPENDIENTE DEL LOTE (verificado empíricamente): la regla neurosimbólica que
+    desambigua NON_CONDENSABLES vs COND_FOUL_SEVERE (postprocess.py, "optimización por perfil
+    termomecánico") decide el intercambio de clases usando la MEDIA de early_P_dis_error y
+    T_cond_approach sobre TODAS las filas del lote en conflicto, no por ciclo. Consecuencia real: el
+    run 1100 del split de test (true NON_CONDENSABLES) se diagnostica 11 (correcto) cuando se envía
+    el split completo, pero 2 (COND_FOUL_SEVERE) cuando se envía ese run aislado. El diagnóstico de
+    esas dos clases depende de con qué otros ciclos se agrupe la petición. Es diseño del equipo de IA
+    portado fielmente al plugin; los golden_cases se verifican en batch de split completo (mismo modo
+    en que se generaron las métricas). Recomendado: pedir al equipo de IA una versión por-ciclo de la
+    regla para producción.

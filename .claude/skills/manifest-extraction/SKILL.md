@@ -30,6 +30,12 @@ inbox/<model_id>/
   o romperá silenciosamente `pip install`/`pip-audit` en el pipeline.
 - Localizar `config.yaml` o equivalente — suele contener valores por defecto y, a veces,
   escenarios de validación oficiales ya definidos por el equipo de IA.
+- Localizar el código de entrenamiento original (`train.py`, notebook, o la sección de
+  entrenamiento dentro de `predict.py`) — de ahí salen `target_column`, las columnas requeridas
+  y los hiperparámetros (optimizador, learning rate, epochs) que van al bloque `training` del
+  manifest. Si el modelo no trae código de entrenamiento propio (p. ej. solo se entrega el
+  artefacto ya entrenado, sin forma de reentrenarlo con datos nuevos), `training.supported` es
+  `false` — no se inventa un procedimiento de fine-tuning que el equipo de IA no definió.
 
 ## Paso 2 — Extraer golden cases del dataset
 
@@ -88,6 +94,14 @@ outputs:
   predict_inline: [...]
   # + modos adicionales (optimize, batch...) si el modelo no es un predictor puro
 
+training:
+  supported: <true|false>       # false si no hay código/procedimiento de entrenamiento entregado
+  target_column: <null si supported=false>   # columna objetivo en el CSV de data_path
+  required_columns: [...]       # features + target que debe traer el CSV de entrenamiento
+  hyperparams: {...}            # optimizador, lr, epochs — del código de entrenamiento original
+  metrics_returned: [...]       # métricas que debe devolver TrainResponse (mae, r2, ...)
+  source: codigo_entrenamiento  # o memoria_seccion_X — trazabilidad de dónde salió cada dato
+
 constraints: {...}              # restricciones duras de negocio, no un output más
 
 metrics_reported: {...}         # del hold-out test — referencia de tolerancia, no caso verificable
@@ -107,5 +121,8 @@ known_issues: [...]             # cualquier gotcha de formato/encoding/estructur
 - Cualquier campo que no se pueda rellenar con evidencia real (código, dataset o memoria) se
   deja explícitamente como `null` con un comentario explicando por qué falta — nunca se rellena
   por inferencia del agente.
+- `training.target_column`, `training.required_columns` y `training.hyperparams` nunca se
+  infieren ni se copian de otro modelo — o salen del código de entrenamiento/memoria de este
+  modelo concreto, o `training.supported` queda en `false` con la razón en `known_issues`.
 - Si la memoria no sigue la estructura de secciones esperada, señalarlo en `known_issues` y
   pedir confirmación humana antes de continuar.

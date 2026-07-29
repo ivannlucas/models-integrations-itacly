@@ -1,0 +1,52 @@
+{
+  "model_id": "a10",
+  "model_slug": "cattle-disease-vector-detection",
+  "fecha": "Julio 2026",
+  "descripcion": "Sistema de análisis de imágenes que localiza y reconoce, sobre fotografías de ganado vacuno, los tres vectores biológicos que transmiten enfermedades al animal: moscas, mosquitos y garrapatas. A partir de una foto, marca dónde hay cada bicho y de qué tipo es, y resume cuántos hay de cada especie. Está pensado como una herramienta de vigilancia sanitaria temprana en la explotación.",
+  "objetivo": "Ayudar a la explotación a anticiparse a las infestaciones de moscas, mosquitos y garrapatas en el establo, detectando su presencia sobre los animales a partir de imágenes antes de que el problema se extienda. El objetivo de negocio declarado es reducir en torno a un 10% los costes de tratamiento asociados a estos vectores, una cifra que —según la propia entrega— todavía debe confirmarse con una validación en condiciones reales.",
+  "caso_uso": "Le envías una fotografía del animal (o un conjunto de fotos) y el sistema te devuelve qué vectores ha encontrado, de qué especie, cuántos, y cuál es el predominante en esa imagen. Puedes analizar una foto suelta para una respuesta inmediata, o una carpeta/lote de imágenes de golpe. Dispones de dos ajustes opcionales de sensibilidad (uno para cuán exigente es al detectar un bicho y otro para aceptar la especie asignada) si quieres afinar cuántas detecciones dudosas se descartan.",
+  "que_no_responde": "No diagnostica la enfermedad del animal ni su gravedad: solo indica la presencia y el tipo de vector (mosca, mosquito o garrapata) visible en la imagen, no si el animal está enfermo ni qué tratamiento aplicar.",
+  "entradas_contexto": "El sistema trabaja con fotografías del ganado tomadas en la explotación. Lo ideal son imágenes nítidas y bien iluminadas en las que el vector sea razonablemente visible sobre el animal; los bichos muy pequeños o lejanos son más difíciles de detectar.",
+  "inputs": [
+    {"nombre": "Fotografía del animal", "descripcion": "Una imagen del ganado, ya sea como archivo en el sistema o como imagen enviada directamente. Formatos habituales: JPG, PNG, BMP o TIFF."},
+    {"nombre": "Carpeta o lote de imágenes", "descripcion": "Un conjunto de fotos para analizar en bloque; el sistema revisa cada imagen y devuelve un resultado por fichero."},
+    {"nombre": "Sensibilidad de detección (opcional)", "descripcion": "Ajuste de cuán exigente es el sistema al dar por buena la presencia de un bicho; por defecto es permisivo (0,2) para no perderse vectores."},
+    {"nombre": "Sensibilidad de especie (opcional)", "descripcion": "Ajuste de cuán seguro debe estar de la especie antes de aceptarla; por defecto medio (0,5)."}
+  ],
+  "outputs": [
+    {"nombre": "Vector predominante", "descripcion": "La especie de vector más presente en la imagen (mosca, mosquito o garrapata), o 'sin vectores' si no encuentra ninguno fiable.", "interpretacion": "Te indica de un vistazo cuál es el problema principal en esa foto; 'sin vectores' significa que no se ha aceptado ninguna detección."},
+    {"nombre": "Confianza", "descripcion": "Cuán seguro está el sistema de la especie del vector predominante, de 0 a 1.", "interpretacion": "Cuanto más alta, más fiable; conviene revisar a mano las detecciones con confianza baja."},
+    {"nombre": "Número de vectores", "descripcion": "Cuántos bichos ha detectado y aceptado en total en la imagen.", "interpretacion": "Da una idea de la magnitud de la presencia; 0 significa imagen sin vectores aceptados."},
+    {"nombre": "Detalle y reparto por especie", "descripcion": "El listado de cada detección con su ubicación en la foto y el recuento agrupado por tipo de vector.", "interpretacion": "Permite comprobar visualmente las detecciones y ver qué mezcla de vectores hay en el animal."}
+  ],
+  "ejemplo_interpretacion": "Si en una foto el sistema devuelve 'garrapata' como vector predominante con confianza 0,93 y un recuento de 4 garrapatas y 1 mosca, se interpreta como una presencia clara de garrapatas sobre ese animal que justifica una inspección y, si procede, un tratamiento antiparasitario; la mosca aislada con confianza baja probablemente no sea relevante.",
+  "margen_error": "Una vez que un bicho está bien recortado en la imagen, el sistema acierta la especie en torno a 98 de cada 100 casos. El punto débil está en detectarlos: se localiza aproximadamente el 71% de los vectores presentes, de modo que puede pasar por alto cerca de 3 de cada 10, sobre todo cuando son pequeños u ocupan menos de una décima parte de la imagen. Por eso una respuesta 'sin vectores' no garantiza que el animal esté libre de ellos.",
+  "revisar_manualmente": [
+    "Detecciones con confianza baja o cercana al umbral: conviene confirmarlas visualmente antes de actuar.",
+    "Imágenes con vectores muy pequeños, lejanos o sobre pelaje oscuro, donde el sistema tiende a omitir detecciones.",
+    "Fotos tomadas con mala iluminación, sombras marcadas, contraluz o movimiento (imagen movida), que reducen la fiabilidad.",
+    "Un resultado 'sin vectores' cuando hay sospecha razonable de infestación: no descarta con seguridad su presencia."
+  ],
+  "que_no_hace": [
+    "No diagnostica enfermedades ni evalúa el estado de salud del animal.",
+    "No cuenta con exactitud absoluta el número de parásitos: es una estimación de los que consigue detectar.",
+    "No recomienda tratamientos ni dosis.",
+    "No garantiza detectar todos los vectores presentes, especialmente los pequeños o poco visibles.",
+    "No ha sido validado sobre el pelaje real del ganado en explotación: se entrenó con imágenes de fondos controlados."
+  ],
+  "puede_equivocarse": "Sí. El clasificador de especie es muy fiable (~98%), pero la detección deja escapar en torno al 29% de los vectores y, al haberse entrenado con fondos controlados y no sobre el pelaje real del animal, puede confundir texturas del pelo con bichos. Además, el ahorro del 10% en costes de tratamiento es un objetivo de negocio no verificado que requiere validación con datos reales antes del despliegue. Debe usarse como ayuda a la vigilancia, no como una cuenta exacta ni como una garantía de ausencia de plaga.",
+  "kpis": [
+    {"kpi": "Fiabilidad al identificar la especie", "valor_umbral": "> 80% (obtenido ~98%)", "descripcion": "De los bichos que detecta, el porcentaje en que acierta si es mosca, mosquito o garrapata."},
+    {"kpi": "Capacidad de detección (cobertura)", "valor_umbral": "> 65% (obtenido ~71%)", "descripcion": "Porcentaje de los vectores realmente presentes que el sistema consigue localizar."},
+    {"kpi": "Precisión de localización", "valor_umbral": "> 70% (obtenido ~79%)", "descripcion": "Grado de acierto al situar correctamente los recuadros sobre los vectores."},
+    {"kpi": "Ahorro en costes de tratamiento", "valor_umbral": "~10% (objetivo, no validado)", "descripcion": "Reducción de coste esperada por la intervención temprana; pendiente de confirmar en explotación real."}
+  ],
+  "limitaciones": [
+    {"tipo": "Sin validación end-to-end", "descripcion": "La detección y la identificación de especie se probaron por separado, no el sistema completo funcionando sobre fotos reales de la explotación; no hay una comprobación integral de extremo a extremo."},
+    {"tipo": "Entrenado con fondos controlados", "descripcion": "Las imágenes de entrenamiento tenían fondos neutros o de vegetación, no el pelaje del ganado, por lo que en campo puede confundir texturas del pelo con vectores."},
+    {"tipo": "Se le escapan los vectores pequeños", "descripcion": "Cuando el bicho ocupa menos de una décima parte de la imagen, es frecuente que no lo detecte; la distancia variable de la cámara al animal agrava el problema."},
+    {"tipo": "Menos fiable en moscas y mosquitos", "descripcion": "En los datos de entrenamiento las garrapatas estaban sobrerrepresentadas, así que el reconocimiento de las otras dos especies es algo más frágil."},
+    {"tipo": "Sensible a las condiciones de la foto", "descripcion": "Luz cambiante, sombras del animal, sol directo o imagen movida pueden reducir puntualmente tanto la detección como la precisión."},
+    {"tipo": "Ahorro de costes sin confirmar", "descripcion": "La reducción del 10% en costes de tratamiento es un objetivo de negocio que solo puede darse por bueno tras validar el modelo en condiciones reales."}
+  ]
+}

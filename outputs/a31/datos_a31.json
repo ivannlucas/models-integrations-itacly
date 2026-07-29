@@ -1,0 +1,198 @@
+{
+ "model_id": "a31",
+ "model_slug": "cereals-residue-optimizer",
+ "fecha": "Julio 2026",
+ "model_key": "ml31-cereals-residue-optimizer",
+ "version": "2.0",
+ "descripcion": "Optimizador determinista de Programación Lineal (PuLP/CBC, método Simplex) que reasigna la superficie de cultivos cerealistas en secano y regadío para minimizar el residuo vegetal disponible en suelo manteniendo un umbral mínimo de beneficio económico (Modo A), o maximizar el beneficio bajo un residuo máximo (Modo B). No es un modelo con pesos entrenados: resuelve un problema de optimización con restricciones a partir de un modelo económico por cultivo. Sustituye al surrogate MLPRegressor v1.x, retirado en la memoria v2.0.",
+ "task_type": "optimization (Programación Lineal determinista)",
+ "framework": "PuLP==3.3.2 (solver CBC), numpy, pandas, pydantic",
+ "artefacto": "Sin pesos entrenados. Artefactos de configuración: crop_economics.json (precios/costes por cultivo), harvest_index.json (índice de cosecha por cultivo/régimen/estrés hídrico) y los config JSON (inference/optimization/pareto/economics). Dataset histórico dataset_cereal_lluvia_2009_2023.csv como base de superficies y rendimientos.",
+ "objetivo": "Dada la distribución histórica de superficies de cultivo de un año, proponer una asignación alternativa que reduzca la biomasa residual agrícola sin sacrificar el beneficio económico de la explotación, respetando límites de superficie, producción mínima por cultivo y bandas de variación realistas. Herramienta de análisis prescriptivo (qué hacer), no predictivo.",
+ "caso_uso": "Servido en /models/ml31-cereals-residue-optimizer/predict con tres modos por el discriminador 'mode'. Modo optimize: se fija el escenario (año de referencia, factor climático, lluvia esperada, tolerancias y restricciones) y optimization_mode (minimize_residue | maximize_benefit); devuelve el plan de asignación por cultivo/régimen, totales (producción, residuo, beneficio), reducción % vs baseline y veredicto de criterios de éxito. Modo pareto: traza la frontera residuo↔beneficio por epsilon-constraint y devuelve las cotas, los puntos no dominados y el knee point. Modo batch: optimiza cada escenario de un CSV. El reentrenamiento por usuario no aplica: /train devuelve HTTP 501 (optimizador determinista). Si las restricciones son incompatibles, el LP es infactible y se devuelve HTTP 422 (InfeasibleOptimizationError).",
+ "inputs": [
+  {
+   "nombre": "mode",
+   "tipo": "str",
+   "descripcion": "Discriminador de petición: 'optimize', 'pareto' o 'batch'",
+   "obligatorio": "Sí",
+   "valor_defecto": "optimize"
+  },
+  {
+   "nombre": "reference_year",
+   "tipo": "int",
+   "descripcion": "Año de referencia; fija superficies y rendimientos históricos. Si no existe cae al último año disponible",
+   "obligatorio": "No",
+   "valor_defecto": "2023"
+  },
+  {
+   "nombre": "optimization_mode",
+   "tipo": "str",
+   "descripcion": "Objetivo del LP: 'minimize_residue' (Modo A) o 'maximize_benefit' (Modo B)",
+   "obligatorio": "No",
+   "valor_defecto": "minimize_residue"
+  },
+  {
+   "nombre": "climate_factor",
+   "tipo": "float",
+   "descripcion": "Multiplicador sobre los rendimientos (0.75–1.15); se aplica a baseline y óptimo por igual",
+   "obligatorio": "No",
+   "valor_defecto": "1.0"
+  },
+  {
+   "nombre": "expected_spring_rain_mm",
+   "tipo": "float",
+   "descripcion": "Lluvia de primavera esperada (mm); <100 activa estrés hídrico (índice de cosecha reducido en secano)",
+   "obligatorio": "No",
+   "valor_defecto": "130.0"
+  },
+  {
+   "nombre": "min_benefit_eur / min_benefit_pct_of_baseline",
+   "tipo": "float | null",
+   "descripcion": "Beneficio mínimo exigido (restricción R6, Modo A). Si min_benefit_eur es null se deriva del baseline por el %",
+   "obligatorio": "No",
+   "valor_defecto": "null / 1.0"
+  },
+  {
+   "nombre": "max_residue_t",
+   "tipo": "float | null",
+   "descripcion": "Residuo máximo admisible (restricción R7, Modo B)",
+   "obligatorio": "No",
+   "valor_defecto": "null"
+  },
+  {
+   "nombre": "surface_tolerance_pct",
+   "tipo": "float",
+   "descripcion": "Banda ±% sobre la superficie histórica de cada cultivo (restricción R4c)",
+   "obligatorio": "No",
+   "valor_defecto": "25.0"
+  },
+  {
+   "nombre": "min_secano_use_pct / min_regadio_use_pct",
+   "tipo": "float",
+   "descripcion": "Uso mínimo de la superficie total de secano/regadío (R1b/R2b)",
+   "obligatorio": "No",
+   "valor_defecto": "95.0 / 95.0"
+  },
+  {
+   "nombre": "crop_constraints / price_overrides / cost_overrides",
+   "tipo": "dict",
+   "descripcion": "Restricciones por cultivo (producción/superficie mín-máx) y sobrescritura de precios/costes económicos",
+   "obligatorio": "No",
+   "valor_defecto": "{}"
+  },
+  {
+   "nombre": "data_path",
+   "tipo": "str",
+   "descripcion": "Modo batch: CSV con un escenario de optimización por fila",
+   "obligatorio": "Sí (modo batch)",
+   "valor_defecto": "-"
+  }
+ ],
+ "outputs": [
+  {
+   "nombre": "crop_allocation",
+   "tipo": "dict[cultivo]->{secano_ha,regadio_ha,production_t,residue_t,benefit_eur}",
+   "descripcion": "Plan de acción: superficie óptima por cultivo y régimen con sus magnitudes derivadas",
+   "rango": "≥ 0",
+   "interpretacion": "Es la recomendación operativa de reasignación de superficies"
+  },
+  {
+   "nombre": "total_residue_t",
+   "tipo": "float (t)",
+   "descripcion": "Residuo total disponible en suelo de la solución óptima (objetivo Modo A)",
+   "rango": "positivo",
+   "interpretacion": "Menor es mejor; se compara con el baseline del año"
+  },
+  {
+   "nombre": "total_benefit_eur",
+   "tipo": "float (EUR)",
+   "descripcion": "Beneficio total de la solución óptima (objetivo Modo B)",
+   "rango": "positivo",
+   "interpretacion": "Guardarraíl en Modo A: no debe caer por debajo del mínimo exigido"
+  },
+  {
+   "nombre": "residue_reduction_pct",
+   "tipo": "float (%)",
+   "descripcion": "(baseline-óptimo)/baseline×100. POSITIVO indica reducción de residuo (convención inversa a la memoria, que lo tabula negativo)",
+   "rango": "-100..100",
+   "interpretacion": "Métrica de impacto principal; 31.18% en el escenario 2023"
+  },
+  {
+   "nombre": "solver_status",
+   "tipo": "str",
+   "descripcion": "Estado del solver CBC: OPTIMAL | INFEASIBLE | UNBOUNDED | NOT_SOLVED",
+   "rango": "-",
+   "interpretacion": "INFEASIBLE se traduce a HTTP 422; restricciones incompatibles"
+  },
+  {
+   "nombre": "pareto_points / bounds / knee_point",
+   "tipo": "list / dict (modo pareto)",
+   "descripcion": "Frontera residuo↔beneficio: cotas, puntos no dominados (en millones) y punto de mejor compromiso",
+   "rango": "-",
+   "interpretacion": "El knee point es el mejor equilibrio residuo-beneficio de la frontera"
+  }
+ ],
+ "metricas": [
+  {
+   "nombre": "Reducción de residuo (escenario 2023, verificado)",
+   "valor": "31.18 %",
+   "descripcion": "Reducción de residuo vs baseline manteniendo el beneficio (reproducido exacto contra el resultado auditado)",
+   "interpretacion": "casi un tercio menos de biomasa residual sin perder beneficio"
+  },
+  {
+   "nombre": "Beneficio preservado (2023)",
+   "valor": "100 % (Δ -0.54 EUR)",
+   "descripcion": "Beneficio de la solución óptima frente al baseline",
+   "interpretacion": "la reducción de residuo no cuesta beneficio"
+  },
+  {
+   "nombre": "Variación de producción (2023)",
+   "valor": "-5.05 %",
+   "descripcion": "Cambio de producción total de la solución óptima vs baseline",
+   "interpretacion": "ligera bajada de producción como contrapartida"
+  },
+  {
+   "nombre": "Reducción multiaño (2021 / 2022)",
+   "valor": "7.44 % / 7.30 %",
+   "descripcion": "Reducción de residuo verificada para otros años (magnitud exacta vs memoria)",
+   "interpretacion": "el beneficio del enfoque se mantiene en distintos años"
+  },
+  {
+   "nombre": "Verificación golden dataset",
+   "valor": "12/12 dentro de tolerancia 0.5 %",
+   "descripcion": "Todos los casos auditados (optimize, cotas y frontera de Pareto) reproducidos por el plugin integrado",
+   "interpretacion": "el port del LP es fiel al modelo original"
+  }
+ ],
+ "limitaciones": [
+  {
+   "tipo": "No es un predictor ni un modelo aprendido",
+   "descripcion": "Es un optimizador determinista de Programación Lineal; su calidad depende del modelo económico (precios/costes) y de los datos históricos de superficie/rendimiento, no de un entrenamiento."
+  },
+  {
+   "tipo": "Sensible a precios y costes",
+   "descripcion": "El resultado (sobre todo en Modo B, maximizar beneficio) depende de los precios de grano y costes por cultivo del modelo económico; conviene revisarlos y, si procede, sobrescribirlos con datos actuales."
+  },
+  {
+   "tipo": "Restricciones pueden ser infactibles",
+   "descripcion": "Combinaciones incompatibles de beneficio mínimo, bandas de superficie y uso mínimo de tierra hacen el problema infactible (HTTP 422); requiere relajar alguna restricción."
+  },
+  {
+   "tipo": "Alcance de datos",
+   "descripcion": "El dataset base cubre Castilla y León 2009–2023 (sin 2020) y 10 cultivos cerealistas; fuera de ese ámbito los coeficientes no son válidos."
+  },
+  {
+   "tipo": "Convención de signo",
+   "descripcion": "residue_reduction_pct se devuelve positivo cuando hay reducción (la memoria lo tabula negativo); misma magnitud, signo opuesto — documentado para evitar malinterpretaciones."
+  },
+  {
+   "tipo": "Identidad del modelo",
+   "descripcion": "El identificador y el título del proyecto mencionan 'neuroevolutivo', pero la versión v2.0 integrada es Programación Lineal determinista (ni neuroevolución ni algoritmo genético)."
+  }
+ ],
+ "fichero_nombre": "Golden dataset del manifest (inbox/a31/manifest.yaml): 12 casos auditados de optimization_metrics.json, pareto_metrics.json y la tabla multiaño de la memoria.",
+ "fichero_registros": "12 casos: 1 escenario de referencia 2023, 2 multiaño (2021/2022), 2 cotas de Pareto y 7 puntos de la frontera (incl. knee).",
+ "fichero_resultado": "12/12 reproducidos por el plugin integrado dentro de tolerancia 0.5 %: 2023 residuo 4 481 067.28 t y reducción 31.18 % exactos; cotas y knee de Pareto exactos. Ver outputs/a31/verification_report.md.",
+ "observaciones_tecnicas": "Ejecutable en CPU (solver CBC incluido con PuLP==3.3.2); sin GPU, sin dependencias pesadas de ML. Resolución del LP ~0.014 s por escenario. Determinista y reproducible (sin semillas aleatorias). Artefactos de configuración (crop_economics.json, harvest_index.json, config JSON) en artifacts/ml31_cereals_residue_optimizer/ local o en S3 artifacts/fixed/. train() → HTTP 501 (optimizador, no se reentrena). Excepción de dominio InfeasibleOptimizationError → HTTP 422. mlflow_utils.py presente por convención del repo."
+}

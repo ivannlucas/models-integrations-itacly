@@ -8,11 +8,17 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from app.domain.services.exceptions import (
+    InfeasibleOptimizationError,
+    InsufficientCycleHistoryError,
     InsufficientFramesError,
+    InsufficientTelemetryHistoryError,
     InvalidImageError,
     InvalidVideoError,
     NoValidSimulationPointError,
     PuConstraintViolationError,
+    UnknownDiagnosisSystemError,
+    ThermalSafetyViolationError,
+
 )
 
 # ── Plugin imports ────────────────────────────────────────────────────────────
@@ -77,9 +83,29 @@ from app.plugins.ml31_cereals_residue_optimizer.predict_dto import (
     PredictRequest as Ml31Residue_Request,
     PredictResponse as Ml31Residue_Response,
 )
-from app.plugins.ml31_cereals_residue_optimizer.train_dto import (
-    TrainRequest as Ml31Residue_TrainReq,
-    TrainResponse as Ml31Residue_TrainResp,
+
+from app.plugins.ml4_lactic_cnn_thermal_early_disease_detection.plugin import (
+    Ml4LacticCnnThermalEarlyDiseaseDetectionPlugin,
+)
+from app.plugins.ml4_lactic_cnn_thermal_early_disease_detection.predict_dto import (
+    PredictRequest as Ml4Thermal_Request,
+    PredictResponse as Ml4Thermal_Response,
+)
+
+from app.plugins.ml23_lactic_market_price_forecast.plugin import (
+    Ml23LacticMarketPriceForecastPlugin,
+)
+from app.plugins.ml23_lactic_market_price_forecast.predict_dto import (
+    PredictRequest as Ml23_Request,
+    PredictResponse as Ml23_Response,
+)
+
+from app.plugins.ml17_meat_market_price_analysis.plugin import (
+    Ml17MeatMarketPriceAnalysisPlugin,
+)
+from app.plugins.ml17_meat_market_price_analysis.predict_dto import (
+    PredictRequest as Ml17_Request,
+    PredictResponse as Ml17_Response,
 )
 
 from app.plugins.ml35_dairy_ann_cleaning_cost.plugin import Ml35DairyAnnCleaningCostPlugin
@@ -90,6 +116,45 @@ from app.plugins.ml35_dairy_ann_cleaning_cost.predict_dto import (
 from app.plugins.ml35_dairy_ann_cleaning_cost.train_dto import (
     TrainRequest as Ml35Dairy_TrainReq,
     TrainResponse as Ml35Dairy_TrainResp,
+)
+
+from app.plugins.ml34_dairy_pasteurization_energy_ga.plugin import (
+    Ml34DairyPasteurizationEnergyGaPlugin,
+)
+from app.plugins.ml34_dairy_pasteurization_energy_ga.predict_dto import (
+    PredictRequest as Ml34Dairy_Request,
+    PredictResponse as Ml34Dairy_Response,
+)
+from app.plugins.ml34_dairy_pasteurization_energy_ga.train_dto import (
+    TrainRequest as Ml34Dairy_TrainReq,
+    TrainResponse as Ml34Dairy_TrainResp,
+)
+
+from app.plugins.ml46_dairy_fouling_clog_detection.plugin import Ml46DairyFoulingClogDetectionPlugin
+from app.plugins.ml46_dairy_fouling_clog_detection.predict_dto import (
+    PredictRequest as Ml46Dairy_Request,
+    PredictResponse as Ml46Dairy_Response,
+)
+from app.plugins.ml46_dairy_fouling_clog_detection.train_dto import (
+    TrainRequest as Ml46Dairy_TrainReq,
+    TrainResponse as Ml46Dairy_TrainResp,
+)
+from app.plugins.m47_dnsl_fallas_maquinaria_pasteurizado.plugin import M47DnsFallMaquinariaPasteurizadoPlugin
+from app.plugins.m47_dnsl_fallas_maquinaria_pasteurizado.predict_dto import (
+    PredictRequest as M47_Request,
+    PredictResponse as M47_Response,
+)
+
+from app.plugins.ml40_meat_refrigeration_aeration_fault_diagnosis.plugin import (
+    Ml40MeatRefrigerationAerationFaultDiagnosisPlugin,
+)
+from app.plugins.ml40_meat_refrigeration_aeration_fault_diagnosis.predict_dto import (
+    PredictRequest as Ml40Meat_Request,
+    PredictResponse as Ml40Meat_Response,
+)
+from app.plugins.ml40_meat_refrigeration_aeration_fault_diagnosis.train_dto import (
+    TrainRequest as Ml40Meat_TrainReq,
+    TrainResponse as Ml40Meat_TrainResp,
 )
 
 
@@ -187,8 +252,34 @@ REGISTRY: list[ModelEntry] = [
         plugin_class=Ml31CerealsResidueOptimizerPlugin,
         predict_request_type=Ml31Residue_Request,
         predict_response_type=Ml31Residue_Response,
-        train_request_type=Ml31Residue_TrainReq,
-        train_response_type=Ml31Residue_TrainResp,
+        extra_predict_exceptions=(InfeasibleOptimizationError,),
+    ),
+    ModelEntry(
+        model_id="ml4-lactic-cnn-thermal-early-disease-detection",
+        prefix="/models/ml4-lactic-cnn-thermal-early-disease-detection",
+        version="1.0.0",
+        plugin_class=Ml4LacticCnnThermalEarlyDiseaseDetectionPlugin,
+        predict_request_type=Ml4Thermal_Request,
+        predict_response_type=Ml4Thermal_Response,
+        extra_predict_exceptions=(InvalidImageError,),
+    ),
+    ModelEntry(
+        model_id="ml23-lactic-market-price-forecast",
+        prefix="/models/ml23-lactic-market-price-forecast",
+        version="1.0.0",
+        plugin_class=Ml23LacticMarketPriceForecastPlugin,
+        predict_request_type=Ml23_Request,
+        predict_response_type=Ml23_Response,
+        extra_predict_exceptions=(),
+    ),
+    ModelEntry(
+        model_id="ml17-meat-market-price-analysis",
+        prefix="/models/ml17-meat-market-price-analysis",
+        version="1.0.0",
+        plugin_class=Ml17MeatMarketPriceAnalysisPlugin,
+        predict_request_type=Ml17_Request,
+        predict_response_type=Ml17_Response,
+        extra_predict_exceptions=(),
     ),
     ModelEntry(
         model_id="ml35-dairy-ann-cleaning-cost",
@@ -200,5 +291,47 @@ REGISTRY: list[ModelEntry] = [
         extra_predict_exceptions=(PuConstraintViolationError,),
         train_request_type=Ml35Dairy_TrainReq,
         train_response_type=Ml35Dairy_TrainResp,
+    ),
+    ModelEntry(
+        model_id="ml34-dairy-pasteurization-energy-ga",
+        prefix="/models/ml34-dairy-pasteurization-energy-ga",
+        version="1.0.0",
+        plugin_class=Ml34DairyPasteurizationEnergyGaPlugin,
+        predict_request_type=Ml34Dairy_Request,
+        predict_response_type=Ml34Dairy_Response,
+        extra_predict_exceptions=(ThermalSafetyViolationError,),
+        train_request_type=Ml34Dairy_TrainReq,
+        train_response_type=Ml34Dairy_TrainResp,
+    ),
+    ModelEntry(
+        model_id="ml46-dairy-fouling-clog-detection",
+        prefix="/models/ml46-dairy-fouling-clog-detection",
+        version="1.0.0",
+        plugin_class=Ml46DairyFoulingClogDetectionPlugin,
+        predict_request_type=Ml46Dairy_Request,
+        predict_response_type=Ml46Dairy_Response,
+        extra_predict_exceptions=(InsufficientTelemetryHistoryError,),
+        train_request_type=Ml46Dairy_TrainReq,
+        train_response_type=Ml46Dairy_TrainResp,
+    ),
+    ModelEntry(
+        model_id="m47-dnsl-fallas-maquinaria-pasteurizado",
+        prefix="/models/m47-dnsl-fallas-maquinaria-pasteurizado",
+        version="1.0.0",
+        plugin_class=M47DnsFallMaquinariaPasteurizadoPlugin,
+        predict_request_type=M47_Request,
+        predict_response_type=M47_Response,
+        extra_predict_exceptions=(),
+    ),
+    ModelEntry(
+        model_id="ml40-meat-refrigeration-aeration-fault-diagnosis",
+        prefix="/models/ml40-meat-refrigeration-aeration-fault-diagnosis",
+        version="1.0.0",
+        plugin_class=Ml40MeatRefrigerationAerationFaultDiagnosisPlugin,
+        predict_request_type=Ml40Meat_Request,
+        predict_response_type=Ml40Meat_Response,
+        extra_predict_exceptions=(InsufficientCycleHistoryError, UnknownDiagnosisSystemError),
+        train_request_type=Ml40Meat_TrainReq,
+        train_response_type=Ml40Meat_TrainResp,
     ),
 ]

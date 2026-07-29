@@ -1,0 +1,173 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Manifest del modelo a47 — Deep Neurosymbolic Learning (DNSL) para detección de
+# fallas en maquinaria de pasteurizado.
+#
+# Generado por el skill manifest-extraction a partir de:
+#   - codigo/a47-dnsl-fallas-maquinaria-pasteurizado/  (src, config.yaml, artefactos, splits)
+#   - entregable/47 - ... - v2.0.docx  (memoria del equipo de IA, v2.0 24/06/2026)
+#   - app/plugins/m47_dnsl_fallas_maquinaria_pasteurizado/  (plugin ya integrado — contrato I/O autoritativo)
+# ─────────────────────────────────────────────────────────────────────────────
+
+model_id: lacteo-dnsl-fallas-maquinaria-pasteurizado
+model_key_runtime: m47-dnsl-fallas-maquinaria-pasteurizado   # MODEL_ID del plugin integrado
+artifact_folder: a47_dnsl_fallas_maquinaria_pasteurizado
+sector: lacteo
+nombre: "Desarrollo de un modelo predictivo basado en DNSL para la detección de fallas en maquinaria de pasteurizado"
+acronimo: DEFPAM-DNSL
+organismo: AIR Institute
+lote: 2
+version_memoria: "2.0"          # 24/06/2026
+version_plugin: "1.0.0"
+task_type: multi_label_classification   # 4 componentes × 3 estados (Sano/Warning/Crítico), simultáneo
+framework: [pytorch, scikit-learn, pandas, numpy, joblib, pyyaml]
+
+# ── Arquitectura ─────────────────────────────────────────────────────────────
+arquitectura:
+  tipo: "1D-CNN + Physics-Guided Loss (Deep Neurosymbolic Learning, familia NESY-CL)"
+  backbone: "CNN 1D de 4 bloques convolucionales (32→64→128→256 canales) + AdaptiveAvgPool1d(1)"
+  cabezas: "4 cabezas lineales independientes (una por componente), cada una con 3 logits de salida"
+  perdida: "CrossEntropy (4 componentes) + PhysicsGuidedLoss ponderada por lambda dinámico (WARMUP→RAMP_UP→MAX_LAMBDA)"
+  reglas_fisicas:
+    - "Conservación de energía (Bomba): eficiencia hidráulica P_hyd/Power >= 0.75, penaliza predecir 'Sano' si se viola"
+    - "Calorimetría (Enfriador/Fouling): transferencia de calor real >= 80% de la esperada, penaliza 'Sano' si se viola"
+  ventana: "1 ciclo = 60 s a 10 Hz = 600 pasos temporales (padding/truncado a 600); 7 canales de sensor + derivadas"
+
+# ── Artefactos ───────────────────────────────────────────────────────────────
+artifacts:
+  folder: models/artifacts/       # ruta dentro del código entregado
+  files:
+    - neurosymbolic_cnn.pth        # pesos del modelo DNSL (PyTorch state_dict)
+    - scaler_cnn_dns.pkl           # StandardScaler ajustado sobre train
+    - feature_columns.pkl          # orden/definición de columnas de entrada esperadas
+    - ts1_mean_train.pkl           # media de TS1 en train (para offset del gemelo térmico)
+  size_total_aprox: "~600 KB"
+
+# ── Entradas ─────────────────────────────────────────────────────────────────
+# El input NO es una fila aislada: es una ventana temporal completa (un ciclo de
+# ~600 filas a 10 Hz). Cada sensor se envía como array temporal (predict inline)
+# o como CSV multi-fila agrupable por Cycle_ID (predict batch / data_path).
+inputs:
+  fixed:      # los 7 sensores obligatorios (series temporales)
+    - {nombre: PS1,  tipo: "list[float]", unidad: bar,   descripcion: "Presión del circuito principal / entrada"}
+    - {nombre: PS3,  tipo: "list[float]", unidad: bar,   descripcion: "Presión en punto secundario / retorno"}
+    - {nombre: EPS1, tipo: "list[float]", unidad: W,     descripcion: "Potencia activa del motor eléctrico (crítica para regla física de bomba)"}
+    - {nombre: FS1,  tipo: "list[float]", unidad: "L/min", descripcion: "Caudal volumétrico principal (crítico para reglas termo/mecánicas)"}
+    - {nombre: TS1,  tipo: "list[float]", unidad: "°C",  descripcion: "Temperatura de entrada"}
+    - {nombre: TS2,  tipo: "list[float]", unidad: "°C",  descripcion: "Temperatura de salida"}
+    - {nombre: VS1,  tipo: "list[float]", unidad: "mm/s", descripcion: "Nivel de vibración mecánica"}
+  complementary:   # necesarias para estructurar la ventana, no son predictores
+    - {nombre: Time_Segundos, tipo: "list[float]", descripcion: "Marca temporal (0.0–60.0 s) para ordenar las 600 observaciones"}
+    - {nombre: Cycle_ID,      tipo: "int", opcional: true, descripcion: "Identificador de ciclo; permite predicción multi-ciclo en modo batch"}
+  control: []      # no hay optimización: el modelo no decide variables de control
+  derived_if_missing:
+    _rmean: "Media móvil (ventana 5) de cada sensor — se calcula internamente en inferencia"
+    _rstd:  "Desviación estándar móvil (ventana 5) — se calcula internamente"
+    _lag1:  "Valor retardado 1 paso — se calcula internamente"
+  digital_twin:
+    descripcion: >
+      Offset térmico opcional que desplaza TS1/TS2 al baseline de 65 °C usando ts1_mean_train.
+      SOLO para datos de laboratorio UCI (temperaturas de aceite ~45 °C). En producción con
+      pasteurizador real (leche 70–74 °C) DEBE estar desactivado.
+    plugin_flag: "APPLY_DIGITAL_TWIN (env var, default false)"
+
+# ── Salidas ──────────────────────────────────────────────────────────────────
+outputs:
+  predict_inline:
+    - {nombre: Enfriador_Fouling, tipo: int,   valores: "0=SANO, 1=WARNING, 2=CRÍTICO"}
+    - {nombre: Valvula_Switch,    tipo: int,   valores: "0=SANO, 1=WARNING, 2=CRÍTICO"}
+    - {nombre: Bomba_Leakage,     tipo: int,   valores: "0=SANO, 1=WARNING, 2=CRÍTICO"}
+    - {nombre: Acumulador_Gas,    tipo: int,   valores: "0=SANO, 1=WARNING, 2=CRÍTICO"}
+    - {nombre: Confianza_Fouling, tipo: float, rango: "0–1", descripcion: "Probabilidad softmax de la clase ganadora"}
+    - {nombre: Confianza_Valvula, tipo: float, rango: "0–1"}
+    - {nombre: Confianza_Bomba,   tipo: float, rango: "0–1"}
+    - {nombre: Confianza_Acumulador, tipo: float, rango: "0–1"}
+  predict_batch:
+    descripcion: "Una fila de predicción por Cycle_ID presente en el CSV (mismos 8 campos que inline)"
+
+# ── Entrenamiento (fine-tune / re-entrenamiento por usuario) ─────────────────
+training:
+  supported: true
+  # El plugin implementa train() vía train_model_from_csv: reconstruye la CNN y la
+  # entrena con PhysicsGuidedLoss + Early Stopping sobre los ciclos del CSV aportado.
+  target_column: [Fouling, Valvula, Bomba, Acumulador]   # 4 targets (0/1/2) — nombres exigidos por el trainer del plugin
+  required_columns: [PS1, PS3, EPS1, FS1, TS1, TS2, VS1, Time_Segundos, Cycle_ID, Fouling, Valvula, Bomba, Acumulador]
+  hyperparams:                    # valores del código original (config.yaml, óptimos de Optuna)
+    optimizer: Adam
+    learning_rate: 0.0022243234786004373
+    dropout_rate: 0.20219689010649033
+    batch_size: 32
+    epochs_max: 300
+    patience: 15
+    warmup_epochs: 10
+    ramp_up_epochs: 80
+    max_lambda: 3.7585293696964697
+    window_size: 600
+    random_state: 42
+  metrics_returned: [exact_match, accuracy, f1_macro, n_train, n_test, training_time_s]
+  source: codigo_entrenamiento    # config/config.yaml + src/training/trainer.py + plugin trainer.py
+  nota_fine_tuning: >
+    El código original también ofrece un modo Transfer Learning (congela backbone,
+    re-entrena solo las 4 cabezas, ~3000 parámetros, 200–500 ciclos reales) para
+    calibrar el modelo al fluido real de planta. El plugin integrado expone
+    re-entrenamiento vía train() con artefactos versionados en MLflow.
+
+# ── Restricciones / reglas de negocio ────────────────────────────────────────
+constraints:
+  ventana_minima: "El modelo espera ~600 pasos por ciclo; si hay menos se rellena con padding, si hay más se trunca"
+  prioridad_negocio: "Minimizar falsos negativos (no detectar un fallo real). Una falsa alarma tiene coste bajo; un fallo no detectado, alto"
+  digital_twin_produccion: "Con datos reales de planta el gemelo térmico DEBE estar desactivado (biosanitario: se audita la temperatura real del líquido)"
+
+# ── Métricas reportadas (hold-out test, referencia de tolerancia) ────────────
+metrics_reported:
+  fuente: "memoria v2.0 (Tabla 6) + models/metrics/test_metrics_confusion.csv (artefacto entregado)"
+  n_test_ciclos: 331               # 15% de 2205 ciclos, split por Cycle_ID
+  exact_match: 0.9879              # 98.79% de ciclos con los 4 componentes correctos a la vez
+  accuracy: 0.9970
+  precision_macro: 0.9969
+  recall_macro: 0.9972
+  f1_macro: 0.9970                 # criterio de éxito: >= 0.95 (SUPERADO)
+  por_componente:
+    Fouling:    {accuracy: 1.0,    f1: 1.0}
+    Valvula:    {accuracy: 1.0,    f1: 1.0}
+    Bomba:      {accuracy: 0.9940, nota: "único error: 2 ciclos Sano→Warning (falsa alarma)"}
+    Acumulador: {accuracy: 0.9940, nota: "único error: 2 ciclos Sano→Warning (falsa alarma)"}
+  aviso: >
+    Métricas obtenidas sobre el banco de laboratorio UCI (fallos inyectados de forma controlada).
+    En planta real serán netamente inferiores: requiere reentrenamiento/calibración con datos
+    etiquetados de un pasteurizador lácteo antes de cualquier despliegue en producción.
+
+# ── Golden cases ─────────────────────────────────────────────────────────────
+# Fuente: dataset_test_split (data/splits/test_split.csv, 331 ciclos, 601 filas/ciclo).
+# expected = PREDICCIÓN REAL DEL MODELO capturada ejecutando el pipeline de inferencia
+# original (src/predict/predictor.py, apply_digital_twin=False porque el split ya trae las
+# temperaturas desplazadas del entrenamiento), NO la etiqueta verdadera. Se conserva el caso
+# 211 aunque el modelo difiere de la verdad (pred Acumulador=1 vs true=0) porque documenta
+# el error real del modelo (falsa alarma de clase contigua). Selección diversa: 15 ciclos
+# cubriendo 9 combinaciones de estado (F,V,B,A).
+# Reproducción capturada en CUDA (torch 2.1.2); en CPU las clases deben coincidir aunque las
+# confianzas puedan variar en decimales — ver known_issues.
+golden_cases:
+  - {id: cycle_020, source: dataset_test_split, input: {window_source: "test_split.csv filtrado por Cycle_ID=20, 601 filas @10Hz", Cycle_ID: 20},  expected: {Enfriador_Fouling: 2, Valvula_Switch: 0, Bomba_Leakage: 0, Acumulador_Gas: 0}, true_targets: [2,0,0,0], match: true}
+  - {id: cycle_023, source: dataset_test_split, input: {window_source: "test_split.csv filtrado por Cycle_ID=23, 601 filas @10Hz", Cycle_ID: 23},  expected: {Enfriador_Fouling: 2, Valvula_Switch: 0, Bomba_Leakage: 0, Acumulador_Gas: 0}, true_targets: [2,0,0,0], match: true}
+  - {id: cycle_210, source: dataset_test_split, input: {window_source: "test_split.csv filtrado por Cycle_ID=210, 601 filas @10Hz", Cycle_ID: 210}, expected: {Enfriador_Fouling: 2, Valvula_Switch: 0, Bomba_Leakage: 2, Acumulador_Gas: 0}, true_targets: [2,0,2,0], match: true}
+  - {id: cycle_211, source: dataset_test_split, input: {window_source: "test_split.csv filtrado por Cycle_ID=211, 601 filas @10Hz", Cycle_ID: 211}, expected: {Enfriador_Fouling: 2, Valvula_Switch: 2, Bomba_Leakage: 2, Acumulador_Gas: 1}, true_targets: [2,2,2,0], match: false, nota: "Error real del modelo: Acumulador pred=1 (WARNING) vs true=0 (SANO) — falsa alarma de clase contigua, coste bajo"}
+  - {id: cycle_219, source: dataset_test_split, input: {window_source: "test_split.csv filtrado por Cycle_ID=219, 601 filas @10Hz", Cycle_ID: 219}, expected: {Enfriador_Fouling: 2, Valvula_Switch: 2, Bomba_Leakage: 2, Acumulador_Gas: 0}, true_targets: [2,2,2,0], match: true}
+  - {id: cycle_231, source: dataset_test_split, input: {window_source: "test_split.csv filtrado por Cycle_ID=231, 601 filas @10Hz", Cycle_ID: 231}, expected: {Enfriador_Fouling: 2, Valvula_Switch: 1, Bomba_Leakage: 2, Acumulador_Gas: 0}, true_targets: [2,1,2,0], match: true}
+  - {id: cycle_233, source: dataset_test_split, input: {window_source: "test_split.csv filtrado por Cycle_ID=233, 601 filas @10Hz", Cycle_ID: 233}, expected: {Enfriador_Fouling: 2, Valvula_Switch: 1, Bomba_Leakage: 2, Acumulador_Gas: 0}, true_targets: [2,1,2,0], match: true}
+  - {id: cycle_251, source: dataset_test_split, input: {window_source: "test_split.csv filtrado por Cycle_ID=251, 601 filas @10Hz", Cycle_ID: 251}, expected: {Enfriador_Fouling: 2, Valvula_Switch: 0, Bomba_Leakage: 1, Acumulador_Gas: 0}, true_targets: [2,0,1,0], match: true}
+  - {id: cycle_254, source: dataset_test_split, input: {window_source: "test_split.csv filtrado por Cycle_ID=254, 601 filas @10Hz", Cycle_ID: 254}, expected: {Enfriador_Fouling: 2, Valvula_Switch: 2, Bomba_Leakage: 1, Acumulador_Gas: 0}, true_targets: [2,2,1,0], match: true}
+  - {id: cycle_256, source: dataset_test_split, input: {window_source: "test_split.csv filtrado por Cycle_ID=256, 601 filas @10Hz", Cycle_ID: 256}, expected: {Enfriador_Fouling: 2, Valvula_Switch: 2, Bomba_Leakage: 1, Acumulador_Gas: 0}, true_targets: [2,2,1,0], match: true}
+  - {id: cycle_270, source: dataset_test_split, input: {window_source: "test_split.csv filtrado por Cycle_ID=270, 601 filas @10Hz", Cycle_ID: 270}, expected: {Enfriador_Fouling: 2, Valvula_Switch: 1, Bomba_Leakage: 1, Acumulador_Gas: 0}, true_targets: [2,1,1,0], match: true}
+  - {id: cycle_275, source: dataset_test_split, input: {window_source: "test_split.csv filtrado por Cycle_ID=275, 601 filas @10Hz", Cycle_ID: 275}, expected: {Enfriador_Fouling: 2, Valvula_Switch: 1, Bomba_Leakage: 1, Acumulador_Gas: 0}, true_targets: [2,1,1,0], match: true}
+  - {id: cycle_282, source: dataset_test_split, input: {window_source: "test_split.csv filtrado por Cycle_ID=282, 601 filas @10Hz", Cycle_ID: 282}, expected: {Enfriador_Fouling: 2, Valvula_Switch: 0, Bomba_Leakage: 1, Acumulador_Gas: 0}, true_targets: [2,0,1,0], match: true}
+  - {id: cycle_294, source: dataset_test_split, input: {window_source: "test_split.csv filtrado por Cycle_ID=294, 601 filas @10Hz", Cycle_ID: 294}, expected: {Enfriador_Fouling: 2, Valvula_Switch: 2, Bomba_Leakage: 0, Acumulador_Gas: 0}, true_targets: [2,2,0,0], match: true}
+  - {id: cycle_303, source: dataset_test_split, input: {window_source: "test_split.csv filtrado por Cycle_ID=303, 601 filas @10Hz", Cycle_ID: 303}, expected: {Enfriador_Fouling: 2, Valvula_Switch: 1, Bomba_Leakage: 0, Acumulador_Gas: 0}, true_targets: [2,1,0,0], match: true}
+
+# ── Known issues / gotchas ───────────────────────────────────────────────────
+known_issues:
+  - "El manifest no venía en el repo; se generó a posteriori (plugin ya integrado). El model_id runtime del plugin es m47-dnsl-... y la carpeta de artefactos a47_dnsl_..."
+  - "test_split.csv usa el Cycle_ID original del dataset (20,23,29...); prediction_output.csv entregado usa un índice reindexado 0..2204 y NO es alineable directamente con el split — por eso los golden se capturaron ejecutando el modelo sobre el split, no leyendo prediction_output.csv."
+  - "Golden capturados en GPU/CUDA (torch 2.1.2+cu121). En CPU las CLASES deben reproducirse; las confianzas pueden diferir en decimales. El versionado de CUDA puede alterar levemente la reproducibilidad numérica (advertido en la memoria)."
+  - "scaler_cnn_dns.pkl se serializó con scikit-learn 1.6.1; el entorno local tiene 1.7.0 — carga con warnings de versión pero funciona. Fijar versión en verificación si se busca reproducción estricta."
+  - "El dataset es de laboratorio (banco hidráulico UCI, fluido = aceite), NO de pasteurizado lácteo real. Todas las métricas son optimistas respecto a producción; el modelo requiere reentrenamiento/calibración con datos de planta antes de desplegar."
+  - "No existe outputs/a47/verification_report.md — el modelo aún no ha pasado el skill verification contra estos golden cases."

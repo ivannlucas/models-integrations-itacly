@@ -106,6 +106,18 @@ class PredictInlineResponse(BaseModel):
     mae_bound: float | None = Field(
         default=None, description="Cross-validated MAE of the bound SO2 model (~14.5 mg/L)"
     )
+    xai_feature_values: dict[str, float] = Field(
+        default_factory=dict,
+        description="Wine analysis input values used for this prediction, echoed back for XAI/explainability display",
+    )
+    simulation_trajectory: list[dict[str, float]] = Field(
+        default_factory=list,
+        description=(
+            "Every candidate free SO2 dose evaluated during optimization, with its estimated "
+            "bound/total/molecular SO2 and predicted quality — the full dose-vs-quality path, "
+            "not just the recommended point"
+        ),
+    )
 
 
 PredictRequest = Annotated[

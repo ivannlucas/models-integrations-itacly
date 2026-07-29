@@ -1,0 +1,54 @@
+{
+  "model_id": "a17",
+  "model_slug": "meat-market-price-analysis",
+  "fecha": "Julio 2026",
+
+  "descripcion": "Herramienta de apoyo a la decisión que estima cuál será el precio del cerdo (porcino clase E) en España el mes que viene, a partir de la situación del mercado del mes actual. Trabaja con datos mensuales oficiales de precios, sacrificio de animales y coste de la alimentación, y tiene en cuenta de forma automática la época del año, ya que el precio del cerdo sigue un patrón estacional. Devuelve un único valor: el precio estimado para el mes siguiente, en euros por cada 100 kilos.",
+  "objetivo": "Ayudar a anticipar hacia dónde va el precio del cerdo el mes próximo para tomar mejores decisiones de compra, planificación de existencias y gestión comercial. El resultado clave que se le pide a la herramienta es acertar la dirección del mercado (si el precio sube o baja) al menos 8 de cada 10 veces; en las pruebas realizadas lo consigue en torno a 9 de cada 10.",
+  "caso_uso": "Cada mes, cuando ya se conocen los datos oficiales del mes que acaba de cerrar, introduces esos datos (el precio actual del cerdo y unos pocos indicadores del mercado) y la herramienta te devuelve el precio estimado para el mes siguiente. Puedes consultarlo mes a mes de forma individual, o cargar de golpe una tabla con varios meses para obtener una estimación por cada uno. No necesitas indicar la época del año: la herramienta la tiene en cuenta sola a partir de la fecha.",
+  "que_no_responde": "No te dice el precio exacto y garantizado del mes que viene, ni predice más allá del mes inmediato con la misma fiabilidad, ni explica las causas económicas del movimiento del mercado. Es una estimación de apoyo, no un precio cerrado.",
+  "entradas_contexto": "La herramienta se alimenta de datos mensuales de fuentes oficiales (portal de datos agroalimentarios de la Comisión Europea, Eurostat y el Ministerio de Agricultura). Necesita la foto del mercado del último mes cerrado para estimar el siguiente.",
+  "inputs": [
+    {"nombre": "Mes de referencia", "descripcion": "La fecha del último mes del que ya tienes datos. Sirve para que la herramienta sepa en qué época del año está y proyecte el mes siguiente."},
+    {"nombre": "Precio actual del cerdo en España", "descripcion": "El precio del porcino clase E en España en el mes actual, en euros por 100 kilos. Es el dato más importante, porque el precio de un mes se parece mucho al del mes anterior."},
+    {"nombre": "Sacrificio de cerdos en España", "descripcion": "El volumen de animales sacrificados en España durante el mes. Da una idea de cuánta oferta hay en el mercado nacional."},
+    {"nombre": "Sacrificio de cerdos en la Unión Europea", "descripcion": "El volumen de animales sacrificados en el conjunto de la UE durante el mes. Refleja la oferta a nivel europeo."},
+    {"nombre": "Precio de la cebada para pienso", "descripcion": "El precio mensual de la cebada, usado como indicador del coste de alimentar a los animales."},
+    {"nombre": "Precio del maíz para pienso", "descripcion": "El precio mensual del maíz, otro indicador del coste de alimentación."},
+    {"nombre": "Precio de referencia del cerdo (otras razas)", "descripcion": "Un precio porcino nacional de referencia publicado por el Ministerio de Agricultura, que sirve como señal complementaria del mercado."},
+    {"nombre": "Tabla de varios meses (opcional)", "descripcion": "Un fichero con una fila por mes para obtener de una vez la estimación del mes siguiente de cada uno."}
+  ],
+  "outputs": [
+    {"nombre": "Precio estimado del mes siguiente", "descripcion": "El precio del cerdo (clase E, España) que la herramienta espera para el mes que viene, en euros por 100 kilos.", "interpretacion": "Es una estimación de apoyo: compárala con el precio actual para ver si el mercado apunta a subir o bajar, y contrástala con tu propio criterio antes de decidir."},
+    {"nombre": "Mes de partida", "descripcion": "El mes a partir del cual se ha calculado la estimación, para que quede claro a qué mes siguiente se refiere.", "interpretacion": "Confirma que has usado el mes correcto como punto de partida."},
+    {"nombre": "Detalle de los datos usados", "descripcion": "El listado de los valores que la herramienta ha empleado para calcular la estimación.", "interpretacion": "Permite revisar y justificar de dónde sale cada resultado."}
+  ],
+  "ejemplo_interpretacion": "Si el precio actual del cerdo es 180 €/100 kg y la herramienta estima 186 €/100 kg para el mes siguiente, la lectura es que el mercado apunta a una ligera subida de unos 6 euros. Como el margen de error típico ronda los 4-5 euros, una diferencia tan pequeña conviene tomarla como una señal de tendencia al alza más que como una cifra exacta; lo relevante es que apunta a subida, no bajada.",
+  "margen_error": "De media, la estimación se aparta del precio real en torno a 4 a 5 euros por cada 100 kilos. Diferencias de ese orden entre lo estimado y lo real son normales y no deben interpretarse como un fallo. Lo más fiable de la herramienta es acertar si el precio va a subir o a bajar: lo consigue en torno a 9 de cada 10 meses.",
+  "revisar_manualmente": [
+    "Cuando la estimación y el precio actual son casi iguales: la señal de si sube o baja es débil y conviene contrastarla con tu criterio.",
+    "En momentos de mercado inestable o cambios bruscos (crisis, cambios de política comercial, subidas fuertes del coste del pienso), donde el comportamiento reciente puede no repetirse.",
+    "Si vas a usar la herramienta para prever más de un mes por delante: la fiabilidad baja cuanto más lejos se mira.",
+    "Cuando falten o parezcan erróneos algunos de los datos de entrada del mes: una entrada de mala calidad da una estimación de mala calidad."
+  ],
+  "que_no_hace": [
+    "No garantiza el precio exacto del mes que viene: da una estimación con un margen de error.",
+    "No explica por qué se mueve el mercado ni identifica sus causas.",
+    "No predice con fiabilidad a varios meses vista; está pensado para el mes inmediato.",
+    "No sustituye el criterio del responsable de compras ni la información de mercado del día a día.",
+    "No se reentrena solo desde la herramienta: actualizarlo requiere un proceso técnico aparte."
+  ],
+  "puede_equivocarse": "Sí. Es una ayuda a la decisión, no una bola de cristal. Puede equivocarse en la cifra exacta (típicamente unos 4-5 euros por 100 kilos) y, en meses de mercado revuelto o ante situaciones nuevas que no se parecen a lo vivido antes, puede fallar también en la dirección. Su punto fuerte es dar una señal fiable de tendencia mes a mes; debe usarse como un apoyo más junto al conocimiento del negocio, no como una decisión automática.",
+  "kpis": [
+    {"kpi": "Acierto en la dirección del mercado", "valor_umbral": "> 80% (obtenido ~87%)", "descripcion": "De cada 10 meses, en cuántos acierta si el precio va a subir o a bajar. Es el objetivo principal de la herramienta."},
+    {"kpi": "Margen de error del precio estimado", "valor_umbral": "~4,5 €/100 kg de media", "descripcion": "Cuánto se desvía de media la cifra estimada respecto al precio real observado."},
+    {"kpi": "Mejora frente a 'repetir el precio de este mes'", "valor_umbral": "Error un tercio menor", "descripcion": "La herramienta se equivoca bastante menos que la regla simple de suponer que el mes que viene el precio será igual que el de hoy."}
+  ],
+  "limitaciones": [
+    {"tipo": "Depende mucho del precio actual", "descripcion": "El precio del cerdo cambia despacio de un mes a otro, así que buena parte de la estimación se apoya en el precio del mes en curso. Por eso la herramienta acierta el nivel con facilidad, pero anticipar los giros del mercado es lo verdaderamente difícil."},
+    {"tipo": "Usa pocos indicadores del mercado", "descripcion": "Solo tiene en cuenta precio, oferta (animales sacrificados) y coste del pienso. No mira demanda, inventarios, logística ni la economía general, así que puede quedarse corta ante situaciones fuera de lo habitual."},
+    {"tipo": "Puede desactualizarse", "descripcion": "Si el mercado cambia de forma importante respecto a los años recientes con los que se preparó, su fiabilidad puede bajar. Conviene revisarla periódicamente y avisar si empieza a fallar más de lo normal."},
+    {"tipo": "Pensada para el mes inmediato", "descripcion": "Está diseñada para estimar el mes siguiente. Mirar varios meses hacia delante es posible, pero mucho menos fiable y solo debe usarse como exploración."},
+    {"tipo": "Requiere validación con el mercado real", "descripcion": "Aunque los resultados de las pruebas son buenos, su utilidad práctica debe confirmarse con el seguimiento del mercado real antes de apoyarse en ella para decisiones importantes."}
+  ]
+}

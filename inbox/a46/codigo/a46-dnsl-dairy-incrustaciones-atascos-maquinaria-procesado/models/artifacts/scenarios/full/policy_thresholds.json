@@ -1,0 +1,13 @@
+{
+  "clog_prob_thr": 0.4,
+  "watch_foul_prob_thr": 0.35,
+  "actionable_foul_prob_thr": 0.55,
+  "tau_clog": 60.0,
+  "tau_foul_watch": 30.0,
+  "tau_unplanned": 60.0,
+  "foul_urgency_ttu": 60.0,
+  "severity_incipient_thr": 0.000495,
+  "severity_advanced_thr": 0.0011,
+  "cooldown_min": 90.0,
+  "objective": 0.4583333333333333
+}

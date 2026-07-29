@@ -1,0 +1,137 @@
+{
+ "model_id": "a07",
+ "model_slug": "cereals-grain-pest-detection",
+ "fecha": "Julio 2026",
+ "model_key": "ml7-cereals-grain-pest-detection",
+ "version": "1.0.0",
+ "descripcion": "Sistema de análisis de imágenes que detecta insectos plaga en fotografías de grano de cereal almacenado. Localiza cada insecto en la imagen, lo clasifica entre cinco especies de plaga y resume cuál predomina y cuántos hay, devolviendo además la foto con las detecciones marcadas.",
+ "task_type": "object_detection (detección de objetos multiclase sobre imagen)",
+ "framework": "ultralytics (YOLO) sobre PyTorch; artefacto servido best.pt. La memoria describe la arquitectura entrenada como YOLO26n (variante nano, 260 capas, 2.505.750 parámetros, ~5,8 GFLOPs); el plugin la carga como checkpoint YOLO de ultralytics.",
+ "artefacto": "best.pt (~5,3 MB) — checkpoint YOLO de ultralytics con las mejores métricas de validación. Cargado vía ArtifactStore (carpeta ml7_cereals_grain_pest_detection, local o S3). last.pt no se entrega.",
+ "objetivo": "Anticipar la presencia de plagas de insectos en centros de almacenamiento de grano, donde la infestación puede provocar pérdidas del 10-40 % de la producción anual (pérdida de peso, de capacidad germinativa, rancidez y proliferación fúngica). Permite una vigilancia preventiva automatizada mediante análisis periódico de imágenes y la generación de alertas tempranas para intervenir antes de que la infestación se consolide.",
+ "caso_uso": "Envías una fotografía de la superficie del grano (o un lote de fotos) y el sistema te devuelve qué insectos ha encontrado, la especie predominante, cuántos hay de cada tipo y la imagen con los insectos señalados. Está pensado para una vigilancia periódica que genere alertas tempranas antes de que la infestación se consolide. Puedes ajustar la sensibilidad si quieres descartar más o menos detecciones dudosas.",
+ "inputs": [
+  {
+   "nombre": "Imagen individual",
+   "descripcion": "Una foto del grano (como ruta de fichero o imagen codificada), en formatos habituales JPG, PNG, BMP o TIFF"
+  },
+  {
+   "nombre": "Carpeta o ZIP de imágenes",
+   "descripcion": "Un conjunto de fotos para analizar en bloque; el sistema recorre la carpeta y examina cada imagen"
+  },
+  {
+   "nombre": "Umbral de sensibilidad (opcional)",
+   "descripcion": "Un valor entre 0 y 1 para ajustar cuán exigente es el sistema al aceptar una detección; por defecto 0,28"
+  }
+ ],
+ "outputs": [
+  {
+   "nombre": "Especie dominante",
+   "descripcion": "El insecto plaga más presente en la imagen",
+   "interpretacion": "si no hay detecciones fiables, devuelve 'ninguna'; te dice de qué plaga preocuparte primero"
+  },
+  {
+   "nombre": "Confianza",
+   "descripcion": "Cuán seguro está el sistema de esa detección, de 0 a 1",
+   "interpretacion": "cuanto más alta, más fiable; revisa a mano las detecciones con confianza baja"
+  },
+  {
+   "nombre": "Recuento de insectos",
+   "descripcion": "Cuántos insectos ha encontrado en total y cuántos de cada especie",
+   "interpretacion": "da una idea de la magnitud de la presencia de plaga en esa foto"
+  },
+  {
+   "nombre": "Imagen marcada",
+   "descripcion": "La misma foto con recuadros de color señalando cada insecto detectado y su especie",
+   "interpretacion": "te permite comprobar de un vistazo si las detecciones tienen sentido"
+  }
+ ],
+ "metricas": [
+  {
+   "nombre": "IDP = mAP@0,5 (global, detección)",
+   "valor": "0,87",
+   "descripcion": "KPI principal declarado en la memoria; media del AP por clase con IoU ≥ 0,5 sobre el conjunto de test (2.700 imágenes, 4.090 instancias). Métrica declarada en la memoria, sin verificación post-integración",
+   "interpretacion": "supera el criterio de aceptación (> 0,8) y se sitúa en el rango 80-90 % reportado en la literatura"
+  },
+  {
+   "nombre": "Precision (global, detección)",
+   "valor": "0,84",
+   "descripcion": "Proporción de cajas predichas correctas sobre el conjunto de test (declarada en la memoria)",
+   "interpretacion": "de cada 100 detecciones, ~84 corresponden a insectos reales de la clase indicada"
+  },
+  {
+   "nombre": "Recall (global, detección)",
+   "valor": "0,81",
+   "descripcion": "Proporción de insectos reales correctamente detectados sobre el conjunto de test (declarada en la memoria)",
+   "interpretacion": "el modelo localiza ~81 de cada 100 insectos presentes"
+  },
+  {
+   "nombre": "mAP@0,5 por clase (rango, detección)",
+   "valor": "0,84 (cf) – 0,95 (os)",
+   "descripcion": "cf 0,84 / os 0,95 / rd 0,87 / sz 0,88 / tc 0,88 (memoria, Tabla 7). Métrica declarada, sin verificación post-integración",
+   "interpretacion": "Cryptolestes ferrugineus es la clase más difícil; Oryzaephilus surinamensis la más fiable"
+  },
+  {
+   "nombre": "Precision / Recall (global, clasificación)",
+   "valor": "0,71 / 0,87",
+   "descripcion": "Métricas a nivel de clasificación de especie (sin localización), derivadas de la matriz de confusión sobre el test (memoria, Tabla 8)",
+   "interpretacion": "buena sensibilidad global; la precisión baja por confusiones entre especies morfológicamente similares"
+  }
+ ],
+ "limitaciones": [
+  {
+   "tipo": "Conjunto cerrado de 5 especies",
+   "descripcion": "El modelo solo reconoce las plagas incluidas en el dataset de entrenamiento (cf, sz, rd, tc, os; sz agrupa Sitophilus zeamais y Sitophilus oryzae). Ante una especie no vista, puede no detectarla o asignarla erróneamente a una clase conocida (closed-set classification). Ampliar la cobertura exige nuevas imágenes anotadas y reentrenamiento/fine-tuning."
+  },
+  {
+   "tipo": "Insectos muy pequeños en la imagen",
+   "descripcion": "Cerca de la mitad de los insectos aparecen muy pequeños dentro de la foto, lo que dificulta reconocerlos y reduce el acierto, sobre todo en las dos especies más diminutas (el gorgojo dientes de sierra y el taladro de los granos)."
+  },
+  {
+   "tipo": "Fuente de datos única",
+   "descripcion": "Se entrena y valida sobre una única fuente pública (Pestdataset, porción procesada del dataset de Li et al. 2024 vía Tian et al. 2025), con 17.999 imágenes reales de cámaras de almacenamiento tras limpieza. Aunque son datos reales (no sintéticos), la representatividad taxonómica y de condiciones queda acotada a ese conjunto."
+  },
+  {
+   "tipo": "Entrenamiento en GPU, inferencia en CPU",
+   "descripcion": "El entrenamiento requirió GPU (CUDA, ~6-8 h en RTX 4070). En esta integración la inferencia está fijada a CPU (_DEVICE='cpu'); es adecuada para imágenes individuales o lotes pequeños, pero el throughput en lotes grandes es limitado sin GPU."
+  },
+  {
+   "tipo": "Nombre de clase 'sz' simplificado",
+   "descripcion": "El plugin muestra la clase sz como 'Sitophilus spp.', mientras que la memoria la define como 'Sitophilus zeamais / Sitophilus oryzae' agrupadas por similitud morfológica; ambas referencias designan la misma clase."
+  }
+ ],
+ "fichero_nombre": "No documentado en la entrega como golden dataset versionado. La memoria referencia el conjunto de test del split hold-out del Pestdataset (data/splits) y el pipeline de inferencia scripts/predict.py.",
+ "fichero_registros": "Conjunto de test declarado en la memoria: 2.700 imágenes, 4.090 instancias etiquetadas (partición estratificada 70/15/15, semilla 42).",
+ "fichero_resultado": "Según la memoria, la evaluación sobre el test alcanza mAP@0,5 global de 0,87 (P 0,84 / R 0,81). No se ejecutó verificación de correctitud post-integración contra golden dataset en esta entrega (no existe verification_report.md).",
+ "observaciones_tecnicas": "Inferencia solo CPU (_DEVICE='cpu'); ultralytics importado de forma perezosa. Artefacto best.pt (~5,3 MB) cargado vía ArtifactStore (local artifacts/ o S3), nunca commiteado a git. Entrada RGB reescalada internamente por ultralytics (resolución nativa del dataset 512×512, tensor (3,512,512)); imagen anotada limitada a 640 px y JPEG calidad 70. Entorno de desarrollo: Python 3.10.11, torch/torchvision, ultralytics, opencv-python, numpy, pandas (PyTorch con CUDA solo para entrenamiento). El umbral por defecto CONF_THRESHOLD=0,28 se calibró para minimizar falsos positivos sin comprometer recall; es sobrescribible por petición. train() responde HTTP 501 (artefacto externo). metrics={} en el endpoint stats.",
+ "que_no_responde": "No te dice el nivel de infestación en peso ni el daño económico, ni identifica plagas fuera de las 5 especies que conoce: te indica qué insectos de esas especies aparecen en cada imagen y dónde están.",
+ "entradas_contexto": "El sistema trabaja con fotografías de la superficie del grano almacenado, del tipo que tomaría una cámara fija instalada en el silo o almacén de forma periódica. Puedes enviar una imagen suelta o una carpeta/ZIP de imágenes para analizarlas todas de una vez.",
+ "ejemplo_interpretacion": "Si envías una foto de la superficie del grano y el sistema devuelve 'Rhyzopertha dominica' con confianza 0,90 y un recuento de 6 insectos, significa que ha localizado 6 posibles insectos y que la plaga predominante es el barrenador menor de los granos, con alta certeza: conviene revisar ese punto del almacén y valorar una intervención. Si devuelve 'ninguna', en esa imagen no ha detectado insectos por encima del umbral.",
+ "margen_error": "En las pruebas, el sistema localiza correctamente en torno a 8 de cada 10 insectos presentes y, de las detecciones que marca, unas 8 de cada 10 son correctas. Es más fiable con unas especies que con otras: detecta muy bien Oryzaephilus surinamensis y algo peor Cryptolestes ferrugineus, porque son insectos muy pequeños en la imagen. Una foto sin detecciones no garantiza al 100 % que no haya plaga, sobre todo si los insectos son diminutos o están ocultos.",
+ "revisar_manualmente": [
+  "Detecciones con confianza baja: conviene confirmarlas visualmente sobre la imagen marcada.",
+  "Imágenes donde sospeches una plaga distinta a las 5 especies conocidas: el sistema podría no detectarla o confundirla con una conocida.",
+  "Especies pequeñas y difíciles (Cryptolestes ferrugineus, Rhyzopertha dominica), donde el sistema acierta algo menos.",
+  "Fotos de mala calidad, mal iluminadas o muy distintas a las condiciones de un almacén de grano, fuera de aquello con lo que se entrenó el modelo."
+ ],
+ "que_no_hace": [
+  "No identifica plagas fuera de las 5 especies con las que fue entrenado.",
+  "No estima el nivel de infestación en kilos ni el daño económico.",
+  "No sustituye la inspección física ni el criterio del técnico del almacén: es una ayuda de vigilancia.",
+  "No garantiza detectar todos los insectos, especialmente los muy pequeños o parcialmente ocultos.",
+  "No aprende de tus imágenes automáticamente: usa un modelo ya entrenado y no se reentrena desde el propio servicio."
+ ],
+ "puede_equivocarse": "Sí. Aunque en las pruebas obtiene un buen rendimiento (índice de detección global de 0,87, por encima del objetivo de 0,8), puede pasar por alto insectos muy pequeños o confundir especies morfológicamente parecidas, y no reconocerá plagas que no estén entre las 5 que conoce. Debe usarse como una herramienta de apoyo a la vigilancia preventiva y a la decisión de intervención, no como una garantía de ausencia de plaga.",
+ "kpis": [
+  {
+   "kpi": "Índice de Detección de Plagas (IDP, equivalente a mAP@0,5)",
+   "valor_umbral": "> 0,80",
+   "descripcion": "Mide la capacidad global del sistema para localizar y clasificar correctamente las plagas. Resultado declarado en la memoria sobre el conjunto de test: 0,87 — objetivo cumplido."
+  },
+  {
+   "kpi": "Sensibilidad (Recall) de detección",
+   "valor_umbral": "0,70 – 0,90 (rango de referencia de la literatura)",
+   "descripcion": "Proporción de insectos realmente presentes que el sistema detecta. Resultado declarado: 0,81 — dentro del rango aceptado para aplicaciones reales."
+  }
+ ]
+}

@@ -1,0 +1,14 @@
+column,dtype,non_null,missing_pct,n_unique,min,p01,p50,p99,max,top_values
+asset_id,object,244,0.0,10,,,,,,"asset_08:27, asset_09:26, asset_02:25, asset_03:25, asset_05:25"
+corrective_action,object,244,0.0,3,,,,,,"CIP_cycle:171, flush/unblock:64, unscheduled CIP:9"
+cycle_id,object,244,0.0,180,,,,,,"asset_09_C00018:2, asset_03_C00002:2, asset_03_C00017:2, asset_03_C00015:2, asset_03_C00014:2"
+cycle_index,int64,244,0.0,18,1.0,1.0,10.0,18.0,18.0,
+duration_min,float64,244,0.0,42,10.0,10.43,38.0,51.56999999999999,55.0,
+end_time,"datetime64[ns, UTC]",244,0.0,244,,,,,,"2026-01-02 08:07:00+00:00:1, 2026-01-08 10:13:00+00:00:1, 2026-01-09 03:45:00+00:00:1, 2026-01-10 16:57:00+00:00:1, 2026-01-11 19:33:00+00:00:1"
+fault_type,object,244,0.0,3,,,,,,"preventive:171, clogging:64, fouling:9"
+maintenance_id,object,244,0.0,27,,,,,,"M000001:10, M000012:10, M000021:10, M000020:10, M000019:10"
+maintenance_type,object,244,0.0,3,,,,,,"scheduled_CIP:171, unclog:64, CIP_extra:9"
+notes,object,244,0.0,244,,,,,,"scheduled cleaning after asset_00_C00001:1, scheduled cleaning after asset_06_C00006:1, scheduled cleaning after asset_06_C00007:1, scheduled cleaning after asset_06_C00008:1, synthetic unplanned intervention for asset_06_C00009:1"
+planned,int32,244,0.0,2,0.0,0.0,1.0,1.0,1.0,
+severity_rf_at_start,float64,244,0.0,243,2.12819e-05,3.0194761e-05,0.00015160255,0.002810496097999999,0.00306,
+start_time,"datetime64[ns, UTC]",244,0.0,242,,,,,,"2026-01-16 12:51:00+00:00:2, 2026-01-07 16:47:00+00:00:2, 2026-01-02 07:21:00+00:00:1, 2026-01-21 05:47:00+00:00:1, 2026-01-09 03:00:00+00:00:1"

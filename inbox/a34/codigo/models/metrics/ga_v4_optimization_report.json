@@ -1,0 +1,65 @@
+{
+    "version": "v4",
+    "descripcion": "Optimización GA uni-objetivo sobre malla completa de variables no controlables",
+    "malla": {
+        "T_in_leche": {
+            "min": 0.0,
+            "max": 8.0,
+            "paso": 0.2,
+            "n_valores": 41
+        },
+        "Delta_P": {
+            "min": 0.4,
+            "max": 1.0,
+            "paso": 0.1,
+            "n_valores": 7
+        },
+        "t_ciclo": {
+            "min": 0,
+            "max": 800,
+            "paso": 50,
+            "n_valores": 17
+        }
+    },
+    "ga_config": {
+        "algoritmo": "GA uni-objetivo (custom varOr + selTournament + HallOfFame)",
+        "pop_size": 150,
+        "n_gen": 15,
+        "cxpb": 0.8,
+        "mutpb": 0.2,
+        "justificacion_n_gen": "P95 convergencia = 7 gen (análisis 100 escenarios v4) + margen seguridad"
+    },
+    "resultados": {
+        "total_escenarios": 4592,
+        "escenarios_factibles": 4592,
+        "pct_factibles": 100.0,
+        "F_flow_optimo": {
+            "media": 5421.32,
+            "min": 5018.67,
+            "max": 5500.0,
+            "std": 70.0
+        },
+        "T_servicio_optimo": {
+            "media": 81.68,
+            "min": 79.28,
+            "max": 83.98,
+            "std": 0.95
+        },
+        "E_consumo_pred": {
+            "media": 428.2249,
+            "min": 397.3087,
+            "max": 462.4005
+        },
+        "consumo_especifico": {
+            "media": 0.078996,
+            "min": 0.073635,
+            "max": 0.085901
+        }
+    },
+    "restriccion": {
+        "T_out_min_requerido": 72.3,
+        "T_out_min_obtenido": 72.3,
+        "T_out_media": 72.3,
+        "cumplimiento_100pct": true
+    }
+}

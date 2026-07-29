@@ -1,0 +1,22 @@
+{
+  "severity_rmse": 9.931898864011049e-05,
+  "severity_mae": 6.90431015364266e-05,
+  "stage_accuracy": 0.975326329194524,
+  "stage_macro_f1": 0.9621076858361081,
+  "stage_balanced_accuracy": 0.97081783443161,
+  "watch_foul_auc": 0.9872349224348558,
+  "watch_foul_ap": 0.7622969567329191,
+  "watch_foul_f1": 0.5586297760210803,
+  "foul_h_auc": 0.9872349224348558,
+  "foul_h_ap": 0.7622969567329191,
+  "foul_h_f1": 0.5586297760210803,
+  "actionable_foul_auc": 0.9376265047405987,
+  "actionable_foul_ap": 0.028838941230115166,
+  "actionable_foul_f1": 0.0,
+  "clog_h_auc": 0.9437037092259121,
+  "clog_h_ap": 0.12297476780003622,
+  "clog_h_f1": 0.11392405063291139,
+  "tte_foul_mae_min": 37.85157933761951,
+  "tte_clog_mae_min": 16.854975924754516,
+  "ttu_mae_min": 74.41770846287334
+}

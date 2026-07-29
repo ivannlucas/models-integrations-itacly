@@ -27,7 +27,15 @@ curl http://localhost:8000/models/<model_id>/health
 curl -X POST http://localhost:8000/models/<model_id>/predict \
   -H "Content-Type: application/json" -d '<payload de ejemplo, sacado del manifest>'
 curl http://localhost:8000/models/<model_id>/stats
+curl -X POST http://localhost:8000/models/<model_id>/train \
+  -H "Content-Type: application/json" -d '<data_path apuntando a un CSV con training.required_columns del manifest>'
 ```
+
+Comportamiento esperado de `/train` según `manifest.training`:
+- `supported: true` → 200 con `TrainResponse` conteniendo las métricas de `training.metrics_returned`.
+- `supported: false` → 501 (`TrainingNotSupportedError`). Un 501 aquí NO es un fallo del
+  checklist si el manifest ya declaraba `supported: false` — sí lo es si el manifest decía
+  `true` y el endpoint devuelve 501 (train() quedó sin implementar).
 
 No se pasa a la Parte B con la Parte A en rojo.
 
@@ -59,6 +67,7 @@ Generar `outputs/<model_id>/verification_report.md`:
 - [x] pylint: sin issues nuevos
 - [x] pip-audit: sin CVEs nuevas
 - [x] Arranque local + health + predict + stats: OK
+- [x] /train: <200 con métricas OK | 501 esperado (training.supported=false)>
 
 ## Correctitud (golden dataset)
 | Caso | Esperado | Obtenido | Diferencia | ¿OK? |

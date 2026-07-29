@@ -1,0 +1,109 @@
+{
+ "model_id": "a31",
+ "model_slug": "cereals-residue-optimizer",
+ "fecha": "Julio 2026",
+ "descripcion": "Herramienta de apoyo a la decisión que propone cómo repartir la superficie de cultivos cerealistas (entre secano y regadío) para reducir la cantidad de residuo vegetal que queda en el suelo, sin perder beneficio económico. A partir de la situación de un año, calcula un plan alternativo de siembra y te dice cuánto residuo ahorrarías y qué beneficio mantendrías.",
+ "objetivo": "Ayudar a planificar la distribución de cultivos de forma que se genere menos biomasa residual manteniendo la rentabilidad de la explotación. Busca un mejor equilibrio entre sostenibilidad (menos residuo) y economía (mismo beneficio), respetando límites realistas de cuánto se puede cambiar la superficie de cada cultivo.",
+ "caso_uso": "Indicas el año de referencia y, si quieres, ajustes como la lluvia esperada o cuánto beneficio quieres preservar como mínimo. La herramienta te devuelve un plan de reparto de superficies por cultivo, cuánto residuo se reduce y qué pasa con el beneficio y la producción. También puede dibujar el abanico de opciones posibles (desde 'máximo ahorro de residuo' hasta 'máximo beneficio') para que elijas el punto de equilibrio que prefieras, o analizar varios escenarios de golpe. No aprende de tus datos: es un cálculo de optimización, no una predicción.",
+ "que_no_responde": "No predice precios, cosechas ni el clima futuro, ni garantiza el resultado económico real: propone un reparto de cultivos teórico bajo las condiciones y los precios que le indiques.",
+ "entradas_contexto": "Parte de los datos históricos de superficies y rendimientos de cultivos cerealistas de Castilla y León (2009–2023) y de un modelo económico de precios y costes por cultivo. Tú solo aportas el escenario (año de referencia y, opcionalmente, ajustes de clima, lluvia o restricciones).",
+ "inputs": [
+  {
+   "nombre": "Año de referencia",
+   "descripcion": "El año cuya distribución de cultivos se toma como punto de partida para proponer mejoras."
+  },
+  {
+   "nombre": "Objetivo",
+   "descripcion": "Qué priorizar: reducir al máximo el residuo (manteniendo un beneficio mínimo) o maximizar el beneficio (sin pasar de un residuo máximo)."
+  },
+  {
+   "nombre": "Ajustes del escenario (opcionales)",
+   "descripcion": "Lluvia de primavera esperada, factor de clima, beneficio mínimo a preservar y cuánto se permite variar la superficie de cada cultivo."
+  },
+  {
+   "nombre": "Precios y costes (opcionales)",
+   "descripcion": "Puedes sobrescribir los precios de venta y los costes por cultivo si quieres usar cifras actualizadas."
+  },
+  {
+   "nombre": "Conjunto de escenarios",
+   "descripcion": "Un fichero con varios escenarios para calcularlos todos de una vez."
+  }
+ ],
+ "outputs": [
+  {
+   "nombre": "Plan de reparto de cultivos",
+   "descripcion": "Cuánta superficie dedicar a cada cultivo en secano y en regadío en la propuesta óptima.",
+   "interpretacion": "Es la recomendación práctica de siembra para ese escenario."
+  },
+  {
+   "nombre": "Residuo y ahorro",
+   "descripcion": "El residuo total del plan y cuánto se reduce respecto a la situación de partida.",
+   "interpretacion": "Cuanto mayor el ahorro, mejor para la sostenibilidad; en el año 2023 el ahorro fue del 31%."
+  },
+  {
+   "nombre": "Beneficio y producción",
+   "descripcion": "El beneficio económico del plan y cómo cambia la producción respecto al punto de partida.",
+   "interpretacion": "Sirve de control: el beneficio no debe bajar del mínimo que fijaste."
+  },
+  {
+   "nombre": "Abanico de opciones",
+   "descripcion": "El conjunto de planes posibles entre 'máximo ahorro de residuo' y 'máximo beneficio', con el punto de mejor equilibrio destacado.",
+   "interpretacion": "Te permite elegir el compromiso que prefieras entre sostenibilidad y economía."
+  }
+ ],
+ "ejemplo_interpretacion": "Para el año 2023, la herramienta propone un reparto que reduce el residuo en un 31% (de unos 6,5 a 4,5 millones de toneladas) manteniendo prácticamente el mismo beneficio (diferencia inferior a 1 euro), a cambio de una bajada de producción del 5%. Se interpreta como: 'es posible generar casi un tercio menos de residuo sin perder rentabilidad, sacrificando algo de volumen de cosecha'.",
+ "margen_error": "El resultado es un cálculo exacto para las condiciones y precios que le des; no tiene error estadístico como un modelo que predice. Su fiabilidad depende de que los precios, costes y datos de superficie sean realistas: con cifras desactualizadas, el plan propuesto puede no reflejar la situación real de la explotación.",
+ "revisar_manualmente": [
+  "Revisa que los precios y costes por cultivo estén actualizados antes de usar el plan; son la base del cálculo económico.",
+  "Si la herramienta no encuentra solución, alguna restricción es incompatible (p. ej. exigir demasiado beneficio y muy poco cambio de superficie a la vez): relaja alguna condición.",
+  "Contrasta el plan propuesto con criterios agronómicos (rotación, suelo, agua disponible) que la herramienta no contempla.",
+  "El plan es para cultivos cerealistas de Castilla y León; fuera de ese ámbito no es válido."
+ ],
+ "que_no_hace": [
+  "No predice el precio del grano ni la cosecha futura.",
+  "No decide por ti: propone un plan que debes validar con criterio agronómico y de mercado.",
+  "No tiene en cuenta rotaciones de cultivo, tipo de suelo ni disponibilidad real de agua.",
+  "No aprende ni se ajusta con tus datos: es un cálculo de optimización determinista.",
+  "No garantiza el beneficio económico real, que depende de precios y condiciones que pueden cambiar."
+ ],
+ "puede_equivocarse": "El cálculo en sí es exacto y reproducible, pero el plan solo es tan bueno como los precios, costes y datos que se le den. Las cifras de impacto (por ejemplo el 31% de reducción) proceden de un análisis con datos históricos y requieren validación con datos reales y actuales antes de aplicarse en una explotación. Es una ayuda a la planificación, no una garantía de resultado.",
+ "kpis": [
+  {
+   "kpi": "Reducción de residuo vegetal",
+   "valor_umbral": "~31% en el escenario 2023 (verificado)",
+   "descripcion": "Cuánta biomasa residual se ahorra respecto a la distribución de partida."
+  },
+  {
+   "kpi": "Beneficio preservado",
+   "valor_umbral": "100% (sin pérdida apreciable)",
+   "descripcion": "El plan mantiene el beneficio económico de la explotación."
+  },
+  {
+   "kpi": "Estabilidad multiaño",
+   "valor_umbral": "~7% de reducción en 2021 y 2022",
+   "descripcion": "El enfoque aporta ahorro también en otros años, no solo en el de referencia."
+  }
+ ],
+ "limitaciones": [
+  {
+   "tipo": "No es una predicción",
+   "descripcion": "Es un optimizador que calcula el mejor reparto bajo las condiciones dadas; no anticipa precios ni cosechas."
+  },
+  {
+   "tipo": "Depende de precios y costes",
+   "descripcion": "Si los precios de venta o los costes no están actualizados, el plan propuesto puede no ser realista, sobre todo cuando se prioriza el beneficio."
+  },
+  {
+   "tipo": "Puede no encontrar solución",
+   "descripcion": "Si las condiciones que impones son incompatibles entre sí, la herramienta avisa de que no hay plan posible y hay que relajar alguna."
+  },
+  {
+   "tipo": "Ámbito limitado",
+   "descripcion": "Válido para cultivos cerealistas de Castilla y León con datos de 2009 a 2023; no extrapolable a otras zonas o cultivos."
+  },
+  {
+   "tipo": "Impacto por validar",
+   "descripcion": "El ahorro de residuo estimado procede de datos históricos y debe confirmarse con datos reales antes de tomar decisiones sobre el terreno."
+  }
+ ]
+}

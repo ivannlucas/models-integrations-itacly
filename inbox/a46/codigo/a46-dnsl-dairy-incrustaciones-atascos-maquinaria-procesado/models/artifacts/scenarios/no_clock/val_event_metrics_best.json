@@ -1,0 +1,30 @@
+{
+  "total_events": 14,
+  "tp_events_total": 12,
+  "fn_events_total": 2,
+  "false_alarms_total": 1,
+  "precision_total": 0.9230769230769231,
+  "recall_total": 0.8571428571428571,
+  "macro_event_f1": 0.46153846153846156,
+  "false_alarms_per_day_total": 0.038527397260273974,
+  "per_type": {
+    "clogging": {
+      "tp_events": 12,
+      "fn_events": 1,
+      "false_alarms": 1,
+      "precision": 0.9230769230769231,
+      "recall": 0.9230769230769231,
+      "f1": 0.9230769230769231,
+      "avg_lead_min": 29.083333333333332
+    },
+    "fouling": {
+      "tp_events": 0,
+      "fn_events": 1,
+      "false_alarms": 0,
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "avg_lead_min": NaN
+    }
+  }
+}

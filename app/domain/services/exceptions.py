@@ -39,3 +39,29 @@ class NoValidSimulationPointError(ValueError):
 
 class PuConstraintViolationError(ValueError):
     """Raised when the requested setpoints violate the PU ≥ 13 food-safety constraint (ml35)."""
+
+
+class InsufficientTelemetryHistoryError(ValueError):
+    """Raised when fewer than seq_len valid rows of telemetry history are provided (ml46)."""
+
+
+
+class InsufficientCycleHistoryError(ValueError):
+    """Raised when a cycle (run_id) has fewer minutes of history than the lag features need (ml40)."""
+
+
+class UnknownDiagnosisSystemError(ValueError):
+    """Raised when the input columns match neither refrigeracion nor aireado contracts (ml40)."""
+
+class ThermalSafetyViolationError(ValueError):
+    """Raised when the GA cannot find a feasible solution meeting T_out >= 72.3 °C (ml34)."""
+
+
+class InfeasibleOptimizationError(ValueError):
+    """Raised when the LP crop-allocation problem is infeasible/unbounded (ml31).
+
+    Combinations of constraints that are too strict (e.g. a very high min_benefit
+    together with a narrow ±surface band) yield CBC status != OPTIMAL. The plugin
+    translates this to a domain error (HTTP 422) instead of returning an empty plan.
+    """
+

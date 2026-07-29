@@ -15,6 +15,7 @@ from app.application.dto.stats_dto import InputField, OutputField, RuntimeStats,
 from app.domain.ports.model_plugin_port import ModelPluginPort
 from app.domain.services.exceptions import ModelNotLoadedError, PuConstraintViolationError
 from app.domain.services.mlflow_tracker import BaseMLflowTracker
+from app.infrastructure.artifact_store import local_file_path
 from app.plugins.ml35_dairy_ann_cleaning_cost.constants import (
     BASELINE_FLUJO,
     BASELINE_TEMP_AGUA,
@@ -62,6 +63,29 @@ def _infer(model: Any, scaler_X: Any, scaler_y: Any, df: pd.DataFrame) -> float:
     with torch.no_grad():
         pred_scaled = model(torch.FloatTensor(x_scaled)).numpy()
     return float(scaler_y.inverse_transform(pred_scaled)[0, 0])
+
+
+def _resolve_features(features: dict) -> dict:
+    """Fill temp_proceso_leche/temp_agua_servicio defaults when the caller omits them."""
+    data = dict(features)
+    if data.get("temp_proceso_leche") is None:
+        data["temp_proceso_leche"] = data["temp_setpoint_leche"]
+    if data.get("temp_agua_servicio") is None:
+        data["temp_agua_servicio"] = data["temp_proceso_leche"] + 10.0
+    return data
+
+
+def _xai_values_from_features(data: dict) -> dict[str, float] | None:
+    """Build xai_feature_values from a resolved (post-default) feature dict."""
+    xai: dict[str, float] = {}
+    for f in FEATURES:
+        val = data.get(f)
+        if val is not None and pd.notna(val):
+            try:
+                xai[f] = float(val)
+            except (TypeError, ValueError):
+                pass
+    return xai or None
 
 
 def _build_df(temp_entrada, temp_ambiente, temp_setpoint, temp_proceso, temp_agua, flujo,
@@ -130,11 +154,7 @@ class Ml35DairyAnnCleaningCostPlugin(ModelPluginPort):
 
     def _run_predict(self, features: dict) -> PredictInlineResponse:
         """ANN single-sample inference with PU validation."""
-        data = dict(features)
-        if data.get("temp_proceso_leche") is None:
-            data["temp_proceso_leche"] = data["temp_setpoint_leche"]
-        if data.get("temp_agua_servicio") is None:
-            data["temp_agua_servicio"] = data["temp_proceso_leche"] + 10.0
+        data = _resolve_features(features)
 
         temp_setpoint = float(data["temp_setpoint_leche"])
         temp_proceso = float(data["temp_proceso_leche"])
@@ -246,15 +266,18 @@ class Ml35DairyAnnCleaningCostPlugin(ModelPluginPort):
                 self._model, self._scaler_X, self._scaler_y, user_temp_dir = loaded
         try:
             self._require_loaded()
-            df = pd.read_csv(data_path)
+            with local_file_path(data_path) as local_path:
+                df = pd.read_csv(local_path)
             predictions: list[dict] = []
             for idx, row in df.iterrows():
                 try:
-                    pred = self._run_predict(row.to_dict())
+                    row_dict = row.to_dict()
+                    pred = self._run_predict(row_dict)
                     predictions.append({
                         "row": int(idx),
                         "consumo_agua_l": pred.consumo_agua_l,
                         "pu_logrado": pred.pu_logrado,
+                        "xai_feature_values": _xai_values_from_features(_resolve_features(row_dict)),
                     })
                 except Exception as exc:
                     logger.warning("Error en fila %s: %s", idx, exc)
@@ -285,7 +308,8 @@ class Ml35DairyAnnCleaningCostPlugin(ModelPluginPort):
         else:
             tracker = None
 
-        df = pd.read_csv(data_path)
+        with local_file_path(data_path) as local_path:
+            df = pd.read_csv(local_path)
         if "temp_proceso_leche" not in df.columns and "temp_setpoint_leche" in df.columns:
             df["temp_proceso_leche"] = df["temp_setpoint_leche"]
         if "temp_agua_servicio" not in df.columns and "temp_proceso_leche" in df.columns:
