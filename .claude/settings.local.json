@@ -160,7 +160,24 @@
       "Bash(cp ~/proyectos/Bitbucket/itacyl-pan-modelsinference-svc/app/plugins/ml4_lactic_cnn_thermal_early_disease_detection/model_loader.py app/plugins/ml4_lactic_cnn_thermal_early_disease_detection/model_loader.py)",
       "Bash(cp ~/proyectos/Bitbucket/itacyl-pan-modelsinference-svc/app/plugins/ml4_lactic_cnn_thermal_early_disease_detection/plugin.py app/plugins/ml4_lactic_cnn_thermal_early_disease_detection/plugin.py)",
       "Bash(cp ~/proyectos/Bitbucket/itacyl-pan-modelsinference-svc/app/plugins/ml4_lactic_cnn_thermal_early_disease_detection/postprocessing.py app/plugins/ml4_lactic_cnn_thermal_early_disease_detection/postprocessing.py)",
-      "Read(//home/alejandro/proyectos/Bitbucket/itacyl-pan-modelsinference-svc/app/plugins/ml4_lactic_cnn_thermal_early_disease_detection/**)"
+      "Read(//home/alejandro/proyectos/Bitbucket/itacyl-pan-modelsinference-svc/app/plugins/ml4_lactic_cnn_thermal_early_disease_detection/**)",
+      "Bash(grep -v \"^-$\")",
+      "Bash(cp ~/proyectos/Bitbucket/itacyl-pan-modelsinference-svc/app/domain/services/exceptions.py app/domain/services/exceptions.py)",
+      "Read(//home/alejandro/proyectos/Bitbucket/itacyl-pan-modelsinference-svc/app/domain/services/**)",
+      "Bash(echo \"exit $?\")",
+      "Bash(grep -rln \"run_inference\\\\|pad_or_truncate\" /home/alejandro/proyectos/AIR/models-integrations-itacly/app --include=\"*.py\" | grep -v m47_dnsl *)",
+      "Read(//home/alejandro/proyectos/Bitbucket/itacyl-pan-modelsinference-svc/app/plugins/m47_dnsl_fallas_maquinaria_pasteurizado/**)",
+      "Bash(cp ~/proyectos/Bitbucket/itacyl-pan-modelsinference-svc/app/plugins/m47_dnsl_fallas_maquinaria_pasteurizado/plugin.py app/plugins/m47_dnsl_fallas_maquinaria_pasteurizado/plugin.py)",
+      "Bash(cp ~/proyectos/Bitbucket/itacyl-pan-modelsinference-svc/app/plugins/m47_dnsl_fallas_maquinaria_pasteurizado/postprocessing.py app/plugins/m47_dnsl_fallas_maquinaria_pasteurizado/postprocessing.py)",
+      "Bash(cp ~/proyectos/Bitbucket/itacyl-pan-modelsinference-svc/app/plugins/m47_dnsl_fallas_maquinaria_pasteurizado/preprocessing.py app/plugins/m47_dnsl_fallas_maquinaria_pasteurizado/preprocessing.py)",
+      "Bash(grep -rln \"from app.plugins.ml34\\\\|import.*ml34_dairy\" /home/alejandro/proyectos/AIR/models-integrations-itacly/app --include=\"*.py\" | grep -v \"^/home/alejandro/proyectos/AIR/models-integrations-itacly/app/plugins/ml34_dairy_pasteurization_energy_ga/\" | grep -v registry.py *)",
+      "Bash(cp ~/proyectos/Bitbucket/itacyl-pan-modelsinference-svc/app/plugins/ml34_dairy_pasteurization_energy_ga/plugin.py app/plugins/ml34_dairy_pasteurization_energy_ga/plugin.py)",
+      "Bash(cp ~/proyectos/Bitbucket/itacyl-pan-modelsinference-svc/app/plugins/ml34_dairy_pasteurization_energy_ga/predict_dto.py app/plugins/ml34_dairy_pasteurization_energy_ga/predict_dto.py)",
+      "Bash(cp ~/proyectos/Bitbucket/itacyl-pan-modelsinference-svc/tests/unit/test_ml34_dairy_pasteurization_energy_ga.py tests/unit/test_ml34_dairy_pasteurization_energy_ga.py)",
+      "Read(//home/alejandro/proyectos/Bitbucket/itacyl-pan-modelsinference-svc/app/plugins/ml34_dairy_pasteurization_energy_ga/**)",
+      "Bash(.venv/bin/python -m pytest tests/unit/test_ml34_dairy_pasteurization_energy_ga.py::test_predict_batch_optimize -q)",
+      "Read(//home/alejandro/proyectos/Bitbucket/itacyl-pan-modelsinference-svc/tests/**)",
+      "Bash(cp ~/proyectos/Bitbucket/itacyl-pan-modelsinference-svc/tests/conftest.py tests/conftest.py)"
     ],
     "additionalDirectories": [
       "/home/alejandro/proyectos/AIR/models-integrations-itacly/.claude/skills"

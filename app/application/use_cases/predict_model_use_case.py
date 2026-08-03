@@ -27,7 +27,13 @@ class PredictModelUseCase:
         mlflow_run_id = getattr(request, "mlflow_run_id", "")
         if request.mode == "batch":
             logger.info("Executing batch prediction, data_path=%s, mlflow_run_id=%s", request.data_path, mlflow_run_id or "(standard)")
-            return self._plugin.predict_batch(data_path=request.data_path, mlflow_run_id=mlflow_run_id)
+            batch_kwargs: dict[str, Any] = {"data_path": request.data_path, "mlflow_run_id": mlflow_run_id}
+            # Only ml34's predict_batch declares model_key (GA-vs-MLP dispatch, mirrors
+            # predict_inline below) — every other plugin's predict_batch is
+            # (*, data_path, mlflow_run_id) with no **kwargs, so pass it conditionally.
+            if "model_key" in inspect.signature(self._plugin.predict_batch).parameters:
+                batch_kwargs["model_key"] = getattr(request, "model_key", None)
+            return self._plugin.predict_batch(**batch_kwargs)
         logger.info("Executing inline prediction, mlflow_run_id=%s", mlflow_run_id or "(standard)")
         features = request.model_dump(exclude={"mode", "model_key", "threshold", "mlflow_run_id", "data_path"})
         kwargs: dict[str, Any] = {

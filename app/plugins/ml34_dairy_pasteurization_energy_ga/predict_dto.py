@@ -10,11 +10,18 @@ matching the platform/orchestrator flow which only ever sends ``inline`` or
                  * model_key == "optimize" → single-objective GA recommends
                    (F_flow, T_servicio) setpoints for the scenario given the 3
                    non-controllable inputs (+ optional seed).
-  - "batch":   run the MLP inline prediction on each row of a CSV.
+  - "batch":   run one operation over every row of a CSV, dispatched by the
+               same ``model_key`` convention as inline:
+                 * model_key != "optimize" (default) → MLP surrogate over the
+                   5 process features (one row = one CSV row).
+                 * model_key == "optimize" → GA per scenario row (needs only
+                   T_in_leche, Delta_P, t_ciclo per row; an optional ``seed``
+                   column overrides the default row seed of ``1 + row_index``,
+                   matching the delivered src/main.py::optimize() semantics).
 
-Keeping the "optimize" operation inside the "inline" mode (differentiated by
-model_key) means the whole upstream flow stays on inline/batch and the
-GA-vs-MLP decision lives here, in the model container.
+Keeping the "optimize" operation inside the "inline"/"batch" modes
+(differentiated by model_key) means the whole upstream flow stays on
+inline/batch and the GA-vs-MLP decision lives here, in the model container.
 """
 from typing import Annotated, Any, Literal, Union
 
@@ -22,11 +29,12 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class PredictBatchRequest(BaseModel):
-    """Batch prediction request: CSV path with the 5 MLP features per row."""
+    """Batch prediction request: CSV path, dispatched by ``model_key`` like inline."""
 
     model_config = ConfigDict(protected_namespaces=())
     mode: Literal["batch"] = "batch"
-    data_path: str = Field(..., description="Path to CSV with the 5 MLP input features")
+    data_path: str = Field(..., description="Path to CSV — 5 MLP features, or 3 GA scenario features when model_key='optimize'")
+    model_key: str | None = Field(default=None, description="'optimize' runs the GA per row; omitted/other runs the MLP surrogate")
     mlflow_run_id: str = ""
 
 

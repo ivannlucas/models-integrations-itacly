@@ -41,6 +41,7 @@ from app.plugins.ml34_dairy_pasteurization_energy_ga.constants import (
     MODEL_ID,
     SCALER_X_FILENAME,
     SCALER_Y_FILENAME,
+    SCENARIO_FEATURES,
     T_OUT_MIN,
     TARGETS,
     TRAIN_BATCH_SIZE,
@@ -213,8 +214,15 @@ class Ml34DairyPasteurizationEnergyGaPlugin(ModelPluginPort):
 
     # ── predict_batch ─────────────────────────────────────────────────────────
 
-    def predict_batch(self, *, data_path: str, mlflow_run_id: str = "") -> PredictBatchResponse:
-        """Batch MLP inference over a CSV file (one prediction per row)."""
+    def predict_batch(
+        self, *, data_path: str, model_key: str | None = None, mlflow_run_id: str = "",
+    ) -> PredictBatchResponse:
+        """Batch inference over a CSV file — MLP estimate, or GA optimize per row.
+
+        Same GA-vs-MLP dispatch as predict_inline, keyed off model_key: "optimize"
+        runs one GA search per CSV row (reusing _run_optimize, the same code path
+        the inline endpoint uses), anything else runs the MLP surrogate.
+        """
         user_temp_dir = None
         saved = (self._model, self._scaler_X, self._scaler_y, self._config)
         if mlflow_run_id:
@@ -226,30 +234,78 @@ class Ml34DairyPasteurizationEnergyGaPlugin(ModelPluginPort):
             self._require_loaded()
             with local_file_path(data_path) as local_path:
                 df = pd.read_csv(local_path)
-            missing = [c for c in FEATURES if c not in df.columns]
-            if missing:
-                raise ValueError(f"CSV falta columnas requeridas: {missing}")
-            predictions: list[dict] = []
-            for idx, row in df.iterrows():
-                try:
-                    row_dict = row.to_dict()
-                    pred = self._run_predict(row_dict)
-                    predictions.append({
-                        "row": int(idx),
-                        "E_consumo_pred": pred.E_consumo_pred,
-                        "T_out_pred": pred.T_out_pred,
-                        "xai_feature_values": _xai_values_from_features(row_dict),
-                    })
-                except Exception as exc:  # pylint: disable=broad-exception-caught
-                    logger.warning("Error en fila %s: %s", idx, exc)
-                    predictions.append({"row": int(idx), "error": str(exc)})
+
+            if model_key == "optimize":
+                predictions = self._predict_batch_optimize(df)
+            else:
+                predictions = self._predict_batch_estimate(df)
+
             self._record()
-            logger.info("predict_batch done — %d rows, mlflow=%s", len(predictions), bool(mlflow_run_id))
+            logger.info(
+                "predict_batch done — %d rows, model_key=%s, mlflow=%s",
+                len(predictions), model_key or "(estimate)", bool(mlflow_run_id),
+            )
             return PredictBatchResponse(model_id=MODEL_ID, predictions=predictions, output_path=None)
         finally:
             if user_temp_dir:
                 shutil.rmtree(user_temp_dir, ignore_errors=True)
                 self._model, self._scaler_X, self._scaler_y, self._config = saved
+
+    def _predict_batch_estimate(self, df: pd.DataFrame) -> list[dict]:
+        """MLP surrogate inference, one row of the CSV = one scenario."""
+        missing = [c for c in FEATURES if c not in df.columns]
+        if missing:
+            raise ValueError(f"CSV falta columnas requeridas: {missing}")
+        predictions: list[dict] = []
+        for idx, row in df.iterrows():
+            try:
+                row_dict = row.to_dict()
+                pred = self._run_predict(row_dict)
+                predictions.append({
+                    "row": int(idx),
+                    "E_consumo_pred": pred.E_consumo_pred,
+                    "T_out_pred": pred.T_out_pred,
+                    "xai_feature_values": _xai_values_from_features(row_dict),
+                })
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                logger.warning("Error en fila %s: %s", idx, exc)
+                predictions.append({"row": int(idx), "error": str(exc)})
+        return predictions
+
+    def _predict_batch_optimize(self, df: pd.DataFrame) -> list[dict]:
+        """GA per scenario row — same per-row loop as the delivered
+        src/main.py::optimize(), reusing _run_optimize (the inline GA path) per row.
+
+        Row seed: an explicit 'seed' column overrides it per row; otherwise
+        ``1 + row_index``, matching optimize()'s ``seed=seed_base+idx`` default.
+
+        The row echoes T_in_leche/Delta_P/t_ciclo (the scenario, not part of
+        PredictOptimizeResponse) alongside IA_F_flow/IA_T_servicio/IA_E_consumo/
+        IA_T_out. The GA search itself isn't SHAP-explainable (stochastic
+        population search, not a deterministic function), but IA_F_flow/
+        IA_T_servicio is just another point in the same 5-feature MLP space the
+        "estimate" sub-mode already models — the platform explains *that* point
+        post-hoc, the same way it does for inline optimize (see
+        dairy_pasteurization_energy in predict-task-manager.ts), which is why
+        the 3 scenario inputs need to survive into the row.
+        """
+        missing = [c for c in SCENARIO_FEATURES if c not in df.columns]
+        if missing:
+            raise ValueError(f"CSV falta columnas requeridas: {missing}")
+        has_seed_col = "seed" in df.columns
+        predictions: list[dict] = []
+        for idx, row in df.iterrows():
+            try:
+                t_in, delta_p, t_ciclo = float(row["T_in_leche"]), float(row["Delta_P"]), float(row["t_ciclo"])
+                seed = int(row["seed"]) if has_seed_col and pd.notna(row["seed"]) else 1 + int(idx)
+                features = {"T_in_leche": t_in, "Delta_P": delta_p, "t_ciclo": t_ciclo, "seed": seed}
+                pred = self._run_optimize(features).model_dump()
+                pred.update({"row": int(idx), "T_in_leche": t_in, "Delta_P": delta_p, "t_ciclo": t_ciclo})
+                predictions.append(pred)
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                logger.warning("Error en fila %s (optimize): %s", idx, exc)
+                predictions.append({"row": int(idx), "error": str(exc)})
+        return predictions
 
     # ── train ─────────────────────────────────────────────────────────────────
 

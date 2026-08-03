@@ -8,13 +8,19 @@ from dataclasses import fields
 import torch
 
 from app.infrastructure.artifact_store import ArtifactStore
+from app.plugins.ml46_dairy_fouling_clog_detection._vendor.artifact_validation import (
+    validate_feature_artifacts,
+    validate_policy_artifact,
+)
 from app.plugins.ml46_dairy_fouling_clog_detection._vendor.common import FeatureArtifacts, TrainConfig
-from app.plugins.ml46_dairy_fouling_clog_detection._vendor.model_arch import PredictiveTCN
+from app.plugins.ml46_dairy_fouling_clog_detection._vendor.model_arch import PredictiveTCN, validate_checkpoint_compatibility
 from app.plugins.ml46_dairy_fouling_clog_detection.constants import (
     ARTIFACT_FOLDER_NAME,
     FEATURE_ARTIFACTS_FILENAME,
     MODEL_FILENAME,
+    MODEL_MANIFEST_FILENAME,
     POLICY_THRESHOLDS_FILENAME,
+    SCENARIO,
     TRAINING_CONFIG_FILENAME,
 )
 
@@ -52,6 +58,24 @@ def load_policy_thresholds() -> dict:
     return _load_json(_store.path(POLICY_THRESHOLDS_FILENAME))
 
 
+def load_manifest() -> dict:
+    """Load model_manifest.json — the artifact/architecture contract for the served checkpoint."""
+    return _load_json(_store.path(MODEL_MANIFEST_FILENAME))
+
+
+def get_expected_architecture(manifest: dict, scenario: str) -> dict | None:
+    """Pull the scenario's architecture contract out of model_manifest.json, if present."""
+    artifact_contract = manifest.get("artifact_contract")
+    if not isinstance(artifact_contract, dict):
+        return None
+    scenario_contracts = artifact_contract.get("scenario_contracts", {})
+    sc_contract = scenario_contracts.get(scenario) if isinstance(scenario_contracts, dict) else None
+    if not isinstance(sc_contract, dict):
+        return None
+    architecture = sc_contract.get("architecture")
+    return architecture if isinstance(architecture, dict) else None
+
+
 def build_model(train_cfg: TrainConfig, feature_artifacts: FeatureArtifacts) -> PredictiveTCN:
     """Instantiate the TCN architecture for the no_clock feature set (76 features)."""
     return PredictiveTCN(
@@ -62,17 +86,31 @@ def build_model(train_cfg: TrainConfig, feature_artifacts: FeatureArtifacts) -> 
     )
 
 
-def load_artifacts() -> tuple[PredictiveTCN, TrainConfig, FeatureArtifacts, dict]:
-    """Load train_cfg, feature_artifacts, policy and the no_clock model checkpoint.
+def load_artifacts() -> tuple[PredictiveTCN, TrainConfig, FeatureArtifacts, dict, dict]:
+    """Load train_cfg, feature_artifacts, policy, model_manifest and the no_clock checkpoint.
 
-    Returns (model, train_cfg, feature_artifacts, policy).
+    Validates the feature/policy artifacts and the checkpoint's architecture against
+    model_manifest.json before serving them — catches an incompatible or mismatched
+    artifact bundle at startup instead of failing silently/obscurely at predict time.
+
+    Returns (model, train_cfg, feature_artifacts, policy, manifest).
     """
     train_cfg = load_train_config()
     feature_artifacts = load_feature_artifacts()
     policy = load_policy_thresholds()
+    manifest = load_manifest()
+
+    validate_feature_artifacts(feature_artifacts, SCENARIO, feature_artifacts.no_clock_feature_names)
+    validate_policy_artifact(policy, SCENARIO)
 
     model = build_model(train_cfg, feature_artifacts)
     state = torch.load(_store.path(MODEL_FILENAME), map_location="cpu", weights_only=True)
+    validate_checkpoint_compatibility(
+        model, state,
+        architecture_contract=get_expected_architecture(manifest, SCENARIO),
+        feature_names=feature_artifacts.no_clock_feature_names,
+        scenario=SCENARIO,
+    )
     model.load_state_dict(state)
     model.eval()
 
@@ -80,4 +118,4 @@ def load_artifacts() -> tuple[PredictiveTCN, TrainConfig, FeatureArtifacts, dict
         "ml46 artifacts loaded — scenario=no_clock n_features=%d channels=%d",
         len(feature_artifacts.no_clock_feature_names), train_cfg.channels,
     )
-    return model, train_cfg, feature_artifacts, policy
+    return model, train_cfg, feature_artifacts, policy, manifest

@@ -7,6 +7,7 @@ MODEL_FILENAME = "selected_model.pt"
 FEATURE_ARTIFACTS_FILENAME = "feature_artifacts.json"
 TRAINING_CONFIG_FILENAME = "training_config.json"
 POLICY_THRESHOLDS_FILENAME = "policy_thresholds.json"
+MODEL_MANIFEST_FILENAME = "model_manifest.json"
 
 FRAMEWORK = "pytorch/pandas/numpy/scikit-learn"
 VERSION = "1.0.0"
