@@ -2,8 +2,8 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
-from typing import Dict, List, Optional, Sequence, Tuple
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
@@ -121,6 +121,7 @@ class TrainConfig:
     policy_max_candidates: int = 400
     ablate_clocks: bool = True
     cooldown_min_default: int = 60
+    alert_episode_gap_min: int = 60
 
     def resolved_stage_thresholds(self) -> Tuple[float, float]:
         """Return (incipient, advanced) severity thresholds for the 3-class stage."""
@@ -163,6 +164,8 @@ class FeatureArtifacts:
     actionable_foul_pos_weight: float
     full_feature_names: List[str]
     no_clock_feature_names: List[str]
+    dataset_fingerprint: Dict[str, Any] = field(default_factory=dict)
+    created_from_train_assets: List[str] = field(default_factory=list)
 
 
 def robust_quantiles(values: np.ndarray, q_lo: float, q_hi: float, default: Tuple[float, float]) -> Tuple[float, float]:

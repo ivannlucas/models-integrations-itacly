@@ -90,6 +90,30 @@ def test_predict_batch(client):
     body = resp.json()
     assert body["model_id"] == "ml34-dairy-pasteurization-energy-ga"
     assert body["predictions"][0]["row"] == 0
+    assert "E_consumo_pred" in body["predictions"][0]
+
+
+def test_predict_batch_optimize(client):
+    """mode=batch + model_key=optimize must reach predict_batch with model_key forwarded
+    (the GA branch), not silently fall back to the MLP estimate branch."""
+    resp = client.post(
+        f"{PREFIX}/predict",
+        json={"mode": "batch", "model_key": "optimize", "data_path": "/tmp/escenarios.csv"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["model_id"] == "ml34-dairy-pasteurization-energy-ga"
+    row = body["predictions"][0]
+    assert row["row"] == 0
+    assert "IA_F_flow" in row
+    assert "IA_T_servicio" in row
+    assert "E_consumo_pred" not in row
+    # Scenario inputs must survive into the row — the frontend's batch XAI context
+    # builder needs them (T_in_leche/Delta_P/t_ciclo aren't part of the GA's own
+    # response, so they can only reach the front by being echoed onto the row).
+    assert row["T_in_leche"] == 6.78
+    assert row["Delta_P"] == 0.481
+    assert row["t_ciclo"] == 80.0
 
 
 def test_train(client):

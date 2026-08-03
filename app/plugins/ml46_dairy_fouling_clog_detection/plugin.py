@@ -133,12 +133,13 @@ class Ml46DairyFoulingClogDetectionPlugin(ModelPluginPort):
         self._train_cfg = None
         self._feature_artifacts = None
         self._policy: dict | None = None
+        self._manifest: dict | None = None
         self._predict_count: int = 0
         self._last_predict_at: str | None = None
 
     def load(self) -> None:
-        """Load the no_clock TCN checkpoint plus its feature artifacts and alert policy."""
-        self._model, self._train_cfg, self._feature_artifacts, self._policy = model_loader.load_artifacts()
+        """Load the no_clock TCN checkpoint plus its feature artifacts, alert policy and manifest."""
+        self._model, self._train_cfg, self._feature_artifacts, self._policy, self._manifest = model_loader.load_artifacts()
         logger.info("Ml46DairyFoulingClogDetectionPlugin loaded: %s (scenario=%s)", MODEL_ID, SCENARIO)
 
     def is_loaded(self) -> bool:
@@ -407,6 +408,22 @@ class Ml46DairyFoulingClogDetectionPlugin(ModelPluginPort):
 
     # ── stats ─────────────────────────────────────────────────────────────────
 
+    def _dataset_fingerprint(self) -> dict:
+        """Telemetry dataset fingerprint (n_assets/rows) recorded in feature_artifacts.json
+        at fit-time — describes whatever checkpoint is actually loaded, so it can't drift
+        out of sync with the served model the way a hardcoded literal would."""
+        fa = self._feature_artifacts
+        fingerprint = getattr(fa, "dataset_fingerprint", None) or {} if fa else {}
+        telemetry_fp = fingerprint.get("telemetry") if isinstance(fingerprint, dict) else None
+        return telemetry_fp if isinstance(telemetry_fp, dict) else {}
+
+    def _test_window_metrics(self) -> dict:
+        """Test-split window metrics from model_manifest.json's summary, if loaded."""
+        manifest = self._manifest or {}
+        summary = manifest.get("summary") if isinstance(manifest, dict) else None
+        test_metrics = summary.get("test_window_metrics") if isinstance(summary, dict) else None
+        return test_metrics if isinstance(test_metrics, dict) else {}
+
     def stats(self, mlflow_run_id: str = "") -> StatsResponse:
         """Return model metadata, the input/output contract, and real test-split metrics."""
         inputs = [
@@ -433,6 +450,11 @@ class Ml46DairyFoulingClogDetectionPlugin(ModelPluginPort):
             OutputField(name="operator_status", type="str", description="Normal / Watch fouling / Fouling accionable / Obstrucción probable"),
         ]
         avg_latency = None  # no per-call latency tracked at window granularity (batch scores many windows per call)
+        telemetry_fp = self._dataset_fingerprint()
+        test_metrics = self._test_window_metrics()
+        n_total_assets = telemetry_fp.get("n_assets")
+        n_rows = telemetry_fp.get("rows")
+        n_train_assets = len(getattr(self._feature_artifacts, "created_from_train_assets", None) or [])
         base = StatsResponse(
             model_name=MODEL_ID,
             version=VERSION,
@@ -440,7 +462,8 @@ class Ml46DairyFoulingClogDetectionPlugin(ModelPluginPort):
                 "TCN causal multitarea (escenario no_clock) que detecta ensuciamiento e "
                 "incrustación/obstrucción en intercambiadores de calor de placas lácteos a partir "
                 "de ventanas de 120 minutos de telemetría de proceso. Dataset de entrenamiento "
-                "100% sintético (10 activos, 198.615 filas) — ver manifest known_issues."
+                f"100% sintético ({n_total_assets if n_total_assets is not None else 'N/D'} activos, "
+                f"{n_rows if n_rows is not None else 'N/D'} filas) — ver manifest known_issues."
             ),
             task_type="timeseries_multitask",
             framework="pytorch/pandas/numpy/scikit-learn",
@@ -449,22 +472,22 @@ class Ml46DairyFoulingClogDetectionPlugin(ModelPluginPort):
             metrics={
                 "scenario": SCENARIO,
                 "dataset": "test_split",
-                "test_assets": ["asset_00", "asset_06"],
-                "n_total_assets": 10,
-                "n_telemetry_rows_total": 198615,
-                "severity_rmse": 0.00011608393649876462,
-                "severity_mae": 8.135631146805206e-05,
-                "stage_accuracy": 0.9651557655396427,
-                "stage_macro_f1": 0.9471419241121192,
-                "watch_foul_auc": 0.9527048491980619,
-                "watch_foul_ap": 0.46423455917949,
-                "actionable_foul_auc": 0.9716387856257745,
-                "actionable_foul_ap": 0.2400946212680447,
-                "clog_h_auc": 0.9551856255780156,
-                "clog_h_ap": 0.2126166553023802,
-                "tte_foul_mae_min": 69.29759333205156,
-                "tte_clog_mae_min": 32.53357991520313,
-                "ttu_mae_min": 109.62735871918072,
+                "n_total_assets": n_total_assets,
+                "n_train_assets": n_train_assets or None,
+                "n_telemetry_rows_total": n_rows,
+                "severity_rmse": test_metrics.get("severity_rmse"),
+                "severity_mae": test_metrics.get("severity_mae"),
+                "stage_accuracy": test_metrics.get("stage_accuracy"),
+                "stage_macro_f1": test_metrics.get("stage_macro_f1"),
+                "watch_foul_auc": test_metrics.get("watch_foul_auc"),
+                "watch_foul_ap": test_metrics.get("watch_foul_ap"),
+                "actionable_foul_auc": test_metrics.get("actionable_foul_auc"),
+                "actionable_foul_ap": test_metrics.get("actionable_foul_ap"),
+                "clog_h_auc": test_metrics.get("clog_h_auc"),
+                "clog_h_ap": test_metrics.get("clog_h_ap"),
+                "tte_foul_mae_min": test_metrics.get("tte_foul_mae_min"),
+                "tte_clog_mae_min": test_metrics.get("tte_clog_mae_min"),
+                "ttu_mae_min": test_metrics.get("ttu_mae_min"),
                 "synthetic_data_warning": (
                     "Dataset y métricas provienen de un simulador propio, sin validar contra "
                     "telemetría real de planta — ver inbox/a46/manifest.yaml known_issues."

@@ -14,6 +14,7 @@ mapping) without touching disk or any ML framework.
 """
 from __future__ import annotations
 
+import inspect
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Callable
@@ -101,7 +102,6 @@ from app.plugins.ml30_meat_traceability_detection.train_dto import (
 from app.plugins.ml31_cereals_residue_optimizer.predict_dto import (
     PredictBatchResponse as Ml31ResidueBatchResp,
     PredictOptimizeResponse as Ml31ResidueOptimizeResp,
-    PredictParetoResponse as Ml31ResidueParetoResp,
     PredictRequest as Ml31Residue_Request,
     PredictResponse as Ml31Residue_Response,
 )
@@ -231,13 +231,14 @@ class FakePlugin(ModelPluginPort):
     def predict_inline(
         self,
         *,
+        data_path: str | None = None,
         features: dict,
         model_key: str | None = None,
         threshold: float | None = None,
         mlflow_run_id: str = "",
     ) -> BaseModel:
         """Run inline inference on a single feature dict and return the typed inline response."""
-        _ = mlflow_run_id
+        _ = mlflow_run_id, data_path
         if self.raise_on_inline is not None:
             exc, self.raise_on_inline = self.raise_on_inline, None
             raise exc
@@ -247,7 +248,9 @@ class FakePlugin(ModelPluginPort):
             self, features=features, model_key=model_key, threshold=threshold
         )
 
-    def predict_batch(self, *, data_path: str, mlflow_run_id: str = "") -> BaseModel:
+    def predict_batch(
+        self, *, data_path: str, model_key: str | None = None, mlflow_run_id: str = "",
+    ) -> BaseModel:
         """Run batch inference on a CSV file and return the typed batch response."""
         _ = mlflow_run_id
         if self.raise_on_batch is not None:
@@ -255,7 +258,12 @@ class FakePlugin(ModelPluginPort):
             raise exc
         self._predict_count += 1
         self._last_predict_at = datetime.now(tz=timezone.utc).isoformat()
-        return self._batch_factory(self, data_path=data_path)
+        kwargs: dict[str, Any] = {"data_path": data_path}
+        # Only ml34's batch_factory declares model_key (GA-vs-MLP dispatch) — every
+        # other factory is (plugin, *, data_path), so pass it conditionally.
+        if "model_key" in inspect.signature(self._batch_factory).parameters:
+            kwargs["model_key"] = model_key
+        return self._batch_factory(self, **kwargs)
 
     def stats(self, mlflow_run_id: str = "") -> StatsResponse:
         """Return model metadata and runtime statistics."""
@@ -543,47 +551,40 @@ def _ml30_trace_train(plugin: FakePlugin, *, data_path: str) -> Ml30TraceTrainRe
     )
 
 
-def _ml31_residue_inline(plugin: FakePlugin, *, features: dict, model_key, threshold):
-    """Fake optimize/pareto response for the ml31 LP optimizer (dispatch on model_key)."""
-    if model_key == "pareto":
-        return Ml31ResidueParetoResp(
-            model_id="ml31-cereals-residue-optimizer",
-            reference_year=2023,
-            bounds={"min_residue_t": 4.48e6, "benefit_at_min_res_eur": 3.4e8,
-                    "max_benefit_eur": 3.41e8, "residue_at_max_ben_t": 6.5e6},
-            pareto_points=[{"benefit_eur_M": 340.7, "residue_t_M": 4.48, "production_t_M": 5.8, "is_knee": True}],
-            knee_point={"benefit_eur": 3.407e8, "residue_t": 4.48e6, "production_t": 5.8e6},
-            num_sweep_points=20,
-            num_pareto_points=19,
-        )
+def _ml31_residue_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> Ml31ResidueOptimizeResp:
+    """Fake inline response for the ml31 LP residue optimizer."""
     return Ml31ResidueOptimizeResp(
         model_id="ml31-cereals-residue-optimizer",
         reference_year=2023,
         optimization_mode="minimize_residue",
-        crop_allocation={"Trigo semiduro y blando": {"secano_ha": 736266.86, "regadio_ha": 179614.1,
-                          "production_t": 1.0e6, "residue_t": 2224614.67, "benefit_eur": 1.5e8}},
-        total_production_t=5808035.43,
-        total_residue_t=4481067.28,
-        total_benefit_eur=340734196.59,
-        baseline_total_production_t=6114000.0,
-        baseline_total_residue_t=6511018.9,
-        baseline_total_benefit_eur=340734197.13,
-        residue_reduction_pct=31.18,
-        benefit_change_eur=-0.54,
-        benefit_change_pct=-0.0,
-        production_change_pct=-5.05,
+        crop_allocation={
+            "Trigo duro": {"secano_ha": 10.0, "regadio_ha": 2.0,
+                           "production_t": 5.0, "residue_t": 3.0, "benefit_eur": 120.0}
+        },
+        total_production_t=98.0,
+        total_residue_t=45.0,
+        total_benefit_eur=1000.0,
+        baseline_total_production_t=100.0,
+        baseline_total_residue_t=50.0,
+        baseline_total_benefit_eur=1000.0,
+        residue_reduction_pct=10.0,
+        benefit_change_eur=0.0,
+        benefit_change_pct=0.0,
+        production_change_pct=-2.0,
         solver_status="OPTIMAL",
-        solve_time_seconds=0.014,
+        solve_time_seconds=0.01,
         verdict="PASADO",
     )
 
 
 def _ml31_residue_batch(plugin: FakePlugin, *, data_path: str) -> Ml31ResidueBatchResp:
-    """Fake batch response for the ml31 LP optimizer (one optimization per scenario row)."""
+    """Fake batch response for the ml31 LP residue optimizer."""
     return Ml31ResidueBatchResp(
         model_id="ml31-cereals-residue-optimizer",
-        predictions=[{"row": 0, "reference_year": 2023, "total_residue_t": 4481067.28,
-                      "residue_reduction_pct": 31.18, "solver_status": "OPTIMAL"}],
+        predictions=[{"row": 0, "reference_year": 2023, "optimization_mode": "minimize_residue",
+                      "status": "OPTIMAL", "optimized_residue_t": 45.0,
+                      "optimized_benefit_eur": 1000.0, "residue_reduction_pct": 10.0,
+                      "verdict": "PASADO"}],
         output_path=None,
     )
 
@@ -717,8 +718,30 @@ def _ml34_dairy_inline(plugin: FakePlugin, *, features: dict, model_key, thresho
     )
 
 
-def _ml34_dairy_batch(plugin: FakePlugin, *, data_path: str) -> Ml34DairyBatchResp:
-    """Fake batch prediction response for the ml34 pasteurization plugin."""
+def _ml34_dairy_batch(plugin: FakePlugin, *, data_path: str, model_key: str | None = None) -> Ml34DairyBatchResp:
+    """Fake batch prediction response for the ml34 pasteurization plugin.
+
+    Mirrors the real predict_batch's GA-vs-MLP dispatch on model_key.
+    """
+    if model_key == "optimize":
+        return Ml34DairyBatchResp(
+            model_id="ml34-dairy-pasteurization-energy-ga",
+            predictions=[{
+                "row": 0,
+                "T_in_leche": 6.78,
+                "Delta_P": 0.481,
+                "t_ciclo": 80.0,
+                "IA_F_flow": 5422.10,
+                "IA_T_servicio": 80.40,
+                "IA_E_consumo": 412.9016,
+                "IA_T_out": 72.30,
+                "IA_consumo_especifico": 0.076152,
+                "IA_factible": True,
+                "fitness_final": 0.076152,
+                "seed": 1,
+            }],
+            output_path=None,
+        )
     return Ml34DairyBatchResp(
         model_id="ml34-dairy-pasteurization-energy-ga",
         predictions=[{"row": 0, "E_consumo_pred": 392.9284, "T_out_pred": 72.6027}],
@@ -882,7 +905,6 @@ def _ml40_meat_train(plugin: FakePlugin, *, data_path: str) -> Ml40MeatTrainResp
 
 FAKE_FACTORIES: dict[str, tuple[Callable, Callable]] = {
     "ml46-dairy-fouling-clog-detection": (_ml46_dairy_inline, _ml46_dairy_batch),
-    "m47-dnsl-fallas-maquinaria-pasteurizado": (_m47_inline, _m47_batch),
     "ml40-meat-refrigeration-aeration-fault-diagnosis": (_ml40_meat_inline, _ml40_meat_batch),
     "ml35-dairy-ann-cleaning-cost": (_ml35_dairy_inline, _ml35_dairy_batch),
     "ml34-dairy-pasteurization-energy-ga": (_ml34_dairy_inline, _ml34_dairy_batch),
@@ -897,6 +919,7 @@ FAKE_FACTORIES: dict[str, tuple[Callable, Callable]] = {
     "modelo10-lacteo": (_lacteo_inline, _lacteo_batch),
     "ml8-cereals-img-anomaly-detector": (_ml8_cereals_inline, _ml8_cereals_batch),
     "ml5-meat-cow-behaviour": (_ml5_cow_inline, _ml5_cow_batch),
+    "m47-dnsl-fallas-maquinaria-pasteurizado": (_m47_inline, _m47_batch),
 }
 
 TRAIN_FACTORIES: dict[str, Callable] = {

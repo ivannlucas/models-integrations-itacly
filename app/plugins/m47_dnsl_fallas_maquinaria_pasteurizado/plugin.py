@@ -154,9 +154,21 @@ class M47DnsFallMaquinariaPasteurizadoPlugin(ModelPluginPort):
                     )
                 if cycle_ids is not None and cycle_ids.nunique() > 1:
                     first = cycle_ids.unique()[0]
+                    n_cycles = cycle_ids.nunique()
+                    logger.warning(
+                        "predict_inline received a CSV with %d distinct Cycle_ID values; "
+                        "only Cycle_ID=%s (the first one found in the file) is used, the "
+                        "rest are silently ignored. Use predict_batch to get a prediction "
+                        "per cycle instead.",
+                        n_cycles, first,
+                    )
+                    inline_label = f"Cycle_ID={first} (1 of {n_cycles} in file)"
                     x_df = x_df[cycle_ids == first].drop(columns=["Cycle_ID"], errors="ignore")
                 elif cycle_ids is not None:
+                    inline_label = "single-cycle-csv"
                     x_df = x_df.drop(columns=["Cycle_ID"], errors="ignore")
+                else:
+                    inline_label = "inline-csv"
             else:
                 sensor_data = {col: features[col] for col in SENSOR_COLUMNS}
                 x_df = build_dataframe_from_sensors(
@@ -166,8 +178,9 @@ class M47DnsFallMaquinariaPasteurizadoPlugin(ModelPluginPort):
                     ctx["ts1_mean_train"],
                     APPLY_DIGITAL_TWIN,
                 )
+                inline_label = f"Cycle_ID={features.get('Cycle_ID')}"
 
-            resultados = run_inference(ctx["model"], ctx["scaler"], ctx["feature_cols"], x_df, self._device)
+            resultados = run_inference(ctx["model"], ctx["scaler"], ctx["feature_cols"], x_df, self._device, label=inline_label)
             if resultados is None:
                 raise ValueError("Feature columns mismatch during inference")
             self._record()
@@ -201,11 +214,11 @@ class M47DnsFallMaquinariaPasteurizadoPlugin(ModelPluginPort):
                     cycle_df = x_df[mask].drop(columns=["Cycle_ID"], errors="ignore")
                     if cycle_df.empty:
                         continue
-                    result = run_inference(ctx["model"], ctx["scaler"], ctx["feature_cols"], cycle_df, self._device)
+                    result = run_inference(ctx["model"], ctx["scaler"], ctx["feature_cols"], cycle_df, self._device, label=f"Cycle_ID={cid}")
                     if result:
                         predictions.append(format_batch_row(result, cid))
             else:
-                result = run_inference(ctx["model"], ctx["scaler"], ctx["feature_cols"], x_df, self._device)
+                result = run_inference(ctx["model"], ctx["scaler"], ctx["feature_cols"], x_df, self._device, label="single-cycle")
                 if result:
                     predictions.append(format_batch_row(result, None))
 

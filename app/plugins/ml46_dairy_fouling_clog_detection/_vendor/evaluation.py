@@ -9,7 +9,7 @@ instead of recalibrating it per manifest known_issues.
 """
 from __future__ import annotations
 
-from typing import Any, Dict, List, Mapping, Tuple
+from typing import Any, Dict, List, Mapping, Optional
 
 import numpy as np
 import pandas as pd
@@ -257,18 +257,65 @@ def add_explanations(pred_df: pd.DataFrame, policy: Mapping[str, float], predica
 
 
 def consolidate_alerts(pred_df: pd.DataFrame, cooldown_min: int) -> pd.DataFrame:
-    """Collapse repeated actionable alerts of the same (asset, type) inside the cooldown window."""
-    cand = pred_df.loc[pred_df["actionable_alert"] == 1].sort_values(["asset_id", "alert_type", "timestamp"]).copy()
-    kept_rows: List[int] = []
-    last_time: Dict[Tuple[str, str], pd.Timestamp] = {}
-    for idx, row in cand.iterrows():
-        key = (str(row["asset_id"]), str(row["alert_type"]))
-        ts = pd.Timestamp(row["timestamp"])
-        lt = last_time.get(key)
-        if lt is None or (ts - lt).total_seconds() / 60.0 >= cooldown_min:
-            kept_rows.append(idx)
-            last_time[key] = ts
-    return cand.loc[kept_rows].reset_index(drop=True)
+    """Collapse repeated actionable windows into alert episodes.
+
+    Operationally, a model that emits 5-minute repeated warnings before the
+    same physical event has recognised one degradation episode, not several
+    independent alarms. This function therefore groups consecutive actionable
+    rows by asset and alert_type when the gap between emitted rows is below the
+    configured cooldown/episode gap. The returned table keeps the first signal
+    timestamp as the auditable alert time and adds episode-level metadata.
+    """
+    if pred_df is None or len(pred_df) == 0:
+        return pd.DataFrame()
+    cand = pred_df.loc[pred_df["actionable_alert"] == 1].copy()
+    if len(cand) == 0:
+        return cand.reset_index(drop=True)
+
+    cand["timestamp"] = pd.to_datetime(cand["timestamp"], utc=True, errors="coerce")
+    cand = cand.dropna(subset=["timestamp"]).sort_values(["asset_id", "alert_type", "timestamp"]).copy()
+    gap_min = max(float(cooldown_min), 1.0)
+    episodes: List[Dict[str, Any]] = []
+    episode_counter = 0
+
+    for (asset_id, alert_type), g in cand.groupby(["asset_id", "alert_type"], sort=False):
+        g = g.sort_values("timestamp")
+        current_indices: List[int] = []
+        last_ts: Optional[pd.Timestamp] = None
+        for idx, row in g.iterrows():
+            ts = pd.Timestamp(row["timestamp"])
+            if last_ts is None or (ts - last_ts).total_seconds() / 60.0 <= gap_min:
+                current_indices.append(idx)
+            else:
+                episode_counter += 1
+                episodes.append(_alert_episode_row(cand, current_indices, episode_counter, gap_min))
+                current_indices = [idx]
+            last_ts = ts
+        if current_indices:
+            episode_counter += 1
+            episodes.append(_alert_episode_row(cand, current_indices, episode_counter, gap_min))
+
+    out = pd.DataFrame(episodes)
+    if len(out) == 0:
+        return out
+    return out.sort_values(["asset_id", "alert_type", "timestamp"]).reset_index(drop=True)
+
+
+def _alert_episode_row(cand: pd.DataFrame, indices: List[int], episode_counter: int, gap_min: float) -> Dict[str, Any]:
+    """Build one consolidated episode row (first signal's data + episode-level metadata)."""
+    ep = cand.loc[indices].copy()
+    first = ep.iloc[0].to_dict()
+    first.update({
+        "alert_episode_id": f"AE{episode_counter:06d}",
+        "alert_start_time": ep["timestamp"].iloc[0],
+        "alert_end_time": ep["timestamp"].iloc[-1],
+        "last_signal_timestamp": ep["timestamp"].iloc[-1],
+        "n_signals": int(len(ep)),
+        "episode_duration_min": float((ep["timestamp"].iloc[-1] - ep["timestamp"].iloc[0]).total_seconds() / 60.0),
+        "episode_gap_min_used": gap_min,
+        "is_alert_episode": 1,
+    })
+    return first
 
 
 def default_policy(cfg: TrainConfig) -> Dict[str, float]:
