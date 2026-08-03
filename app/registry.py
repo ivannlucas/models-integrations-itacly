@@ -12,6 +12,7 @@ from app.domain.services.exceptions import (
     InsufficientCycleHistoryError,
     InsufficientFramesError,
     InsufficientTelemetryHistoryError,
+    InsufficientWindowHistoryError,
     InvalidImageError,
     InvalidVideoError,
     NoValidSimulationPointError,
@@ -143,6 +144,17 @@ from app.plugins.m47_dnsl_fallas_maquinaria_pasteurizado.plugin import M47DnsFal
 from app.plugins.m47_dnsl_fallas_maquinaria_pasteurizado.predict_dto import (
     PredictRequest as M47_Request,
     PredictResponse as M47_Response,
+)
+from app.plugins.ml45_cereals_dnsl_critical_point_detection.plugin import (
+    Ml45CerealsDnslCriticalPointDetectionPlugin,
+)
+from app.plugins.ml45_cereals_dnsl_critical_point_detection.predict_dto import (
+    PredictRequest as Ml45_Request,
+    PredictResponse as Ml45_Response,
+)
+from app.plugins.ml45_cereals_dnsl_critical_point_detection.train_dto import (
+    TrainRequest as Ml45_TrainReq,
+    TrainResponse as Ml45_TrainResp,
 )
 
 from app.plugins.ml40_meat_refrigeration_aeration_fault_diagnosis.plugin import (
@@ -322,6 +334,17 @@ REGISTRY: list[ModelEntry] = [
         predict_request_type=M47_Request,
         predict_response_type=M47_Response,
         extra_predict_exceptions=(),
+    ),
+    ModelEntry(
+        model_id="ml45-cereals-dnsl-critical-point-detection",
+        prefix="/models/ml45-cereals-dnsl-critical-point-detection",
+        version="1.0.0",
+        plugin_class=Ml45CerealsDnslCriticalPointDetectionPlugin,
+        predict_request_type=Ml45_Request,
+        predict_response_type=Ml45_Response,
+        extra_predict_exceptions=(InsufficientWindowHistoryError,),
+        train_request_type=Ml45_TrainReq,
+        train_response_type=Ml45_TrainResp,
     ),
     ModelEntry(
         model_id="ml40-meat-refrigeration-aeration-fault-diagnosis",

@@ -35,6 +35,7 @@ from app.domain.services.exceptions import (
     InsufficientCycleHistoryError,
     InsufficientFramesError,
     InsufficientTelemetryHistoryError,
+    InsufficientWindowHistoryError,
     InvalidImageError,
     InvalidVideoError,
     NoValidSimulationPointError,
@@ -159,6 +160,16 @@ from app.plugins.m47_dnsl_fallas_maquinaria_pasteurizado.predict_dto import (
     PredictInlineResponse as M47InlineResp,
     PredictRequest as M47_Request,
     PredictResponse as M47_Response,
+)
+from app.plugins.ml45_cereals_dnsl_critical_point_detection.predict_dto import (
+    PredictBatchResponse as Ml45BatchResp,
+    PredictInlineResponse as Ml45InlineResp,
+    PredictRequest as Ml45_Request,
+    PredictResponse as Ml45_Response,
+)
+from app.plugins.ml45_cereals_dnsl_critical_point_detection.train_dto import (
+    TrainRequest as Ml45_TrainReq,
+    TrainResponse as Ml45TrainResp,
 )
 from app.plugins.ml40_meat_refrigeration_aeration_fault_diagnosis.predict_dto import (
     PredictBatchResponse as Ml40MeatBatchResp,
@@ -855,6 +866,60 @@ def _m47_batch(plugin: FakePlugin, *, data_path: str) -> M47BatchResp:
     )
 
 
+def _ml45_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> Ml45InlineResp:
+    """Fake inline response for the m45 grain-dryer PCC detection model."""
+    return Ml45InlineResp(
+        model_id="ml45-cereals-dnsl-critical-point-detection",
+        window_index=1,
+        timestamp_init="2029-04-15 00:00:00",
+        timestamp_end="2029-04-15 03:59:00",
+        predicted_anomaly_class=0,
+        predicted_anomaly_label="No Fallo",
+        anomaly_probability=0.43,
+        decision_threshold=0.73,
+        **{
+            "Estado interpretativo": "Vigilancia",
+            "Evidencia": "No se identifica un perfil catalogado de criticidad, pero hay indicios de anomalia.",
+            "Probabilidad de anomalia": 0.43,
+            "Umbral de detección de anomalias": 0.73,
+            "Margen respecto al umbral": 0.3,
+            "Recomendacion": "Se recomienda vigilancia reforzada y seguimiento.",
+        },
+    )
+
+
+def _ml45_batch(plugin: FakePlugin, *, data_path: str) -> Ml45BatchResp:
+    """Fake batch response for the m45 grain-dryer PCC detection model."""
+    return Ml45BatchResp(
+        model_id="ml45-cereals-dnsl-critical-point-detection",
+        predictions=[{
+            "window_index": 1,
+            "cycle_id": 2400,
+            "timestamp_init": "2029-04-15 00:00:00",
+            "timestamp_end": "2029-04-15 03:59:00",
+            "predicted_anomaly_class": 0,
+            "predicted_anomaly_label": "No Fallo",
+            "anomaly_probability": 0.43,
+            "decision_threshold": 0.73,
+            "Estado interpretativo": "Vigilancia",
+            "Evidencia": "No se identifica un perfil catalogado de criticidad, pero hay indicios de anomalia.",
+            "Probabilidad de anomalia": 0.43,
+            "Umbral de detección de anomalias": 0.73,
+            "Margen respecto al umbral": 0.3,
+            "Recomendacion": "Se recomienda vigilancia reforzada y seguimiento.",
+        }],
+        output_path=None,
+    )
+
+
+def _ml45_train(plugin: FakePlugin, *, data_path: str) -> Ml45TrainResp:
+    """Fake fine-tuning response for the m45 grain-dryer PCC detection model."""
+    return Ml45TrainResp(
+        detail="Fine-tuning completado",
+        accuracy=0.92, f1=0.87, auc=0.91, n_windows=40, n_epochs=30,
+    )
+
+
 def _ml40_meat_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> Ml40MeatInlineResp:
     """Fake inline prediction response for the ml40 refrigeration/aeration fault diagnosis plugin."""
     return Ml40MeatInlineResp(
@@ -920,6 +985,7 @@ FAKE_FACTORIES: dict[str, tuple[Callable, Callable]] = {
     "ml8-cereals-img-anomaly-detector": (_ml8_cereals_inline, _ml8_cereals_batch),
     "ml5-meat-cow-behaviour": (_ml5_cow_inline, _ml5_cow_batch),
     "m47-dnsl-fallas-maquinaria-pasteurizado": (_m47_inline, _m47_batch),
+    "ml45-cereals-dnsl-critical-point-detection": (_ml45_inline, _ml45_batch),
 }
 
 TRAIN_FACTORIES: dict[str, Callable] = {
@@ -930,6 +996,7 @@ TRAIN_FACTORIES: dict[str, Callable] = {
     "modelo10-lacteo": _lacteo_train,
     "ml8-cereals-img-anomaly-detector": _ml8_cereals_train,
     "ml30-meat-traceability-detection": _ml30_trace_train,
+    "ml45-cereals-dnsl-critical-point-detection": _ml45_train,
 }
 
 
@@ -1082,6 +1149,17 @@ TEST_REGISTRY: list[ModelEntry] = [
         predict_request_type=M47_Request,
         predict_response_type=M47_Response,
         extra_predict_exceptions=(),
+    ),
+    ModelEntry(
+        model_id="ml45-cereals-dnsl-critical-point-detection",
+        prefix="/models/ml45-cereals-dnsl-critical-point-detection",
+        version="1.0.0",
+        plugin_class=FakePlugin,
+        predict_request_type=Ml45_Request,
+        predict_response_type=Ml45_Response,
+        extra_predict_exceptions=(InsufficientWindowHistoryError,),
+        train_request_type=Ml45_TrainReq,
+        train_response_type=Ml45TrainResp,
     ),
     ModelEntry(
         model_id="ml40-meat-refrigeration-aeration-fault-diagnosis",

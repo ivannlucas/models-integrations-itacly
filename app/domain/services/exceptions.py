@@ -57,6 +57,11 @@ class ThermalSafetyViolationError(ValueError):
     """Raised when the GA cannot find a feasible solution meeting T_out >= 72.3 °C (ml34)."""
 
 
+class InsufficientWindowHistoryError(ValueError):
+    """Raised when fewer than sequence_length (240) consecutive rows are available to build a
+    temporal window (ml45)."""
+
+
 class InfeasibleOptimizationError(ValueError):
     """Raised when the LP crop-allocation problem is infeasible/unbounded (ml31).
 

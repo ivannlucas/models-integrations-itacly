@@ -54,3 +54,9 @@ deap==1.4.3
 
 # Added for ml31 (cereal residue optimizer) — Linear Programming
 pulp>=2.7.0
+
+# Added for ml45 (grain dryer PCC detection) — DNFLExplainer's TemporalExplainer uses SHAP
+# GradientExplainer for the LSTM branch. Deliberate deviation from this repo's usual pattern
+# (SHAP normally delegated to the external explainability microservice) — the PCC catalog is
+# this model's own functional differentiator, ported inline per explicit product decision.
+shap>=0.51.0
