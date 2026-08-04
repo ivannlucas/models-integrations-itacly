@@ -1,0 +1,8 @@
+model_family,feature_set,validation_rmse,test_rmse,recommendation,metric_group,split,accuracy,precision,recall,false_negative_rate,mae,rmse,r2
+linear_regression,ablation_reduced_context,76.47469717064605,105.67102742272888,baseline_retained,upstream,,,,,,,,
+,,,,,trigger,train,0.9519704433497537,0.9741176470588235,0.9366515837104072,0.06334841628959276,,,
+,,,,,trigger,validation,0.9367816091954023,0.952,0.9596774193548387,0.04032258064516129,,,
+,,,,,trigger,test,0.96,0.9647058823529412,0.9939393939393939,0.006060606060606061,,,
+,,,,,quantity_optimizer,train,,,,,3.9994645620436904,6.63576813977863,0.9997257534492018
+,,,,,quantity_optimizer,validation,,,,,12.900121645653218,19.703367623362663,0.9992717128955891
+,,,,,quantity_optimizer,test,,,,,31.064144337979435,37.0957340841414,0.9978737931736812

@@ -168,6 +168,13 @@ from app.plugins.ml40_meat_refrigeration_aeration_fault_diagnosis.train_dto impo
     TrainRequest as Ml40Meat_TrainReq,
     TrainResponse as Ml40Meat_TrainResp,
 )
+from app.plugins.ml28_meat_neuroevolutionary_raw_materials_prediction.plugin import (
+    Ml28MeatNeuroevolutionaryRawMaterialsPredictionPlugin,
+)
+from app.plugins.ml28_meat_neuroevolutionary_raw_materials_prediction.predict_dto import (
+    PredictRequest as Ml28Meat_Request,
+    PredictResponse as Ml28Meat_Response,
+)
 
 
 # ── Registry entry dataclass ──────────────────────────────────────────────────
@@ -356,5 +363,14 @@ REGISTRY: list[ModelEntry] = [
         extra_predict_exceptions=(InsufficientCycleHistoryError, UnknownDiagnosisSystemError),
         train_request_type=Ml40Meat_TrainReq,
         train_response_type=Ml40Meat_TrainResp,
+    ),
+    ModelEntry(
+        model_id="ml28-meat-neuroevolutionary-raw-materials-prediction",
+        prefix="/models/ml28-meat-neuroevolutionary-raw-materials-prediction",
+        version="1.0.0",
+        plugin_class=Ml28MeatNeuroevolutionaryRawMaterialsPredictionPlugin,
+        predict_request_type=Ml28Meat_Request,
+        predict_response_type=Ml28Meat_Response,
+        extra_predict_exceptions=(),
     ),
 ]

@@ -181,6 +181,12 @@ from app.plugins.ml40_meat_refrigeration_aeration_fault_diagnosis.train_dto impo
     TrainRequest as Ml40Meat_TrainReq,
     TrainResponse as Ml40MeatTrainResp,
 )
+from app.plugins.ml28_meat_neuroevolutionary_raw_materials_prediction.predict_dto import (
+    PredictBatchResponse as Ml28MeatBatchResp,
+    PredictInlineResponse as Ml28MeatInlineResp,
+    PredictRequest as Ml28Meat_Request,
+    PredictResponse as Ml28Meat_Response,
+)
 
 # ── ModelEntry dataclass (local copy — avoids importing app.registry which loads real plugins) ───
 
@@ -968,9 +974,48 @@ def _ml40_meat_train(plugin: FakePlugin, *, data_path: str) -> Ml40MeatTrainResp
     )
 
 
+def _ml28_meat_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> Ml28MeatInlineResp:
+    """Fake inline response for the ml28 meat raw-material procurement rules engine."""
+    return Ml28MeatInlineResp(
+        model_id="ml28-meat-neuroevolutionary-raw-materials-prediction",
+        date="2025-01-26", raw_material_id="RM_BEEF_TRIM_A", destination_profile="cooked_standard_line",
+        current_inventory_tons=36.0, expected_requirement_tons=24.0, lead_time_days=6.0,
+        safety_coverage_days=11.0, expected_yield_rate=0.88, expected_waste_rate=0.02,
+        unit_purchase_cost=3.88, shelf_life_days=28,
+        purchase_trigger_proba=0.8588, purchase_trigger_flag=1, recommended_action="BUY",
+        quantity_optimizer_recommendation_tons=29.817, order_quantity_tons=29.817,
+        decision_reason="Projected stock after lead time is below safety stock. Purchase triggered and quantity optimized under current policy.",
+        projected_stock_after_lead_time_tons=15.429, safety_stock_tons=37.714, coverage_gap_tons=22.286,
+        risk_level="HIGH", baseline_order_quantity_tons=40.75, delta_order_vs_baseline_tons=-10.933,
+        excess_tons=41.337, stockout_tons=0.0,
+    )
+
+
+def _ml28_meat_batch(plugin: FakePlugin, *, data_path: str) -> Ml28MeatBatchResp:
+    """Fake batch response for the ml28 meat raw-material procurement rules engine."""
+    return Ml28MeatBatchResp(
+        model_id="ml28-meat-neuroevolutionary-raw-materials-prediction",
+        predictions=[{
+            "date": "2025-01-05", "raw_material_id": "RM_BEEF_TRIM_A", "destination_profile": "cooked_standard_line",
+            "current_inventory_tons": 58.0, "expected_requirement_tons": 22.0, "lead_time_days": 5.0,
+            "safety_coverage_days": 10.0, "expected_yield_rate": 0.89, "expected_waste_rate": 0.02,
+            "unit_purchase_cost": 3.80, "shelf_life_days": 28,
+            "purchase_trigger_proba": 0.2658, "purchase_trigger_flag": 0, "recommended_action": "DO_NOT_BUY",
+            "quantity_optimizer_recommendation_tons": 0.0, "order_quantity_tons": 0.0,
+            "decision_reason": "Coverage remains above safety threshold; purchase blocked.",
+            "projected_stock_after_lead_time_tons": 42.286, "safety_stock_tons": 31.429, "coverage_gap_tons": 0.0,
+            "risk_level": "LOW", "baseline_order_quantity_tons": 3.767, "delta_order_vs_baseline_tons": -3.767,
+            "excess_tons": 35.56, "stockout_tons": 0.0,
+        }],
+        summary={"row_count": 1, "triggered_orders": 0, "aggregate_excess_reduction_pct": 20.959, "stockout_guardrail_pass": True},
+        output_path=None,
+    )
+
+
 FAKE_FACTORIES: dict[str, tuple[Callable, Callable]] = {
     "ml46-dairy-fouling-clog-detection": (_ml46_dairy_inline, _ml46_dairy_batch),
     "ml40-meat-refrigeration-aeration-fault-diagnosis": (_ml40_meat_inline, _ml40_meat_batch),
+    "ml28-meat-neuroevolutionary-raw-materials-prediction": (_ml28_meat_inline, _ml28_meat_batch),
     "ml35-dairy-ann-cleaning-cost": (_ml35_dairy_inline, _ml35_dairy_batch),
     "ml34-dairy-pasteurization-energy-ga": (_ml34_dairy_inline, _ml34_dairy_batch),
     "ml17-meat-market-price-analysis": (_ml17_inline, _ml17_batch),
@@ -1171,6 +1216,15 @@ TEST_REGISTRY: list[ModelEntry] = [
         extra_predict_exceptions=(InsufficientCycleHistoryError, UnknownDiagnosisSystemError),
         train_request_type=Ml40Meat_TrainReq,
         train_response_type=Ml40MeatTrainResp,
+    ),
+    ModelEntry(
+        model_id="ml28-meat-neuroevolutionary-raw-materials-prediction",
+        prefix="/models/ml28-meat-neuroevolutionary-raw-materials-prediction",
+        version="1.0.0",
+        plugin_class=FakePlugin,
+        predict_request_type=Ml28Meat_Request,
+        predict_response_type=Ml28Meat_Response,
+        extra_predict_exceptions=(),
     ),
 ]
 

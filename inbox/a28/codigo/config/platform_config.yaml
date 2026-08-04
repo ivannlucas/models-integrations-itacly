@@ -1,0 +1,21 @@
+platform:
+  name: cu28_batch_offline_platform
+  mode: batch_offline
+  rounding_decimals: 3
+  heuristics:
+    purchase_trigger_gap_sigmoid_scale: 5.0
+  simulation:
+    baseline_safety_stock_factor: 1.25
+  guardrails:
+    max_stockout_increase_pct: 5.0
+
+destination_profiles:
+  cooked_standard_line:
+    description: Stable cooked-line demand with medium shelf life.
+    product_family_alias: cooked_emulsion
+  cured_long_horizon:
+    description: Longer curing cycle with higher lead-time exposure.
+    product_family_alias: cured_embutido
+  fresh_short_shelf_life:
+    description: Short shelf-life fresh preparation profile.
+    product_family_alias: fresh_preparation

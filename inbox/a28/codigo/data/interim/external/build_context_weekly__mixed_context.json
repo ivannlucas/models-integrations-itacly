@@ -1,0 +1,48 @@
+{
+  "scope": "mixed_context",
+  "executed_at_utc": "2026-06-26T08:35:15.960379+00:00",
+  "inputs": [
+    {
+      "path": "data/processed/external/context/external_long.csv",
+      "size_bytes": 335814,
+      "sha256": "fc4bd1f7885cfa613a33ca0d218c85082a3faa79bd2af8f8e300380b8dd49311"
+    },
+    {
+      "path": "data/interim/external/demand_index_monthly__mixed_context.csv",
+      "size_bytes": 8158,
+      "sha256": "e9fca61e6b5f97e0ffa9c272011235b7637fc3557b9608312a74f2b23b3a1409"
+    },
+    {
+      "path": "data/interim/external/supply_index_monthly__mixed_context.csv",
+      "size_bytes": 165,
+      "sha256": "8954324f4d80d5a1de9ddf7662f564e5c44876b64723ee9f5a26025beddf955a"
+    },
+    {
+      "path": "data/interim/external/purchase_price_weekly__mixed_context.csv",
+      "size_bytes": 21054,
+      "sha256": "ee7c91f79a89bd4a23d92c6ea56824a8641744d45fbc289ea2594b9e799f233d"
+    }
+  ],
+  "outputs": [
+    {
+      "path": "data/processed/external/context/context_weekly_for_simulation.csv",
+      "size_bytes": 48199,
+      "sha256": "b5d8f01e6a71f14296d2173df93af6bbc54747b363ae17efe2b70316c924c4e4"
+    },
+    {
+      "path": "data/processed/external/context/context_proxy_limitations.json",
+      "size_bytes": 2471,
+      "sha256": "48ac1478c53644aa08c21b77b7653b023ba6b825de2b33ad6a35a5e3deeb86de"
+    }
+  ],
+  "row_count": 1169,
+  "columns": [
+    "date",
+    "supply_index",
+    "purchase_price_index",
+    "demand_index"
+  ],
+  "date_min": "2003-12-29",
+  "date_max": "2026-05-18",
+  "first_valid_supply_week": "2021-01-04"
+}

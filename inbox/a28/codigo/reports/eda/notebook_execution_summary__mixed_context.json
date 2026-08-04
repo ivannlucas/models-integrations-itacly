@@ -1,0 +1,254 @@
+{
+  "scope": "mixed_context",
+  "executed_notebooks": [
+    "00_data_sources_audit.ipynb",
+    "01_raw_data_profile.ipynb",
+    "02_external_context_eda.ipynb",
+    "03_synthetic_plant_layer_eda.ipynb",
+    "04_feature_engineering_audit.ipynb",
+    "05_modeling_dataset_eda.ipynb",
+    "06_split_validation_and_leakage_audit.ipynb",
+    "07_training_and_policy_results_eda.ipynb"
+  ],
+  "failed_notebooks": [],
+  "notebook_results": [
+    {
+      "notebook": "00_data_sources_audit.ipynb",
+      "tables": [
+        "reports/tables/eda/data_sources_audit__mixed_context.csv",
+        "reports/tables/eda/data_sources_inconsistencies__mixed_context.csv"
+      ],
+      "figures": [
+        "reports/figures/eda/data_sources_status_counts__mixed_context.png",
+        "reports/figures/eda/data_sources_type_counts__mixed_context.png",
+        "reports/figures/eda/data_sources_raw_file_counts__mixed_context.png"
+      ],
+      "findings": [
+        "Active sources keep official URLs, license URLs and local raw snapshots.",
+        "MAPA_PRICES_OM remains traced only and is not treated as active weekly evidence.",
+        "Candidate sources remain outside the defended mixed_context route."
+      ],
+      "limitations": [
+        "The markdown registry is a curated summary and must stay aligned with source manifests."
+      ],
+      "render_stats": {
+        "table_outputs": 8,
+        "visual_outputs": 3,
+        "stream_outputs": 12,
+        "other_outputs": 0
+      }
+    },
+    {
+      "notebook": "01_raw_data_profile.ipynb",
+      "tables": [
+        "reports/tables/eda/raw_file_inventory__mixed_context.csv",
+        "reports/tables/eda/raw_data_quality__mixed_context.csv",
+        "reports/tables/eda/raw_temporal_ranges__mixed_context.csv"
+      ],
+      "figures": [
+        "reports/figures/eda/raw_file_sizes__mixed_context.png",
+        "reports/figures/eda/raw_record_counts__mixed_context.png",
+        "reports/figures/eda/raw_temporal_coverage__mixed_context.png",
+        "reports/figures/eda/raw_missing_values__mixed_context.png"
+      ],
+      "findings": [
+        "Raw files are external contextual signals and do not contain internal observed plant variables.",
+        "Temporal coverage differs by source and motivates the weekly harmonisation step.",
+        "Each raw file remains traceable through size, hash and access metadata."
+      ],
+      "limitations": [
+        "Spreadsheet profiling reads the first sheet only, which is the defended audit entrypoint for these snapshots."
+      ],
+      "render_stats": {
+        "table_outputs": 9,
+        "visual_outputs": 4,
+        "stream_outputs": 14,
+        "other_outputs": 0
+      }
+    },
+    {
+      "notebook": "02_external_context_eda.ipynb",
+      "tables": [
+        "reports/tables/eda/external_context_summary__mixed_context.csv",
+        "reports/tables/eda/external_context_weekly_snapshot__mixed_context.csv",
+        "reports/tables/eda/external_context_limitations__mixed_context.csv"
+      ],
+      "figures": [
+        "reports/figures/eda/external_context_demand_index__mixed_context.png",
+        "reports/figures/eda/external_context_supply_index__mixed_context.png",
+        "reports/figures/eda/external_context_gap__mixed_context.png",
+        "reports/figures/eda/external_context_price_index__mixed_context.png",
+        "reports/figures/eda/external_context_correlation__mixed_context.png",
+        "reports/figures/eda/external_context_coverage__mixed_context.png"
+      ],
+      "findings": [
+        "External processed signals remain contextual proxies and do not replace internal plant telemetry.",
+        "The weekly dataset is compact and reproducible, with demand, supply and gap signals aligned on a common calendar.",
+        "purchase_price_index must be interpreted as fallback evidence when it remains constant."
+      ],
+      "limitations": [
+        "Proxy limitations are structural and already documented in the dedicated JSON contract."
+      ],
+      "render_stats": {
+        "table_outputs": 9,
+        "visual_outputs": 6,
+        "stream_outputs": 17,
+        "other_outputs": 0
+      }
+    },
+    {
+      "notebook": "03_synthetic_plant_layer_eda.ipynb",
+      "tables": [
+        "reports/tables/eda/synthetic_layer_variable_ranges__mixed_context.csv",
+        "reports/tables/eda/synthetic_layer_by_profile__mixed_context.csv",
+        "reports/tables/eda/synthetic_layer_summary__mixed_context.csv"
+      ],
+      "figures": [
+        "reports/figures/eda/synthetic_requirement_by_profile__mixed_context.png",
+        "reports/figures/eda/synthetic_inventory_distribution__mixed_context.png",
+        "reports/figures/eda/synthetic_lead_time_by_profile__mixed_context.png",
+        "reports/figures/eda/synthetic_yield_waste_by_profile__mixed_context.png",
+        "reports/figures/eda/synthetic_procurement_need_by_profile__mixed_context.png",
+        "reports/figures/eda/synthetic_layer_correlation__mixed_context.png",
+        "reports/figures/eda/synthetic_requirement_inventory_timeseries__mixed_context.png"
+      ],
+      "findings": [
+        "The synthetic layer produces plausible operational ranges by destination profile.",
+        "The upstream signal synthetic_procurement_need behaves as a pressure indicator and not as a final order quantity.",
+        "Inventory, requirement, lead time, yield and waste remain synthetic unless the customer uploads observed values."
+      ],
+      "limitations": [
+        "This notebook validates plausibility only; it does not convert synthetic variables into observed plant evidence."
+      ],
+      "render_stats": {
+        "table_outputs": 11,
+        "visual_outputs": 7,
+        "stream_outputs": 20,
+        "other_outputs": 0
+      }
+    },
+    {
+      "notebook": "04_feature_engineering_audit.ipynb",
+      "tables": [
+        "reports/tables/eda/feature_inventory__mixed_context.csv",
+        "reports/tables/eda/leakage_audit__mixed_context.csv",
+        "reports/tables/eda/feature_sets_allowed__mixed_context.csv"
+      ],
+      "figures": [
+        "reports/figures/eda/features_by_origin__mixed_context.png",
+        "reports/figures/eda/features_by_family__mixed_context.png",
+        "reports/figures/eda/feature_missing_values__mixed_context.png",
+        "reports/figures/eda/feature_correlation__mixed_context.png",
+        "reports/figures/eda/feature_target_correlation__mixed_context.png"
+      ],
+      "findings": [
+        "Feature engineering is traceable through the feature contract and roles metadata.",
+        "Lagged, rolling and profile-derived variables are visible as separate families.",
+        "Downstream decision outputs are excluded from upstream and trigger inputs."
+      ],
+      "limitations": [
+        "The notebook audits the exported feature contract; it does not replace code review of the full feature pipeline."
+      ],
+      "render_stats": {
+        "table_outputs": 6,
+        "visual_outputs": 5,
+        "stream_outputs": 16,
+        "other_outputs": 0
+      }
+    },
+    {
+      "notebook": "05_modeling_dataset_eda.ipynb",
+      "tables": [
+        "reports/tables/eda/modeling_dataset_summary__mixed_context.csv",
+        "reports/tables/eda/modeling_dataset_quality__mixed_context.csv",
+        "reports/tables/eda/target_by_profile__mixed_context.csv",
+        "reports/tables/eda/trigger_balance__mixed_context.csv"
+      ],
+      "figures": [
+        "reports/figures/eda/target_distribution__mixed_context.png",
+        "reports/figures/eda/target_by_profile__mixed_context.png",
+        "reports/figures/eda/trigger_balance__mixed_context.png",
+        "reports/figures/eda/trigger_by_profile__mixed_context.png",
+        "reports/figures/eda/modeling_dataset_timeseries__mixed_context.png",
+        "reports/figures/eda/modeling_dataset_correlation__mixed_context.png"
+      ],
+      "findings": [
+        "The modeling dataset is weekly and combines proxy, synthetic and derived variables.",
+        "synthetic_procurement_need varies materially by destination profile and supports upstream modeling.",
+        "purchase_trigger_label tracks operational stress through inventory, requirement and lead-time relationships."
+      ],
+      "limitations": [
+        "The dataset remains mixed and derived; it should not be read as an observed purchase ledger."
+      ],
+      "render_stats": {
+        "table_outputs": 5,
+        "visual_outputs": 6,
+        "stream_outputs": 15,
+        "other_outputs": 0
+      }
+    },
+    {
+      "notebook": "06_split_validation_and_leakage_audit.ipynb",
+      "tables": [
+        "reports/tables/eda/split_summary__mixed_context.csv",
+        "reports/tables/eda/split_validation_checks__mixed_context.csv",
+        "reports/tables/eda/split_target_distribution__mixed_context.csv"
+      ],
+      "figures": [
+        "reports/figures/eda/split_timeline__mixed_context.png",
+        "reports/figures/eda/target_by_split__mixed_context.png",
+        "reports/figures/eda/trigger_by_split__mixed_context.png",
+        "reports/figures/eda/profile_coverage_by_split__mixed_context.png"
+      ],
+      "findings": [
+        "Train, validation and test remain chronologically ordered.",
+        "No duplicate key tuples were found across splits in the defended dataset.",
+        "Validation is the selection surface while test is reserved for final evaluation."
+      ],
+      "limitations": [
+        "Coverage by profile can still differ across splits because the scenario mix evolves over time."
+      ],
+      "render_stats": {
+        "table_outputs": 7,
+        "visual_outputs": 4,
+        "stream_outputs": 12,
+        "other_outputs": 0
+      }
+    },
+    {
+      "notebook": "07_training_and_policy_results_eda.ipynb",
+      "tables": [
+        "reports/tables/eda/training_metrics_summary__mixed_context.csv",
+        "reports/tables/eda/policy_metrics_summary__mixed_context.csv",
+        "reports/tables/eda/trigger_confusion_matrix__mixed_context.csv"
+      ],
+      "figures": [
+        "reports/figures/eda/upstream_prediction_vs_actual__mixed_context.png",
+        "reports/figures/eda/trigger_probability_distribution__mixed_context.png",
+        "reports/figures/eda/trigger_confusion_matrix__mixed_context.png",
+        "reports/figures/eda/order_quantity_vs_baseline__mixed_context.png",
+        "reports/figures/eda/excess_by_policy__mixed_context.png",
+        "reports/figures/eda/stockout_by_policy__mixed_context.png",
+        "reports/figures/eda/policy_timeseries__mixed_context.png"
+      ],
+      "findings": [
+        "The proposed policy reduces excess relative to the operational baseline while preserving the stockout guardrail.",
+        "The trigger stage respects the zero-order rule when purchase_trigger_flag equals zero.",
+        "Upstream, trigger and quantity metrics remain traceable through validation and test summaries."
+      ],
+      "limitations": [
+        "Results come from simulation-based functional validation and must not be presented as plant-wide industrial proof."
+      ],
+      "render_stats": {
+        "table_outputs": 5,
+        "visual_outputs": 7,
+        "stream_outputs": 15,
+        "other_outputs": 0
+      }
+    }
+  ],
+  "continue_on_error": false,
+  "skip_missing_inputs": false,
+  "eda_summary_path": "reports/eda/eda_summary__mixed_context.json",
+  "generated_at_utc": "2026-06-17T10:30:10.325552+00:00"
+}

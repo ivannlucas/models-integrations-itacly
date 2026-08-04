@@ -1,0 +1,4 @@
+column,lower_bound,upper_bound,outlier_rows
+synthetic_procurement_need,-56.865476733411896,539.5665477887644,36
+current_inventory_tons,980.651079270526,3883.4848137235685,1
+expected_requirement_tons,1069.1953643198754,1960.1060355347122,134

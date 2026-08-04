@@ -1,0 +1,81 @@
+{
+  "scope": "mixed_context",
+  "executed_at_utc": "2026-06-26T08:35:15.860185+00:00",
+  "reference_date": "2026-05-18",
+  "inputs": [
+    {
+      "path": "data/raw/external/INE_CPI/76128.csv",
+      "size_bytes": 17893305,
+      "sha256": "3172d23378b962c321177b2e3f31e2f18a6c6e8afbf2b8b2f87b35866ee5e9ff"
+    },
+    {
+      "path": "data/raw/external/MAPA_SLAUGHTER_MAPA/boletin--diciembre-2025-web.xlsx",
+      "size_bytes": 241556,
+      "sha256": "a8d00d58d3125267e52073e4d2398a88129bec271507e582cf0d2fcf822283e7"
+    },
+    {
+      "path": "data/raw/external/MAPA_SLAUGHTER_MAPA/sacrificio_anual_2024.xlsx",
+      "size_bytes": 164090,
+      "sha256": "7fd3b075418a3e8d6332fc03dbf24b7a69807ce94188a12e589cb35fd760fc2f"
+    },
+    {
+      "path": "data/raw/external/MAPA_SLAUGHTER_MAPA/sacrificio_exhaustivo_2023.xlsx",
+      "size_bytes": 166076,
+      "sha256": "2f8261a46f6e5ce207bc6e6e70fb7b34bfcc3f8a1df1f7653be0cd984a5d94cb"
+    },
+    {
+      "path": "data/raw/external/MAPA_SLAUGHTER_MAPA/web-mapa-1-junio-24-25-web-0.xlsx",
+      "size_bytes": 647011,
+      "sha256": "3f46eb5e130b1343925223566fbec6977d4c213f49af6204b77af2dce3e45084"
+    },
+    {
+      "path": "data/raw/external/MAPA_SLAUGHTER_MAPA/web-mapa-2-diciembre-24-25-web.xlsx",
+      "size_bytes": 706302,
+      "sha256": "1c4fa965d351ea1a32e30a34ba49a00a16dc72fb2c1f7d41f99a3746e1c70bcf"
+    },
+    {
+      "path": "data/raw/external/MAPA_PRICES_OM/s502025rv0.xlsx",
+      "size_bytes": 1252729,
+      "sha256": "1e9cf66bcabab2adff0f0334ab24956bc969c183fe4d160addd4f0d516e08100"
+    }
+  ],
+  "outputs": [
+    {
+      "path": "data/processed/external/context/external_long.csv",
+      "size_bytes": 335814,
+      "sha256": "fc4bd1f7885cfa613a33ca0d218c85082a3faa79bd2af8f8e300380b8dd49311"
+    },
+    {
+      "path": "data/interim/external/demand_index_monthly__mixed_context.csv",
+      "size_bytes": 8158,
+      "sha256": "e9fca61e6b5f97e0ffa9c272011235b7637fc3557b9608312a74f2b23b3a1409"
+    },
+    {
+      "path": "data/interim/external/supply_index_monthly__mixed_context.csv",
+      "size_bytes": 165,
+      "sha256": "8954324f4d80d5a1de9ddf7662f564e5c44876b64723ee9f5a26025beddf955a"
+    },
+    {
+      "path": "data/interim/external/purchase_price_weekly__mixed_context.csv",
+      "size_bytes": 21054,
+      "sha256": "ee7c91f79a89bd4a23d92c6ea56824a8641744d45fbc289ea2594b9e799f233d"
+    },
+    {
+      "path": "data/processed/external/context/download_registry.json",
+      "size_bytes": 467,
+      "sha256": "ba22d8a1886261d6b630f74d12706c118d6e40cd92b26fe7d19380dd1d7a7d03"
+    }
+  ],
+  "row_count": 4199,
+  "columns": [
+    "date",
+    "source",
+    "dataset",
+    "subseries",
+    "value",
+    "unit",
+    "notes"
+  ],
+  "date_min": "2003-12-29",
+  "date_max": "2026-05-18"
+}

@@ -1,0 +1,5 @@
+source,dataset,subseries,variable,min_date,max_date,observations,missing_rate
+INE,CPI,01.1.2.3,index,2004-01-01,2026-01-01,1060,0.0
+INE,CPI,01.1.2.5,index,2004-01-01,2026-01-01,1060,0.0
+MAPA,PRICES_OM,fallback_constant,index,2003-12-29,2026-05-18,1169,0.0
+MAPA,SLAUGHTER_MAPA,TOTAL|value,,2021-01-01,2025-01-01,910,0.0

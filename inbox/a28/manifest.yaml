@@ -1,0 +1,204 @@
+model_id: ml28_meat_neuroevolutionary_raw_materials_prediction
+sector: carnico
+nombre: "CU28 - NEUROCARN-OPT: Sistema de soporte a la decisión para el aprovisionamiento de materia prima cárnica"
+task_type: decision_support_rules_engine  # NO es un modelo ML entrenado (ver known_issues) — motor de reglas deterministas por fila: trigger de compra (sigmoide) -> optimizador de cantidad (división) -> gating -> simulación de política
+framework:
+  - pandas>=1.5.0
+  - numpy>=1.23.0
+  - pyyaml>=6.0.0
+  # scikit-learn/lightgbm/xgboost están en requirements.txt del equipo de IA pero SOLO para la
+  # ruta de entrenamiento reproducible mixed_context (no servida por este plugin) — ver known_issues.
+
+# NOMBRE DEL PLUGIN vs LO QUE REALMENTE SE SIRVE — LEER ANTES DE INTEGRAR:
+# El nombre pedido para el plugin es "neuroevolutionary", pero la propia entrega documenta
+# explícitamente que la neuroevolución es SOLO una comparativa experimental offline, nunca el
+# motor de decisión servido (memoria, párrafo intro: "la cantidad recomendada en la versión
+# actual procede de una implementación mínima y reproducible con reglas de fallback
+# documentadas"; DELIVERY_README_CU28.md: "La neuroevolución es una comparativa experimental
+# offline; no es el modelo promovido"; model_card_cu28.md: "La version actual es una
+# implementacion minima y reproducible con reglas fallback documentadas"). Decisión ya tomada
+# y confirmada explícitamente por el usuario: el plugin sirve el motor de reglas de
+# `platform_run` (src/cli/platform_run.py), no ningún artefacto .pkl entrenado (ni el baseline
+# LinearRegression/Ridge, ni la neuroevolución). El nombre del paquete se mantiene tal cual se
+# pidió; esta discrepancia debe quedar visible en la ficha técnica para el revisor humano.
+
+artifacts:
+  folder: null  # NO HAY ARTEFACTOS ENTRENADOS QUE CARGAR — el motor servido es puramente config-driven
+  files: []
+  config:
+    - config/platform_config.yaml  # heuristics.purchase_trigger_gap_sigmoid_scale=5.0, simulation.baseline_safety_stock_factor=1.25, guardrails.max_stockout_increase_pct=5.0, rounding_decimals=3, destination_profiles (catálogo descriptivo, no usado en el cálculo numérico)
+
+inputs:
+  # Contrato real: docs/input_contract.md — una fila por combinación date+raw_material_id+destination_profile.
+  # Verificado que el cálculo es fila-a-fila, sin dependencia entre filas (ni lags ni rolling):
+  # una sola fila como CSV produce exactamente el mismo resultado que esa misma fila dentro de un
+  # batch de 20 filas (comprobado ejecutando el pipeline real dos veces). Por eso SÍ tiene sentido
+  # un predict_inline de verdad aquí, a diferencia de a45/m47.
+  fixed:
+    - {name: date, type: date, description: "Fecha ISO o parseable de la necesidad operativa."}
+    - {name: raw_material_id, type: string, description: "Identificador de materia prima cárnica."}
+    - {name: destination_profile, type: string, description: "Destino productivo previsto de la materia prima (NO es el producto comprado)."}
+    - {name: current_inventory_tons, type: float, unit: toneladas, constraint: ">= 0"}
+    - {name: expected_requirement_tons, type: float, unit: toneladas, constraint: ">= 0"}
+    - {name: lead_time_days, type: float, unit: días, constraint: ">= 0"}
+    - {name: safety_coverage_days, type: float, unit: días, constraint: ">= 0"}
+    - {name: expected_yield_rate, type: float, unit: ratio, constraint: "[0, 1]"}
+    - {name: expected_waste_rate, type: float, unit: ratio, constraint: "[0, 1]"}
+    - {name: unit_purchase_cost, type: float, unit: "coste/tonelada", constraint: ">= 0"}
+    - {name: shelf_life_days, type: float, unit: días, constraint: ">= 0"}
+  constraints:
+    no_nulls_in_required_columns: true
+    raw_material_id_non_empty: true
+    destination_profile_non_empty: true
+  derived_if_missing: {}  # ninguno — las 11 columnas son obligatorias, se rechaza el input si falta alguna (validate_input_dataframe)
+
+outputs:
+  # docs/output_contract.md — 25 columnas de recommendations.csv (incluye copia de los 11 inputs).
+  # Fórmulas exactas verbatim de src/feature_engineering/build_features.py,
+  # src/trigger/purchase_trigger.py, src/optimizer/quantity_optimizer.py,
+  # src/simulation/policy_simulation.py, src/reporting/output_writer.py::_ensure_explainability_columns.
+  predict:
+    - {name: purchase_trigger_proba, type: float, description: "sigmoid(scale * inventory_gap_to_safety_tons / max(safety_stock_tons + expected_requirement_tons, 1)), clip [0.01, 0.99]"}
+    - {name: purchase_trigger_flag, type: int, values: [0, 1], description: "1 si projected_stock_after_lead_time_tons < safety_stock_tons"}
+    - {name: recommended_action, type: string, values: ["BUY", "DO_NOT_BUY"]}
+    - {name: quantity_optimizer_recommendation_tons, type: float, description: "max(0, replenishment_gap_tons / effective_supply_rate) — PREVIA al gating, nunca presentar como decisión final"}
+    - {name: order_quantity_tons, type: float, description: "= quantity_optimizer_recommendation_tons si purchase_trigger_flag=1, si no 0.0 — SALIDA FINAL"}
+    - {name: decision_reason, type: string, description: "texto de negocio según trigger + gap de cobertura"}
+    - {name: projected_stock_after_lead_time_tons, type: float, description: "current_inventory_tons - expected_requirement_tons * lead_time_days / 7"}
+    - {name: safety_stock_tons, type: float, description: "expected_requirement_tons * safety_coverage_days / 7"}
+    - {name: coverage_gap_tons, type: float, description: "max(safety_stock_tons - projected_stock_after_lead_time_tons, 0)"}
+    - {name: risk_level, type: string, values: ["LOW", "MEDIUM", "HIGH"], description: "regla documentada en output_contract.md, ver known_issues"}
+    - {name: baseline_order_quantity_tons, type: float, description: "política base: max(0, expected_requirement_tons + safety_stock_tons*1.25 - current_inventory_tons) / effective_supply_rate"}
+    - {name: delta_order_vs_baseline_tons, type: float, description: "order_quantity_tons - baseline_order_quantity_tons"}
+    - {name: excess_tons, type: float, description: "max(0, current_inventory_tons + order_quantity_tons - expected_requirement_tons*(1+expected_waste_rate))"}
+    - {name: stockout_tons, type: float, description: "max(0, expected_requirement_tons*(1+expected_waste_rate) - (current_inventory_tons + order_quantity_tons))"}
+  predict_batch_extra:  # summary_metrics.json, solo agregado en modo batch (no tiene sentido para 1 fila)
+    - {name: row_count, type: int}
+    - {name: triggered_orders, type: int}
+    - {name: total_order_quantity_tons, type: float}
+    - {name: aggregate_excess_reduction_pct, type: float, description: "reducción % de excedente política vs baseline"}
+    - {name: aggregate_stockout_change_pct, type: float}
+    - {name: stockout_guardrail_pass, type: bool, description: "cumplimiento del guardrail max_stockout_increase_pct=5.0"}
+
+training:
+  supported: false
+  reason: >
+    El motor servido (platform_run) no tiene pesos que ajustar: es una función determinista de
+    config/platform_config.yaml (constantes de heurística) sobre las 11 columnas de entrada. No
+    hay procedimiento de "reentrenamiento por usuario" que tenga sentido aquí — cambiar el
+    comportamiento significa cambiar las constantes de config, no ajustar un modelo con datos.
+    El repo SÍ trae un pipeline de entrenamiento real (src/training/train_upstream_predictor.py,
+    train_purchase_trigger.py, train_quantity_optimizer.py, ruta mixed_context) que ajusta
+    LinearRegression/Ridge y una comparativa neuroevolutiva — pero opera sobre un dataset con
+    columnas objetivo sintéticas (synthetic_procurement_need, purchase_trigger_label,
+    quantity_optimizer_target_tons) derivadas de un ETL propio (contexto externo INE/MAPA + capa
+    sintética de planta) que NO forma parte del contrato de inferencia del cliente
+    (input_contract.md lo dice explícitamente: "purchase_trigger_label, targets de entrenamiento
+    ... no forman parte del contrato de inferencia"). No es practicable como fine-tuning vía CSV
+    de usuario sin replicar ese ETL completo — y ese pipeline, además, entrena artefactos que el
+    motor servido no usa (ver el aviso de nombre arriba). training.supported=false documentado
+    con motivo real, no un hueco sin rellenar.
+
+constraints:
+  gating: "purchase_trigger_flag = 0 fuerza order_quantity_tons = 0.0, siempre, incluso si quantity_optimizer_recommendation_tons > 0."
+  risk_level_rule: >
+    HIGH si stockout_tons > 0, o si coverage_gap_tons > 0 y purchase_trigger_proba >= 0.75.
+    MEDIUM si se activa compra, o hay coverage_gap_tons > 0, o purchase_trigger_proba >= 0.50.
+    LOW en el resto de casos. (src/reporting/output_writer.py::_ensure_explainability_columns)
+
+metrics_reported:
+  # Dos fuentes distintas, no confundir — ver known_issues:
+  # (A) métricas OFICIALES de la ruta ML mixed_context (reports/official/cu28_metrics_official__mixed_context.md,
+  #     run mixed_context_20260518_seed42_smoke) — NO corresponden al motor servido por este plugin,
+  #     se reportan como contexto/trazabilidad del CU28, no como métrica de este plugin.
+  mixed_context_ml_pipeline_NOT_served_by_plugin:
+    purchase_trigger_classifier_test: {accuracy: 0.96, balanced_accuracy: 0.6970, precision_buy: 0.9647, recall_buy: 0.9939, recall_do_not_buy: 0.40, f1_buy: 0.9791}
+    quantity_optimizer_ridge_test: {mae: 31.064, rmse: 37.096, r2: 0.9979}
+    upstream_predictor_linear_regression_test: {mae: 72.822, rmse: 105.671, r2: 0.1231}
+    source: reports/official/cu28_metrics_official__mixed_context.md
+  # (B) policy_simulation — ESTA SÍ es la misma lógica que el plugin ejecuta (run_policy_simulation),
+  #     evaluada oficialmente sobre 175 periodos de test de mixed_context:
+  policy_simulation_official:
+    n_periods: 175
+    aggregate_excess_reduction_pct: 21.7108
+    stockout_guardrail_pass: true
+    source: reports/official/cu28_metrics_official__mixed_context.md
+  # (C) Reproducción propia del agente sobre el CSV demo real (20 filas, 2 materias primas, 10
+  #     semanas) ejecutando el código entregado tal cual — usada para los golden_cases:
+  demo_run_agent_reproduced:
+    row_count: 20
+    triggered_orders: 12
+    aggregate_excess_reduction_pct: 20.959
+    stockout_guardrail_pass: true
+    source: "data/demo/customer_upload_example.csv, ejecutado con src/cli/platform_run.py::run_platform_pipeline"
+
+golden_cases:
+  # Filas reales del CSV demo oficial del equipo de IA (data/demo/customer_upload_example.csv),
+  # ejecutadas contra el código entregado tal cual (run_platform_pipeline). Verificado que el
+  # resultado de una fila es idéntico si se manda sola o dentro del batch de 20 — no hay
+  # dependencia entre filas, por lo que estas son válidas también como golden_cases de
+  # predict_inline (una fila) además de predict_batch.
+  - id: case_001_do_not_buy_low
+    source: dataset_demo_real
+    input: {date: "2025-01-05", raw_material_id: RM_BEEF_TRIM_A, destination_profile: cooked_standard_line, current_inventory_tons: 58.0, expected_requirement_tons: 22.0, lead_time_days: 5.0, safety_coverage_days: 10.0, expected_yield_rate: 0.89, expected_waste_rate: 0.02, unit_purchase_cost: 3.80, shelf_life_days: 28}
+    expected: {purchase_trigger_proba: 0.2658, purchase_trigger_flag: 0, recommended_action: DO_NOT_BUY, quantity_optimizer_recommendation_tons: 0.000, order_quantity_tons: 0.000, risk_level: LOW, coverage_gap_tons: 0.000}
+    tolerance: {exact_match: true}
+  - id: case_002_buy_high_risk
+    source: dataset_demo_real
+    input: {date: "2025-01-26", raw_material_id: RM_BEEF_TRIM_A, destination_profile: cooked_standard_line, current_inventory_tons: 36.0, expected_requirement_tons: 24.0, lead_time_days: 6.0, safety_coverage_days: 11.0, expected_yield_rate: 0.88, expected_waste_rate: 0.02, unit_purchase_cost: 3.88, shelf_life_days: 28}
+    expected: {purchase_trigger_proba: 0.8588, purchase_trigger_flag: 1, recommended_action: BUY, quantity_optimizer_recommendation_tons: 29.817, order_quantity_tons: 29.817, risk_level: HIGH, coverage_gap_tons: 22.286}
+    tolerance: {exact_match: true}
+  - id: case_003_buy_medium_risk
+    source: dataset_demo_real
+    input: {date: "2025-01-05", raw_material_id: RM_PORK_SHOULDER_B, destination_profile: fresh_short_shelf_life, current_inventory_tons: 31.0, expected_requirement_tons: 24.0, lead_time_days: 4.0, safety_coverage_days: 7.0, expected_yield_rate: 0.86, expected_waste_rate: 0.03, unit_purchase_cost: 2.90, shelf_life_days: 14}
+    expected: {purchase_trigger_proba: 0.6681, purchase_trigger_flag: 1, recommended_action: BUY, quantity_optimizer_recommendation_tons: 20.379, order_quantity_tons: 20.379, risk_level: MEDIUM, coverage_gap_tons: 6.714}
+    tolerance: {exact_match: true}
+  - id: case_004_buy_high_risk_near_zero_stock
+    source: dataset_demo_real
+    input: {date: "2025-03-02", raw_material_id: RM_PORK_SHOULDER_B, destination_profile: fresh_short_shelf_life, current_inventory_tons: 20.0, expected_requirement_tons: 28.0, lead_time_days: 5.0, safety_coverage_days: 7.0, expected_yield_rate: 0.84, expected_waste_rate: 0.03, unit_purchase_cost: 3.08, shelf_life_days: 14}
+    expected: {purchase_trigger_proba: 0.9241, purchase_trigger_flag: 1, recommended_action: BUY, quantity_optimizer_recommendation_tons: 44.183, order_quantity_tons: 44.183, risk_level: HIGH, coverage_gap_tons: 28.000}
+    tolerance: {exact_match: true}
+  - id: case_005_gating_forces_zero_despite_positive_raw_recommendation
+    source: dataset_demo_real
+    note: >
+      Caso clave para verificar el gating: quantity_optimizer_recommendation_tons=1.638 (>0) pero
+      purchase_trigger_flag=0 fuerza order_quantity_tons=0.0. Si el plugin devolviera 1.638 como
+      order_quantity_tons aquí, sería un bug de wiring (gating no aplicado), no un problema del
+      modelo — este caso está pensado para detectar exactamente ese fallo.
+    input: {date: "2025-03-09", raw_material_id: RM_BEEF_TRIM_A, destination_profile: cooked_standard_line, current_inventory_tons: 52.0, expected_requirement_tons: 22.0, lead_time_days: 5.0, safety_coverage_days: 10.0, expected_yield_rate: 0.89, expected_waste_rate: 0.02, unit_purchase_cost: 3.99, shelf_life_days: 28}
+    expected: {purchase_trigger_proba: 0.3883, purchase_trigger_flag: 0, recommended_action: DO_NOT_BUY, quantity_optimizer_recommendation_tons: 1.638, order_quantity_tons: 0.000, risk_level: LOW, coverage_gap_tons: 0.000}
+    tolerance: {exact_match: true}
+
+known_issues:
+  - >
+    NOMBRE DEL PLUGIN ENGAÑOSO: "neuroevolutionary" en el nombre del paquete no refleja lo que se
+    sirve. Ver el aviso completo arriba de la sección artifacts. Debe quedar visible en la ficha
+    técnica/funcional para que nadie asuma que hay una red neuroevolutiva corriendo en producción.
+  - >
+    SIN ARTEFACTOS ML: a diferencia de todos los demás modelos de este repo, este plugin no carga
+    ningún .pkl/.pt — es un motor de reglas puramente determinista sobre config/platform_config.yaml.
+    mlflow_utils.py se incluye igualmente por convención del repo (obligatorio siempre), pero sus
+    funciones de download/upload no tendrán artefacto real que mover — documentar esto explícitamente
+    en el propio fichero en vez de dejarlo como código muerto sin explicación.
+  - >
+    DOS PIPELINES DESCONECTADOS EN LA ENTREGA: el repo trae una ruta ML completa y reproducible
+    (mixed_context: ETL de contexto externo INE/MAPA, capa sintética de planta, entrenamiento de
+    LinearRegression/Ridge/neuroevolución, métricas oficiales) que NUNCA se conecta con
+    platform_run (el motor de reglas que sí se integra aquí). Son dos sistemas independientes
+    según el propio equipo de IA — no es un error de integración, es el estado real de la entrega
+    ("La version actual es una implementacion minima y reproducible con reglas fallback
+    documentadas", model_card_cu28.md).
+  - >
+    predict_inline SÍ tiene sentido real aquí (a diferencia de a45/m47): cada fila se calcula de
+    forma independiente, sin lags ni ventanas — verificado ejecutando el pipeline real sobre una
+    fila sola vs. la misma fila dentro de un batch de 20, resultado idéntico.
+  - >
+    Memoria real disponible (a diferencia de a45): "28 - Sistema de soporte a la decision para el
+    aprovisionamiento de materia prima carnica v2.0.2.docx", 609 párrafos / 27 tablas. Esta
+    manifest usa su Introducción, Objetivos y Sección 3 (dataset/ETL) — secciones de resultados
+    KPI/limitaciones adicionales no leídas en detalle por brevedad, revisar si docs-generation
+    necesita más profundidad de la memoria.
+  - >
+    destination_profile es metadato de contexto (catálogo descriptivo en platform_config.yaml,
+    cooked_standard_line/cured_long_horizon/fresh_short_shelf_life) — no participa en ningún
+    cálculo numérico de trigger/optimizer/simulation, solo se copia al output tal cual.
