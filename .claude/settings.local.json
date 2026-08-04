@@ -88,7 +88,17 @@
       "Bash(git check-ignore *)",
       "Bash(pkill -f run_ml46_train.py)",
       "Bash(flake8 app/plugins/ml34_dairy_pasteurization_energy_ga/plugin.py app/plugins/ml35_dairy_ann_cleaning_cost/plugin.py app/plugins/ml46_dairy_fouling_clog_detection/plugin.py --select=F,E9)",
-      "Bash(PYTHONPATH=. python3 __TRACKED_VAR__/smoke_ml34.py)"
+      "Bash(PYTHONPATH=. python3 __TRACKED_VAR__/smoke_ml34.py)",
+      "Bash(mkdir -p /tmp/claude-1000/-mnt-c-Users-PC-Desktop-Repositorios-models-integrations-itacly/92bd1d13-5255-4aec-90cb-6d98430d46d6/scratchpad)",
+      "Bash(git checkout *)",
+      "Bash(pkill -f serve_local.py)",
+      "Bash(curl -s -m 2 http://127.0.0.1:8009/models/ml9-cereals-infestation-sequence-classifier/health)",
+      "Bash(curl -s http://127.0.0.1:8009/models/ml9-cereals-infestation-sequence-classifier/health)",
+      "Bash(curl -s http://127.0.0.1:8009/models/ml9-cereals-infestation-sequence-classifier/stats)",
+      "Bash(timeout 3600 curl -s -X POST http://127.0.0.1:8009/models/ml9-cereals-infestation-sequence-classifier/train -H 'Content-Type: application/json' -d '{\"data_path\": \"/tmp/claude-1000/-mnt-c-Users-PC-Desktop-Repositorios-models-integrations-itacly/92bd1d13-5255-4aec-90cb-6d98430d46d6/scratchpad/train_subset.csv\", \"mlflow_run_id\": \"\"}' -w '\\\\nHTTP %{http_code}\\\\n')",
+      "Bash(pkill -f check_422_and_mlflow)",
+      "Read(//mnt/skills/public/docx/**)",
+      "Bash(pkill -f \"serve_local\")"
     ]
   }
 }

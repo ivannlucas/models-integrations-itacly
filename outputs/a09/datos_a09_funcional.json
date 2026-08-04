@@ -1,0 +1,63 @@
+{
+  "model_id": "a09",
+  "model_slug": "cereals-infestation-sequence-classifier",
+  "fecha": "Agosto 2026",
+
+  "descripcion": "Sistema de vigilancia del cereal almacenado que revisa la evolución de las últimas 48 horas de sensorización de cada silo y dice en qué estado apunta: sano, con indicio de insectos o con indicio de moho crítico. No mira valores aislados, sino la trayectoria reciente del CO2, la temperatura y las humedades, que es lo que permite anticipar un problema antes de que sea visible. Junto al estado devuelve un nivel de confianza, para que puedas ordenar por dónde empezar cuando hay varios silos que revisar.",
+  "objetivo": "Detectar antes el deterioro y la infestación del grano almacenado, para reducir la pérdida de materia prima y el coste de intervenir tarde. La idea es sencilla: en vez de esperar a que el problema sea evidente en una inspección, aprovechar los sensores que ya están instalados para que digan cada hora qué silos merecen atención.",
+  "caso_uso": "El sistema se alimenta solo de los registros horarios que ya genera la sensorización del almacén. Con ellos revisa cada silo por tramos de 48 horas y, para cada tramo, indica el estado y la confianza con que lo afirma. En la práctica: consultas el estado de un silo concreto para saber cómo está ahora mismo, o pasas de golpe el histórico de todos los silos y obtienes un listado tramo a tramo con el que priorizar la ronda de inspección del día. El sistema no interrumpe nada ni actúa por sí solo: solo señala dónde mirar.",
+  "que_no_responde": "No dice el día ni la hora en que el grano empezará a deteriorarse, ni sustituye a una inspección física: dice en qué estado apuntan las últimas 48 horas de sensorización de ese silo, para que decidas dónde mirar primero.",
+
+  "entradas_contexto": "Los datos llegan de la sensorización instalada en el propio almacén: un registro por hora con el CO2 del aire entre el grano, la temperatura, la humedad del ambiente y la humedad del grano. No hace falta introducir nada a mano ni esperar resultados de laboratorio. Se necesitan al menos dos días seguidos de registros de un mismo silo para que el sistema pueda pronunciarse.",
+  "inputs": [
+    {"nombre": "Identificador del silo o lote", "descripcion": "A qué silo pertenecen los registros. El sistema analiza cada silo por separado y nunca mezcla la información de dos silos distintos."},
+    {"nombre": "Fecha y hora del registro", "descripcion": "Momento de cada medición. Se espera un registro por hora, en orden."},
+    {"nombre": "CO2 del aire entre el grano", "descripcion": "Concentración de dióxido de carbono en partes por millón. Es la señal más informativa: la actividad biológica (insectos u hongos) hace que suba de forma sostenida."},
+    {"nombre": "Temperatura", "descripcion": "Temperatura del grano o del ambiente de almacenamiento, en grados centígrados."},
+    {"nombre": "Humedad del ambiente", "descripcion": "Humedad relativa del aire del almacén, en porcentaje."},
+    {"nombre": "Humedad del grano", "descripcion": "Humedad del propio cereal, en porcentaje. Junto con la temperatura es la condición que favorece la aparición de moho."}
+  ],
+
+  "outputs": [
+    {"nombre": "Estado del silo", "descripcion": "Sano, indicio de insectos o indicio de moho crítico, para el tramo de 48 horas analizado.", "interpretacion": "Es la conclusión principal. Moho crítico es el estado de mayor severidad y el que debe atenderse primero."},
+    {"nombre": "Nivel de confianza", "descripcion": "Con cuánta seguridad el sistema afirma ese estado, entre 0 y 1.", "interpretacion": "Por encima de 0,9 la lectura es clara; por debajo de 0,6 el silo está en una zona de frontera y conviene comprobarlo físicamente."},
+    {"nombre": "Reparto entre los tres estados", "descripcion": "Cuánta probabilidad asigna a cada uno de los tres estados posibles.", "interpretacion": "Sirve para distinguir un caso claro de una duda: dos valores parecidos indican una transición entre estados, no un diagnóstico firme."},
+    {"nombre": "Tramo temporal analizado", "descripcion": "Fecha y hora de inicio y de fin de las 48 horas evaluadas.", "interpretacion": "El estado se refiere al final del tramo, es decir, a la situación más reciente de esas 48 horas."},
+    {"nombre": "Resumen de estados del conjunto", "descripcion": "Cuando se analiza un histórico completo, cuántos tramos han salido de cada estado.", "interpretacion": "Es la señal de vigilancia del propio sistema: si el reparto cambia de forma sostenida más de un 20 % respecto a lo habitual, hay que revisar el modelo o la sensorización."}
+  ],
+
+  "ejemplo_interpretacion": "Si para el silo S-12 el sistema devuelve \"moho crítico\" con una confianza de 0,97 en el tramo que termina a las 23:00 del 14 de enero, quiere decir que la evolución del CO2, la temperatura y las humedades de las 48 horas anteriores encaja claramente con un proceso de moho avanzado: ese silo pasa al principio de la cola de inspección. Si otro tramo devuelve \"insectos\" con 0,53 y \"moho crítico\" con 0,47, el sistema está indicando una zona de frontera: hay indicio de problema, pero no de qué tipo, y conviene comprobarlo en el silo.",
+  "margen_error": "En las pruebas realizadas el sistema acierta el estado en algo más de 9 de cada 10 tramos, y prácticamente no se le escapa ningún caso de moho crítico. Los errores que comete son casi siempre entre estados contiguos —confundir el arranque de una infestación con un silo todavía sano, o insectos con moho—, no saltos completos. Una diferencia pequeña entre los dos estados más probables no debe leerse como una distinción fiable.",
+
+  "revisar_manualmente": [
+    "Silos con menos de dos días de registros seguidos: el sistema necesita 48 horas de datos para pronunciarse, y con el mínimo justo su lectura es menos fiable que con el histórico completo.",
+    "Tramos con confianza por debajo de 0,6, o en los que dos estados salen con probabilidades parecidas: son transiciones, no diagnósticos.",
+    "Los primeros días de un silo recién llenado, cuando todavía no hay suficiente pasado reciente para que las tendencias de subida de CO2 y temperatura sean informativas.",
+    "Cualquier aviso de moho crítico, antes de actuar sobre el lote: es el estado con más consecuencias económicas y la evidencia disponible hoy es de escenario simulado, no de cereal real.",
+    "Almacenes cuyas condiciones se salgan de los rangos vistos en las pruebas: CO2 por encima de 2.500 partes por millón, temperaturas fuera de 8 a 37 grados o humedad del grano fuera del 11 al 17 por ciento."
+  ],
+  "que_no_hace": [
+    "No sustituye la inspección física del grano ni los controles de calidad obligatorios del almacén.",
+    "No identifica la especie de insecto ni el tipo de hongo: solo distingue entre silo sano, indicio de insectos e indicio de moho crítico.",
+    "No indica el momento exacto en que empezó el problema, sino en qué estado apuntan las últimas 48 horas.",
+    "No decide ninguna intervención por ti (aireación, tratamiento, traslado del lote): ordena la atención, no prescribe la actuación.",
+    "No garantiza el mismo rendimiento en una instalación real, porque todavía no se ha validado con datos reales de operación."
+  ],
+  "puede_equivocarse": "Sí. En las pruebas técnicas acierta alrededor del 94 % de los tramos y detecta el 98,9 % de los casos de moho crítico, y esas cifras se han reproducido exactamente al integrar el modelo en el sistema. Pero se han obtenido sobre un escenario de datos simulado internamente, no sobre cereal real, y en un escenario simulado las diferencias entre estados son más limpias que en un almacén de verdad. Todas las cifras de este documento, incluidos los indicadores de la tabla anterior, requieren validación con datos reales de operación antes de usarse como compromiso de servicio. Trátalo como una ayuda para decidir dónde mirar primero, no como un diagnóstico garantizado.",
+
+  "kpis": [
+    {"kpi": "Acierto global en la clasificación del estado del silo", "valor_umbral": "≥ 90 %", "descripcion": "En las pruebas técnicas se alcanza un 94 %, por encima del mínimo comprometido. Cifra obtenida sobre datos simulados: requiere validación con datos reales antes de usarla como compromiso"},
+    {"kpi": "Equilibrio de acierto entre los tres estados", "valor_umbral": "≥ 0,90", "descripcion": "Se obtiene 0,94: el sistema no acierta solo en los silos sanos, que son los más frecuentes, sino también en los casos de insectos y de moho crítico. Cifra sobre datos simulados, pendiente de validación real"},
+    {"kpi": "Casos de moho crítico detectados", "valor_umbral": "≥ 95 %", "descripcion": "Se detecta el 98,9 % de los tramos con moho crítico. Es el indicador más relevante para el negocio, por ser el estado con más impacto en la calidad del grano. Cifra sobre datos simulados, pendiente de validación real"},
+    {"kpi": "Fiabilidad del nivel de confianza", "valor_umbral": "≤ 0,20 de error de calibración", "descripcion": "Se obtiene 0,18: cuando el sistema dice estar muy seguro, normalmente lo está, así que la confianza puede usarse para ordenar prioridades de inspección"}
+  ],
+
+  "limitaciones": [
+    {"tipo": "Probado solo en un escenario simulado", "descripcion": "Todas las pruebas se han hecho sobre datos generados internamente para representar el comportamiento del cereal almacenado, no sobre registros de un almacén real. Eso demuestra que el sistema funciona de forma consistente y reproducible, pero no cuánto acertará en tu instalación: en un escenario simulado los estados se distinguen con más limpieza que en la realidad. Antes de tomar decisiones económicas con estas cifras hay que validarlas con datos reales de operación."},
+    {"tipo": "Hacen falta dos días de datos por silo", "descripcion": "El sistema analiza tramos de 48 horas: un silo con menos de dos días de registros horarios seguidos no puede evaluarse y el sistema avisa de ello explícitamente en lugar de devolver una respuesta vacía."},
+    {"tipo": "Cuanto más histórico, mejor la lectura", "descripcion": "El sistema calcula tendencias sobre todos los datos que recibe, así que dos días es el mínimo pero no lo ideal. Con solo el mínimo justo, las primeras horas del tramo se evalúan con menos contexto y algún caso de frontera puede leerse distinto. Conviene aportar todo el histórico disponible del silo."},
+    {"tipo": "Señala el estado, no el instante del cambio", "descripcion": "La conclusión se refiere al contexto de las últimas 48 horas, no al momento físico en que arrancó el deterioro. En el escenario de pruebas las transiciones entre estados las define el propio generador de datos, no una observación sobre cereal real, así que tanto el momento del cambio como la frontera entre estados están pendientes de contrastar."},
+    {"tipo": "No aplica ningún umbral de decisión propio", "descripcion": "El sistema entrega estado y confianza; no decide por sí mismo cuándo se lanza un aviso ni recalibra nada con el tiempo. La política de avisos (a partir de qué confianza se actúa) es una decisión de la explotación, no del modelo."},
+    {"tipo": "Denominación del entregable", "descripcion": "El documento del proyecto se titula con la expresión \"Ensemble learning\", pero la solución que finalmente se ha implantado y validado es un único modelo de análisis de series temporales, elegido como el mejor de dos alternativas probadas. Es una cuestión de denominación administrativa y no afecta a los resultados, pero conviene saberlo al leer la documentación."}
+  ]
+}

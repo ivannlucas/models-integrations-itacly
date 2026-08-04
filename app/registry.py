@@ -11,6 +11,7 @@ from app.domain.services.exceptions import (
     InfeasibleOptimizationError,
     InsufficientCycleHistoryError,
     InsufficientFramesError,
+    InsufficientSequenceHistoryError,
     InsufficientTelemetryHistoryError,
     InvalidImageError,
     InvalidVideoError,
@@ -143,6 +144,18 @@ from app.plugins.m47_dnsl_fallas_maquinaria_pasteurizado.plugin import M47DnsFal
 from app.plugins.m47_dnsl_fallas_maquinaria_pasteurizado.predict_dto import (
     PredictRequest as M47_Request,
     PredictResponse as M47_Response,
+)
+
+from app.plugins.ml9_cereals_infestation_sequence_classifier.plugin import (
+    Ml9CerealsInfestationSequenceClassifierPlugin,
+)
+from app.plugins.ml9_cereals_infestation_sequence_classifier.predict_dto import (
+    PredictRequest as Ml9Cereals_Request,
+    PredictResponse as Ml9Cereals_Response,
+)
+from app.plugins.ml9_cereals_infestation_sequence_classifier.train_dto import (
+    TrainRequest as Ml9Cereals_TrainReq,
+    TrainResponse as Ml9Cereals_TrainResp,
 )
 
 from app.plugins.ml40_meat_refrigeration_aeration_fault_diagnosis.plugin import (
@@ -322,6 +335,17 @@ REGISTRY: list[ModelEntry] = [
         predict_request_type=M47_Request,
         predict_response_type=M47_Response,
         extra_predict_exceptions=(),
+    ),
+    ModelEntry(
+        model_id="ml9-cereals-infestation-sequence-classifier",
+        prefix="/models/ml9-cereals-infestation-sequence-classifier",
+        version="1.0.0",
+        plugin_class=Ml9CerealsInfestationSequenceClassifierPlugin,
+        predict_request_type=Ml9Cereals_Request,
+        predict_response_type=Ml9Cereals_Response,
+        extra_predict_exceptions=(InsufficientSequenceHistoryError,),
+        train_request_type=Ml9Cereals_TrainReq,
+        train_response_type=Ml9Cereals_TrainResp,
     ),
     ModelEntry(
         model_id="ml40-meat-refrigeration-aeration-fault-diagnosis",
