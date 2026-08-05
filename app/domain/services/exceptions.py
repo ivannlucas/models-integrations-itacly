@@ -62,6 +62,11 @@ class InsufficientWindowHistoryError(ValueError):
     temporal window (ml45)."""
 
 
+class InsufficientSensorWindowError(ValueError):
+    """Raised when required sensor columns/values are missing or invalid, nulls exceed the
+    allowed ratio, or too few rows survive to build a 180-row temporal window (ml43)."""
+
+
 class InfeasibleOptimizationError(ValueError):
     """Raised when the LP crop-allocation problem is infeasible/unbounded (ml31).
 

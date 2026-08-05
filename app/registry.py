@@ -11,6 +11,7 @@ from app.domain.services.exceptions import (
     InfeasibleOptimizationError,
     InsufficientCycleHistoryError,
     InsufficientFramesError,
+    InsufficientSensorWindowError,
     InsufficientTelemetryHistoryError,
     InsufficientWindowHistoryError,
     InvalidImageError,
@@ -174,6 +175,17 @@ from app.plugins.ml28_meat_neuroevolutionary_raw_materials_prediction.plugin imp
 from app.plugins.ml28_meat_neuroevolutionary_raw_materials_prediction.predict_dto import (
     PredictRequest as Ml28Meat_Request,
     PredictResponse as Ml28Meat_Response,
+)
+from app.plugins.ml43_cereals_dnsl_anomaly_fault_detection.plugin import (
+    Ml43CerealsDnslAnomalyFaultDetectionPlugin,
+)
+from app.plugins.ml43_cereals_dnsl_anomaly_fault_detection.predict_dto import (
+    PredictRequest as Ml43_Request,
+    PredictResponse as Ml43_Response,
+)
+from app.plugins.ml43_cereals_dnsl_anomaly_fault_detection.train_dto import (
+    TrainRequest as Ml43_TrainReq,
+    TrainResponse as Ml43_TrainResp,
 )
 
 
@@ -372,5 +384,16 @@ REGISTRY: list[ModelEntry] = [
         predict_request_type=Ml28Meat_Request,
         predict_response_type=Ml28Meat_Response,
         extra_predict_exceptions=(),
+    ),
+    ModelEntry(
+        model_id="ml43-cereals-dnsl-anomaly-fault-detection",
+        prefix="/models/ml43-cereals-dnsl-anomaly-fault-detection",
+        version="1.0.0",
+        plugin_class=Ml43CerealsDnslAnomalyFaultDetectionPlugin,
+        predict_request_type=Ml43_Request,
+        predict_response_type=Ml43_Response,
+        extra_predict_exceptions=(InsufficientSensorWindowError,),
+        train_request_type=Ml43_TrainReq,
+        train_response_type=Ml43_TrainResp,
     ),
 ]

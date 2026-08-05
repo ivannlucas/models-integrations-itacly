@@ -1,0 +1,324 @@
+model_id: ml43_cereals_dnsl_anomaly_fault_detection
+sector: cerealista
+nombre: "CU43 - Diseño y entrenamiento de un modelo basado en Deep Neuro-Fuzzy Learning para detectar anomalías y predecir fallas en hornos"
+nombre_cu44: "CU44 - Desarrollo de un modelo predictivo basado en XAI para generar acciones correctivas"
+task_type: classification_binary_timeseries_windowed  # ventana deslizante [T=180,F=13] -> anomalía/no-anomalía + capa XAI (fuzzy+SHAP) que reclasifica en 4 estados interpretativos y genera acciones correctivas
+task_type_note: >
+  Este model_id integra CU43 (detección binaria de anomalías) y CU44 (capa XAI + acciones
+  correctivas) como UN SOLO plugin, no dos. En el código entregado (inbox/a43/codigo/) ambos
+  casos de uso comparten un único codebase (src/) donde la capa XAI de CU44 se invoca in-proceso
+  sobre la salida del modelo de CU43 (ver src/predict/xai_predictor.py) — no son dos servicios
+  independientes con un contrato entre ellos. Precedente en este mismo repo: ml45 (misma familia
+  DNSL) también porta su capa XAI (pcc.py) dentro del plugin en vez de delegarla al servicio de
+  explicabilidad externo.
+framework:
+  - torch==2.5.1+cu121   # requirements.txt fija cu121; verificado en este entorno con torch 2.13.0+cpu (CPU) — ver known_issues
+  - numpy==2.4.6
+  - pandas==3.0.3         # verificado con pandas 3.0.5 en este entorno
+  - scikit-learn==1.8.0   # verificado con sklearn 1.9.0 — InconsistentVersionWarning al cargar scaler.pkl, no bloqueante (ver known_issues)
+  - shap==0.51.0          # verificado con shap 0.52.0. Usado SOLO por la capa XAI interna (temporal_explainer.py), NO está en requirements.txt del repo raíz — ver known_issues
+  - scipy==1.17.1
+  - pyyaml==6.0.3
+  # requirements.txt del código entregado estaba en UTF-16LE con CRLF — normalizado a UTF-8/LF en
+  # inbox/a43/codigo/requirements.txt antes de cualquier pip install/pip-audit.
+  # xgboost/optuna/matplotlib/seaborn/ipykernel son solo para notebooks/tuning, no se necesitan en inferencia.
+
+artifacts:
+  folder: models/artifacts/
+  files:
+    - best_dnf_model.pt      # checkpoint: {model_state_dict, model_cfg} — model_cfg trae input_features=13, n_stats_features=65, sequence_length=180 embebidos
+    - scaler.pkl              # dict {scaler_x: StandardScaler sobre secuencias [N*T,13], scaler_num: StandardScaler sobre 65 stats agregadas}
+    - xai_background.npy      # background SHAP precalculado — necesario para el TemporalExplainer (SHAP), no para la predicción binaria en sí
+    - args.yaml                # model_cfg guardado en texto plano para trazabilidad (idéntico al embebido en el checkpoint)
+    - baseline_models/         # RF/XGB/LSTM/ANFIS baseline — solo referencia de benchmarking (notebooks/baseline.ipynb), no se usan en producción
+  config:
+    - config/config.yaml     # sensores, sequence_length=180, solapamiento_beta=0.5, stats_creation, hiperparámetros lstm/fuzzy/training/xai, catálogo de acciones correctivas completo
+  metrics_file: models/metrics/results.json  # umbral óptimo + métricas de validación/test reales del checkpoint entregado
+
+inputs:
+  # El input NO es una fila aislada: es una serie temporal por ciclo (cycle_id) de sensores IIoT
+  # de un horno industrial de procesado de cereales. Cada ventana de 180 min consecutivos
+  # (solapamiento 50%, step=90) genera UNA predicción — un ciclo completo (600 filas = 10h a
+  # 1 muestra/min) produce varias ventanas de salida (5 en los ciclos de golden_cases). No existe
+  # un modo predict_inline de "una fila = una predicción" tal cual lo tienen los modelos
+  # tabulares — mismo patrón que m47_dnsl_fallas_maquinaria_pasteurizado y ml45 (misma familia
+  # DNSL): predict_inline resuelve esto con una ventana sintética "steady-state" (repetir el
+  # snapshot de sensores 180 veces) para dar una respuesta de "¿este punto de operación es
+  # anómalo?" sin requerir historial real, además de predict_batch para CSVs de ciclos completos.
+  fixed:  # 13 sensores IIoT — data_generation.sensors en config.yaml, mismo orden que SENSOR_COLUMNS
+    - {name: temp_zona1,           type: float, unit: "°C",   range: [20, 250], description: "Temperatura zona 1 del horno (entrada)"}
+    - {name: temp_zona2,           type: float, unit: "°C",   range: [20, 250], description: "Temperatura zona 2 del horno (parte media)"}
+    - {name: temp_zona3,           type: float, unit: "°C",   range: [20, 250], description: "Temperatura zona 3 del horno (salida)"}
+    - {name: temp_salida_gases,    type: float, unit: "°C",   range: [20, 300], description: "Temperatura de salida de gases de escape"}
+    - {name: presion_camara,       type: float, unit: mbar,   range: [-5, 10],  description: "Presión interna de la cámara"}
+    - {name: presion_ventilacion,  type: float, unit: mbar,   range: [0, 50],   description: "Presión del sistema de ventilación/extracción"}
+    - {name: potencia_kw,          type: float, unit: kW,     range: [0, 150],  description: "Potencia eléctrica consumida"}
+    - {name: flujo_gas,            type: float, unit: "m3/h", range: [0, 30],   description: "Flujo de gas del combustible"}
+    - {name: humedad_relativa,     type: float, unit: "%",    range: [0, 100],  description: "Humedad relativa interior"}
+    - {name: temp_ambiente,        type: float, unit: "°C",   range: [-10, 50], description: "Temperatura ambiente exterior"}
+    - {name: setpoint_temp,        type: float, unit: "°C",   range: [20, 250], description: "Temperatura objetivo programada"}
+    - {name: posicion_valvula,     type: float, unit: "%",    range: [0, 100],  description: "Posición de la válvula de gas"}
+    - {name: velocidad_ventilador, type: float, unit: RPM,    range: [0, 2000], description: "Velocidad del ventilador de circulación"}
+  required_metadata:
+    - {name: timestamp,  type: datetime, description: "Obligatoria para ordenar cronológicamente los registros (validate_input_data)."}
+    - {name: cycle_id,   type: int_or_string, description: "Opcional. Si falta, el CSV se interpreta como una única serie temporal continua."}
+  optional_metadata:
+    - {name: fault_name, type: string, description: "Etiqueta textual multi-clase (NORMAL + 6 tipos de falla, con submodos de sensor). Solo evaluación/entrenamiento — nunca feature. Se binariza internamente vía normal_tokens."}
+  constraints:
+    min_rows_per_window: 180   # sequence_length — si un ciclo (o la serie global sin cycle_id) tiene menos filas, no genera ventanas
+    partial_null_max_ratio: 0.10  # nulos parciales por sensor por encima de este ratio -> error; por debajo -> imputación temporal (interpolación + ffill/bfill + mediana)
+  derived_if_missing: {}  # no hay derivación de campos: los 13 sensores son obligatorios y se validan explícitamente (validate_input_data)
+
+outputs:
+  # Una fila de salida por VENTANA temporal (no por fila de entrada ni por ciclo completo)
+  predict_batch:
+    - {name: window_index, type: int, description: "Índice de la ventana dentro del CSV procesado (1-based)."}
+    - {name: cycle_id, type: string, description: "Solo si el CSV trae columna cycle_id."}
+    - {name: timestamp_init, type: datetime}
+    - {name: timestamp_end, type: datetime}
+    - {name: predicted_anomaly_class, type: int, values: [0, 1]}
+    - {name: predicted_anomaly_label, type: string, values: ["No Fallo", "Fallo"]}
+    - {name: anomaly_probability, type: float, description: "Salida de la mezcla tardía (0.7*rama fuzzy + 0.3*rama LSTM), sigmoide ya aplicada — ver model.py forward()."}
+    - {name: decision_threshold, type: float, description: "0.41 — best_threshold guardado en results.json, no un valor fijo en config.yaml."}
+  # Capa XAI (CU44) — objetivo funcional principal según la memoria del CU44: añade estado
+  # interpretativo, bloques de acción y recomendaciones por ventana. Requiere shap + xai_background.
+  xai_report_per_window:
+    - {name: "Estado interpretativo", type: string, values: ["Normal", "Normal con señales", "Alerta no confirmada", "Anomalía confirmada"], description: "corrective_actions.py::_interpretive_state_label — combina probabilidad, margen respecto al umbral, desacuerdo entre ramas y support_ratio."}
+    - {name: "Probabilidad de anomalia", type: float}
+    - {name: "Umbral de decision", type: float}
+    - {name: "Margen respecto al umbral", type: float, description: "Ausente cuando el estado es 'Normal'."}
+    - {name: "Evidencia dominante", type: string, values: ["Ambas ramas", "Rama temporal", "Rama neuro-difusa", "Ninguna rama dominante"], description: "Solo presente cuando el estado es 'Alerta no confirmada'."}
+    - {name: "Bloques principales", type: "list[string]", values: ["combustion_control_flujo", "termico", "ventilacion_presion"]}
+    - {name: "Variables clave", type: "list[string]"}
+    - {name: "Acciones sugeridas", type: "list[string]"}
+
+training:
+  supported: true  # pipeline completo: generate_dataset() (sintético) -> data_processing() -> train() -> get_stats(), src/main.py
+  target_column: fault_name  # multi-clase en el CSV crudo; internamente se binariza a anomalía/normal por ventana vía _anomaly_mask()+normal_tokens (nunca se entrena un clasificador multi-clase de 7 salidas)
+  required_columns: [timestamp, cycle_id, temp_zona1, temp_zona2, temp_zona3, temp_salida_gases, presion_camara, presion_ventilacion, potencia_kw, flujo_gas, humedad_relativa, temp_ambiente, setpoint_temp, posicion_valvula, velocidad_ventilador, fault_name]
+  window_label_strategy: majority  # ventana anómala si >=50% de sus filas están marcadas como anómalas (src/data_processing/preprocess.py::_window_target_label) — DIFIERE de lo descrito en memoria CU43 v1.4 Sec.5.3, ver known_issues
+  hyperparams:  # config/config.yaml::model + training — idénticos a los usados para generar el best_dnf_model.pt entregado (confirmado ejecutando scripts/predict.py con este checkpoint, ver golden_cases)
+    sequence_length: 180
+    solapamiento_beta: 0.5
+    stats_creation: [mean, std, slope, max, min]
+    lstm: {hidden_size: 32, num_layers: 2, dropout: 0.30, bidirectional: true, embedding_dim: 32}
+    fuzzy: {n_mf: 5, n_rules: 24, temperature: 0.8, t_norm: product, normalize_rules: true, init_alpha: sparse, use_log_bias: false, lambda_anomaly: 0.7, train_membership_params: true, train_rule_params: true}
+    optimizer: {lr_rate: 0.00175, weight_decay: 0.00001, batch_size: 256, num_epochs: 200, patience: 30, grad_clip: 1.0, warmup_epochs: 20}
+    scheduler: {type: cosine, factor: 0.6, patience: 3, min_lr: 0.00005, T_max: 200, T_mult: 2, eta_min: 0.000009}
+    dnf_loss: {anomaly_weight: 2.0, aux_anom_dl_weight: 0.4, aux_anom_fuzzy_weight: 0.95, diversity_weight: 0.005, alpha_entropy_weight: 0.01, rule_structure_div_weight: 0.02, rule_usage_balance_weight: 0.04}
+    monitor_metric: "0.65*val_anomaly_f1 + 0.25*fuzzy_f1 - 0.05*dead_rules_ratio - 0.05*alpha_entropy_mean - 0.05*rule_corr"
+    seed: 42
+  metrics_returned: [accuracy, macro_f1, macro_precision, macro_recall, fallo_f1, fallo_precision, fallo_recall, fallo_auc, nofallo_f1, nofallo_precision, nofallo_recall, nofallo_specificity, best_threshold]
+  source: codigo_entrenamiento  # src/training/trainer.py + config/config.yaml + models/artifacts/args.yaml + models/metrics/results.json (resultado real de una ejecución ya completada)
+
+constraints: {}  # no hay restricciones de negocio explícitas tipo "PU >= 13"; las únicas reglas
+  # duras encontradas en código son de validación de datos de entrada (ver inputs.constraints).
+  # Sí existe un catálogo de acciones correctivas configurable (no una restricción de negocio),
+  # ver la sección "Generación de Acciones Correctivas" de la memoria CU44 y
+  # config.yaml::xai.action_config — portado literal a corrective_actions.py::DEFAULT_ACTION_CONFIG.
+
+metrics_reported:  # models/metrics/results.json::test_metrics — evaluación REAL sobre data/splits/test.csv, no inventado.
+  # IMPORTANTE: estas cifras NO coinciden con las reportadas en la memoria CU43 v1.4 (accuracy=0.928,
+  # fallo_recall=0.663 — ver known_issues). Son las métricas REALES del checkpoint actualmente
+  # entregado en inbox/a43/codigo/models/artifacts/best_dnf_model.pt, reproducidas ejecutando
+  # scripts/get_stats.py-equivalente (resultado ya persistido en results.json, no recalculado por
+  # el agente).
+  accuracy: 0.989
+  macro_f1: 0.949802225840293
+  macro_precision: 0.9415168937481585
+  macro_recall: 0.958453486136692
+  fallo_f1: 0.9054441260744985
+  fallo_precision: 0.8876404494382022
+  fallo_recall: 0.9239766081871345
+  fallo_auc: 0.9953633937559818
+  nofallo_f1: 0.9941603256060875
+  nofallo_precision: 0.9953933380581148
+  nofallo_recall: 0.9929303640862496
+  nofallo_specificity: 0.9929303640862496
+  confusion_matrix: {tp: 158, fp: 20, tn: 2809, fn: 13}
+  selected_threshold: 0.41000000000000003
+  best_epoch: 133
+  n_epochs_trained: 163
+  total_params: 51380  # calculado directamente sobre el checkpoint entregado (51380 = 10034 fuzzy + 41346 DL), no viene en results.json
+  source: models/metrics/results.json (best_threshold, best_epoch, n_epochs_trained, test_metrics) + total_params calculado cargando best_dnf_model.pt
+
+golden_cases:
+  # 7 casos: NORMAL + 6 familias de falla (aislamiento, resistencia, refractario, sensor
+  # descalibrado, ventilador, válvula). Extraídos de inbox/a43/codigo/data/splits/test.csv (real,
+  # no sintetizado por el agente) y ejecutados con el pipeline ORIGINAL del equipo de IA
+  # (scripts/predict.py, CPU forzado vía CUDA_VISIBLE_DEVICES="", seed=42 vía config.yaml) usando
+  # el checkpoint entregado (best_dnf_model.pt) — no se ha inventado ningún valor esperado, son
+  # outputs reales reproducidos el 2026-08-05. Cada caso = 1 ciclo completo (600 filas) -> 5
+  # ventanas de salida (seq_length=180, step=90).
+  - id: cycle_2400_normal
+    source: dataset_test_split
+    input: {cycle_id: 2400, fault_name_real: NORMAL, split_file: data/splits/test.csv}
+    expected:
+      windows:
+        - {window_index: 1, predicted_anomaly_class: 0, anomaly_probability: 0.0007}
+        - {window_index: 2, predicted_anomaly_class: 0, anomaly_probability: 0.0001}
+        - {window_index: 3, predicted_anomaly_class: 0, anomaly_probability: 0.0000}
+        - {window_index: 4, predicted_anomaly_class: 0, anomaly_probability: 0.0000}
+        - {window_index: 5, predicted_anomaly_class: 0, anomaly_probability: 0.0006}
+    tolerance: {prediction_exact: true, probability_atol: 0.005}
+
+  - id: cycle_2407_resistencia_degradada
+    source: dataset_test_split
+    input: {cycle_id: 2407, fault_name_real: RESISTENCIA_DEGRADADA, split_file: data/splits/test.csv}
+    expected:
+      windows:
+        - {window_index: 1, predicted_anomaly_class: 0, anomaly_probability: 0.0361}
+        - {window_index: 2, predicted_anomaly_class: 1, anomaly_probability: 1.0000}
+        - {window_index: 3, predicted_anomaly_class: 1, anomaly_probability: 0.5996}
+        - {window_index: 4, predicted_anomaly_class: 0, anomaly_probability: 0.0000}
+        - {window_index: 5, predicted_anomaly_class: 0, anomaly_probability: 0.0000}
+    tolerance: {prediction_exact: true, probability_atol: 0.005}
+
+  - id: cycle_2417_refractario_erosionado
+    source: dataset_test_split
+    input: {cycle_id: 2417, fault_name_real: REFRACTARIO_EROSIONADO, split_file: data/splits/test.csv}
+    expected:
+      windows:
+        - {window_index: 1, predicted_anomaly_class: 0, anomaly_probability: 0.0000}
+        - {window_index: 2, predicted_anomaly_class: 0, anomaly_probability: 0.0001}
+        - {window_index: 3, predicted_anomaly_class: 0, anomaly_probability: 0.0153}
+        - {window_index: 4, predicted_anomaly_class: 1, anomaly_probability: 1.0000}
+        - {window_index: 5, predicted_anomaly_class: 0, anomaly_probability: 0.0035}
+    tolerance: {prediction_exact: true, probability_atol: 0.005}
+
+  - id: cycle_2424_sensor_descalibrado_zona1_drift
+    source: dataset_test_split
+    input: {cycle_id: 2424, fault_name_real: SENSOR_DESCALIBRADO_TEMP_ZONA1_DRIFT, split_file: data/splits/test.csv}
+    note: >
+      window_index=3 (0.4916) queda a solo 0.08 del umbral (0.41) — caso límite útil para
+      detectar drift de reproducibilidad del puerto (cualquier discrepancia de preprocesado
+      movería fácilmente esta ventana al lado equivocado del umbral).
+    expected:
+      windows:
+        - {window_index: 1, predicted_anomaly_class: 0, anomaly_probability: 0.0005}
+        - {window_index: 2, predicted_anomaly_class: 0, anomaly_probability: 0.0001}
+        - {window_index: 3, predicted_anomaly_class: 1, anomaly_probability: 0.4916}
+        - {window_index: 4, predicted_anomaly_class: 0, anomaly_probability: 0.0049}
+        - {window_index: 5, predicted_anomaly_class: 0, anomaly_probability: 0.0015}
+    tolerance: {prediction_exact: true, probability_atol: 0.005}
+
+  - id: cycle_2430_ventilador_defectuoso
+    source: dataset_test_split
+    input: {cycle_id: 2430, fault_name_real: VENTILADOR_DEFECTUOSO, split_file: data/splits/test.csv}
+    expected:
+      windows:
+        - {window_index: 1, predicted_anomaly_class: 0, anomaly_probability: 0.0001}
+        - {window_index: 2, predicted_anomaly_class: 0, anomaly_probability: 0.0000}
+        - {window_index: 3, predicted_anomaly_class: 0, anomaly_probability: 0.0000}
+        - {window_index: 4, predicted_anomaly_class: 0, anomaly_probability: 0.0000}
+        - {window_index: 5, predicted_anomaly_class: 1, anomaly_probability: 1.0000}
+    tolerance: {prediction_exact: true, probability_atol: 0.005}
+
+  - id: cycle_2443_aislamiento_degradado
+    source: dataset_test_split
+    input: {cycle_id: 2443, fault_name_real: AISLAMIENTO_DEGRADADO, split_file: data/splits/test.csv}
+    expected:
+      windows:
+        - {window_index: 1, predicted_anomaly_class: 1, anomaly_probability: 1.0000}
+        - {window_index: 2, predicted_anomaly_class: 1, anomaly_probability: 1.0000}
+        - {window_index: 3, predicted_anomaly_class: 0, anomaly_probability: 0.0128}
+        - {window_index: 4, predicted_anomaly_class: 0, anomaly_probability: 0.0000}
+        - {window_index: 5, predicted_anomaly_class: 0, anomaly_probability: 0.0000}
+    tolerance: {prediction_exact: true, probability_atol: 0.005}
+
+  - id: cycle_2519_valvula_obstruida
+    source: dataset_test_split
+    input: {cycle_id: 2519, fault_name_real: VALVULA_OBSTRUIDA, split_file: data/splits/test.csv}
+    note: >
+      Falso negativo real del modelo entregado: el ciclo SÍ tiene falla (VALVULA_OBSTRUIDA) pero
+      las 5 ventanas se clasifican como "No Fallo" (máximo 0.2266, por debajo de 0.41). Consistente
+      con que fallo_recall=0.924 no es 1.0 — se conserva tal cual (no se ajusta ni se silencia),
+      sirve para verificar REPRODUCIBILIDAD del puerto, no para validar acierto del modelo.
+    expected:
+      windows:
+        - {window_index: 1, predicted_anomaly_class: 0, anomaly_probability: 0.0000}
+        - {window_index: 2, predicted_anomaly_class: 0, anomaly_probability: 0.0980}
+        - {window_index: 3, predicted_anomaly_class: 0, anomaly_probability: 0.2266}
+        - {window_index: 4, predicted_anomaly_class: 0, anomaly_probability: 0.0000}
+        - {window_index: 5, predicted_anomaly_class: 0, anomaly_probability: 0.0000}
+    tolerance: {prediction_exact: true, probability_atol: 0.005}
+
+known_issues:
+  - >
+    DISCREPANCIA MEMORIA vs CHECKPOINT ENTREGADO: la memoria CU43 v1.4 (29/06/2026) describe una
+    configuración de modelo y unas métricas que NO coinciden con el checkpoint realmente entregado
+    en inbox/a43/codigo/models/artifacts/best_dnf_model.pt. Memoria: LSTM hidden_size=128,
+    num_layers=1, bidirectional=False, dropout=0.25; fuzzy n_mf=3, temperature=0.6,
+    lambda_anomaly=0.8; decision_threshold=0.55; accuracy=0.928, fallo_recall=0.663,
+    fallo_precision=0.968, AUC=0.900; 92.352 parámetros. Checkpoint real (confirmado ejecutando
+    scripts/predict.py y cargando best_dnf_model.pt, ver hyperparams/metrics_reported arriba):
+    LSTM hidden_size=32, num_layers=2, bidirectional=True, dropout=0.30; fuzzy n_mf=5,
+    temperature=0.8, lambda_anomaly=0.7; decision_threshold=0.41; accuracy=0.989,
+    fallo_recall=0.924, fallo_precision=0.888; 51.380 parámetros. El histórico de commits del
+    código fuente (DatagIA/ml-orchestrator/a43-44-neurofuzzy-anomalias-fallas) muestra actividad
+    hasta el 14/07/2026, ~2 semanas después de la fecha de la memoria v1.4 — el equipo de IA
+    reentrenó el modelo tras cerrar la memoria y entregó el checkpoint nuevo sin actualizar el
+    documento. Precedente idéntico ya documentado en este mismo repo para ml46
+    (Ml46DairyFoulingClogDetectionPlugin docstring: "discrepancy between the delivered memoria and
+    the actually-shipped artifacts"). Se sigue el mismo criterio: el CÓDIGO + CHECKPOINT +
+    results.json real son la fuente de verdad técnica para hyperparams/metrics_reported/
+    golden_cases; la memoria se usa solo para narrativa de negocio (objetivos, descripción de
+    variables, limitaciones). docs-generation debe reflejar AMBAS cifras (declaradas por memoria
+    vs. verificadas tras integración) — ver skill docs-generation, regla de "dos evidencias
+    distintas".
+  - >
+    ETIQUETADO DE VENTANA: la memoria CU43 v1.4 Sec. 5.3 describe la estrategia de etiquetado como
+    "la ventana se etiqueta anómala si al menos el 50% de sus registros son anómalos" (estrategia
+    de mayoría) — esto SÍ coincide con el código actual
+    (src/data_processing/preprocess.py::_window_target_label, siempre mayoría >=50%). No hay
+    discrepancia aquí, a diferencia del resto de hiperparámetros. Se confirma explícitamente
+    porque versiones anteriores del pipeline (no las entregadas) usaban una estrategia distinta
+    ("any_anomaly": cualquier fila anómala marca la ventana) — el código entregado ya no la tiene.
+  - >
+    ARQUITECTURA: no existe un modo predict_inline "una fila = una predicción" — la unidad mínima
+    de inferencia es una ventana de 180 timesteps. El precedente más cercano ya integrado en este
+    mismo repo es ml45_cereals_dnsl_critical_point_detection y
+    m47_dnsl_fallas_maquinaria_pasteurizado (misma familia "DNSL") — revisados como plantilla de
+    arquitectura para el plugin de a43.
+  - >
+    SHAP NO ES DEPENDENCIA DEL SERVICIO PRINCIPAL: shap no está en requirements.txt del repo raíz
+    (solo en requirements.txt de inbox/a43/codigo). El modelo original usa shap para su
+    TemporalExplainer interno (src/xai/temporal_explainer.py) y necesita xai_background.npy.
+    Decisión (igual que ml45, ya resuelta en ese plugin): se porta la capa XAI/acciones
+    correctivas COMPLETA dentro del plugin (añadiendo shap a requirements.txt del proyecto), ya
+    que el catálogo de acciones correctivas es el diferencial funcional del CU44 y no es
+    reproducible por el servicio de explicabilidad genérico externo (que no conoce los bloques
+    combustion_control_flujo/termico/ventilacion_presion ni el sistema de estados
+    normal/normal_with_signals/unconfirmed_alert/confirmed_anomaly).
+  - >
+    VERSIONES: requirements.txt entregado fija torch==2.5.1+cu121, numpy==2.4.6, pandas==3.0.3,
+    scikit-learn==1.8.0, shap==0.51.0. El entorno usado para generar golden_cases tiene
+    torch 2.13.0+cpu, pandas 3.0.5, sklearn 1.9.0, shap 0.52.0. Cargar scaler.pkl con sklearn 1.9.0
+    emite InconsistentVersionWarning (creado con 1.8.0) pero funciona correctamente — confirmado
+    al reproducir los 7 golden_cases. requirements.txt además estaba en UTF-16LE con CRLF
+    (normalizado a UTF-8/LF en inbox/a43/codigo/requirements.txt antes de cualquier
+    pip-audit/pip install).
+  - >
+    GPU: en este sandbox, torch no tiene build CUDA — se forzó CPU (CUDA_VISIBLE_DEVICES="") para
+    poder ejecutar el pipeline original y generar los golden_cases. No debería afectar a
+    producción (donde el device se resuelve igual que en el resto de plugins: cuda si está
+    disponible, si no cpu), pero lo dejo registrado por si se repite el síntoma.
+  - >
+    DATASET SINTÉTICO: como en el resto de modelos de este repo, los datos (data/raw, data/splits)
+    son generados sintéticamente (src/data_processing/generate_dataset.py, seed=42). Las cifras de
+    metrics_reported y golden_cases son reales sobre ESE dataset sintético — requieren validación
+    con datos reales de hornos industriales antes de cualquier despliegue en producción. La propia
+    memoria (Sección 10, Limitaciones) ya advierte de esto explícitamente.
+  - >
+    baseline_models/ (RF, XGBoost, LSTM simple, ANFIS) son solo comparativas de benchmarking del
+    propio equipo de IA (ver notebooks/baseline.ipynb) — no se integran, no son el modelo de
+    producción.
+  - >
+    CU44 (acciones correctivas): la memoria de CU44 reporta una evaluación cualitativa sobre un
+    subconjunto de 25 muestras por grupo de confusión (TP/TN/FN, 11 para FP) — ver Tablas 5-6 de
+    esa memoria (inbox/a44/entregable/). No se han convertido en golden_cases individuales porque
+    no incluyen valores de anomaly_probability por ventana reproducibles 1:1 (son agregados
+    estadísticos: medias/desviaciones y conteos de etiqueta), a diferencia de los 7 golden_cases
+    de detección binaria de arriba, que sí son reproducibles ventana a ventana. La verificación de
+    la capa XAI se hace de forma cualitativa (¿el estado interpretativo y los bloques de acción
+    tienen sentido?) en el skill verification, no cuantitativa contra un valor esperado exacto.

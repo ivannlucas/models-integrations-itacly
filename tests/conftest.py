@@ -34,6 +34,7 @@ from app.domain.services.exceptions import (
     InfeasibleOptimizationError,
     InsufficientCycleHistoryError,
     InsufficientFramesError,
+    InsufficientSensorWindowError,
     InsufficientTelemetryHistoryError,
     InsufficientWindowHistoryError,
     InvalidImageError,
@@ -186,6 +187,16 @@ from app.plugins.ml28_meat_neuroevolutionary_raw_materials_prediction.predict_dt
     PredictInlineResponse as Ml28MeatInlineResp,
     PredictRequest as Ml28Meat_Request,
     PredictResponse as Ml28Meat_Response,
+)
+from app.plugins.ml43_cereals_dnsl_anomaly_fault_detection.predict_dto import (
+    PredictBatchResponse as Ml43BatchResp,
+    PredictInlineResponse as Ml43InlineResp,
+    PredictRequest as Ml43_Request,
+    PredictResponse as Ml43_Response,
+)
+from app.plugins.ml43_cereals_dnsl_anomaly_fault_detection.train_dto import (
+    TrainRequest as Ml43_TrainReq,
+    TrainResponse as Ml43TrainResp,
 )
 
 # ── ModelEntry dataclass (local copy — avoids importing app.registry which loads real plugins) ───
@@ -1012,6 +1023,51 @@ def _ml28_meat_batch(plugin: FakePlugin, *, data_path: str) -> Ml28MeatBatchResp
     )
 
 
+def _ml43_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> Ml43InlineResp:
+    """Fake inline response for the ml43 cereal dryer DNF anomaly/fault detection model (CU43+CU44)."""
+    return Ml43InlineResp(
+        model_id="ml43-cereals-dnsl-anomaly-fault-detection",
+        predicted_anomaly_class=0,
+        predicted_anomaly_label="No Fallo",
+        anomaly_probability=0.0512,
+        decision_threshold=threshold if threshold is not None else 0.41,
+        xai_feature_values={"temp_zona1": 80.0, "temp_zona2": 82.0},
+        corrective_actions=None,
+        xai_error=None,
+        model_name="ml43-cereals-dnsl-anomaly-fault-detection",
+    )
+
+
+def _ml43_batch(plugin: FakePlugin, *, data_path: str) -> Ml43BatchResp:
+    """Fake batch response for the ml43 cereal dryer DNF anomaly/fault detection model (CU43+CU44)."""
+    return Ml43BatchResp(
+        model_id="ml43-cereals-dnsl-anomaly-fault-detection",
+        predictions=[{
+            "window_index": 1,
+            "cycle_id": "2400",
+            "predicted_anomaly_class": 0,
+            "predicted_anomaly_label": "No Fallo",
+            "anomaly_probability": 0.0512,
+            "decision_threshold": 0.41,
+            "xai_feature_values": {"temp_zona1": 80.0, "temp_zona2": 82.0},
+            "corrective_actions": None,
+            "xai_error": None,
+        }],
+        output_path=None,
+    )
+
+
+def _ml43_train(plugin: FakePlugin, *, data_path: str) -> Ml43TrainResp:
+    """Fake training response for the ml43 cereal dryer DNF anomaly/fault detection model."""
+    return Ml43TrainResp(
+        detail="Entrenamiento completado",
+        accuracy=0.989, macro_f1=0.9498, macro_precision=0.9415, macro_recall=0.9585,
+        fallo_f1=0.9054, fallo_precision=0.8876, fallo_recall=0.9240,
+        n_train=28, n_test=7, n_windows_total=35,
+        upload_warning=None,
+    )
+
+
 FAKE_FACTORIES: dict[str, tuple[Callable, Callable]] = {
     "ml46-dairy-fouling-clog-detection": (_ml46_dairy_inline, _ml46_dairy_batch),
     "ml40-meat-refrigeration-aeration-fault-diagnosis": (_ml40_meat_inline, _ml40_meat_batch),
@@ -1031,6 +1087,7 @@ FAKE_FACTORIES: dict[str, tuple[Callable, Callable]] = {
     "ml5-meat-cow-behaviour": (_ml5_cow_inline, _ml5_cow_batch),
     "m47-dnsl-fallas-maquinaria-pasteurizado": (_m47_inline, _m47_batch),
     "ml45-cereals-dnsl-critical-point-detection": (_ml45_inline, _ml45_batch),
+    "ml43-cereals-dnsl-anomaly-fault-detection": (_ml43_inline, _ml43_batch),
 }
 
 TRAIN_FACTORIES: dict[str, Callable] = {
@@ -1042,6 +1099,7 @@ TRAIN_FACTORIES: dict[str, Callable] = {
     "ml8-cereals-img-anomaly-detector": _ml8_cereals_train,
     "ml30-meat-traceability-detection": _ml30_trace_train,
     "ml45-cereals-dnsl-critical-point-detection": _ml45_train,
+    "ml43-cereals-dnsl-anomaly-fault-detection": _ml43_train,
 }
 
 
@@ -1225,6 +1283,17 @@ TEST_REGISTRY: list[ModelEntry] = [
         predict_request_type=Ml28Meat_Request,
         predict_response_type=Ml28Meat_Response,
         extra_predict_exceptions=(),
+    ),
+    ModelEntry(
+        model_id="ml43-cereals-dnsl-anomaly-fault-detection",
+        prefix="/models/ml43-cereals-dnsl-anomaly-fault-detection",
+        version="1.0.0",
+        plugin_class=FakePlugin,
+        predict_request_type=Ml43_Request,
+        predict_response_type=Ml43_Response,
+        extra_predict_exceptions=(InsufficientSensorWindowError,),
+        train_request_type=Ml43_TrainReq,
+        train_response_type=Ml43TrainResp,
     ),
 ]
 
