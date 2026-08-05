@@ -97,6 +97,27 @@ def build_predictions_frame(
     return out
 
 
+def window_feature_values(
+    x_seq: np.ndarray,
+    feature_columns: list[str],
+    window_pos: int,
+) -> dict[str, float]:
+    """Return the engineered feature values of the LAST step of the window at *window_pos*.
+
+    This is what the platform's explainability service consumes as `xai_feature_values`: the 65
+    derived variables (diffs, slopes, rolling means/stds, interactions, cyclic hour/day) that the
+    model actually saw, not the four raw sensor readings. Values are pre-scaling — the same units
+    the features are computed in — so an attribution is readable by a human.
+    """
+    if window_pos < 0 or window_pos >= len(x_seq):
+        return {}
+    last_step = np.asarray(x_seq[window_pos])[-1, :]
+    return {
+        name: clean_scalar(float(value))
+        for name, value in zip(feature_columns, last_step)
+    }
+
+
 def class_distribution(pred_df: pd.DataFrame) -> dict[str, int]:
     """Return the count of scored windows per predicted class label (operational monitoring signal).
 

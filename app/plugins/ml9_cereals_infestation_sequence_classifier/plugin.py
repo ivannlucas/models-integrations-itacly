@@ -237,14 +237,12 @@ class Ml9CerealsInfestationSequenceClassifierPlugin(ModelPluginPort):
                 n_windows_available=len(pred_df),
                 y_true=y_true,
                 model_name=MODEL_ID,
-                xai_feature_values={
-                    "proba_sano": float(row["proba_sano"]),
-                    "proba_insectos": float(row["proba_insectos"]),
-                    "proba_moho_critico": float(row["proba_moho_critico"]),
-                    "confidence": confidence,
-                    "n_rows_used": len(raw_df),
-                    "window_size": WINDOW_SIZE,
-                },
+                # Las 65 variables derivadas que vio el modelo en el último paso de la ventana
+                # puntuada — es lo que el servicio de explicabilidad de la plataforma necesita
+                # para atribuir la decisión (las 4 señales crudas por sí solas no lo permiten).
+                xai_feature_values=postprocessing.window_feature_values(
+                    payload["X_seq"], payload["feature_columns"], idx,
+                ),
             )
         finally:
             if user_tmp:
