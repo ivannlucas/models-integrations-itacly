@@ -7,9 +7,10 @@ from __future__ import annotations
 
 import logging
 import os
+import tempfile
 from typing import Any
 
-from app.domain.services.mlflow_tracker import download_mlflow_artifacts
+from app.domain.services.mlflow_tracker import BaseMLflowTracker
 from app.plugins.ml9_cereals_infestation_sequence_classifier._vendor.sequential import load_checkpoint, load_pickle
 from app.plugins.ml9_cereals_infestation_sequence_classifier.constants import (
     BUNDLE_FILENAME,
@@ -43,10 +44,10 @@ def download_user_model_from_mlflow(run_id: str) -> tuple[dict, Any, dict, str] 
     (the checkpoint carries its own model_config, the bundle its own feature_columns), so a user
     model retrained on a different class cardinality still loads correctly.
     """
-    result = download_mlflow_artifacts(run_id, artifact_path="model", prefix="mlflow_ml9_")
-    if result is None:
+    tmp = tempfile.mkdtemp(prefix="mlflow_ml9_")
+    local_path = BaseMLflowTracker(run_id).download_artifacts(tmp, artifact_path="model")
+    if not local_path:
         return None
-    tmp, local_path = result
 
     model_path = _first_existing(local_path, USER_MODEL_FILENAME, MODEL_FILENAME)
     bundle_path = _first_existing(local_path, USER_BUNDLE_FILENAME, BUNDLE_FILENAME)

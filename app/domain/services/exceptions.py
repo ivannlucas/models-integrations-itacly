@@ -65,6 +65,8 @@ class InsufficientSequenceHistoryError(ValueError):
     This turns that silence into an explicit 422 (see inbox/a09/manifest.yaml
     constraints.historial_minimo).
     """
+
+
 class InsufficientWindowHistoryError(ValueError):
     """Raised when fewer than sequence_length (240) consecutive rows are available to build a
     temporal window (ml45)."""

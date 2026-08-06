@@ -95,3 +95,6 @@ inbox/a09/codigo/a09-del-cereals-el-clasificacion-objetos-anomalos/data/predicti
 # Model artifacts live in S3 (artifacts/fixed/...) — never commit local copies
 # (refrigeracion_model.pkl for ml40 alone is 171 MB)
 /artifacts/
+
+# Claude Code local settings (per-machine permissions/config, not shared config)
+.claude/settings.local.json
