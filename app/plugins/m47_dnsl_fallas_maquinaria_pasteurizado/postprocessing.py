@@ -8,14 +8,15 @@ from app.plugins.m47_dnsl_fallas_maquinaria_pasteurizado.constants import (
 from app.plugins.m47_dnsl_fallas_maquinaria_pasteurizado.preprocessing import pad_or_truncate
 
 
-def run_inference(model, scaler, feature_cols, x_df, device) -> dict | None:
+def run_inference(model, scaler, feature_cols, x_df, device, label: str = "") -> dict | None:
     try:
         df_to_scale = x_df[feature_cols]
     except KeyError:
         return None
 
     X_scaled = scaler.transform(df_to_scale)
-    X_ready = pad_or_truncate(X_scaled)
+    n_samples = X_scaled.shape[0]
+    X_ready = pad_or_truncate(X_scaled, label=label)
     input_tensor = (
         torch.tensor(X_ready, dtype=torch.float32)
         .unsqueeze(0)
@@ -29,7 +30,7 @@ def run_inference(model, scaler, feature_cols, x_df, device) -> dict | None:
         preds = [p.argmax(1).item() for p in probs]
         confidences = [p.max(1).values.item() for p in probs]
 
-    return {"predicciones": preds, "confianzas": confidences}
+    return {"predicciones": preds, "confianzas": confidences, "n_samples": n_samples}
 
 
 def format_inline_response(model_id: str, resultados: dict) -> dict:
@@ -62,5 +63,6 @@ def format_batch_row(resultados: dict, cycle_id) -> dict:
     row["Confianza_Valvula"] = confs[1]
     row["Confianza_Bomba"] = confs[2]
     row["Confianza_Acumulador"] = confs[3]
+    row["n_samples"] = resultados.get("n_samples")
     row["model_name"] = "m47-dnsl-fallas-maquinaria-pasteurizado"
     return row

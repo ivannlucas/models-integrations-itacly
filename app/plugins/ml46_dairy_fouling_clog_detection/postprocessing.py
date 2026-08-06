@@ -113,6 +113,13 @@ def _run_loader(model: PredictiveTCN, loader: Any, sequences: dict[str, AssetSeq
 def explain_and_alert(pred_df: pd.DataFrame, policy: dict, predicate_thresholds: dict, train_cfg: TrainConfig, cooldown_min: int | None = None) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Attach operator explanations to every window and consolidate them into alert episodes."""
     explained = add_explanations(pred_df, policy, predicate_thresholds, train_cfg)
-    cooldown = cooldown_min if cooldown_min is not None else int(policy.get("cooldown_min", train_cfg.cooldown_min_default))
+    if cooldown_min is not None:
+        cooldown = cooldown_min
+    else:
+        # Widened by alert_episode_gap_min so a manually-lowered policy cooldown can't split
+        # one physical episode into several alerts (mirrors src/predict/predictor.py).
+        policy_cooldown = float(policy.get("cooldown_min", train_cfg.cooldown_min_default))
+        episode_gap = float(getattr(train_cfg, "alert_episode_gap_min", train_cfg.cooldown_min_default))
+        cooldown = int(max(policy_cooldown, episode_gap))
     alerts = consolidate_alerts(explained, cooldown)
     return explained, alerts

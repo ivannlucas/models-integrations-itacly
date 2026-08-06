@@ -25,15 +25,14 @@ import pandas as pd
 
 from app.application.dto.stats_dto import InputField, OutputField, RuntimeStats, StatsResponse
 from app.domain.ports.model_plugin_port import ModelPluginPort
+from app.infrastructure.artifact_store import local_file_path
 from app.domain.services.exceptions import (
     InfeasibleOptimizationError,
     ModelNotLoadedError,
     TrainingNotSupportedError,
 )
-from app.domain.services.mlflow_tracker import BaseMLflowTracker
 from app.plugins.ml31_cereals_residue_optimizer.constants import (
     BENEFIT_PRESERVATION_TARGET_PCT,
-    CROPS,
     FRAMEWORK,
     MIN_BENEFIT_CHANGE_EUR,
     MODEL_ID,
@@ -72,6 +71,15 @@ _SCENARIO_DEFAULTS: dict[str, Any] = {
     "min_secano_use_pct": 95.0,
     "min_regadio_use_pct": 95.0,
 }
+
+# Continuous scenario parameters perturbed for local sensitivity ("explainability" —
+# see Ml31CerealsResidueOptimizerPlugin._compute_sensitivity). Excludes reference_year/
+# optimization_mode (categorical/discrete) and min_benefit_eur/max_residue_t (usually
+# unset — perturbing "not set" isn't meaningful).
+_SENSITIVITY_PARAMS: tuple[str, ...] = (
+    "climate_factor", "expected_spring_rain_mm", "min_benefit_pct_of_baseline",
+    "surface_tolerance_pct", "min_secano_use_pct", "min_regadio_use_pct",
+)
 
 
 class Ml31CerealsResidueOptimizerPlugin(ModelPluginPort):
@@ -194,7 +202,7 @@ class Ml31CerealsResidueOptimizerPlugin(ModelPluginPort):
             if model_key == "pareto":
                 result = self._run_pareto(features)
             else:
-                result = self._run_optimize(features)
+                result = self._run_optimize(features, with_sensitivity=True)
             self._record()
             return result
         finally:
@@ -202,11 +210,18 @@ class Ml31CerealsResidueOptimizerPlugin(ModelPluginPort):
                 shutil.rmtree(user_temp_dir, ignore_errors=True)
                 self._economics, self._hi, self._df = saved
 
-    def _run_optimize(self, features: dict) -> PredictOptimizeResponse:
+    def _solve_scenario(self, features: dict) -> dict:
+        """Core LP solve shared by _run_optimize and _compute_sensitivity — returns a
+        plain dict of every computed metric, before wrapping into a response model.
+        """
         reference_year = self._resolve_year(int(features["reference_year"]))
         opt_mode = features["optimization_mode"]
         climate_factor = float(features["climate_factor"])
-        spring_rain_mm = float(features["expected_spring_rain_mm"])
+        spring_rain_mm = float(
+            features["expected_spring_rain_mm"]
+            if features.get("expected_spring_rain_mm") is not None
+            else _SCENARIO_DEFAULTS["expected_spring_rain_mm"]
+        )
         surface_tolerance_pct = features.get("surface_tolerance_pct")
 
         optimizer, _params, baseline = self._build_optimizer(
@@ -270,24 +285,76 @@ class Ml31CerealsResidueOptimizerPlugin(ModelPluginPort):
             for c in solution.crops
         }
 
+        return {
+            "reference_year": reference_year,
+            "optimization_mode": opt_mode,
+            "crop_allocation": crop_allocation,
+            "total_production_t": solution.total_production_t,
+            "total_residue_t": solution.total_residue_t,
+            "total_benefit_eur": solution.total_benefit_eur,
+            "baseline_total_production_t": b_prod,
+            "baseline_total_residue_t": b_res,
+            "baseline_total_benefit_eur": b_ben,
+            "residue_reduction_pct": round(res_red_pct, 2),
+            "benefit_change_eur": round(ben_chg, 2),
+            "benefit_change_pct": round(ben_chg_pct, 2),
+            "production_change_pct": round(prod_chg_pct, 2),
+            "solver_status": solution.status,
+            "solve_time_seconds": solution.solve_time_seconds,
+            "verdict": verdict,
+        }
+
+    def _compute_sensitivity(self, features: dict, baseline_res_red_pct: float) -> list[dict]:
+        """Local sensitivity ("explainability") for a solved scenario: re-solve the LP
+        once per continuous scenario parameter, perturbed by +10%, and report the
+        resulting change in residue_reduction_pct.
+
+        The v2.0 model has no trained weights to run SHAP against (see module
+        docstring), so this is an exact, deterministic alternative — not an
+        approximation — to "which inputs moved this LP's outcome, and by how much".
+        Categorical/discrete inputs (reference_year, optimization_mode) and inputs
+        that default to "unset" (min_benefit_eur, max_residue_t) are excluded, since
+        perturbing them isn't meaningful the same way. Infeasible perturbations are
+        silently skipped rather than failing the whole prediction.
+        """
+        contributions: list[dict] = []
+        for param in _SENSITIVITY_PARAMS:
+            base_value = features.get(param)
+            if base_value is None:
+                base_value = _SCENARIO_DEFAULTS[param]
+            base_value = float(base_value)
+            perturbed_value = base_value * 1.1 if base_value != 0 else 0.1
+            if param in ("min_secano_use_pct", "min_regadio_use_pct"):
+                # These are percentages capped at 100 — a +10% relative bump from any
+                # value >= ~91 would overshoot into "use more than 100% of the land"
+                # and always come back infeasible, silently hiding the parameter from
+                # every near-default scenario. Cap instead of scaling.
+                perturbed_value = min(perturbed_value, 99.0)
+
+            perturbed_features = dict(features)
+            perturbed_features[param] = perturbed_value
+            try:
+                perturbed_result = self._solve_scenario(perturbed_features)
+            except InfeasibleOptimizationError:
+                continue
+            contributions.append({
+                "feature": param,
+                "contribution": round(perturbed_result["residue_reduction_pct"] - baseline_res_red_pct, 4),
+                "value": round(base_value, 4),
+            })
+        contributions.sort(key=lambda c: abs(c["contribution"]), reverse=True)
+        return contributions
+
+    def _run_optimize(self, features: dict, *, with_sensitivity: bool = False) -> PredictOptimizeResponse:
+        result = self._solve_scenario(features)
+        sensitivity = (
+            self._compute_sensitivity(features, result["residue_reduction_pct"])
+            if with_sensitivity else None
+        )
         return PredictOptimizeResponse(
             model_id=MODEL_ID,
-            reference_year=reference_year,
-            optimization_mode=opt_mode,
-            crop_allocation=crop_allocation,
-            total_production_t=solution.total_production_t,
-            total_residue_t=solution.total_residue_t,
-            total_benefit_eur=solution.total_benefit_eur,
-            baseline_total_production_t=b_prod,
-            baseline_total_residue_t=b_res,
-            baseline_total_benefit_eur=b_ben,
-            residue_reduction_pct=round(res_red_pct, 2),
-            benefit_change_eur=round(ben_chg, 2),
-            benefit_change_pct=round(ben_chg_pct, 2),
-            production_change_pct=round(prod_chg_pct, 2),
-            solver_status=solution.status,
-            solve_time_seconds=solution.solve_time_seconds,
-            verdict=verdict,
+            sensitivity=sensitivity,
+            **result,
         )
 
     def _run_pareto(self, features: dict) -> PredictParetoResponse:
@@ -295,7 +362,11 @@ class Ml31CerealsResidueOptimizerPlugin(ModelPluginPort):
         n_points = int(features["num_points"])
         pct_range = features["benefit_range_pct_of_max"]
         climate_factor = float(features["climate_factor"])
-        spring_rain_mm = float(features["expected_spring_rain_mm"])
+        spring_rain_mm = float(
+            features["expected_spring_rain_mm"]
+            if features.get("expected_spring_rain_mm") is not None
+            else _SCENARIO_DEFAULTS["expected_spring_rain_mm"]
+        )
         surface_tolerance_pct = features.get("surface_tolerance_pct")
 
         optimizer, _params, _baseline = self._build_optimizer(
@@ -394,13 +465,17 @@ class Ml31CerealsResidueOptimizerPlugin(ModelPluginPort):
                 self._economics, self._hi, self._df, user_temp_dir = loaded
         try:
             self._require_loaded()
-            df = pd.read_csv(data_path)
+            with local_file_path(data_path) as local_path:
+                df = pd.read_csv(local_path)
             predictions: list[dict] = []
             for idx, row in df.iterrows():
                 try:
                     features = self._row_to_scenario(row)
-                    result = self._run_optimize(features)
-                    predictions.append({
+                    # Sensitivity (explainability) is only ever surfaced for the first row
+                    # of a batch by the platform's XAI panel — computing it for every row
+                    # would multiply solve time ~7x for no benefit, so it's skipped past idx 0.
+                    result = self._run_optimize(features, with_sensitivity=(idx == 0))
+                    row_out = {
                         "row": int(idx),
                         "reference_year": result.reference_year,
                         "optimization_mode": result.optimization_mode,
@@ -412,7 +487,10 @@ class Ml31CerealsResidueOptimizerPlugin(ModelPluginPort):
                         "production_change_pct": result.production_change_pct,
                         "solver_status": result.solver_status,
                         "verdict": result.verdict,
-                    })
+                    }
+                    if result.sensitivity is not None:
+                        row_out["sensitivity"] = result.sensitivity
+                    predictions.append(row_out)
                 except Exception as exc:  # pylint: disable=broad-exception-caught
                     logger.warning("Error en fila %s: %s", idx, exc)
                     predictions.append({"row": int(idx), "error": str(exc)})

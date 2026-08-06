@@ -1,0 +1,522 @@
+{
+  "schema_version": 1,
+  "scope": "mixed_context",
+  "generated_at_utc": "2026-06-26T10:01:07.578218+00:00",
+  "reference_date": "2026-05-18",
+  "status": "PASS",
+  "checks_passed": 40,
+  "checks_total": 40,
+  "checks": [
+    {
+      "name": "upstream linear_regression validation: predictions vs run JSON",
+      "passed": true,
+      "detail": "match"
+    },
+    {
+      "name": "upstream linear_regression validation: run JSON vs summary",
+      "passed": true,
+      "detail": "match"
+    },
+    {
+      "name": "upstream linear_regression test: predictions vs run JSON",
+      "passed": true,
+      "detail": "match"
+    },
+    {
+      "name": "upstream linear_regression test: run JSON vs summary",
+      "passed": true,
+      "detail": "match"
+    },
+    {
+      "name": "upstream neuroevolution validation: predictions vs run JSON",
+      "passed": true,
+      "detail": "match"
+    },
+    {
+      "name": "upstream neuroevolution validation: run JSON vs summary",
+      "passed": true,
+      "detail": "match"
+    },
+    {
+      "name": "upstream neuroevolution test: predictions vs run JSON",
+      "passed": true,
+      "detail": "match"
+    },
+    {
+      "name": "upstream neuroevolution test: run JSON vs summary",
+      "passed": true,
+      "detail": "match"
+    },
+    {
+      "name": "purchase trigger train: predictions vs summary JSON",
+      "passed": true,
+      "detail": "match"
+    },
+    {
+      "name": "purchase trigger train: confusion matrix sums to n",
+      "passed": true,
+      "detail": "actual_buy=442 actual_do_not_buy=370 n=812"
+    },
+    {
+      "name": "purchase trigger train: BUY pct from counts",
+      "passed": true,
+      "detail": "buy_pct=0.5443349753694581 positive_rate_actual=0.5443349753694581"
+    },
+    {
+      "name": "purchase trigger validation: predictions vs summary JSON",
+      "passed": true,
+      "detail": "match"
+    },
+    {
+      "name": "purchase trigger validation: confusion matrix sums to n",
+      "passed": true,
+      "detail": "actual_buy=124 actual_do_not_buy=50 n=174"
+    },
+    {
+      "name": "purchase trigger validation: BUY pct from counts",
+      "passed": true,
+      "detail": "buy_pct=0.7126436781609196 positive_rate_actual=0.7126436781609196"
+    },
+    {
+      "name": "purchase trigger test: predictions vs summary JSON",
+      "passed": true,
+      "detail": "match"
+    },
+    {
+      "name": "purchase trigger test: confusion matrix sums to n",
+      "passed": true,
+      "detail": "actual_buy=165 actual_do_not_buy=10 n=175"
+    },
+    {
+      "name": "purchase trigger test: BUY pct from counts",
+      "passed": true,
+      "detail": "buy_pct=0.9428571428571428 positive_rate_actual=0.9428571428571428"
+    },
+    {
+      "name": "quantity optimizer train: predictions vs summary JSON",
+      "passed": true,
+      "detail": "match"
+    },
+    {
+      "name": "quantity optimizer train: baseline_order_quantity_tons vs summary JSON",
+      "passed": true,
+      "detail": "match"
+    },
+    {
+      "name": "quantity optimizer validation: predictions vs summary JSON",
+      "passed": true,
+      "detail": "match"
+    },
+    {
+      "name": "quantity optimizer validation: baseline_order_quantity_tons vs summary JSON",
+      "passed": true,
+      "detail": "match"
+    },
+    {
+      "name": "quantity optimizer test: predictions vs summary JSON",
+      "passed": true,
+      "detail": "match"
+    },
+    {
+      "name": "quantity optimizer test: baseline_order_quantity_tons vs summary JSON",
+      "passed": true,
+      "detail": "match"
+    },
+    {
+      "name": "quantity optimizer supervised comparison contains DummyRegressor and Ridge on all splits",
+      "passed": true,
+      "detail": "pairs=[('DummyRegressor', 'test'), ('DummyRegressor', 'train'), ('DummyRegressor', 'validation'), ('Ridge', 'test'), ('Ridge', 'train'), ('Ridge', 'validation')]"
+    },
+    {
+      "name": "quantity optimizer supervised comparison excludes target and trigger label from features",
+      "passed": true,
+      "detail": "feature_count=24"
+    },
+    {
+      "name": "quantity optimizer supervised DummyRegressor train: recalculated vs comparison JSON",
+      "passed": true,
+      "detail": "match"
+    },
+    {
+      "name": "quantity optimizer supervised Ridge train: recalculated vs comparison JSON",
+      "passed": true,
+      "detail": "match"
+    },
+    {
+      "name": "quantity optimizer supervised DummyRegressor validation: recalculated vs comparison JSON",
+      "passed": true,
+      "detail": "match"
+    },
+    {
+      "name": "quantity optimizer supervised Ridge validation: recalculated vs comparison JSON",
+      "passed": true,
+      "detail": "match"
+    },
+    {
+      "name": "quantity optimizer supervised DummyRegressor test: recalculated vs comparison JSON",
+      "passed": true,
+      "detail": "match"
+    },
+    {
+      "name": "quantity optimizer supervised Ridge test: recalculated vs comparison JSON",
+      "passed": true,
+      "detail": "match"
+    },
+    {
+      "name": "policy simulation: period CSV vs summary JSON",
+      "passed": true,
+      "detail": "match"
+    },
+    {
+      "name": "formula canonical_variant: config vs effective code parameters",
+      "passed": true,
+      "detail": "config='pressure' effective='pressure'"
+    },
+    {
+      "name": "formula canonical_variant: config vs generated formula report",
+      "passed": true,
+      "detail": "config='pressure' report='pressure'"
+    },
+    {
+      "name": "formula pressure_snapshot_blend_weight: config vs effective code parameters",
+      "passed": true,
+      "detail": "config=0.08 effective=0.08"
+    },
+    {
+      "name": "formula pressure_snapshot_blend_weight: config vs generated formula report",
+      "passed": true,
+      "detail": "config=0.08 report=0.08"
+    },
+    {
+      "name": "formula pressure_coverage_gap_blend_weight: config vs effective code parameters",
+      "passed": true,
+      "detail": "config=0.06 effective=0.06"
+    },
+    {
+      "name": "formula pressure_coverage_gap_blend_weight: config vs generated formula report",
+      "passed": true,
+      "detail": "config=0.06 report=0.06"
+    },
+    {
+      "name": "documentation scan: no known stale metrics in README/docs/reports/official",
+      "passed": true,
+      "detail": "none"
+    },
+    {
+      "name": "metrics summary exposes quantity optimizer DummyRegressor comparison",
+      "passed": true,
+      "detail": "target='quantity_optimizer_target_tons'"
+    }
+  ],
+  "sources": {
+    "baseline_summary_json": "models/metrics/summary/baseline_comparison_latest__mixed_context.json",
+    "trigger_metrics_json": "models/metrics/summary/trigger_metrics_latest__mixed_context.json",
+    "quantity_optimizer_metrics_json": "models/metrics/summary/quantity_optimizer_latest__mixed_context.json",
+    "quantity_optimizer_baseline_comparison_json": "models/metrics/summary/quantity_optimizer_baseline_comparison_latest__mixed_context.json",
+    "policy_simulation_summary_json": "models/metrics/summary/policy_simulation_latest__mixed_context.json",
+    "official_formula_json": "reports/official/synthetic_procurement_need_formula__mixed_context.json",
+    "metrics_summary_json": "models/metrics/summary/metrics_summary__mixed_context.json",
+    "config": "config/config.yaml"
+  },
+  "documentable_metrics": {
+    "upstream_predictor": [
+      {
+        "section": "upstream_predictor",
+        "source": "models/metrics/summary/baseline_comparison_latest__mixed_context.json; models/metrics/baseline_comparison_mixed_context_20260518_seed42_smoke__synthetic_procurement_need__linear_regression__ablation_reduced_context.json",
+        "model_family": "linear_regression",
+        "model_name": "linear_regression_ablation_reduced_context",
+        "feature_set": "ablation_reduced_context",
+        "target": "synthetic_procurement_need",
+        "split": "validation",
+        "n_samples": 174,
+        "mae": 47.707647049152065,
+        "rmse": 76.47469717064605,
+        "r2": 0.589011676816338,
+        "mape": 0.16698156168532938,
+        "prediction_bias": -17.135314940097096
+      },
+      {
+        "section": "upstream_predictor",
+        "source": "models/metrics/summary/baseline_comparison_latest__mixed_context.json; models/metrics/baseline_comparison_mixed_context_20260518_seed42_smoke__synthetic_procurement_need__linear_regression__ablation_reduced_context.json",
+        "model_family": "linear_regression",
+        "model_name": "linear_regression_ablation_reduced_context",
+        "feature_set": "ablation_reduced_context",
+        "target": "synthetic_procurement_need",
+        "split": "test",
+        "n_samples": 175,
+        "mae": 72.82239979926281,
+        "rmse": 105.67102742272888,
+        "r2": 0.12312950024740887,
+        "mape": 0.1600149297070126,
+        "prediction_bias": -50.11183239976784
+      },
+      {
+        "section": "upstream_predictor",
+        "source": "models/metrics/summary/baseline_comparison_latest__mixed_context.json; models/metrics/baseline_comparison_mixed_context_20260518_seed42_smoke__synthetic_procurement_need__neuroevolution__ablation_reduced_context.json",
+        "model_family": "neuroevolution",
+        "model_name": "neuroevolution_ablation_reduced_context",
+        "feature_set": "ablation_reduced_context",
+        "target": "synthetic_procurement_need",
+        "split": "validation",
+        "n_samples": 174,
+        "mae": 94.9272365870896,
+        "rmse": 127.61424716008125,
+        "r2": -0.14443801861018368,
+        "mape": 0.33718344562232344,
+        "prediction_bias": -55.118256502547524
+      },
+      {
+        "section": "upstream_predictor",
+        "source": "models/metrics/summary/baseline_comparison_latest__mixed_context.json; models/metrics/baseline_comparison_mixed_context_20260518_seed42_smoke__synthetic_procurement_need__neuroevolution__ablation_reduced_context.json",
+        "model_family": "neuroevolution",
+        "model_name": "neuroevolution_ablation_reduced_context",
+        "feature_set": "ablation_reduced_context",
+        "target": "synthetic_procurement_need",
+        "split": "test",
+        "n_samples": 175,
+        "mae": 184.5997901476652,
+        "rmse": 213.46256623034822,
+        "r2": -2.578220107110586,
+        "mape": 0.38353199703633345,
+        "prediction_bias": -181.5310896361209
+      }
+    ],
+    "purchase_trigger": [
+      {
+        "section": "purchase_trigger",
+        "source": "models/metrics/summary/trigger_metrics_latest__mixed_context.json; models/metrics/official/purchase_trigger_predictions_train__mixed_context.csv",
+        "split": "train",
+        "n_samples": 812,
+        "actual_buy": 442,
+        "actual_do_not_buy": 370,
+        "buy_pct": 0.5443349753694581,
+        "accuracy": 0.9519704433497537,
+        "balanced_accuracy": 0.9534609269903387,
+        "precision_buy": 0.9741176470588235,
+        "precision_do_not_buy": 0.9276485788113695,
+        "recall_buy": 0.9366515837104072,
+        "recall_do_not_buy": 0.9702702702702702,
+        "f1_buy": 0.9550173010380624,
+        "f1_do_not_buy": 0.9484808454425363,
+        "false_negative_rate": 0.06334841628959276,
+        "true_negative": 359,
+        "false_positive": 11,
+        "false_negative": 28,
+        "true_positive": 414
+      },
+      {
+        "section": "purchase_trigger",
+        "source": "models/metrics/summary/trigger_metrics_latest__mixed_context.json; models/metrics/official/purchase_trigger_predictions_validation__mixed_context.csv",
+        "split": "validation",
+        "n_samples": 174,
+        "actual_buy": 124,
+        "actual_do_not_buy": 50,
+        "buy_pct": 0.7126436781609196,
+        "accuracy": 0.9367816091954023,
+        "balanced_accuracy": 0.9198387096774194,
+        "precision_buy": 0.952,
+        "precision_do_not_buy": 0.8979591836734694,
+        "recall_buy": 0.9596774193548387,
+        "recall_do_not_buy": 0.88,
+        "f1_buy": 0.9558232931726908,
+        "f1_do_not_buy": 0.888888888888889,
+        "false_negative_rate": 0.04032258064516129,
+        "true_negative": 44,
+        "false_positive": 6,
+        "false_negative": 5,
+        "true_positive": 119
+      },
+      {
+        "section": "purchase_trigger",
+        "source": "models/metrics/summary/trigger_metrics_latest__mixed_context.json; models/metrics/official/purchase_trigger_predictions_test__mixed_context.csv",
+        "split": "test",
+        "n_samples": 175,
+        "actual_buy": 165,
+        "actual_do_not_buy": 10,
+        "buy_pct": 0.9428571428571428,
+        "accuracy": 0.96,
+        "balanced_accuracy": 0.696969696969697,
+        "precision_buy": 0.9647058823529412,
+        "precision_do_not_buy": 0.8,
+        "recall_buy": 0.9939393939393939,
+        "recall_do_not_buy": 0.4,
+        "f1_buy": 0.9791044776119404,
+        "f1_do_not_buy": 0.5333333333333333,
+        "false_negative_rate": 0.006060606060606061,
+        "true_negative": 4,
+        "false_positive": 6,
+        "false_negative": 1,
+        "true_positive": 164
+      }
+    ],
+    "quantity_optimizer": [
+      {
+        "section": "quantity_optimizer",
+        "source": "models/metrics/summary/quantity_optimizer_latest__mixed_context.json; models/metrics/official/quantity_optimizer_predictions_train__mixed_context.csv",
+        "model": "Ridge",
+        "split": "train",
+        "target": "quantity_optimizer_target_tons",
+        "n_samples": 442,
+        "mae": 3.9994645620436904,
+        "rmse": 6.63576813977863,
+        "r2": 0.9997257534492018,
+        "mape": 0.1856676630512659,
+        "baseline_order_quantity_tons_mae": 4.93507267051678,
+        "baseline_order_quantity_tons_rmse": 12.065701140216483,
+        "baseline_order_quantity_tons_r2": 0.9990932994146666
+      },
+      {
+        "section": "quantity_optimizer",
+        "source": "models/metrics/summary/quantity_optimizer_latest__mixed_context.json; models/metrics/official/quantity_optimizer_predictions_validation__mixed_context.csv",
+        "model": "Ridge",
+        "split": "validation",
+        "target": "quantity_optimizer_target_tons",
+        "n_samples": 124,
+        "mae": 12.900121645653218,
+        "rmse": 19.703367623362663,
+        "r2": 0.9992717128955891,
+        "mape": 0.1503558201612301,
+        "baseline_order_quantity_tons_mae": 16.420628261821772,
+        "baseline_order_quantity_tons_rmse": 25.03340956316879,
+        "baseline_order_quantity_tons_r2": 0.9988243942306193
+      },
+      {
+        "section": "quantity_optimizer",
+        "source": "models/metrics/summary/quantity_optimizer_latest__mixed_context.json; models/metrics/official/quantity_optimizer_predictions_test__mixed_context.csv",
+        "model": "Ridge",
+        "split": "test",
+        "target": "quantity_optimizer_target_tons",
+        "n_samples": 165,
+        "mae": 31.064144337979435,
+        "rmse": 37.0957340841414,
+        "r2": 0.9978737931736812,
+        "mape": 0.09069090529075183,
+        "baseline_order_quantity_tons_mae": 31.679930543505172,
+        "baseline_order_quantity_tons_rmse": 36.30726355666127,
+        "baseline_order_quantity_tons_r2": 0.9979632177372101
+      }
+    ],
+    "quantity_optimizer_baseline_comparison": [
+      {
+        "section": "quantity_optimizer_baseline_comparison",
+        "source": "models/metrics/summary/quantity_optimizer_baseline_comparison_latest__mixed_context.json",
+        "model": "DummyRegressor",
+        "split": "train",
+        "rmse": 400.7011749302037,
+        "mae": 272.0314738724874,
+        "r2": 0.0,
+        "n_rows": 442
+      },
+      {
+        "section": "quantity_optimizer_baseline_comparison",
+        "source": "models/metrics/summary/quantity_optimizer_baseline_comparison_latest__mixed_context.json",
+        "model": "Ridge",
+        "split": "train",
+        "rmse": 6.63576813977863,
+        "mae": 3.9994645620436904,
+        "r2": 0.9997257534492018,
+        "n_rows": 442
+      },
+      {
+        "section": "quantity_optimizer_baseline_comparison",
+        "source": "models/metrics/summary/quantity_optimizer_baseline_comparison_latest__mixed_context.json",
+        "model": "DummyRegressor",
+        "split": "validation",
+        "rmse": 824.1777654783837,
+        "mae": 536.3048285513383,
+        "r2": -0.27427595210661004,
+        "n_rows": 124
+      },
+      {
+        "section": "quantity_optimizer_baseline_comparison",
+        "source": "models/metrics/summary/quantity_optimizer_baseline_comparison_latest__mixed_context.json",
+        "model": "Ridge",
+        "split": "validation",
+        "rmse": 19.703367623362663,
+        "mae": 12.900121645653218,
+        "r2": 0.9992717128955891,
+        "n_rows": 124
+      },
+      {
+        "section": "quantity_optimizer_baseline_comparison",
+        "source": "models/metrics/summary/quantity_optimizer_baseline_comparison_latest__mixed_context.json",
+        "model": "DummyRegressor",
+        "split": "test",
+        "rmse": 1189.0638023229546,
+        "mae": 901.0212475737835,
+        "r2": -1.1845796593242532,
+        "n_rows": 165
+      },
+      {
+        "section": "quantity_optimizer_baseline_comparison",
+        "source": "models/metrics/summary/quantity_optimizer_baseline_comparison_latest__mixed_context.json",
+        "model": "Ridge",
+        "split": "test",
+        "rmse": 37.0957340841414,
+        "mae": 31.064144337979435,
+        "r2": 0.9978737931736812,
+        "n_rows": 165
+      }
+    ],
+    "policy_simulation": {
+      "section": "policy_simulation",
+      "source": "models/metrics/summary/policy_simulation_latest__mixed_context.json; models/metrics/official/policy_simulation_period_latest__mixed_context.csv",
+      "n_periods": 175,
+      "baseline_excess_tons": 37374.49442683941,
+      "policy_excess_tons": 29260.17626877957,
+      "absolute_excess_reduction_tons": 8114.318158059839,
+      "aggregate_excess_reduction_pct": 21.710843939156476,
+      "baseline_stockout_tons": 0.0,
+      "policy_stockout_tons": 0.0,
+      "stockout_tons": 0.0,
+      "aggregate_stockout_change_pct": 0.0,
+      "stockout_guardrail_pass": true,
+      "trigger_rule_respected": true,
+      "baseline_policy_name": "operational_simple",
+      "proposed_policy_name": "two_stage_mixed_context",
+      "allowed_stockout_increase_pct": 5.0
+    },
+    "synthetic_procurement_need_formula": {
+      "section": "synthetic_procurement_need_formula",
+      "source": "config/config.yaml; src/data_processing/synthetic_plant.py; reports/official/synthetic_procurement_need_formula__mixed_context.json",
+      "canonical_variant": "pressure",
+      "canonical_target_column": "synthetic_procurement_need",
+      "effective_variant_column": "synthetic_procurement_need_pressure",
+      "pressure_core_weight": 0.8600000000000001,
+      "pressure_snapshot_blend_weight": 0.08,
+      "pressure_coverage_gap_blend_weight": 0.06,
+      "forward_requirement_weights": [
+        0.4,
+        0.3,
+        0.2,
+        0.1
+      ],
+      "formula_note": "For canonical_variant=pressure, synthetic_procurement_need is the pressure variant: pressure_core_weight * pressure_core + pressure_snapshot_blend_weight * legacy_snapshot_need + pressure_coverage_gap_blend_weight * synthetic_procurement_need_coverage_gap."
+    }
+  },
+  "documentation_scan": {
+    "paths_scanned": [
+      "README.md",
+      "DELIVERY_README_CU28.md",
+      "docs/data_blob_inventory.md",
+      "docs/data_lineage.md",
+      "docs/data_sources_registry.md",
+      "docs/etl_pipeline.md",
+      "docs/feature_engineering.md",
+      "docs/input_contract.md",
+      "docs/leakage_policy.md",
+      "docs/model_card_cu28.md",
+      "docs/output_contract.md",
+      "docs/platform_usage.md",
+      "docs/README.md",
+      "docs/repository_outputs.md",
+      "docs/reproducibility.md",
+      "docs/simulation_assumptions.md",
+      "docs/simulation_data_basis.md",
+      "reports/official/cu28_metrics_official__mixed_context.md",
+      "reports/official/synthetic_procurement_need_formula__mixed_context.json",
+      "reports/official/synthetic_procurement_need_formula__mixed_context.md"
+    ],
+    "obsolete_findings": []
+  }
+}

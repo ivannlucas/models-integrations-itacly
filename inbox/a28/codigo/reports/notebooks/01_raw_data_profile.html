@@ -1,0 +1,1038 @@
+<html><head><meta charset='utf-8'><title>01_raw_data_profile.ipynb</title></head><body>
+<section class='markdown'><pre># CU28 mixed_context - Raw Data Profile
+
+Notebook narrativo de auditoria para el scope `mixed_context`.
+</pre></section>
+<section class='markdown'><pre>## Objetivo
+
+Perfilar los snapshots raw oficiales antes del ETL para mostrar su estructura, cobertura y limitaciones como senales externas/proxy.
+</pre></section>
+<section class='markdown'><pre>## Alcance
+
+Este analisis describe la ruta oficial reproducible `mixed_context`. Las senales externas se tratan como contexto/proxy. Las variables internas de planta siguen siendo sinteticas salvo carga posterior de cliente.
+</pre></section>
+<section class='markdown'><pre>## Inputs
+
+            - `data/raw/external/INE_CPI/`
+- `data/raw/external/MAPA_SLAUGHTER_MAPA/`
+- `data/raw/external/MAPA_PRICES_OM/`
+- `data/raw/external/*/source_manifest.json`
+</pre></section>
+<section class='markdown'><pre>## Outputs esperados
+
+            - `reports/tables/eda/raw_file_inventory__mixed_context.csv`
+- `reports/tables/eda/raw_data_quality__mixed_context.csv`
+- `reports/tables/eda/raw_temporal_ranges__mixed_context.csv`
+- `reports/figures/eda/raw_file_sizes__mixed_context.png`
+- `reports/figures/eda/raw_record_counts__mixed_context.png`
+- `reports/figures/eda/raw_temporal_coverage__mixed_context.png`
+- `reports/figures/eda/raw_missing_values__mixed_context.png`
+</pre></section>
+<section class='markdown'><pre>## Limitaciones
+
+Este notebook documenta evidencia reproducible del pipeline oficial, pero no sustituye la revision de codigo, la auditoria de datos de origen ni una certificacion operacional de planta.
+</pre></section>
+<section class='code'><h3>Code</h3><pre>from pathlib import Path
+import json
+import numpy as np
+import pandas as pd
+import matplotlib
+matplotlib.use(&quot;Agg&quot;)
+import matplotlib.pyplot as plt
+
+from src.reproducibility.notebook_support import (
+    detect_temporal_columns,
+    ensure_eda_dirs,
+    execution_metadata,
+    first_valid_temporal_range,
+    load_source_manifests,
+    load_tabular_file,
+    parse_markdown_table,
+    print_frame,
+    print_series,
+    project_root,
+    read_json,
+    relative_to_root,
+    save_figure,
+    save_table,
+    sha256_file,
+)
+</pre><h3>Output</h3><pre></pre></section>
+<section class='code'><h3>Code</h3><pre>NOTEBOOK_NAME = &quot;01_raw_data_profile.ipynb&quot;
+PROJECT_ROOT = project_root()
+SCOPE = globals().get(&quot;scope&quot;, &quot;mixed_context&quot;)
+REPORT_DIRS = ensure_eda_dirs()
+META = execution_metadata(SCOPE)
+FIGURES = []
+TABLES = []
+print(json.dumps(META, indent=2))
+</pre><h3>Output</h3><pre>{
+  &quot;scope&quot;: &quot;mixed_context&quot;,
+  &quot;executed_at_utc&quot;: &quot;2026-06-17T10:30:03.831889+00:00&quot;,
+  &quot;commit&quot;: &quot;b2fc273adf68c17087b4637655067bc80d417fa9&quot;
+}
+</pre></section>
+<section class='markdown'><pre>## Carga de datos
+
+Las siguientes celdas cargan los artefactos de entrada y muestran verificaciones intermedias antes de producir tablas y graficas.
+</pre></section>
+<section class='code'><h3>Code</h3><pre>raw_root = PROJECT_ROOT / &quot;data&quot; / &quot;raw&quot; / &quot;external&quot;
+source_manifests = load_source_manifests(raw_root)
+if not source_manifests:
+    raise FileNotFoundError(f&quot;No source manifests found under {raw_root}&quot;)
+raw_inventory_rows = []
+for manifest in source_manifests:
+    for raw_file in manifest.get(&quot;raw_files&quot;, []):
+        file_path = PROJECT_ROOT / raw_file[&quot;path&quot;]
+        raw_inventory_rows.append(
+            {
+                &quot;source_id&quot;: manifest[&quot;source_id&quot;],
+                &quot;path&quot;: raw_file[&quot;path&quot;],
+                &quot;size_bytes&quot;: file_path.stat().st_size if file_path.exists() else raw_file.get(&quot;size_bytes&quot;),
+                &quot;sha256&quot;: sha256_file(file_path) if file_path.exists() else raw_file.get(&quot;sha256&quot;),
+                &quot;access_date&quot;: manifest[&quot;access_date&quot;],
+                &quot;retrieval_method&quot;: manifest[&quot;retrieval_method&quot;],
+            }
+        )
+if not raw_inventory_rows:
+    raise FileNotFoundError(f&quot;No raw files declared in source manifests under {raw_root}&quot;)
+raw_inventory = pd.DataFrame(raw_inventory_rows).sort_values([&quot;source_id&quot;, &quot;path&quot;]).reset_index(drop=True)
+print_frame(&quot;Raw inventory&quot;, raw_inventory, rows=20)
+display(raw_inventory)
+</pre><h3>Output</h3><pre>Raw inventory
+          source_id                                                                      path  size_bytes                                                           sha256 access_date retrieval_method
+            INE_CPI                                       data/raw/external/INE_CPI/76128.csv    17893305 3172d23378b962c321177b2e3f31e2f18a6c6e8afbf2b8b2f87b35866ee5e9ff  2026-05-18  cached_snapshot
+     MAPA_PRICES_OM                          data/raw/external/MAPA_PRICES_OM/s502025rv0.xlsx     1252729 1e9cf66bcabab2adff0f0334ab24956bc969c183fe4d160addd4f0d516e08100  2026-05-18  cached_snapshot
+MAPA_SLAUGHTER_MAPA    data/raw/external/MAPA_SLAUGHTER_MAPA/boletin--diciembre-2025-web.xlsx      241556 a8d00d58d3125267e52073e4d2398a88129bec271507e582cf0d2fcf822283e7  2026-05-18  cached_snapshot
+MAPA_SLAUGHTER_MAPA          data/raw/external/MAPA_SLAUGHTER_MAPA/sacrificio_anual_2024.xlsx      164090 7fd3b075418a3e8d6332fc03dbf24b7a69807ce94188a12e589cb35fd760fc2f  2026-05-18  cached_snapshot
+MAPA_SLAUGHTER_MAPA     data/raw/external/MAPA_SLAUGHTER_MAPA/sacrificio_exhaustivo_2023.xlsx      166076 2f8261a46f6e5ce207bc6e6e70fb7b34bfcc3f8a1df1f7653be0cd984a5d94cb  2026-05-18  cached_snapshot
+MAPA_SLAUGHTER_MAPA   data/raw/external/MAPA_SLAUGHTER_MAPA/web-mapa-1-junio-24-25-web-0.xlsx      647011 3f46eb5e130b1343925223566fbec6977d4c213f49af6204b77af2dce3e45084  2026-05-18  cached_snapshot
+MAPA_SLAUGHTER_MAPA data/raw/external/MAPA_SLAUGHTER_MAPA/web-mapa-2-diciembre-24-25-web.xlsx      706302 1c4fa965d351ea1a32e30a34ba49a00a16dc72fb2c1f7d41f99a3746e1c70bcf  2026-05-18  cached_snapshot
+</pre><table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th>source_id</th>
+      <th>path</th>
+      <th>size_bytes</th>
+      <th>sha256</th>
+      <th>access_date</th>
+      <th>retrieval_method</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>INE_CPI</td>
+      <td>data/raw/external/INE_CPI/76128.csv</td>
+      <td>17893305</td>
+      <td>3172d23378b962c321177b2e3f31e2f18a6c6e8afbf2b8b2f87b35866ee5e9ff</td>
+      <td>2026-05-18</td>
+      <td>cached_snapshot</td>
+    </tr>
+    <tr>
+      <td>MAPA_PRICES_OM</td>
+      <td>data/raw/external/MAPA_PRICES_OM/s502025rv0.xlsx</td>
+      <td>1252729</td>
+      <td>1e9cf66bcabab2adff0f0334ab24956bc969c183fe4d160addd4f0d516e08100</td>
+      <td>2026-05-18</td>
+      <td>cached_snapshot</td>
+    </tr>
+    <tr>
+      <td>MAPA_SLAUGHTER_MAPA</td>
+      <td>data/raw/external/MAPA_SLAUGHTER_MAPA/boletin--diciembre-2025-web.xlsx</td>
+      <td>241556</td>
+      <td>a8d00d58d3125267e52073e4d2398a88129bec271507e582cf0d2fcf822283e7</td>
+      <td>2026-05-18</td>
+      <td>cached_snapshot</td>
+    </tr>
+    <tr>
+      <td>MAPA_SLAUGHTER_MAPA</td>
+      <td>data/raw/external/MAPA_SLAUGHTER_MAPA/sacrificio_anual_2024.xlsx</td>
+      <td>164090</td>
+      <td>7fd3b075418a3e8d6332fc03dbf24b7a69807ce94188a12e589cb35fd760fc2f</td>
+      <td>2026-05-18</td>
+      <td>cached_snapshot</td>
+    </tr>
+    <tr>
+      <td>MAPA_SLAUGHTER_MAPA</td>
+      <td>data/raw/external/MAPA_SLAUGHTER_MAPA/sacrificio_exhaustivo_2023.xlsx</td>
+      <td>166076</td>
+      <td>2f8261a46f6e5ce207bc6e6e70fb7b34bfcc3f8a1df1f7653be0cd984a5d94cb</td>
+      <td>2026-05-18</td>
+      <td>cached_snapshot</td>
+    </tr>
+    <tr>
+      <td>MAPA_SLAUGHTER_MAPA</td>
+      <td>data/raw/external/MAPA_SLAUGHTER_MAPA/web-mapa-1-junio-24-25-web-0.xlsx</td>
+      <td>647011</td>
+      <td>3f46eb5e130b1343925223566fbec6977d4c213f49af6204b77af2dce3e45084</td>
+      <td>2026-05-18</td>
+      <td>cached_snapshot</td>
+    </tr>
+    <tr>
+      <td>MAPA_SLAUGHTER_MAPA</td>
+      <td>data/raw/external/MAPA_SLAUGHTER_MAPA/web-mapa-2-diciembre-24-25-web.xlsx</td>
+      <td>706302</td>
+      <td>1c4fa965d351ea1a32e30a34ba49a00a16dc72fb2c1f7d41f99a3746e1c70bcf</td>
+      <td>2026-05-18</td>
+      <td>cached_snapshot</td>
+    </tr>
+  </tbody>
+</table></section>
+<section class='code'><h3>Code</h3><pre>profiles = []
+previews = {}
+tail_previews = {}
+for row in raw_inventory.itertuples(index=False):
+    file_path = PROJECT_ROOT / row.path
+    frame = load_tabular_file(file_path)
+    temporal = first_valid_temporal_range(frame)
+    previews[row.path] = frame.head(3)
+    tail_previews[row.path] = frame.tail(3)
+    profiles.append(
+        {
+            &quot;source_id&quot;: row.source_id,
+            &quot;path&quot;: row.path,
+            &quot;row_count&quot;: int(len(frame)),
+            &quot;column_count&quot;: int(len(frame.columns)),
+            &quot;columns&quot;: &quot;, &quot;.join(str(column) for column in frame.columns[:12]),
+            &quot;dtypes&quot;: &quot;, &quot;.join(f&quot;{column}:{dtype}&quot; for column, dtype in frame.dtypes.astype(str).items()),
+            &quot;missing_pct_mean&quot;: float(frame.isna().mean().mean()),
+            &quot;duplicate_rows&quot;: int(frame.duplicated().sum()),
+            &quot;temporal_column&quot;: temporal[&quot;column&quot;],
+            &quot;date_min&quot;: temporal[&quot;date_min&quot;],
+            &quot;date_max&quot;: temporal[&quot;date_max&quot;],
+        }
+    )
+raw_quality = pd.DataFrame(profiles).sort_values([&quot;source_id&quot;, &quot;path&quot;]).reset_index(drop=True)
+print_frame(&quot;Raw profile&quot;, raw_quality, rows=20)
+display(raw_quality[[&quot;source_id&quot;, &quot;path&quot;, &quot;row_count&quot;, &quot;column_count&quot;, &quot;temporal_column&quot;, &quot;date_min&quot;, &quot;date_max&quot;]])
+</pre><h3>Output</h3><pre>Raw profile
+          source_id                                                                      path  row_count  column_count                                                                                                                                                                                                                       columns                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               dtypes  missing_pct_mean  duplicate_rows temporal_column date_min date_max
+            INE_CPI                                       data/raw/external/INE_CPI/76128.csv     228520             4                                                                                                                                                                        ﻿Subclases ECOICOP ver.2, Tipo de dato, Periodo, Total                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               ﻿Subclases ECOICOP ver.2:str, Tipo de dato:str, Periodo:str, Total:str          0.119805               0            None     None     None
+     MAPA_PRICES_OM                          data/raw/external/MAPA_PRICES_OM/s502025rv0.xlsx        121            57                                                                              Unnamed: 0, Unnamed: 1, Unnamed: 2, Unnamed: 3, Unnamed: 4, Unnamed: 5, Unnamed: 6, Unnamed: 7, Unnamed: 8, Unnamed: 9, Unnamed: 10, Unnamed: 11 Unnamed: 0:float64, Unnamed: 1:float64, Unnamed: 2:str, Unnamed: 3:str, Unnamed: 4:object, Unnamed: 5:object, Unnamed: 6:object, Unnamed: 7:object, Unnamed: 8:object, Unnamed: 9:object, Unnamed: 10:object, Unnamed: 11:object, Unnamed: 12:object, Unnamed: 13:object, Unnamed: 14:object, Unnamed: 15:object, Unnamed: 16:object, Unnamed: 17:object, Unnamed: 18:object, Unnamed: 19:object, Unnamed: 20:object, Unnamed: 21:object, Unnamed: 22:object, Unnamed: 23:object, Unnamed: 24:object, Unnamed: 25:object, Unnamed: 26:object, Unnamed: 27:object, Unnamed: 28:object, Unnamed: 29:object, Unnamed: 30:object, Unnamed: 31:object, Unnamed: 32:object, Unnamed: 33:object, Unnamed: 34:object, Unnamed: 35:object, Unnamed: 36:object, Unnamed: 37:object, Unnamed: 38:object, Unnamed: 39:object, Unnamed: 40:object, Unnamed: 41:object, Unnamed: 42:object, Unnamed: 43:object, Unnamed: 44:object, Unnamed: 45:object, Unnamed: 46:object, Unnamed: 47:object, Unnamed: 48:object, Unnamed: 49:object, Unnamed: 50:object, Unnamed: 51:object, Unnamed: 52:object, Unnamed: 53:object, Unnamed: 54:object, Unnamed: 55:object, Unnamed: 56:object          0.344788              22            None     None     None
+MAPA_SLAUGHTER_MAPA    data/raw/external/MAPA_SLAUGHTER_MAPA/boletin--diciembre-2025-web.xlsx         94            15                                                                              Unnamed: 0, Unnamed: 1, Unnamed: 2, Unnamed: 3, Unnamed: 4, Unnamed: 5, Unnamed: 6, Unnamed: 7, Unnamed: 8, Unnamed: 9, Unnamed: 10, Unnamed: 11                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        Unnamed: 0:str, Unnamed: 1:object, Unnamed: 2:object, Unnamed: 3:object, Unnamed: 4:object, Unnamed: 5:object, Unnamed: 6:object, Unnamed: 7:object, Unnamed: 8:object, Unnamed: 9:object, Unnamed: 10:object, Unnamed: 11:object, Unnamed: 12:object, Unnamed: 13:object, Unnamed: 14:object          0.278014              13            None     None     None
+MAPA_SLAUGHTER_MAPA          data/raw/external/MAPA_SLAUGHTER_MAPA/sacrificio_anual_2024.xlsx         71             8 ENCUESTA ANUAL CENSAL DE SACRIFICIO DE GANADO EN MATADEROS 2024\nDESAGREGACION PROVINCIAL DEL NUMERO DE CABEZAS SACRIFICADAS POR ESPECIES, Unnamed: 1, Unnamed: 2, Unnamed: 3, Unnamed: 4, Unnamed: 5, Unnamed: 6, Unnamed: 7                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   ENCUESTA ANUAL CENSAL DE SACRIFICIO DE GANADO EN MATADEROS 2024\nDESAGREGACION PROVINCIAL DEL NUMERO DE CABEZAS SACRIFICADAS POR ESPECIES:str, Unnamed: 1:object, Unnamed: 2:object, Unnamed: 3:object, Unnamed: 4:object, Unnamed: 5:object, Unnamed: 6:object, Unnamed: 7:object          0.091549               2            None     None     None
+MAPA_SLAUGHTER_MAPA     data/raw/external/MAPA_SLAUGHTER_MAPA/sacrificio_exhaustivo_2023.xlsx         83             8                                                                           ENCUESTA ANUAL CENSAL DE SACRIFICIO DE GANADO EN MATADEROS 2023, Unnamed: 1, Unnamed: 2, Unnamed: 3, Unnamed: 4, Unnamed: 5, Unnamed: 6, Unnamed: 7                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             ENCUESTA ANUAL CENSAL DE SACRIFICIO DE GANADO EN MATADEROS 2023:str, Unnamed: 1:object, Unnamed: 2:object, Unnamed: 3:object, Unnamed: 4:object, Unnamed: 5:object, Unnamed: 6:object, Unnamed: 7:object          0.200301               5            None     None     None
+MAPA_SLAUGHTER_MAPA   data/raw/external/MAPA_SLAUGHTER_MAPA/web-mapa-1-junio-24-25-web-0.xlsx         65             6                                                                                                                                                        Unnamed: 0, Unnamed: 1, Unnamed: 2, Unnamed: 3, Unnamed: 4, Unnamed: 5                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          Unnamed: 0:str, Unnamed: 1:object, Unnamed: 2:object, Unnamed: 3:object, Unnamed: 4:float64, Unnamed: 5:str          0.638462              26            None     None     None
+MAPA_SLAUGHTER_MAPA data/raw/external/MAPA_SLAUGHTER_MAPA/web-mapa-2-diciembre-24-25-web.xlsx         65            15                                                                              Unnamed: 0, Unnamed: 1, Unnamed: 2, Unnamed: 3, Unnamed: 4, Unnamed: 5, Unnamed: 6, Unnamed: 7, Unnamed: 8, Unnamed: 9, Unnamed: 10, Unnamed: 11                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        Unnamed: 0:str, Unnamed: 1:object, Unnamed: 2:object, Unnamed: 3:object, Unnamed: 4:object, Unnamed: 5:object, Unnamed: 6:object, Unnamed: 7:object, Unnamed: 8:object, Unnamed: 9:object, Unnamed: 10:object, Unnamed: 11:float64, Unnamed: 12:float64, Unnamed: 13:float64, Unnamed: 14:str          0.606154              26            None     None     None
+</pre><table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th>source_id</th>
+      <th>path</th>
+      <th>row_count</th>
+      <th>column_count</th>
+      <th>temporal_column</th>
+      <th>date_min</th>
+      <th>date_max</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>INE_CPI</td>
+      <td>data/raw/external/INE_CPI/76128.csv</td>
+      <td>228520</td>
+      <td>4</td>
+      <td>None</td>
+      <td>None</td>
+      <td>None</td>
+    </tr>
+    <tr>
+      <td>MAPA_PRICES_OM</td>
+      <td>data/raw/external/MAPA_PRICES_OM/s502025rv0.xlsx</td>
+      <td>121</td>
+      <td>57</td>
+      <td>None</td>
+      <td>None</td>
+      <td>None</td>
+    </tr>
+    <tr>
+      <td>MAPA_SLAUGHTER_MAPA</td>
+      <td>data/raw/external/MAPA_SLAUGHTER_MAPA/boletin--diciembre-2025-web.xlsx</td>
+      <td>94</td>
+      <td>15</td>
+      <td>None</td>
+      <td>None</td>
+      <td>None</td>
+    </tr>
+    <tr>
+      <td>MAPA_SLAUGHTER_MAPA</td>
+      <td>data/raw/external/MAPA_SLAUGHTER_MAPA/sacrificio_anual_2024.xlsx</td>
+      <td>71</td>
+      <td>8</td>
+      <td>None</td>
+      <td>None</td>
+      <td>None</td>
+    </tr>
+    <tr>
+      <td>MAPA_SLAUGHTER_MAPA</td>
+      <td>data/raw/external/MAPA_SLAUGHTER_MAPA/sacrificio_exhaustivo_2023.xlsx</td>
+      <td>83</td>
+      <td>8</td>
+      <td>None</td>
+      <td>None</td>
+      <td>None</td>
+    </tr>
+    <tr>
+      <td>MAPA_SLAUGHTER_MAPA</td>
+      <td>data/raw/external/MAPA_SLAUGHTER_MAPA/web-mapa-1-junio-24-25-web-0.xlsx</td>
+      <td>65</td>
+      <td>6</td>
+      <td>None</td>
+      <td>None</td>
+      <td>None</td>
+    </tr>
+    <tr>
+      <td>MAPA_SLAUGHTER_MAPA</td>
+      <td>data/raw/external/MAPA_SLAUGHTER_MAPA/web-mapa-2-diciembre-24-25-web.xlsx</td>
+      <td>65</td>
+      <td>15</td>
+      <td>None</td>
+      <td>None</td>
+      <td>None</td>
+    </tr>
+  </tbody>
+</table></section>
+<section class='markdown'><pre>## Inspeccion inicial
+
+En esta fase se comprueban shape, columnas, tipos, nulos y duplicados. La lectura usa el primer sheet reproducible de cada snapshot tabular.
+</pre></section>
+<section class='code'><h3>Code</h3><pre>shape_summary = raw_quality[[&quot;source_id&quot;, &quot;path&quot;, &quot;row_count&quot;, &quot;column_count&quot;]].copy()
+print_frame(&quot;Shape by raw file&quot;, shape_summary, rows=20)
+display(shape_summary)
+</pre><h3>Output</h3><pre>Shape by raw file
+          source_id                                                                      path  row_count  column_count
+            INE_CPI                                       data/raw/external/INE_CPI/76128.csv     228520             4
+     MAPA_PRICES_OM                          data/raw/external/MAPA_PRICES_OM/s502025rv0.xlsx        121            57
+MAPA_SLAUGHTER_MAPA    data/raw/external/MAPA_SLAUGHTER_MAPA/boletin--diciembre-2025-web.xlsx         94            15
+MAPA_SLAUGHTER_MAPA          data/raw/external/MAPA_SLAUGHTER_MAPA/sacrificio_anual_2024.xlsx         71             8
+MAPA_SLAUGHTER_MAPA     data/raw/external/MAPA_SLAUGHTER_MAPA/sacrificio_exhaustivo_2023.xlsx         83             8
+MAPA_SLAUGHTER_MAPA   data/raw/external/MAPA_SLAUGHTER_MAPA/web-mapa-1-junio-24-25-web-0.xlsx         65             6
+MAPA_SLAUGHTER_MAPA data/raw/external/MAPA_SLAUGHTER_MAPA/web-mapa-2-diciembre-24-25-web.xlsx         65            15
+</pre><table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th>source_id</th>
+      <th>path</th>
+      <th>row_count</th>
+      <th>column_count</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>INE_CPI</td>
+      <td>data/raw/external/INE_CPI/76128.csv</td>
+      <td>228520</td>
+      <td>4</td>
+    </tr>
+    <tr>
+      <td>MAPA_PRICES_OM</td>
+      <td>data/raw/external/MAPA_PRICES_OM/s502025rv0.xlsx</td>
+      <td>121</td>
+      <td>57</td>
+    </tr>
+    <tr>
+      <td>MAPA_SLAUGHTER_MAPA</td>
+      <td>data/raw/external/MAPA_SLAUGHTER_MAPA/boletin--diciembre-2025-web.xlsx</td>
+      <td>94</td>
+      <td>15</td>
+    </tr>
+    <tr>
+      <td>MAPA_SLAUGHTER_MAPA</td>
+      <td>data/raw/external/MAPA_SLAUGHTER_MAPA/sacrificio_anual_2024.xlsx</td>
+      <td>71</td>
+      <td>8</td>
+    </tr>
+    <tr>
+      <td>MAPA_SLAUGHTER_MAPA</td>
+      <td>data/raw/external/MAPA_SLAUGHTER_MAPA/sacrificio_exhaustivo_2023.xlsx</td>
+      <td>83</td>
+      <td>8</td>
+    </tr>
+    <tr>
+      <td>MAPA_SLAUGHTER_MAPA</td>
+      <td>data/raw/external/MAPA_SLAUGHTER_MAPA/web-mapa-1-junio-24-25-web-0.xlsx</td>
+      <td>65</td>
+      <td>6</td>
+    </tr>
+    <tr>
+      <td>MAPA_SLAUGHTER_MAPA</td>
+      <td>data/raw/external/MAPA_SLAUGHTER_MAPA/web-mapa-2-diciembre-24-25-web.xlsx</td>
+      <td>65</td>
+      <td>15</td>
+    </tr>
+  </tbody>
+</table></section>
+<section class='code'><h3>Code</h3><pre>column_and_dtype_summary = raw_quality[[&quot;source_id&quot;, &quot;path&quot;, &quot;columns&quot;, &quot;dtypes&quot;]].copy()
+print_frame(&quot;Columns and dtypes&quot;, column_and_dtype_summary, rows=20)
+display(column_and_dtype_summary.head(10))
+</pre><h3>Output</h3><pre>Columns and dtypes
+          source_id                                                                      path                                                                                                                                                                                                                       columns                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               dtypes
+            INE_CPI                                       data/raw/external/INE_CPI/76128.csv                                                                                                                                                                        ﻿Subclases ECOICOP ver.2, Tipo de dato, Periodo, Total                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               ﻿Subclases ECOICOP ver.2:str, Tipo de dato:str, Periodo:str, Total:str
+     MAPA_PRICES_OM                          data/raw/external/MAPA_PRICES_OM/s502025rv0.xlsx                                                                              Unnamed: 0, Unnamed: 1, Unnamed: 2, Unnamed: 3, Unnamed: 4, Unnamed: 5, Unnamed: 6, Unnamed: 7, Unnamed: 8, Unnamed: 9, Unnamed: 10, Unnamed: 11 Unnamed: 0:float64, Unnamed: 1:float64, Unnamed: 2:str, Unnamed: 3:str, Unnamed: 4:object, Unnamed: 5:object, Unnamed: 6:object, Unnamed: 7:object, Unnamed: 8:object, Unnamed: 9:object, Unnamed: 10:object, Unnamed: 11:object, Unnamed: 12:object, Unnamed: 13:object, Unnamed: 14:object, Unnamed: 15:object, Unnamed: 16:object, Unnamed: 17:object, Unnamed: 18:object, Unnamed: 19:object, Unnamed: 20:object, Unnamed: 21:object, Unnamed: 22:object, Unnamed: 23:object, Unnamed: 24:object, Unnamed: 25:object, Unnamed: 26:object, Unnamed: 27:object, Unnamed: 28:object, Unnamed: 29:object, Unnamed: 30:object, Unnamed: 31:object, Unnamed: 32:object, Unnamed: 33:object, Unnamed: 34:object, Unnamed: 35:object, Unnamed: 36:object, Unnamed: 37:object, Unnamed: 38:object, Unnamed: 39:object, Unnamed: 40:object, Unnamed: 41:object, Unnamed: 42:object, Unnamed: 43:object, Unnamed: 44:object, Unnamed: 45:object, Unnamed: 46:object, Unnamed: 47:object, Unnamed: 48:object, Unnamed: 49:object, Unnamed: 50:object, Unnamed: 51:object, Unnamed: 52:object, Unnamed: 53:object, Unnamed: 54:object, Unnamed: 55:object, Unnamed: 56:object
+MAPA_SLAUGHTER_MAPA    data/raw/external/MAPA_SLAUGHTER_MAPA/boletin--diciembre-2025-web.xlsx                                                                              Unnamed: 0, Unnamed: 1, Unnamed: 2, Unnamed: 3, Unnamed: 4, Unnamed: 5, Unnamed: 6, Unnamed: 7, Unnamed: 8, Unnamed: 9, Unnamed: 10, Unnamed: 11                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        Unnamed: 0:str, Unnamed: 1:object, Unnamed: 2:object, Unnamed: 3:object, Unnamed: 4:object, Unnamed: 5:object, Unnamed: 6:object, Unnamed: 7:object, Unnamed: 8:object, Unnamed: 9:object, Unnamed: 10:object, Unnamed: 11:object, Unnamed: 12:object, Unnamed: 13:object, Unnamed: 14:object
+MAPA_SLAUGHTER_MAPA          data/raw/external/MAPA_SLAUGHTER_MAPA/sacrificio_anual_2024.xlsx ENCUESTA ANUAL CENSAL DE SACRIFICIO DE GANADO EN MATADEROS 2024\nDESAGREGACION PROVINCIAL DEL NUMERO DE CABEZAS SACRIFICADAS POR ESPECIES, Unnamed: 1, Unnamed: 2, Unnamed: 3, Unnamed: 4, Unnamed: 5, Unnamed: 6, Unnamed: 7                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   ENCUESTA ANUAL CENSAL DE SACRIFICIO DE GANADO EN MATADEROS 2024\nDESAGREGACION PROVINCIAL DEL NUMERO DE CABEZAS SACRIFICADAS POR ESPECIES:str, Unnamed: 1:object, Unnamed: 2:object, Unnamed: 3:object, Unnamed: 4:object, Unnamed: 5:object, Unnamed: 6:object, Unnamed: 7:object
+MAPA_SLAUGHTER_MAPA     data/raw/external/MAPA_SLAUGHTER_MAPA/sacrificio_exhaustivo_2023.xlsx                                                                           ENCUESTA ANUAL CENSAL DE SACRIFICIO DE GANADO EN MATADEROS 2023, Unnamed: 1, Unnamed: 2, Unnamed: 3, Unnamed: 4, Unnamed: 5, Unnamed: 6, Unnamed: 7                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             ENCUESTA ANUAL CENSAL DE SACRIFICIO DE GANADO EN MATADEROS 2023:str, Unnamed: 1:object, Unnamed: 2:object, Unnamed: 3:object, Unnamed: 4:object, Unnamed: 5:object, Unnamed: 6:object, Unnamed: 7:object
+MAPA_SLAUGHTER_MAPA   data/raw/external/MAPA_SLAUGHTER_MAPA/web-mapa-1-junio-24-25-web-0.xlsx                                                                                                                                                        Unnamed: 0, Unnamed: 1, Unnamed: 2, Unnamed: 3, Unnamed: 4, Unnamed: 5                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          Unnamed: 0:str, Unnamed: 1:object, Unnamed: 2:object, Unnamed: 3:object, Unnamed: 4:float64, Unnamed: 5:str
+MAPA_SLAUGHTER_MAPA data/raw/external/MAPA_SLAUGHTER_MAPA/web-mapa-2-diciembre-24-25-web.xlsx                                                                              Unnamed: 0, Unnamed: 1, Unnamed: 2, Unnamed: 3, Unnamed: 4, Unnamed: 5, Unnamed: 6, Unnamed: 7, Unnamed: 8, Unnamed: 9, Unnamed: 10, Unnamed: 11                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        Unnamed: 0:str, Unnamed: 1:object, Unnamed: 2:object, Unnamed: 3:object, Unnamed: 4:object, Unnamed: 5:object, Unnamed: 6:object, Unnamed: 7:object, Unnamed: 8:object, Unnamed: 9:object, Unnamed: 10:object, Unnamed: 11:float64, Unnamed: 12:float64, Unnamed: 13:float64, Unnamed: 14:str
+</pre><table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th>source_id</th>
+      <th>path</th>
+      <th>columns</th>
+      <th>dtypes</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>INE_CPI</td>
+      <td>data/raw/external/INE_CPI/76128.csv</td>
+      <td>﻿Subclases ECOICOP ver.2, Tipo de dato, Periodo, Total</td>
+      <td>﻿Subclases ECOICOP ver.2:str, Tipo de dato:str, Periodo:str, Total:str</td>
+    </tr>
+    <tr>
+      <td>MAPA_PRICES_OM</td>
+      <td>data/raw/external/MAPA_PRICES_OM/s502025rv0.xlsx</td>
+      <td>Unnamed: 0, Unnamed: 1, Unnamed: 2, Unnamed: 3, Unnamed: 4, Unnamed: 5, Unnamed: 6, Unnamed: 7, Unnamed: 8, Unnamed: 9, Unnamed: 10, Unnamed: 11</td>
+      <td>Unnamed: 0:float64, Unnamed: 1:float64, Unnamed: 2:str, Unnamed: 3:str, Unnamed: 4:object, Unnamed: 5:object, Unnamed: 6:object, Unnamed: 7:object, Unnamed: 8:object, Unnamed: 9:object, Unnamed: 10:object, Unnamed: 11:object, Unnamed: 12:object, Unnamed: 13:object, Unnamed: 14:object, Unnamed: 15:object, Unnamed: 16:object, Unnamed: 17:object, Unnamed: 18:object, Unnamed: 19:object, Unnamed: 20:object, Unnamed: 21:object, Unnamed: 22:object, Unnamed: 23:object, Unnamed: 24:object, Unnamed: 25:object, Unnamed: 26:object, Unnamed: 27:object, Unnamed: 28:object, Unnamed: 29:object, Unnamed: 30:object, Unnamed: 31:object, Unnamed: 32:object, Unnamed: 33:object, Unnamed: 34:object, Unnamed: 35:object, Unnamed: 36:object, Unnamed: 37:object, Unnamed: 38:object, Unnamed: 39:object, Unnamed: 40:object, Unnamed: 41:object, Unnamed: 42:object, Unnamed: 43:object, Unnamed: 44:object, Unnamed: 45:object, Unnamed: 46:object, Unnamed: 47:object, Unnamed: 48:object, Unnamed: 49:object, Unnamed: 50:object, Unnamed: 51:object, Unnamed: 52:object, Unnamed: 53:object, Unnamed: 54:object, Unnamed: 55:object, Unnamed: 56:object</td>
+    </tr>
+    <tr>
+      <td>MAPA_SLAUGHTER_MAPA</td>
+      <td>data/raw/external/MAPA_SLAUGHTER_MAPA/boletin--diciembre-2025-web.xlsx</td>
+      <td>Unnamed: 0, Unnamed: 1, Unnamed: 2, Unnamed: 3, Unnamed: 4, Unnamed: 5, Unnamed: 6, Unnamed: 7, Unnamed: 8, Unnamed: 9, Unnamed: 10, Unnamed: 11</td>
+      <td>Unnamed: 0:str, Unnamed: 1:object, Unnamed: 2:object, Unnamed: 3:object, Unnamed: 4:object, Unnamed: 5:object, Unnamed: 6:object, Unnamed: 7:object, Unnamed: 8:object, Unnamed: 9:object, Unnamed: 10:object, Unnamed: 11:object, Unnamed: 12:object, Unnamed: 13:object, Unnamed: 14:object</td>
+    </tr>
+    <tr>
+      <td>MAPA_SLAUGHTER_MAPA</td>
+      <td>data/raw/external/MAPA_SLAUGHTER_MAPA/sacrificio_anual_2024.xlsx</td>
+      <td>ENCUESTA ANUAL CENSAL DE SACRIFICIO DE GANADO EN MATADEROS 2024\nDESAGREGACION PROVINCIAL DEL NUMERO DE CABEZAS SACRIFICADAS POR ESPECIES, Unnamed: 1, Unnamed: 2, Unnamed: 3, Unnamed: 4, Unnamed: 5, Unnamed: 6, Unnamed: 7</td>
+      <td>ENCUESTA ANUAL CENSAL DE SACRIFICIO DE GANADO EN MATADEROS 2024\nDESAGREGACION PROVINCIAL DEL NUMERO DE CABEZAS SACRIFICADAS POR ESPECIES:str, Unnamed: 1:object, Unnamed: 2:object, Unnamed: 3:object, Unnamed: 4:object, Unnamed: 5:object, Unnamed: 6:object, Unnamed: 7:object</td>
+    </tr>
+    <tr>
+      <td>MAPA_SLAUGHTER_MAPA</td>
+      <td>data/raw/external/MAPA_SLAUGHTER_MAPA/sacrificio_exhaustivo_2023.xlsx</td>
+      <td>ENCUESTA ANUAL CENSAL DE SACRIFICIO DE GANADO EN MATADEROS 2023, Unnamed: 1, Unnamed: 2, Unnamed: 3, Unnamed: 4, Unnamed: 5, Unnamed: 6, Unnamed: 7</td>
+      <td>ENCUESTA ANUAL CENSAL DE SACRIFICIO DE GANADO EN MATADEROS 2023:str, Unnamed: 1:object, Unnamed: 2:object, Unnamed: 3:object, Unnamed: 4:object, Unnamed: 5:object, Unnamed: 6:object, Unnamed: 7:object</td>
+    </tr>
+    <tr>
+      <td>MAPA_SLAUGHTER_MAPA</td>
+      <td>data/raw/external/MAPA_SLAUGHTER_MAPA/web-mapa-1-junio-24-25-web-0.xlsx</td>
+      <td>Unnamed: 0, Unnamed: 1, Unnamed: 2, Unnamed: 3, Unnamed: 4, Unnamed: 5</td>
+      <td>Unnamed: 0:str, Unnamed: 1:object, Unnamed: 2:object, Unnamed: 3:object, Unnamed: 4:float64, Unnamed: 5:str</td>
+    </tr>
+    <tr>
+      <td>MAPA_SLAUGHTER_MAPA</td>
+      <td>data/raw/external/MAPA_SLAUGHTER_MAPA/web-mapa-2-diciembre-24-25-web.xlsx</td>
+      <td>Unnamed: 0, Unnamed: 1, Unnamed: 2, Unnamed: 3, Unnamed: 4, Unnamed: 5, Unnamed: 6, Unnamed: 7, Unnamed: 8, Unnamed: 9, Unnamed: 10, Unnamed: 11</td>
+      <td>Unnamed: 0:str, Unnamed: 1:object, Unnamed: 2:object, Unnamed: 3:object, Unnamed: 4:object, Unnamed: 5:object, Unnamed: 6:object, Unnamed: 7:object, Unnamed: 8:object, Unnamed: 9:object, Unnamed: 10:object, Unnamed: 11:float64, Unnamed: 12:float64, Unnamed: 13:float64, Unnamed: 14:str</td>
+    </tr>
+  </tbody>
+</table></section>
+<section class='code'><h3>Code</h3><pre>quality_summary = raw_quality[[&quot;source_id&quot;, &quot;path&quot;, &quot;missing_pct_mean&quot;, &quot;duplicate_rows&quot;]].copy()
+quality_summary[&quot;missing_pct_mean&quot;] = quality_summary[&quot;missing_pct_mean&quot;].round(4)
+print_frame(&quot;Missing values and duplicates&quot;, quality_summary, rows=20)
+display(quality_summary)
+</pre><h3>Output</h3><pre>Missing values and duplicates
+          source_id                                                                      path  missing_pct_mean  duplicate_rows
+            INE_CPI                                       data/raw/external/INE_CPI/76128.csv            0.1198               0
+     MAPA_PRICES_OM                          data/raw/external/MAPA_PRICES_OM/s502025rv0.xlsx            0.3448              22
+MAPA_SLAUGHTER_MAPA    data/raw/external/MAPA_SLAUGHTER_MAPA/boletin--diciembre-2025-web.xlsx            0.2780              13
+MAPA_SLAUGHTER_MAPA          data/raw/external/MAPA_SLAUGHTER_MAPA/sacrificio_anual_2024.xlsx            0.0915               2
+MAPA_SLAUGHTER_MAPA     data/raw/external/MAPA_SLAUGHTER_MAPA/sacrificio_exhaustivo_2023.xlsx            0.2003               5
+MAPA_SLAUGHTER_MAPA   data/raw/external/MAPA_SLAUGHTER_MAPA/web-mapa-1-junio-24-25-web-0.xlsx            0.6385              26
+MAPA_SLAUGHTER_MAPA data/raw/external/MAPA_SLAUGHTER_MAPA/web-mapa-2-diciembre-24-25-web.xlsx            0.6062              26
+</pre><table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th>source_id</th>
+      <th>path</th>
+      <th>missing_pct_mean</th>
+      <th>duplicate_rows</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>INE_CPI</td>
+      <td>data/raw/external/INE_CPI/76128.csv</td>
+      <td>0.1198</td>
+      <td>0</td>
+    </tr>
+    <tr>
+      <td>MAPA_PRICES_OM</td>
+      <td>data/raw/external/MAPA_PRICES_OM/s502025rv0.xlsx</td>
+      <td>0.3448</td>
+      <td>22</td>
+    </tr>
+    <tr>
+      <td>MAPA_SLAUGHTER_MAPA</td>
+      <td>data/raw/external/MAPA_SLAUGHTER_MAPA/boletin--diciembre-2025-web.xlsx</td>
+      <td>0.2780</td>
+      <td>13</td>
+    </tr>
+    <tr>
+      <td>MAPA_SLAUGHTER_MAPA</td>
+      <td>data/raw/external/MAPA_SLAUGHTER_MAPA/sacrificio_anual_2024.xlsx</td>
+      <td>0.0915</td>
+      <td>2</td>
+    </tr>
+    <tr>
+      <td>MAPA_SLAUGHTER_MAPA</td>
+      <td>data/raw/external/MAPA_SLAUGHTER_MAPA/sacrificio_exhaustivo_2023.xlsx</td>
+      <td>0.2003</td>
+      <td>5</td>
+    </tr>
+    <tr>
+      <td>MAPA_SLAUGHTER_MAPA</td>
+      <td>data/raw/external/MAPA_SLAUGHTER_MAPA/web-mapa-1-junio-24-25-web-0.xlsx</td>
+      <td>0.6385</td>
+      <td>26</td>
+    </tr>
+    <tr>
+      <td>MAPA_SLAUGHTER_MAPA</td>
+      <td>data/raw/external/MAPA_SLAUGHTER_MAPA/web-mapa-2-diciembre-24-25-web.xlsx</td>
+      <td>0.6062</td>
+      <td>26</td>
+    </tr>
+  </tbody>
+</table></section>
+<section class='code'><h3>Code</h3><pre>for path, preview in previews.items():
+    print(f&quot;First rows for {path}&quot;)
+    print(preview.to_string(index=False))
+    print(&quot;&quot;)
+</pre><h3>Output</h3><pre>First rows for data/raw/external/INE_CPI/76128.csv
+﻿Subclases ECOICOP ver.2 Tipo de dato Periodo   Total
+          Índice general       Índice 2026M02     NaN
+          Índice general       Índice 2026M01 100,836
+          Índice general       Índice 2025M12 101,289
+
+First rows for data/raw/external/MAPA_PRICES_OM/s502025rv0.xlsx
+ Unnamed: 0  Unnamed: 1 Unnamed: 2 Unnamed: 3 Unnamed: 4 Unnamed: 5 Unnamed: 6 Unnamed: 7 Unnamed: 8 Unnamed: 9 Unnamed: 10 Unnamed: 11 Unnamed: 12 Unnamed: 13 Unnamed: 14 Unnamed: 15 Unnamed: 16 Unnamed: 17 Unnamed: 18 Unnamed: 19 Unnamed: 20 Unnamed: 21 Unnamed: 22 Unnamed: 23 Unnamed: 24 Unnamed: 25 Unnamed: 26 Unnamed: 27 Unnamed: 28 Unnamed: 29 Unnamed: 30 Unnamed: 31 Unnamed: 32 Unnamed: 33 Unnamed: 34 Unnamed: 35 Unnamed: 36 Unnamed: 37 Unnamed: 38 Unnamed: 39 Unnamed: 40 Unnamed: 41 Unnamed: 42 Unnamed: 43 Unnamed: 44 Unnamed: 45 Unnamed: 46 Unnamed: 47 Unnamed: 48 Unnamed: 49 Unnamed: 50 Unnamed: 51 Unnamed: 52 Unnamed: 53 Unnamed: 54 Unnamed: 55 Unnamed: 56
+        NaN         NaN        NaN        NaN        NaN        NaN        NaN        NaN        NaN        NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN
+        NaN         NaN        NaN        NaN        NaN        NaN        NaN        NaN        NaN        NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN
+        NaN         NaN        NaN        NaN        NaN        NaN        NaN        NaN        NaN        NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN
+
+First rows for data/raw/external/MAPA_SLAUGHTER_MAPA/boletin--diciembre-2025-web.xlsx
+                                                  Unnamed: 0 Unnamed: 1 Unnamed: 2 Unnamed: 3 Unnamed: 4 Unnamed: 5 Unnamed: 6 Unnamed: 7 Unnamed: 8 Unnamed: 9 Unnamed: 10 Unnamed: 11 Unnamed: 12 Unnamed: 13 Unnamed: 14
+                                                         NaN        NaN        NaN        NaN        NaN        NaN        NaN        NaN        NaN        NaN         NaN         NaN         NaN         NaN         NaN
+          SUBSECRETARÍA DE AGRICULTURA, PESCA Y ALIMENTACIÓN        NaN        NaN        NaN        NaN        NaN        NaN        NaN        NaN        NaN         NaN         NaN         NaN         NaN         NaN
+SUBDIRECCIÓN GENERAL DE ANÁLISIS, COORDINACIÓN Y ESTADÍSTICA        NaN        NaN        NaN        NaN        NaN        NaN        NaN        NaN        NaN         NaN         NaN         NaN         NaN         NaN
+
+First rows for data/raw/external/MAPA_SLAUGHTER_MAPA/sacrificio_anual_2024.xlsx
+ENCUESTA ANUAL CENSAL DE SACRIFICIO DE GANADO EN MATADEROS 2024\nDESAGREGACION PROVINCIAL DEL NUMERO DE CABEZAS SACRIFICADAS POR ESPECIES Unnamed: 1 Unnamed: 2 Unnamed: 3 Unnamed: 4 Unnamed: 5     Unnamed: 6       Unnamed: 7
+                                                                                                                      PROVINCIAS \nY CCAA     BOVINO      OVINO    CAPRINO    PORCINO     EQUINO AVES \n(miles) CONEJOS\n(miles)
+                                                                                                                              CORUÑA (LA)     102824       4041        776     192968     DC (1)         DC (1)                0
+                                                                                                                                     LUGO     106814     DC (1)     DC (1)     DC (1)     DC (1)         DC (2)                0
+
+First rows for data/raw/external/MAPA_SLAUGHTER_MAPA/sacrificio_exhaustivo_2023.xlsx
+          ENCUESTA ANUAL CENSAL DE SACRIFICIO DE GANADO EN MATADEROS 2023 Unnamed: 1 Unnamed: 2 Unnamed: 3 Unnamed: 4 Unnamed: 5 Unnamed: 6 Unnamed: 7
+DESAGREGACION PROVINCIAL DEL NUMERO DE CABEZAS SACRIFICADAS, POR ESPECIES        NaN        NaN        NaN        NaN        NaN        NaN        NaN
+                                                                      NaN        NaN        NaN        NaN        NaN        NaN        NaN        NaN
+                                                               PROVINCIAS        NaN        NaN        NaN        NaN        NaN        NaN        NaN
+
+First rows for data/raw/external/MAPA_SLAUGHTER_MAPA/web-mapa-1-junio-24-25-web-0.xlsx
+                                                  Unnamed: 0 Unnamed: 1 Unnamed: 2 Unnamed: 3  Unnamed: 4 Unnamed: 5
+                                                         NaN        NaN        NaN        NaN         NaN        NaN
+          SUBSECRETARÍA DE AGRICULTURA, PESCA Y ALIMENTACIÓN        NaN        NaN        NaN         NaN        NaN
+SUBDIRECCIÓN GENERAL DE ANÁLISIS, COORDINACIÓN Y ESTADÍSTICA        NaN        NaN        NaN         NaN           
+
+First rows for data/raw/external/MAPA_SLAUGHTER_MAPA/web-mapa-2-diciembre-24-25-web.xlsx
+                                                  Unnamed: 0 Unnamed: 1 Unnamed: 2 Unnamed: 3 Unnamed: 4 Unnamed: 5 Unnamed: 6 Unnamed: 7 Unnamed: 8 Unnamed: 9 Unnamed: 10  Unnamed: 11  Unnamed: 12  Unnamed: 13 Unnamed: 14
+                                                         NaN        NaN        NaN        NaN        NaN        NaN        NaN        NaN        NaN        NaN         NaN          NaN          NaN          NaN         NaN
+          SUBSECRETARÍA DE AGRICULTURA, PESCA Y ALIMENTACIÓN        NaN        NaN        NaN        NaN        NaN        NaN        NaN        NaN        NaN         NaN          NaN          NaN          NaN         NaN
+SUBDIRECCIÓN GENERAL DE ANÁLISIS, COORDINACIÓN Y ESTADÍSTICA        NaN        NaN        NaN        NaN                   NaN        NaN        NaN        NaN         NaN          NaN          NaN          NaN         NaN
+
+</pre></section>
+<section class='code'><h3>Code</h3><pre>for path, preview in tail_previews.items():
+    print(f&quot;Last rows for {path}&quot;)
+    print(preview.to_string(index=False))
+    print(&quot;&quot;)
+</pre><h3>Output</h3><pre>Last rows for data/raw/external/INE_CPI/76128.csv
+         ﻿Subclases ECOICOP ver.2                  Tipo de dato Periodo Total
+13.9.0.9 Otros servicios n.c.o.p. Variación en lo que va de año 2002M03   2,2
+13.9.0.9 Otros servicios n.c.o.p. Variación en lo que va de año 2002M02   1,9
+13.9.0.9 Otros servicios n.c.o.p. Variación en lo que va de año 2002M01   1,5
+
+Last rows for data/raw/external/MAPA_PRICES_OM/s502025rv0.xlsx
+ Unnamed: 0  Unnamed: 1                Unnamed: 2 Unnamed: 3 Unnamed: 4 Unnamed: 5 Unnamed: 6 Unnamed: 7 Unnamed: 8 Unnamed: 9 Unnamed: 10 Unnamed: 11 Unnamed: 12 Unnamed: 13 Unnamed: 14 Unnamed: 15 Unnamed: 16 Unnamed: 17 Unnamed: 18 Unnamed: 19 Unnamed: 20 Unnamed: 21 Unnamed: 22 Unnamed: 23 Unnamed: 24 Unnamed: 25 Unnamed: 26 Unnamed: 27 Unnamed: 28 Unnamed: 29 Unnamed: 30 Unnamed: 31 Unnamed: 32 Unnamed: 33 Unnamed: 34 Unnamed: 35 Unnamed: 36 Unnamed: 37 Unnamed: 38 Unnamed: 39 Unnamed: 40 Unnamed: 41 Unnamed: 42 Unnamed: 43 Unnamed: 44 Unnamed: 45 Unnamed: 46 Unnamed: 47 Unnamed: 48 Unnamed: 49 Unnamed: 50 Unnamed: 51 Unnamed: 52 Unnamed: 53 Unnamed: 54 Unnamed: 55 Unnamed: 56
+        NaN         NaN             Naranja Navel         kg       1.29       1.28       1.24       1.24       1.23       1.25        1.28        1.29        1.31        1.29        1.31        1.32        1.33        1.37         1.4        1.42        1.43        1.42         1.4        1.41        1.42        1.45        1.35        1.37        1.39        1.37        1.38        1.39        1.38        1.39         1.4         1.4        1.41        1.42        1.41        1.42        1.43        1.41        1.42        1.45        1.44         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN
+        NaN         NaN Pera de agua o blanquilla         kg       1.55       1.53       1.51       1.52       1.53       1.55        1.58        1.57        1.58        1.58        1.57        1.56        1.58        1.57        1.56        1.54        1.55        1.57        1.55        1.56        1.56        1.58        1.61        1.61        1.62         1.6        1.65        1.65        1.68        1.68        1.69        1.59        1.61        1.61         1.6        1.67        1.68        1.67        1.64        1.59        1.55        1.54        1.57        1.53        1.51        1.51         1.5        1.49        1.48        1.48        1.48         1.5         1.5
+        NaN         NaN                   Plátano         kg        NaN        NaN        NaN        NaN        NaN        NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN         NaN
+
+Last rows for data/raw/external/MAPA_SLAUGHTER_MAPA/boletin--diciembre-2025-web.xlsx
+                                            Unnamed: 0 Unnamed: 1   Unnamed: 2  Unnamed: 3   Unnamed: 4   Unnamed: 5   Unnamed: 6   Unnamed: 7  Unnamed: 8   Unnamed: 9  Unnamed: 10  Unnamed: 11  Unnamed: 12  Unnamed: 13  Unnamed: 14
+                                                   NaN       2025  2879.121341  2616.10925  2714.254955  2773.620002  2786.685141  2713.568602  2930.62267  2801.640366  2541.957067  2631.075401  2426.974816  2679.961778  32495.59139
+ (1) En 2025 es el acumulado de los datos disponibles.        NaN          NaN         NaN          NaN          NaN          NaN          NaN         NaN          NaN          NaN          NaN          NaN          NaN          NaN
+                  Nota.- Resultado 2025 provisionales.        NaN          NaN         NaN          NaN          NaN          NaN          NaN         NaN          NaN          NaN          NaN          NaN          NaN          NaN
+
+Last rows for data/raw/external/MAPA_SLAUGHTER_MAPA/sacrificio_anual_2024.xlsx
+ENCUESTA ANUAL CENSAL DE SACRIFICIO DE GANADO EN MATADEROS 2024\nDESAGREGACION PROVINCIAL DEL NUMERO DE CABEZAS SACRIFICADAS POR ESPECIES Unnamed: 1 Unnamed: 2 Unnamed: 3 Unnamed: 4 Unnamed: 5 Unnamed: 6 Unnamed: 7
+                     DC (2): Dato Confidencial cuya cifra representa entre el  2 y el 5 % de cabezas sacrificadas en España por categoría        NaN        NaN        NaN        NaN        NaN        NaN        NaN
+                    DC (3): Dato Confidencial cuya cifra representa entre el  5 y el 10 % de cabezas sacrificadas en España por categoría        NaN        NaN        NaN        NaN        NaN        NaN        NaN
+                   DC (4): Dato Confidencial cuya cifra representa entre el  10 y el 30 % de cabezas sacrificadas en España por categoría        NaN        NaN        NaN        NaN        NaN        NaN        NaN
+
+Last rows for data/raw/external/MAPA_SLAUGHTER_MAPA/sacrificio_exhaustivo_2023.xlsx
+               ENCUESTA ANUAL CENSAL DE SACRIFICIO DE GANADO EN MATADEROS 2023 Unnamed: 1 Unnamed: 2 Unnamed: 3 Unnamed: 4 Unnamed: 5 Unnamed: 6 Unnamed: 7
+Referenciar el documento como: “Encuestas de Sacrificio de Ganado– Año 2023.”         NaN        NaN        NaN        NaN        NaN        NaN        NaN
+  Edita: © Ministerio de Agricultura, Pesca y Alimentación. NIPO: 003-22-133-3        NaN        NaN        NaN        NaN        NaN        NaN        NaN
+                     Catálogo de publicaciones AGE : https://cpage.mpr.gob.es/        NaN        NaN        NaN        NaN        NaN        NaN        NaN
+
+Last rows for data/raw/external/MAPA_SLAUGHTER_MAPA/web-mapa-1-junio-24-25-web-0.xlsx
+       Unnamed: 0    Unnamed: 1    Unnamed: 2 Unnamed: 3  Unnamed: 4 Unnamed: 5
+         CANARIAS      317.2624       279.647  13.451029         NaN        NaN
+OTRAS COMUNIDADES      2816.088      2550.455  10.415122         NaN        NaN
+            TOTAL  57396.890863  60287.057895  -4.794009         NaN        NaN
+
+Last rows for data/raw/external/MAPA_SLAUGHTER_MAPA/web-mapa-2-diciembre-24-25-web.xlsx
+       Unnamed: 0    Unnamed: 1    Unnamed: 2 Unnamed: 3     Unnamed: 4     Unnamed: 5 Unnamed: 6    Unnamed: 7   Unnamed: 8 Unnamed: 9 Unnamed: 10  Unnamed: 11  Unnamed: 12  Unnamed: 13 Unnamed: 14
+         CANARIAS       264.449      270.7864  -2.340369      1867.4277      1888.3675  -1.108884    266.775386   269.766786   0.879711   -0.376538          NaN          NaN          NaN         NaN
+OTRAS COMUNIDADES    3394.18874      3153.013   7.649056    20421.13054     20185.0117   1.169773   2917.304363    2883.5731 -14.050025   -8.545474          NaN          NaN          NaN         NaN
+            TOTAL  66128.138588  64742.560405   2.140135  411565.622779  423552.401932  -2.830058  58795.088968  60507.48599 -11.089152   -6.541407          NaN          NaN          NaN         NaN
+
+</pre></section>
+<section class='code'><h3>Code</h3><pre>temporal_ranges = raw_quality[[&quot;source_id&quot;, &quot;path&quot;, &quot;temporal_column&quot;, &quot;date_min&quot;, &quot;date_max&quot;]].copy()
+print_frame(&quot;Temporal range by raw file&quot;, temporal_ranges, rows=20)
+display(temporal_ranges)
+</pre><h3>Output</h3><pre>Temporal range by raw file
+          source_id                                                                      path temporal_column date_min date_max
+            INE_CPI                                       data/raw/external/INE_CPI/76128.csv            None     None     None
+     MAPA_PRICES_OM                          data/raw/external/MAPA_PRICES_OM/s502025rv0.xlsx            None     None     None
+MAPA_SLAUGHTER_MAPA    data/raw/external/MAPA_SLAUGHTER_MAPA/boletin--diciembre-2025-web.xlsx            None     None     None
+MAPA_SLAUGHTER_MAPA          data/raw/external/MAPA_SLAUGHTER_MAPA/sacrificio_anual_2024.xlsx            None     None     None
+MAPA_SLAUGHTER_MAPA     data/raw/external/MAPA_SLAUGHTER_MAPA/sacrificio_exhaustivo_2023.xlsx            None     None     None
+MAPA_SLAUGHTER_MAPA   data/raw/external/MAPA_SLAUGHTER_MAPA/web-mapa-1-junio-24-25-web-0.xlsx            None     None     None
+MAPA_SLAUGHTER_MAPA data/raw/external/MAPA_SLAUGHTER_MAPA/web-mapa-2-diciembre-24-25-web.xlsx            None     None     None
+</pre><table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th>source_id</th>
+      <th>path</th>
+      <th>temporal_column</th>
+      <th>date_min</th>
+      <th>date_max</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>INE_CPI</td>
+      <td>data/raw/external/INE_CPI/76128.csv</td>
+      <td>None</td>
+      <td>None</td>
+      <td>None</td>
+    </tr>
+    <tr>
+      <td>MAPA_PRICES_OM</td>
+      <td>data/raw/external/MAPA_PRICES_OM/s502025rv0.xlsx</td>
+      <td>None</td>
+      <td>None</td>
+      <td>None</td>
+    </tr>
+    <tr>
+      <td>MAPA_SLAUGHTER_MAPA</td>
+      <td>data/raw/external/MAPA_SLAUGHTER_MAPA/boletin--diciembre-2025-web.xlsx</td>
+      <td>None</td>
+      <td>None</td>
+      <td>None</td>
+    </tr>
+    <tr>
+      <td>MAPA_SLAUGHTER_MAPA</td>
+      <td>data/raw/external/MAPA_SLAUGHTER_MAPA/sacrificio_anual_2024.xlsx</td>
+      <td>None</td>
+      <td>None</td>
+      <td>None</td>
+    </tr>
+    <tr>
+      <td>MAPA_SLAUGHTER_MAPA</td>
+      <td>data/raw/external/MAPA_SLAUGHTER_MAPA/sacrificio_exhaustivo_2023.xlsx</td>
+      <td>None</td>
+      <td>None</td>
+      <td>None</td>
+    </tr>
+    <tr>
+      <td>MAPA_SLAUGHTER_MAPA</td>
+      <td>data/raw/external/MAPA_SLAUGHTER_MAPA/web-mapa-1-junio-24-25-web-0.xlsx</td>
+      <td>None</td>
+      <td>None</td>
+      <td>None</td>
+    </tr>
+    <tr>
+      <td>MAPA_SLAUGHTER_MAPA</td>
+      <td>data/raw/external/MAPA_SLAUGHTER_MAPA/web-mapa-2-diciembre-24-25-web.xlsx</td>
+      <td>None</td>
+      <td>None</td>
+      <td>None</td>
+    </tr>
+  </tbody>
+</table></section>
+<section class='markdown'><pre>## Interpretacion intermedia
+
+Los snapshots raw son insumos contextuales externos. No representan inventario observado, compras observadas ni produccion observada de una planta concreta.
+</pre></section>
+<section class='code'><h3>Code</h3><pre>size_by_source = raw_inventory.groupby(&quot;source_id&quot;, as_index=False)[&quot;size_bytes&quot;].sum().sort_values(&quot;size_bytes&quot;, ascending=False)
+fig, ax = plt.subplots(figsize=(7, 4))
+ax.bar(size_by_source[&quot;source_id&quot;], size_by_source[&quot;size_bytes&quot;], color=&quot;#355c7d&quot;)
+ax.set_title(&quot;Raw size by source&quot;)
+ax.set_ylabel(&quot;bytes&quot;)
+FIGURES.append(save_figure(fig, &quot;raw_file_sizes__mixed_context.png&quot;))
+plt.close(fig)
+print_frame(&quot;Size by source&quot;, size_by_source)
+</pre><h3>Output</h3><pre>Figure saved to: C:\Users\Erick Mercado\Documents\a28-cnp-carnico-neuroevolutivas-materia\reports\figures\eda\raw_file_sizes__mixed_context.png
+Size by source
+          source_id  size_bytes
+            INE_CPI    17893305
+MAPA_SLAUGHTER_MAPA     1925035
+     MAPA_PRICES_OM     1252729
+</pre><img src='../figures/eda/raw_file_sizes__mixed_context.png' alt='raw_file_sizes__mixed_context.png' style='max-width:100%;height:auto;' /></section>
+<section class='markdown'><pre>### Interpretacion de la figura
+
+El tamano por fuente ayuda a entender el peso del blob y confirma que el repositorio no necesita contener datos masivos si el empaquetado externo esta bien trazado.
+</pre></section>
+<section class='code'><h3>Code</h3><pre>records_by_source = raw_quality.groupby(&quot;source_id&quot;, as_index=False)[&quot;row_count&quot;].sum().sort_values(&quot;row_count&quot;, ascending=False)
+fig, ax = plt.subplots(figsize=(7, 4))
+ax.bar(records_by_source[&quot;source_id&quot;], records_by_source[&quot;row_count&quot;], color=&quot;#c06c84&quot;)
+ax.set_title(&quot;Raw record count by source&quot;)
+ax.set_ylabel(&quot;rows&quot;)
+FIGURES.append(save_figure(fig, &quot;raw_record_counts__mixed_context.png&quot;))
+plt.close(fig)
+print_frame(&quot;Records by source&quot;, records_by_source)
+</pre><h3>Output</h3><pre>Figure saved to: C:\Users\Erick Mercado\Documents\a28-cnp-carnico-neuroevolutivas-materia\reports\figures\eda\raw_record_counts__mixed_context.png
+Records by source
+          source_id  row_count
+            INE_CPI     228520
+MAPA_SLAUGHTER_MAPA        378
+     MAPA_PRICES_OM        121
+</pre><img src='../figures/eda/raw_record_counts__mixed_context.png' alt='raw_record_counts__mixed_context.png' style='max-width:100%;height:auto;' /></section>
+<section class='markdown'><pre>### Interpretacion de la figura
+
+El conteo de filas ilustra que las fuentes aportan granularidades distintas y que el ETL posterior debe armonizar frecuencia y estructura.
+</pre></section>
+<section class='code'><h3>Code</h3><pre>temporal_plot_df = temporal_ranges.dropna(subset=[&quot;date_min&quot;, &quot;date_max&quot;]).copy()
+temporal_plot_df[&quot;date_min&quot;] = pd.to_datetime(temporal_plot_df[&quot;date_min&quot;])
+temporal_plot_df[&quot;date_max&quot;] = pd.to_datetime(temporal_plot_df[&quot;date_max&quot;])
+fig, ax = plt.subplots(figsize=(10, 4))
+for idx, row in temporal_plot_df.reset_index(drop=True).iterrows():
+    ax.hlines(idx, row[&quot;date_min&quot;], row[&quot;date_max&quot;], linewidth=6, color=&quot;#6c5b7b&quot;)
+ax.set_yticks(range(len(temporal_plot_df)))
+ax.set_yticklabels(temporal_plot_df[&quot;source_id&quot;])
+ax.set_title(&quot;Temporal coverage by raw file&quot;)
+ax.set_xlabel(&quot;date&quot;)
+FIGURES.append(save_figure(fig, &quot;raw_temporal_coverage__mixed_context.png&quot;))
+plt.close(fig)
+</pre><h3>Output</h3><pre>Figure saved to: C:\Users\Erick Mercado\Documents\a28-cnp-carnico-neuroevolutivas-materia\reports\figures\eda\raw_temporal_coverage__mixed_context.png
+</pre><img src='../figures/eda/raw_temporal_coverage__mixed_context.png' alt='raw_temporal_coverage__mixed_context.png' style='max-width:100%;height:auto;' /></section>
+<section class='code'><h3>Code</h3><pre>missing_by_file = raw_quality[[&quot;path&quot;, &quot;missing_pct_mean&quot;]].sort_values(&quot;missing_pct_mean&quot;, ascending=False)
+fig, ax = plt.subplots(figsize=(10, 4))
+ax.bar(missing_by_file[&quot;path&quot;], missing_by_file[&quot;missing_pct_mean&quot;], color=&quot;#f67280&quot;)
+ax.set_title(&quot;Average missing rate by raw file&quot;)
+ax.set_ylabel(&quot;missing_pct_mean&quot;)
+ax.tick_params(axis=&quot;x&quot;, rotation=75)
+FIGURES.append(save_figure(fig, &quot;raw_missing_values__mixed_context.png&quot;))
+plt.close(fig)
+print_frame(&quot;Missing rate by raw file&quot;, missing_by_file, rows=20)
+</pre><h3>Output</h3><pre>Figure saved to: C:\Users\Erick Mercado\Documents\a28-cnp-carnico-neuroevolutivas-materia\reports\figures\eda\raw_missing_values__mixed_context.png
+Missing rate by raw file
+                                                                     path  missing_pct_mean
+  data/raw/external/MAPA_SLAUGHTER_MAPA/web-mapa-1-junio-24-25-web-0.xlsx          0.638462
+data/raw/external/MAPA_SLAUGHTER_MAPA/web-mapa-2-diciembre-24-25-web.xlsx          0.606154
+                         data/raw/external/MAPA_PRICES_OM/s502025rv0.xlsx          0.344788
+   data/raw/external/MAPA_SLAUGHTER_MAPA/boletin--diciembre-2025-web.xlsx          0.278014
+    data/raw/external/MAPA_SLAUGHTER_MAPA/sacrificio_exhaustivo_2023.xlsx          0.200301
+                                      data/raw/external/INE_CPI/76128.csv          0.119805
+         data/raw/external/MAPA_SLAUGHTER_MAPA/sacrificio_anual_2024.xlsx          0.091549
+</pre><img src='../figures/eda/raw_missing_values__mixed_context.png' alt='raw_missing_values__mixed_context.png' style='max-width:100%;height:auto;' /></section>
+<section class='markdown'><pre>## Hallazgos parciales
+
+- El inventario raw queda identificado por ruta, hash y metodo de obtencion.
+- La cobertura temporal es heterogenea y confirma la necesidad de un ETL que armonice frecuencia.
+- Las hojas tabulares no contienen variables internas observadas de planta.
+</pre></section>
+<section class='code'><h3>Code</h3><pre>TABLES.append(save_table(raw_inventory, &quot;raw_file_inventory__mixed_context.csv&quot;))
+TABLES.append(save_table(raw_quality, &quot;raw_data_quality__mixed_context.csv&quot;))
+TABLES.append(save_table(temporal_ranges, &quot;raw_temporal_ranges__mixed_context.csv&quot;))
+RESULT = {
+    &quot;notebook&quot;: NOTEBOOK_NAME,
+    &quot;tables&quot;: TABLES,
+    &quot;figures&quot;: FIGURES,
+    &quot;findings&quot;: [
+        &quot;Raw files are external contextual signals and do not contain internal observed plant variables.&quot;,
+        &quot;Temporal coverage differs by source and motivates the weekly harmonisation step.&quot;,
+        &quot;Each raw file remains traceable through size, hash and access metadata.&quot;,
+    ],
+    &quot;limitations&quot;: [
+        &quot;Spreadsheet profiling reads the first sheet only, which is the defended audit entrypoint for these snapshots.&quot;,
+    ],
+}
+print(json.dumps(RESULT, indent=2))
+</pre><h3>Output</h3><pre>Table saved to: C:\Users\Erick Mercado\Documents\a28-cnp-carnico-neuroevolutivas-materia\reports\tables\eda\raw_file_inventory__mixed_context.csv
+Table saved to: C:\Users\Erick Mercado\Documents\a28-cnp-carnico-neuroevolutivas-materia\reports\tables\eda\raw_data_quality__mixed_context.csv
+Table saved to: C:\Users\Erick Mercado\Documents\a28-cnp-carnico-neuroevolutivas-materia\reports\tables\eda\raw_temporal_ranges__mixed_context.csv
+{
+  &quot;notebook&quot;: &quot;01_raw_data_profile.ipynb&quot;,
+  &quot;tables&quot;: [
+    &quot;reports/tables/eda/raw_file_inventory__mixed_context.csv&quot;,
+    &quot;reports/tables/eda/raw_data_quality__mixed_context.csv&quot;,
+    &quot;reports/tables/eda/raw_temporal_ranges__mixed_context.csv&quot;
+  ],
+  &quot;figures&quot;: [
+    &quot;reports/figures/eda/raw_file_sizes__mixed_context.png&quot;,
+    &quot;reports/figures/eda/raw_record_counts__mixed_context.png&quot;,
+    &quot;reports/figures/eda/raw_temporal_coverage__mixed_context.png&quot;,
+    &quot;reports/figures/eda/raw_missing_values__mixed_context.png&quot;
+  ],
+  &quot;findings&quot;: [
+    &quot;Raw files are external contextual signals and do not contain internal observed plant variables.&quot;,
+    &quot;Temporal coverage differs by source and motivates the weekly harmonisation step.&quot;,
+    &quot;Each raw file remains traceable through size, hash and access metadata.&quot;
+  ],
+  &quot;limitations&quot;: [
+    &quot;Spreadsheet profiling reads the first sheet only, which is the defended audit entrypoint for these snapshots.&quot;
+  ]
+}
+</pre><table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th>source_id</th>
+      <th>path</th>
+      <th>size_bytes</th>
+      <th>sha256</th>
+      <th>access_date</th>
+      <th>retrieval_method</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>INE_CPI</td>
+      <td>data/raw/external/INE_CPI/76128.csv</td>
+      <td>17893305</td>
+      <td>3172d23378b962c321177b2e3f31e2f18a6c6e8afbf2b8b2f87b35866ee5e9ff</td>
+      <td>2026-05-18</td>
+      <td>cached_snapshot</td>
+    </tr>
+    <tr>
+      <td>MAPA_PRICES_OM</td>
+      <td>data/raw/external/MAPA_PRICES_OM/s502025rv0.xlsx</td>
+      <td>1252729</td>
+      <td>1e9cf66bcabab2adff0f0334ab24956bc969c183fe4d160addd4f0d516e08100</td>
+      <td>2026-05-18</td>
+      <td>cached_snapshot</td>
+    </tr>
+    <tr>
+      <td>MAPA_SLAUGHTER_MAPA</td>
+      <td>data/raw/external/MAPA_SLAUGHTER_MAPA/boletin--diciembre-2025-web.xlsx</td>
+      <td>241556</td>
+      <td>a8d00d58d3125267e52073e4d2398a88129bec271507e582cf0d2fcf822283e7</td>
+      <td>2026-05-18</td>
+      <td>cached_snapshot</td>
+    </tr>
+    <tr>
+      <td>MAPA_SLAUGHTER_MAPA</td>
+      <td>data/raw/external/MAPA_SLAUGHTER_MAPA/sacrificio_anual_2024.xlsx</td>
+      <td>164090</td>
+      <td>7fd3b075418a3e8d6332fc03dbf24b7a69807ce94188a12e589cb35fd760fc2f</td>
+      <td>2026-05-18</td>
+      <td>cached_snapshot</td>
+    </tr>
+    <tr>
+      <td>MAPA_SLAUGHTER_MAPA</td>
+      <td>data/raw/external/MAPA_SLAUGHTER_MAPA/sacrificio_exhaustivo_2023.xlsx</td>
+      <td>166076</td>
+      <td>2f8261a46f6e5ce207bc6e6e70fb7b34bfcc3f8a1df1f7653be0cd984a5d94cb</td>
+      <td>2026-05-18</td>
+      <td>cached_snapshot</td>
+    </tr>
+    <tr>
+      <td>MAPA_SLAUGHTER_MAPA</td>
+      <td>data/raw/external/MAPA_SLAUGHTER_MAPA/web-mapa-1-junio-24-25-web-0.xlsx</td>
+      <td>647011</td>
+      <td>3f46eb5e130b1343925223566fbec6977d4c213f49af6204b77af2dce3e45084</td>
+      <td>2026-05-18</td>
+      <td>cached_snapshot</td>
+    </tr>
+    <tr>
+      <td>MAPA_SLAUGHTER_MAPA</td>
+      <td>data/raw/external/MAPA_SLAUGHTER_MAPA/web-mapa-2-diciembre-24-25-web.xlsx</td>
+      <td>706302</td>
+      <td>1c4fa965d351ea1a32e30a34ba49a00a16dc72fb2c1f7d41f99a3746e1c70bcf</td>
+      <td>2026-05-18</td>
+      <td>cached_snapshot</td>
+    </tr>
+  </tbody>
+</table><table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th>source_id</th>
+      <th>path</th>
+      <th>row_count</th>
+      <th>column_count</th>
+      <th>columns</th>
+      <th>dtypes</th>
+      <th>missing_pct_mean</th>
+      <th>duplicate_rows</th>
+      <th>temporal_column</th>
+      <th>date_min</th>
+      <th>date_max</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>INE_CPI</td>
+      <td>data/raw/external/INE_CPI/76128.csv</td>
+      <td>228520</td>
+      <td>4</td>
+      <td>﻿Subclases ECOICOP ver.2, Tipo de dato, Periodo, Total</td>
+      <td>﻿Subclases ECOICOP ver.2:str, Tipo de dato:str, Periodo:str, Total:str</td>
+      <td>0.119805</td>
+      <td>0</td>
+      <td>None</td>
+      <td>None</td>
+      <td>None</td>
+    </tr>
+    <tr>
+      <td>MAPA_PRICES_OM</td>
+      <td>data/raw/external/MAPA_PRICES_OM/s502025rv0.xlsx</td>
+      <td>121</td>
+      <td>57</td>
+      <td>Unnamed: 0, Unnamed: 1, Unnamed: 2, Unnamed: 3, Unnamed: 4, Unnamed: 5, Unnamed: 6, Unnamed: 7, Unnamed: 8, Unnamed: 9, Unnamed: 10, Unnamed: 11</td>
+      <td>Unnamed: 0:float64, Unnamed: 1:float64, Unnamed: 2:str, Unnamed: 3:str, Unnamed: 4:object, Unnamed: 5:object, Unnamed: 6:object, Unnamed: 7:object, Unnamed: 8:object, Unnamed: 9:object, Unnamed: 10:object, Unnamed: 11:object, Unnamed: 12:object, Unnamed: 13:object, Unnamed: 14:object, Unnamed: 15:object, Unnamed: 16:object, Unnamed: 17:object, Unnamed: 18:object, Unnamed: 19:object, Unnamed: 20:object, Unnamed: 21:object, Unnamed: 22:object, Unnamed: 23:object, Unnamed: 24:object, Unnamed: 25:object, Unnamed: 26:object, Unnamed: 27:object, Unnamed: 28:object, Unnamed: 29:object, Unnamed: 30:object, Unnamed: 31:object, Unnamed: 32:object, Unnamed: 33:object, Unnamed: 34:object, Unnamed: 35:object, Unnamed: 36:object, Unnamed: 37:object, Unnamed: 38:object, Unnamed: 39:object, Unnamed: 40:object, Unnamed: 41:object, Unnamed: 42:object, Unnamed: 43:object, Unnamed: 44:object, Unnamed: 45:object, Unnamed: 46:object, Unnamed: 47:object, Unnamed: 48:object, Unnamed: 49:object, Unnamed: 50:object, Unnamed: 51:object, Unnamed: 52:object, Unnamed: 53:object, Unnamed: 54:object, Unnamed: 55:object, Unnamed: 56:object</td>
+      <td>0.344788</td>
+      <td>22</td>
+      <td>None</td>
+      <td>None</td>
+      <td>None</td>
+    </tr>
+    <tr>
+      <td>MAPA_SLAUGHTER_MAPA</td>
+      <td>data/raw/external/MAPA_SLAUGHTER_MAPA/boletin--diciembre-2025-web.xlsx</td>
+      <td>94</td>
+      <td>15</td>
+      <td>Unnamed: 0, Unnamed: 1, Unnamed: 2, Unnamed: 3, Unnamed: 4, Unnamed: 5, Unnamed: 6, Unnamed: 7, Unnamed: 8, Unnamed: 9, Unnamed: 10, Unnamed: 11</td>
+      <td>Unnamed: 0:str, Unnamed: 1:object, Unnamed: 2:object, Unnamed: 3:object, Unnamed: 4:object, Unnamed: 5:object, Unnamed: 6:object, Unnamed: 7:object, Unnamed: 8:object, Unnamed: 9:object, Unnamed: 10:object, Unnamed: 11:object, Unnamed: 12:object, Unnamed: 13:object, Unnamed: 14:object</td>
+      <td>0.278014</td>
+      <td>13</td>
+      <td>None</td>
+      <td>None</td>
+      <td>None</td>
+    </tr>
+    <tr>
+      <td>MAPA_SLAUGHTER_MAPA</td>
+      <td>data/raw/external/MAPA_SLAUGHTER_MAPA/sacrificio_anual_2024.xlsx</td>
+      <td>71</td>
+      <td>8</td>
+      <td>ENCUESTA ANUAL CENSAL DE SACRIFICIO DE GANADO EN MATADEROS 2024\nDESAGREGACION PROVINCIAL DEL NUMERO DE CABEZAS SACRIFICADAS POR ESPECIES, Unnamed: 1, Unnamed: 2, Unnamed: 3, Unnamed: 4, Unnamed: 5, Unnamed: 6, Unnamed: 7</td>
+      <td>ENCUESTA ANUAL CENSAL DE SACRIFICIO DE GANADO EN MATADEROS 2024\nDESAGREGACION PROVINCIAL DEL NUMERO DE CABEZAS SACRIFICADAS POR ESPECIES:str, Unnamed: 1:object, Unnamed: 2:object, Unnamed: 3:object, Unnamed: 4:object, Unnamed: 5:object, Unnamed: 6:object, Unnamed: 7:object</td>
+      <td>0.091549</td>
+      <td>2</td>
+      <td>None</td>
+      <td>None</td>
+      <td>None</td>
+    </tr>
+    <tr>
+      <td>MAPA_SLAUGHTER_MAPA</td>
+      <td>data/raw/external/MAPA_SLAUGHTER_MAPA/sacrificio_exhaustivo_2023.xlsx</td>
+      <td>83</td>
+      <td>8</td>
+      <td>ENCUESTA ANUAL CENSAL DE SACRIFICIO DE GANADO EN MATADEROS 2023, Unnamed: 1, Unnamed: 2, Unnamed: 3, Unnamed: 4, Unnamed: 5, Unnamed: 6, Unnamed: 7</td>
+      <td>ENCUESTA ANUAL CENSAL DE SACRIFICIO DE GANADO EN MATADEROS 2023:str, Unnamed: 1:object, Unnamed: 2:object, Unnamed: 3:object, Unnamed: 4:object, Unnamed: 5:object, Unnamed: 6:object, Unnamed: 7:object</td>
+      <td>0.200301</td>
+      <td>5</td>
+      <td>None</td>
+      <td>None</td>
+      <td>None</td>
+    </tr>
+    <tr>
+      <td>MAPA_SLAUGHTER_MAPA</td>
+      <td>data/raw/external/MAPA_SLAUGHTER_MAPA/web-mapa-1-junio-24-25-web-0.xlsx</td>
+      <td>65</td>
+      <td>6</td>
+      <td>Unnamed: 0, Unnamed: 1, Unnamed: 2, Unnamed: 3, Unnamed: 4, Unnamed: 5</td>
+      <td>Unnamed: 0:str, Unnamed: 1:object, Unnamed: 2:object, Unnamed: 3:object, Unnamed: 4:float64, Unnamed: 5:str</td>
+      <td>0.638462</td>
+      <td>26</td>
+      <td>None</td>
+      <td>None</td>
+      <td>None</td>
+    </tr>
+    <tr>
+      <td>MAPA_SLAUGHTER_MAPA</td>
+      <td>data/raw/external/MAPA_SLAUGHTER_MAPA/web-mapa-2-diciembre-24-25-web.xlsx</td>
+      <td>65</td>
+      <td>15</td>
+      <td>Unnamed: 0, Unnamed: 1, Unnamed: 2, Unnamed: 3, Unnamed: 4, Unnamed: 5, Unnamed: 6, Unnamed: 7, Unnamed: 8, Unnamed: 9, Unnamed: 10, Unnamed: 11</td>
+      <td>Unnamed: 0:str, Unnamed: 1:object, Unnamed: 2:object, Unnamed: 3:object, Unnamed: 4:object, Unnamed: 5:object, Unnamed: 6:object, Unnamed: 7:object, Unnamed: 8:object, Unnamed: 9:object, Unnamed: 10:object, Unnamed: 11:float64, Unnamed: 12:float64, Unnamed: 13:float64, Unnamed: 14:str</td>
+      <td>0.606154</td>
+      <td>26</td>
+      <td>None</td>
+      <td>None</td>
+      <td>None</td>
+    </tr>
+  </tbody>
+</table><table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th>source_id</th>
+      <th>path</th>
+      <th>temporal_column</th>
+      <th>date_min</th>
+      <th>date_max</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>INE_CPI</td>
+      <td>data/raw/external/INE_CPI/76128.csv</td>
+      <td>None</td>
+      <td>None</td>
+      <td>None</td>
+    </tr>
+    <tr>
+      <td>MAPA_PRICES_OM</td>
+      <td>data/raw/external/MAPA_PRICES_OM/s502025rv0.xlsx</td>
+      <td>None</td>
+      <td>None</td>
+      <td>None</td>
+    </tr>
+    <tr>
+      <td>MAPA_SLAUGHTER_MAPA</td>
+      <td>data/raw/external/MAPA_SLAUGHTER_MAPA/boletin--diciembre-2025-web.xlsx</td>
+      <td>None</td>
+      <td>None</td>
+      <td>None</td>
+    </tr>
+    <tr>
+      <td>MAPA_SLAUGHTER_MAPA</td>
+      <td>data/raw/external/MAPA_SLAUGHTER_MAPA/sacrificio_anual_2024.xlsx</td>
+      <td>None</td>
+      <td>None</td>
+      <td>None</td>
+    </tr>
+    <tr>
+      <td>MAPA_SLAUGHTER_MAPA</td>
+      <td>data/raw/external/MAPA_SLAUGHTER_MAPA/sacrificio_exhaustivo_2023.xlsx</td>
+      <td>None</td>
+      <td>None</td>
+      <td>None</td>
+    </tr>
+    <tr>
+      <td>MAPA_SLAUGHTER_MAPA</td>
+      <td>data/raw/external/MAPA_SLAUGHTER_MAPA/web-mapa-1-junio-24-25-web-0.xlsx</td>
+      <td>None</td>
+      <td>None</td>
+      <td>None</td>
+    </tr>
+    <tr>
+      <td>MAPA_SLAUGHTER_MAPA</td>
+      <td>data/raw/external/MAPA_SLAUGHTER_MAPA/web-mapa-2-diciembre-24-25-web.xlsx</td>
+      <td>None</td>
+      <td>None</td>
+      <td>None</td>
+    </tr>
+  </tbody>
+</table></section>
+<section class='markdown'><pre>## Limitaciones
+
+El perfil raw no sustituye la inspeccion sectorial de contenido. Su objetivo es dejar constancia reproducible de estructura, completitud y cobertura antes del ETL.
+</pre></section>
+<section class='markdown'><pre>## Concluson final
+
+Los raw oficiales quedan caracterizados como snapshots externos/proxy listos para transformacion, sin insinuar que sean historicos internos de aprovisionamiento o produccion.
+</pre></section>
+</body></html>

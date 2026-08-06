@@ -1,0 +1,27 @@
+{
+  "source_id": "MAPA_PRICES_OM",
+  "source_name": "Sistema de precios origen-destino (Observatorio de la Cadena)",
+  "organization": "Ministerio de Agricultura, Pesca y Alimentacion (MAPA)",
+  "source_type": "official_spreadsheet_snapshot",
+  "evidence_status": "traced",
+  "official_url": "https://servicio.mapa.gob.es/es/alimentacion/temas/observatorio-cadena/cadenas-valor/sistema-de-precios-om",
+  "download_url_or_endpoint": "https://servicio.mapa.gob.es/dam/mapa/contenido/alimentacion/servicios/observatorio-de-precios-de-los-alimentos/sistema-de-informacion-de-precios-origen---destino/s132026rv0.xlsx",
+  "access_date": "2026-05-18",
+  "license_or_terms_url": "https://www.mapa.gob.es/es/atencion-al-ciudadano/aviso-legal",
+  "redistribution_allowed": "yes_with_source_citation_unless_third_party_rights_apply",
+  "retrieval_method": "cached_snapshot",
+  "role": "Traced fallback constant reference only; not an active weekly price feed in the defended route.",
+  "raw_files": [
+    {
+      "path": "data/raw/external/MAPA_PRICES_OM/s502025rv0.xlsx",
+      "size_bytes": 1252729,
+      "sha256": "1e9cf66bcabab2adff0f0334ab24956bc969c183fe4d160addd4f0d516e08100",
+      "description": "Cached MAPA origen-destino prices workbook preserved only as traced fallback evidence."
+    }
+  ],
+  "derived_artifacts": [
+    "data/processed/external/context/context_weekly_for_simulation.csv",
+    "data/processed/external/context/context_proxy_limitations.json"
+  ],
+  "limitations": "The current processed route uses purchase_price_index as fallback_constant=100. This source must not be defended as an active weekly signal."
+}

@@ -12,7 +12,9 @@ from app.domain.services.exceptions import (
     InsufficientCycleHistoryError,
     InsufficientFramesError,
     InsufficientSequenceHistoryError,
+    InsufficientSensorWindowError,
     InsufficientTelemetryHistoryError,
+    InsufficientWindowHistoryError,
     InvalidImageError,
     InvalidVideoError,
     NoValidSimulationPointError,
@@ -145,6 +147,17 @@ from app.plugins.m47_dnsl_fallas_maquinaria_pasteurizado.predict_dto import (
     PredictRequest as M47_Request,
     PredictResponse as M47_Response,
 )
+from app.plugins.ml45_cereals_dnsl_critical_point_detection.plugin import (
+    Ml45CerealsDnslCriticalPointDetectionPlugin,
+)
+from app.plugins.ml45_cereals_dnsl_critical_point_detection.predict_dto import (
+    PredictRequest as Ml45_Request,
+    PredictResponse as Ml45_Response,
+)
+from app.plugins.ml45_cereals_dnsl_critical_point_detection.train_dto import (
+    TrainRequest as Ml45_TrainReq,
+    TrainResponse as Ml45_TrainResp,
+)
 
 from app.plugins.ml9_cereals_infestation_sequence_classifier.plugin import (
     Ml9CerealsInfestationSequenceClassifierPlugin,
@@ -168,6 +181,24 @@ from app.plugins.ml40_meat_refrigeration_aeration_fault_diagnosis.predict_dto im
 from app.plugins.ml40_meat_refrigeration_aeration_fault_diagnosis.train_dto import (
     TrainRequest as Ml40Meat_TrainReq,
     TrainResponse as Ml40Meat_TrainResp,
+)
+from app.plugins.ml28_meat_neuroevolutionary_raw_materials_prediction.plugin import (
+    Ml28MeatNeuroevolutionaryRawMaterialsPredictionPlugin,
+)
+from app.plugins.ml28_meat_neuroevolutionary_raw_materials_prediction.predict_dto import (
+    PredictRequest as Ml28Meat_Request,
+    PredictResponse as Ml28Meat_Response,
+)
+from app.plugins.ml43_cereals_dnsl_anomaly_fault_detection.plugin import (
+    Ml43CerealsDnslAnomalyFaultDetectionPlugin,
+)
+from app.plugins.ml43_cereals_dnsl_anomaly_fault_detection.predict_dto import (
+    PredictRequest as Ml43_Request,
+    PredictResponse as Ml43_Response,
+)
+from app.plugins.ml43_cereals_dnsl_anomaly_fault_detection.train_dto import (
+    TrainRequest as Ml43_TrainReq,
+    TrainResponse as Ml43_TrainResp,
 )
 
 
@@ -348,6 +379,17 @@ REGISTRY: list[ModelEntry] = [
         train_response_type=Ml9Cereals_TrainResp,
     ),
     ModelEntry(
+        model_id="ml45-cereals-dnsl-critical-point-detection",
+        prefix="/models/ml45-cereals-dnsl-critical-point-detection",
+        version="1.0.0",
+        plugin_class=Ml45CerealsDnslCriticalPointDetectionPlugin,
+        predict_request_type=Ml45_Request,
+        predict_response_type=Ml45_Response,
+        extra_predict_exceptions=(InsufficientWindowHistoryError,),
+        train_request_type=Ml45_TrainReq,
+        train_response_type=Ml45_TrainResp,
+    ),
+    ModelEntry(
         model_id="ml40-meat-refrigeration-aeration-fault-diagnosis",
         prefix="/models/ml40-meat-refrigeration-aeration-fault-diagnosis",
         version="1.0.0",
@@ -357,5 +399,25 @@ REGISTRY: list[ModelEntry] = [
         extra_predict_exceptions=(InsufficientCycleHistoryError, UnknownDiagnosisSystemError),
         train_request_type=Ml40Meat_TrainReq,
         train_response_type=Ml40Meat_TrainResp,
+    ),
+    ModelEntry(
+        model_id="ml28-meat-neuroevolutionary-raw-materials-prediction",
+        prefix="/models/ml28-meat-neuroevolutionary-raw-materials-prediction",
+        version="1.0.0",
+        plugin_class=Ml28MeatNeuroevolutionaryRawMaterialsPredictionPlugin,
+        predict_request_type=Ml28Meat_Request,
+        predict_response_type=Ml28Meat_Response,
+        extra_predict_exceptions=(),
+    ),
+    ModelEntry(
+        model_id="ml43-cereals-dnsl-anomaly-fault-detection",
+        prefix="/models/ml43-cereals-dnsl-anomaly-fault-detection",
+        version="1.0.0",
+        plugin_class=Ml43CerealsDnslAnomalyFaultDetectionPlugin,
+        predict_request_type=Ml43_Request,
+        predict_response_type=Ml43_Response,
+        extra_predict_exceptions=(InsufficientSensorWindowError,),
+        train_request_type=Ml43_TrainReq,
+        train_response_type=Ml43_TrainResp,
     ),
 ]

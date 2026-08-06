@@ -1,0 +1,73 @@
+{
+  "model_id": "a43",
+  "model_slug": "cereals-dnsl-anomaly-fault-detection",
+  "fecha": "Agosto 2026",
+  "model_key": "ml43-cereals-dnsl-anomaly-fault-detection",
+  "version": "1.0.0",
+  "descripcion": "Modelo híbrido Deep Neuro-Fuzzy (BiLSTM + reglas fuzzy tipo ANFIS/TSK, fusión tardía) que clasifica ventanas de 180 minutos de telemetría de un horno industrial de procesado de cereales como Normal o Fallo. Incorpora una capa XAI (SHAP sobre la rama temporal + activación de reglas fuzzy) que genera un estado interpretativo, bloques de subsistema implicados y acciones correctivas recomendadas (CU43+CU44 integrados en un único plugin).",
+  "task_type": "classification_binary_timeseries_windowed",
+  "framework": "PyTorch (torch.nn.LSTM + capa fuzzy ANFIS diferenciable) + SHAP (GradientExplainer) + scikit-learn (StandardScaler)",
+  "artefacto": "best_dnf_model.pt (checkpoint + model_cfg), scaler.pkl (scaler_x + scaler_num), xai_background.npy (background SHAP)",
+  "objetivo": "Detectar de forma temprana anomalías y fallos incipientes en hornos industriales de procesado de cereales (aislamiento térmico, resistencias, refractario, sensores, válvula de gas, ventilador), reduciendo el mantenimiento reactivo y las paradas no planificadas mediante mantenimiento predictivo.",
+  "caso_uso": "El sistema de monitorización del horno envía periódicamente los últimos registros de los 13 sensores (temperatura por zonas, presión, potencia, flujo de gas, humedad, velocidad de ventilador, etc.) al endpoint de predicción, en modo batch (CSV de uno o varios ciclos completos) o inline (última lectura, evaluada como punto de operación estacionario). El modelo devuelve, por cada ventana de 180 minutos, la probabilidad de anomalía y, cuando se supera el umbral, un informe con el subsistema más probablemente implicado y acciones correctivas sugeridas.",
+  "inputs": [
+    {"nombre": "temp_zona1", "tipo": "float", "descripcion": "Temperatura zona 1 del horno — entrada (°C)", "obligatorio": "Sí", "valor_defecto": "-"},
+    {"nombre": "temp_zona2", "tipo": "float", "descripcion": "Temperatura zona 2 del horno — parte media (°C)", "obligatorio": "Sí", "valor_defecto": "-"},
+    {"nombre": "temp_zona3", "tipo": "float", "descripcion": "Temperatura zona 3 del horno — salida (°C)", "obligatorio": "Sí", "valor_defecto": "-"},
+    {"nombre": "temp_salida_gases", "tipo": "float", "descripcion": "Temperatura de salida de gases de escape (°C)", "obligatorio": "Sí", "valor_defecto": "-"},
+    {"nombre": "presion_camara", "tipo": "float", "descripcion": "Presión interna de la cámara (mbar)", "obligatorio": "Sí", "valor_defecto": "-"},
+    {"nombre": "presion_ventilacion", "tipo": "float", "descripcion": "Presión del sistema de ventilación/extracción (mbar)", "obligatorio": "Sí", "valor_defecto": "-"},
+    {"nombre": "potencia_kw", "tipo": "float", "descripcion": "Potencia eléctrica consumida (kW)", "obligatorio": "Sí", "valor_defecto": "-"},
+    {"nombre": "flujo_gas", "tipo": "float", "descripcion": "Flujo de gas del combustible (m³/h)", "obligatorio": "Sí", "valor_defecto": "-"},
+    {"nombre": "humedad_relativa", "tipo": "float", "descripcion": "Humedad relativa interior (%)", "obligatorio": "Sí", "valor_defecto": "-"},
+    {"nombre": "temp_ambiente", "tipo": "float", "descripcion": "Temperatura ambiente exterior (°C)", "obligatorio": "Sí", "valor_defecto": "-"},
+    {"nombre": "setpoint_temp", "tipo": "float", "descripcion": "Temperatura objetivo programada (°C)", "obligatorio": "Sí", "valor_defecto": "-"},
+    {"nombre": "posicion_valvula", "tipo": "float", "descripcion": "Posición de la válvula de gas (%)", "obligatorio": "Sí", "valor_defecto": "-"},
+    {"nombre": "velocidad_ventilador", "tipo": "float", "descripcion": "Velocidad del ventilador de circulación (RPM)", "obligatorio": "Sí", "valor_defecto": "-"},
+    {"nombre": "timestamp", "tipo": "datetime", "descripcion": "Marca temporal de cada registro, para ordenar cronológicamente", "obligatorio": "Sí", "valor_defecto": "-"},
+    {"nombre": "cycle_id", "tipo": "int/string", "descripcion": "Identificador de ciclo de secado. Si falta, el CSV se trata como una única serie temporal continua", "obligatorio": "No", "valor_defecto": "serie única"}
+  ],
+  "outputs": [
+    {"nombre": "predicted_anomaly_label", "tipo": "string", "descripcion": "Etiqueta binaria de la ventana", "rango": "{'Fallo', 'No Fallo'}", "interpretacion": "'Fallo' si anomaly_probability >= decision_threshold (0.41)"},
+    {"nombre": "anomaly_probability", "tipo": "float", "descripcion": "Probabilidad de anomalía de la mezcla tardía (0.7·rama fuzzy + 0.3·rama LSTM), sigmoide aplicada", "rango": "[0, 1]", "interpretacion": "valores cercanos a 1 indican alta confianza en anomalía"},
+    {"nombre": "decision_threshold", "tipo": "float", "descripcion": "Umbral de decisión aplicado", "rango": "0.41 (fijo, seleccionado en validación)", "interpretacion": "trazabilidad del punto de corte usado en esa predicción"},
+    {"nombre": "corrective_actions", "tipo": "objeto (CU44)", "descripcion": "Estado interpretativo, bloques de subsistema implicados y acciones sugeridas — solo presente cuando la ventana se marca como anómala", "rango": "4 estados: Normal / Normal con señales / Alerta no confirmada / Anomalía confirmada", "interpretacion": "guía priorizada de qué revisar primero (combustión/flujo, térmico, ventilación/presión)"}
+  ],
+  "metricas": [
+    {"nombre": "Accuracy (test)", "valor": "0.989", "descripcion": "Exactitud global sobre el conjunto de test hold-out (checkpoint entregado, verificado)", "interpretacion": "el modelo clasifica correctamente el 98.9% de las ventanas de test"},
+    {"nombre": "F1 clase Fallo (test)", "valor": "0.905", "descripcion": "F1-score de la clase minoritaria (Fallo) sobre test — verificado tras integración", "interpretacion": "buen equilibrio entre detectar fallos reales y evitar falsas alarmas"},
+    {"nombre": "Precision/Recall Fallo (test)", "valor": "0.888 / 0.924", "descripcion": "De cada 100 alertas de fallo, ~89 son reales; se detecta el 92.4% de los fallos reales", "interpretacion": "prioriza no perder fallos reales, asumiendo algo más de falsas alarmas que otras configuraciones del mismo modelo"},
+    {"nombre": "AUC-ROC clase Fallo (test)", "valor": "0.995", "descripcion": "Capacidad discriminativa entre Normal y Fallo — verificado tras integración", "interpretacion": "separación casi perfecta entre ambas clases en el dataset sintético de test"},
+    {"nombre": "Accuracy / Recall Fallo (memoria CU43 v1.4, declarados)", "valor": "0.928 / 0.663", "descripcion": "Cifras reportadas en la memoria entregada (v1.4, 29/06/2026) — corresponden a una configuración de modelo distinta a la del checkpoint finalmente entregado (ver observaciones técnicas)", "interpretacion": "se incluyen por trazabilidad documental; las cifras de referencia para producción son las verificadas arriba, no estas"}
+  ],
+  "limitaciones": [
+    {"tipo": "Dataset 100% sintético", "descripcion": "El modelo se entrena y evalúa sobre datos generados por un simulador propio (src/data_processing/generate_dataset.py), ante la ausencia de datos reales etiquetados de hornos industriales por confidencialidad del sector. Requiere validación con datos reales antes de cualquier despliegue en producción."},
+    {"tipo": "Discrepancia memoria vs. checkpoint entregado", "descripcion": "La memoria CU43 v1.4 describe hiperparámetros y métricas de una configuración de modelo anterior a la del checkpoint realmente entregado (reentrenado ~2 semanas después de cerrar la memoria). Este plugin usa el checkpoint real, verificado — ver inbox/a43/manifest.yaml known_issues."},
+    {"tipo": "Sin modo 'una fila = una predicción'", "descripcion": "La unidad mínima de inferencia es una ventana de 180 registros consecutivos (3 horas a 1 muestra/minuto). El modo inline aproxima un punto de operación puntual repitiendo la lectura 180 veces (ventana sintética estacionaria), no sustituye a un histórico real."},
+    {"tipo": "Recall moderado en ciertos tipos de falla", "descripcion": "El checkpoint entregado, pese a un recall global de 0.924, puede no detectar el 100% de las instancias de un tipo de falla concreto (ver caso 'cycle_2519_valvula_obstruida' del golden dataset, un falso negativo real reproducido y documentado, no oculto)."}
+  ],
+  "fichero_nombre": "golden_cycles.csv (7 ciclos extraídos de data/splits/test.csv: 2400, 2407, 2417, 2424, 2430, 2443, 2519)",
+  "fichero_registros": "4200 filas (7 ciclos × 600 registros/ciclo) → 35 ventanas de salida (5 por ciclo)",
+  "fichero_resultado": "1 ciclo NORMAL (0 ventanas anómalas) + 6 ciclos con falla real (aislamiento, resistencia, refractario, sensor descalibrado, ventilador, válvula), con 1-2 ventanas anómalas detectadas cada uno salvo el de válvula obstruida (falso negativo real, documentado) — ver outputs/a43/verification_report.md para el detalle ventana a ventana.",
+  "observaciones_tecnicas": "CPU estándar x86-64 suficiente para inferencia; GPU CUDA recomendable solo para reentrenamiento. RAM 8 GB mínimo. Artefactos: ~215 KB (checkpoint) + ~4 KB (scalers) + ~2.3 MB (background SHAP). Librerías núcleo: torch 2.5.1, numpy 2.4.6, pandas 3.0.3, scikit-learn 1.8.0, shap 0.51.0 (verificado con versiones ligeramente superiores en el entorno de integración, sin incidencias — ver known_issues del manifest). La capa XAI (SHAP GradientExplainer) añade latencia notable por ventana anómala explicada; se ejecuta solo cuando la ventana supera el umbral de decisión.",
+
+  "que_no_responde": "El modelo no indica la causa raíz exacta del fallo ni garantiza qué componente ha fallado — señala el subsistema con más evidencia (combustión/flujo, térmico o ventilación/presión) y sugiere qué revisar primero. La confirmación final siempre corresponde al personal de mantenimiento.",
+  "entradas_contexto": "Los datos provienen de la red de sensores IIoT instalada en el horno (temperaturas por zona, presiones, potencia, flujo de gas, humedad y velocidad de ventilador), muestreados típicamente cada minuto y volcados a un fichero CSV por ciclo de secado.",
+  "ejemplo_interpretacion": "Si para una ventana de 3 horas el sistema devuelve anomaly_probability = 0.96 (por encima del umbral 0.41), la ventana se marca como 'Fallo' y, si el estado interpretativo es 'Anomalía confirmada', se muestran las acciones sugeridas — por ejemplo, revisar la estabilidad térmica del horno si el bloque principal señalado es 'térmico'.",
+  "margen_error": "Sobre el conjunto de prueba verificado, el modelo acierta en el 98.9% de las ventanas evaluadas. Quedan sin detectar aproximadamente 1 de cada 13 fallos reales (recall 92.4%) — una probabilidad de anomalía baja no es garantía absoluta de normalidad, especialmente en fallos de aparición gradual.",
+  "revisar_manualmente": [
+    "Cuando el estado interpretativo sea 'Alerta no confirmada': el modelo detecta indicios pero no hay acuerdo suficiente entre sus dos mecanismos de análisis internos.",
+    "Cuando el estado sea 'Normal con señales': no se supera el umbral de fallo, pero hay indicios que conviene vigilar en los siguientes ciclos.",
+    "Ante cualquier fallo de tipo válvula obstruida: es el escenario donde el modelo entregado tiene más dificultad para detectar el fallo (ver limitaciones)."
+  ],
+  "que_no_hace": [
+    "No sustituye la inspección física del horno ni el criterio del personal de mantenimiento.",
+    "No funciona con una sola lectura puntual sin contexto — necesita como mínimo 3 horas de histórico de sensores por ciclo (o una lectura repetida como aproximación).",
+    "No ha sido validado todavía con datos reales de planta — el entrenamiento es 100% sobre datos sintéticos."
+  ],
+  "puede_equivocarse": "Sí, como cualquier modelo predictivo. En el conjunto de prueba detecta correctamente el 92.4% de los fallos reales, con muy pocas falsas alarmas (menos del 12% de las alertas son falsos positivos). Es una ayuda a la decisión que prioriza qué ciclos revisar antes, no una garantía de detección del 100% de los fallos ni un sustituto del mantenimiento preventivo habitual.",
+  "kpis": [
+    {"kpi": "Tasa de detección de fallos reales (recall)", "valor_umbral": "≥ 90%", "descripcion": "De cada 10 fallos reales en el horno, el modelo señala al menos 9 — verificado en el 92.4% sobre el conjunto de prueba."},
+    {"kpi": "Fiabilidad de las alertas (precisión)", "valor_umbral": "≥ 85%", "descripcion": "De cada 10 alertas de fallo generadas, al menos 8-9 corresponden a un fallo real — verificado en el 88.8% sobre el conjunto de prueba."}
+  ]
+}

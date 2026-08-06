@@ -45,13 +45,13 @@ class InsufficientTelemetryHistoryError(ValueError):
     """Raised when fewer than seq_len valid rows of telemetry history are provided (ml46)."""
 
 
-
 class InsufficientCycleHistoryError(ValueError):
     """Raised when a cycle (run_id) has fewer minutes of history than the lag features need (ml40)."""
 
 
 class UnknownDiagnosisSystemError(ValueError):
     """Raised when the input columns match neither refrigeracion nor aireado contracts (ml40)."""
+
 
 class ThermalSafetyViolationError(ValueError):
     """Raised when the GA cannot find a feasible solution meeting T_out >= 72.3 °C (ml34)."""
@@ -65,6 +65,14 @@ class InsufficientSequenceHistoryError(ValueError):
     This turns that silence into an explicit 422 (see inbox/a09/manifest.yaml
     constraints.historial_minimo).
     """
+class InsufficientWindowHistoryError(ValueError):
+    """Raised when fewer than sequence_length (240) consecutive rows are available to build a
+    temporal window (ml45)."""
+
+
+class InsufficientSensorWindowError(ValueError):
+    """Raised when required sensor columns/values are missing or invalid, nulls exceed the
+    allowed ratio, or too few rows survive to build a 180-row temporal window (ml43)."""
 
 
 class InfeasibleOptimizationError(ValueError):
@@ -74,4 +82,3 @@ class InfeasibleOptimizationError(ValueError):
     together with a narrow ±surface band) yield CBC status != OPTIMAL. The plugin
     translates this to a domain error (HTTP 422) instead of returning an empty plan.
     """
-

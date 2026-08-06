@@ -1,0 +1,486 @@
+<html><head><meta charset='utf-8'><title>06_split_validation_and_leakage_audit.ipynb</title></head><body>
+<section class='markdown'><pre># CU28 mixed_context - Split Validation and Leakage Audit
+
+Notebook narrativo de auditoria para el scope `mixed_context`.
+</pre></section>
+<section class='markdown'><pre>## Objetivo
+
+Demostrar que los splits train, validation y test son cronologicos, no se mezclan temporalmente y reservan test para evaluacion final.
+</pre></section>
+<section class='markdown'><pre>## Alcance
+
+Este analisis describe la ruta oficial reproducible `mixed_context`. Las senales externas se tratan como contexto/proxy. Las variables internas de planta siguen siendo sinteticas salvo carga posterior de cliente.
+</pre></section>
+<section class='markdown'><pre>## Inputs
+
+            - `data/splits/baseline/default__mixed_context/train.csv`
+- `data/splits/baseline/default__mixed_context/validation.csv`
+- `data/splits/baseline/default__mixed_context/test.csv`
+- `data/splits/baseline/default__mixed_context/split_metadata.json`
+- `data/processed/baseline/feature_engineering_modeling__mixed_context.csv`
+</pre></section>
+<section class='markdown'><pre>## Outputs esperados
+
+            - `reports/tables/eda/split_summary__mixed_context.csv`
+- `reports/tables/eda/split_validation_checks__mixed_context.csv`
+- `reports/tables/eda/split_target_distribution__mixed_context.csv`
+- `reports/figures/eda/split_timeline__mixed_context.png`
+- `reports/figures/eda/target_by_split__mixed_context.png`
+- `reports/figures/eda/trigger_by_split__mixed_context.png`
+- `reports/figures/eda/profile_coverage_by_split__mixed_context.png`
+</pre></section>
+<section class='markdown'><pre>## Limitaciones
+
+Este notebook documenta evidencia reproducible del pipeline oficial, pero no sustituye la revision de codigo, la auditoria de datos de origen ni una certificacion operacional de planta.
+</pre></section>
+<section class='code'><h3>Code</h3><pre>from pathlib import Path
+import json
+import numpy as np
+import pandas as pd
+import matplotlib
+matplotlib.use(&quot;Agg&quot;)
+import matplotlib.pyplot as plt
+
+from src.reproducibility.notebook_support import (
+    detect_temporal_columns,
+    ensure_eda_dirs,
+    execution_metadata,
+    first_valid_temporal_range,
+    load_source_manifests,
+    load_tabular_file,
+    parse_markdown_table,
+    print_frame,
+    print_series,
+    project_root,
+    read_json,
+    relative_to_root,
+    save_figure,
+    save_table,
+    sha256_file,
+)
+</pre><h3>Output</h3><pre></pre></section>
+<section class='code'><h3>Code</h3><pre>NOTEBOOK_NAME = &quot;06_split_validation_and_leakage_audit.ipynb&quot;
+PROJECT_ROOT = project_root()
+SCOPE = globals().get(&quot;scope&quot;, &quot;mixed_context&quot;)
+REPORT_DIRS = ensure_eda_dirs()
+META = execution_metadata(SCOPE)
+FIGURES = []
+TABLES = []
+print(json.dumps(META, indent=2))
+</pre><h3>Output</h3><pre>{
+  &quot;scope&quot;: &quot;mixed_context&quot;,
+  &quot;executed_at_utc&quot;: &quot;2026-06-17T10:30:08.928327+00:00&quot;,
+  &quot;commit&quot;: &quot;b2fc273adf68c17087b4637655067bc80d417fa9&quot;
+}
+</pre></section>
+<section class='markdown'><pre>## Carga de datos
+
+Las siguientes celdas cargan los artefactos de entrada y muestran verificaciones intermedias antes de producir tablas y graficas.
+</pre></section>
+<section class='code'><h3>Code</h3><pre>split_root = PROJECT_ROOT / &quot;data/splits/baseline/default__mixed_context&quot;
+train_df = pd.read_csv(split_root / &quot;train.csv&quot;)
+validation_df = pd.read_csv(split_root / &quot;validation.csv&quot;)
+test_df = pd.read_csv(split_root / &quot;test.csv&quot;)
+for frame in [train_df, validation_df, test_df]:
+    frame[&quot;date&quot;] = pd.to_datetime(frame[&quot;date&quot;], errors=&quot;coerce&quot;)
+split_meta = read_json(split_root / &quot;split_metadata.json&quot;)
+print({&quot;train_rows&quot;: len(train_df), &quot;validation_rows&quot;: len(validation_df), &quot;test_rows&quot;: len(test_df)})
+</pre><h3>Output</h3><pre>{&#x27;train_rows&#x27;: 812, &#x27;validation_rows&#x27;: 174, &#x27;test_rows&#x27;: 175}
+</pre></section>
+<section class='code'><h3>Code</h3><pre>split_summary = pd.DataFrame(
+    [
+        {
+            &quot;split&quot;: &quot;train&quot;,
+            &quot;rows&quot;: len(train_df),
+            &quot;date_min&quot;: str(train_df[&quot;date&quot;].min().date()),
+            &quot;date_max&quot;: str(train_df[&quot;date&quot;].max().date()),
+        },
+        {
+            &quot;split&quot;: &quot;validation&quot;,
+            &quot;rows&quot;: len(validation_df),
+            &quot;date_min&quot;: str(validation_df[&quot;date&quot;].min().date()),
+            &quot;date_max&quot;: str(validation_df[&quot;date&quot;].max().date()),
+        },
+        {
+            &quot;split&quot;: &quot;test&quot;,
+            &quot;rows&quot;: len(test_df),
+            &quot;date_min&quot;: str(test_df[&quot;date&quot;].min().date()),
+            &quot;date_max&quot;: str(test_df[&quot;date&quot;].max().date()),
+        },
+    ]
+)
+print_frame(&quot;Split summary&quot;, split_summary, rows=10)
+display(split_summary)
+</pre><h3>Output</h3><pre>Split summary
+     split  rows   date_min   date_max
+     train   812 2004-02-23 2019-09-09
+validation   174 2019-09-16 2023-01-09
+      test   175 2023-01-16 2026-05-18
+</pre><table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th>split</th>
+      <th>rows</th>
+      <th>date_min</th>
+      <th>date_max</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>train</td>
+      <td>812</td>
+      <td>2004-02-23</td>
+      <td>2019-09-09</td>
+    </tr>
+    <tr>
+      <td>validation</td>
+      <td>174</td>
+      <td>2019-09-16</td>
+      <td>2023-01-09</td>
+    </tr>
+    <tr>
+      <td>test</td>
+      <td>175</td>
+      <td>2023-01-16</td>
+      <td>2026-05-18</td>
+    </tr>
+  </tbody>
+</table></section>
+<section class='markdown'><pre>## Validaciones cronologicas
+
+Se comprueba explicitamente que train termina antes de validation y que validation termina antes de test.
+</pre></section>
+<section class='code'><h3>Code</h3><pre>chronology_checks = pd.DataFrame(
+    [
+        {&quot;check&quot;: &quot;max_train_before_min_validation&quot;, &quot;pass&quot;: bool(train_df[&quot;date&quot;].max() &lt; validation_df[&quot;date&quot;].min())},
+        {&quot;check&quot;: &quot;max_validation_before_min_test&quot;, &quot;pass&quot;: bool(validation_df[&quot;date&quot;].max() &lt; test_df[&quot;date&quot;].min())},
+    ]
+)
+print_frame(&quot;Chronology checks&quot;, chronology_checks)
+display(chronology_checks)
+</pre><h3>Output</h3><pre>Chronology checks
+                          check  pass
+max_train_before_min_validation  True
+ max_validation_before_min_test  True
+</pre><table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th>check</th>
+      <th>pass</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>max_train_before_min_validation</td>
+      <td>True</td>
+    </tr>
+    <tr>
+      <td>max_validation_before_min_test</td>
+      <td>True</td>
+    </tr>
+  </tbody>
+</table></section>
+<section class='code'><h3>Code</h3><pre>train_keys = set(zip(train_df[&quot;date&quot;], train_df[&quot;destination_profile&quot;], train_df[&quot;raw_material_id&quot;]))
+validation_keys = set(zip(validation_df[&quot;date&quot;], validation_df[&quot;destination_profile&quot;], validation_df[&quot;raw_material_id&quot;]))
+test_keys = set(zip(test_df[&quot;date&quot;], test_df[&quot;destination_profile&quot;], test_df[&quot;raw_material_id&quot;]))
+overlap_counts = pd.DataFrame(
+    [
+        {&quot;pair&quot;: &quot;train_validation&quot;, &quot;overlap_rows&quot;: len(train_keys &amp; validation_keys)},
+        {&quot;pair&quot;: &quot;validation_test&quot;, &quot;overlap_rows&quot;: len(validation_keys &amp; test_keys)},
+        {&quot;pair&quot;: &quot;train_test&quot;, &quot;overlap_rows&quot;: len(train_keys &amp; test_keys)},
+    ]
+)
+print_frame(&quot;Duplicate keys across splits&quot;, overlap_counts)
+display(overlap_counts)
+</pre><h3>Output</h3><pre>Duplicate keys across splits
+            pair  overlap_rows
+train_validation             0
+ validation_test             0
+      train_test             0
+</pre><table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th>pair</th>
+      <th>overlap_rows</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>train_validation</td>
+      <td>0</td>
+    </tr>
+    <tr>
+      <td>validation_test</td>
+      <td>0</td>
+    </tr>
+    <tr>
+      <td>train_test</td>
+      <td>0</td>
+    </tr>
+  </tbody>
+</table></section>
+<section class='code'><h3>Code</h3><pre>combined = pd.concat(
+    [
+        train_df.assign(split=&quot;train&quot;),
+        validation_df.assign(split=&quot;validation&quot;),
+        test_df.assign(split=&quot;test&quot;),
+    ],
+    ignore_index=True,
+)
+target_by_split = combined.groupby(&quot;split&quot;)[&quot;synthetic_procurement_need&quot;].agg([&quot;mean&quot;, &quot;median&quot;, &quot;min&quot;, &quot;max&quot;]).reset_index()
+trigger_by_split = combined.groupby(&quot;split&quot;)[&quot;purchase_trigger_label&quot;].mean().reset_index()
+profile_coverage = combined.groupby([&quot;split&quot;, &quot;destination_profile&quot;]).size().reset_index(name=&quot;rows&quot;)
+print_frame(&quot;Target by split&quot;, target_by_split)
+print_frame(&quot;Trigger rate by split&quot;, trigger_by_split)
+print_frame(&quot;Profile coverage&quot;, profile_coverage, rows=20)
+</pre><h3>Output</h3><pre>Target by split
+     split       mean     median        min         max
+      test 446.865974 451.213193 149.750371 1055.525357
+     train 205.578954 204.071208  15.021012  519.772503
+validation 304.600576 305.038578  57.919904  861.603088
+Trigger rate by split
+     split  purchase_trigger_label
+      test                0.942857
+     train                0.544335
+validation                0.712644
+Profile coverage
+     split destination_profile  rows
+      test      cured_embutido    92
+      test   fresh_preparation    83
+     train     cooked_emulsion   108
+     train      cured_embutido   394
+     train   fresh_preparation   310
+validation     cooked_emulsion    12
+validation      cured_embutido    88
+validation   fresh_preparation    74
+</pre></section>
+<section class='markdown'><pre>## Visualizacion de splits
+
+Las graficas siguientes deben dejar claro que la separacion es temporal, que la distribucion del target cambia de forma razonable y que ningun split usa informacion futura para seleccion.
+</pre></section>
+<section class='code'><h3>Code</h3><pre>fig, ax = plt.subplots(figsize=(10, 4))
+offsets = {&quot;train&quot;: 0, &quot;validation&quot;: 1, &quot;test&quot;: 2}
+colors = {&quot;train&quot;: &quot;#355c7d&quot;, &quot;validation&quot;: &quot;#6c5b7b&quot;, &quot;test&quot;: &quot;#c06c84&quot;}
+for split_name, split_df in [(&quot;train&quot;, train_df), (&quot;validation&quot;, validation_df), (&quot;test&quot;, test_df)]:
+    ax.scatter(split_df[&quot;date&quot;], np.full(len(split_df), offsets[split_name]), s=8, alpha=0.5, color=colors[split_name], label=split_name)
+ax.set_yticks([0, 1, 2])
+ax.set_yticklabels([&quot;train&quot;, &quot;validation&quot;, &quot;test&quot;])
+ax.set_title(&quot;Timeline by split&quot;)
+ax.legend()
+FIGURES.append(save_figure(fig, &quot;split_timeline__mixed_context.png&quot;))
+plt.close(fig)
+</pre><h3>Output</h3><pre>Figure saved to: C:\Users\Erick Mercado\Documents\a28-cnp-carnico-neuroevolutivas-materia\reports\figures\eda\split_timeline__mixed_context.png
+</pre><img src='../figures/eda/split_timeline__mixed_context.png' alt='split_timeline__mixed_context.png' style='max-width:100%;height:auto;' /></section>
+<section class='code'><h3>Code</h3><pre>fig, ax = plt.subplots(figsize=(8, 4))
+ax.bar(target_by_split[&quot;split&quot;], target_by_split[&quot;mean&quot;], color=[&quot;#355c7d&quot;, &quot;#6c5b7b&quot;, &quot;#c06c84&quot;])
+ax.set_title(&quot;Average target by split&quot;)
+ax.set_ylabel(&quot;synthetic_procurement_need&quot;)
+FIGURES.append(save_figure(fig, &quot;target_by_split__mixed_context.png&quot;))
+plt.close(fig)
+</pre><h3>Output</h3><pre>Figure saved to: C:\Users\Erick Mercado\Documents\a28-cnp-carnico-neuroevolutivas-materia\reports\figures\eda\target_by_split__mixed_context.png
+</pre><img src='../figures/eda/target_by_split__mixed_context.png' alt='target_by_split__mixed_context.png' style='max-width:100%;height:auto;' /></section>
+<section class='code'><h3>Code</h3><pre>fig, ax = plt.subplots(figsize=(8, 4))
+ax.bar(trigger_by_split[&quot;split&quot;], trigger_by_split[&quot;purchase_trigger_label&quot;], color=[&quot;#355c7d&quot;, &quot;#6c5b7b&quot;, &quot;#c06c84&quot;])
+ax.set_title(&quot;Trigger rate by split&quot;)
+ax.set_ylabel(&quot;trigger_rate&quot;)
+FIGURES.append(save_figure(fig, &quot;trigger_by_split__mixed_context.png&quot;))
+plt.close(fig)
+</pre><h3>Output</h3><pre>Figure saved to: C:\Users\Erick Mercado\Documents\a28-cnp-carnico-neuroevolutivas-materia\reports\figures\eda\trigger_by_split__mixed_context.png
+</pre><img src='../figures/eda/trigger_by_split__mixed_context.png' alt='trigger_by_split__mixed_context.png' style='max-width:100%;height:auto;' /></section>
+<section class='code'><h3>Code</h3><pre>pivot_profile = profile_coverage.pivot(index=&quot;destination_profile&quot;, columns=&quot;split&quot;, values=&quot;rows&quot;).fillna(0)
+fig, ax = plt.subplots(figsize=(8, 4))
+pivot_profile.plot(kind=&quot;bar&quot;, ax=ax)
+ax.set_title(&quot;Profile coverage by split&quot;)
+ax.set_ylabel(&quot;rows&quot;)
+FIGURES.append(save_figure(fig, &quot;profile_coverage_by_split__mixed_context.png&quot;))
+plt.close(fig)
+</pre><h3>Output</h3><pre>Figure saved to: C:\Users\Erick Mercado\Documents\a28-cnp-carnico-neuroevolutivas-materia\reports\figures\eda\profile_coverage_by_split__mixed_context.png
+</pre><img src='../figures/eda/profile_coverage_by_split__mixed_context.png' alt='profile_coverage_by_split__mixed_context.png' style='max-width:100%;height:auto;' /></section>
+<section class='code'><h3>Code</h3><pre>checks_df = chronology_checks.copy()
+checks_df[&quot;detail&quot;] = [
+    &quot;train end before validation start&quot;,
+    &quot;validation end before test start&quot;,
+]
+checks_df = pd.concat(
+    [
+        checks_df,
+        pd.DataFrame([{&quot;check&quot;: &quot;no_overlap_between_splits&quot;, &quot;pass&quot;: int(overlap_counts[&quot;overlap_rows&quot;].sum()) == 0, &quot;detail&quot;: &quot;no duplicated key tuple across splits&quot;}]),
+    ],
+    ignore_index=True,
+)
+print_frame(&quot;Pass fail checks&quot;, checks_df, rows=20)
+display(checks_df)
+</pre><h3>Output</h3><pre>Pass fail checks
+                          check  pass                                detail
+max_train_before_min_validation  True     train end before validation start
+ max_validation_before_min_test  True      validation end before test start
+      no_overlap_between_splits  True no duplicated key tuple across splits
+</pre><table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th>check</th>
+      <th>pass</th>
+      <th>detail</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>max_train_before_min_validation</td>
+      <td>True</td>
+      <td>train end before validation start</td>
+    </tr>
+    <tr>
+      <td>max_validation_before_min_test</td>
+      <td>True</td>
+      <td>validation end before test start</td>
+    </tr>
+    <tr>
+      <td>no_overlap_between_splits</td>
+      <td>True</td>
+      <td>no duplicated key tuple across splits</td>
+    </tr>
+  </tbody>
+</table></section>
+<section class='markdown'><pre>## Interpretacion
+
+`validation` se usa para seleccion y calibracion. `test` queda reservado a evaluacion final. La grafica temporal debe mostrar bloques ordenados sin mezcla entre periodos.
+</pre></section>
+<section class='code'><h3>Code</h3><pre>TABLES.append(save_table(split_summary, &quot;split_summary__mixed_context.csv&quot;))
+TABLES.append(save_table(checks_df, &quot;split_validation_checks__mixed_context.csv&quot;))
+TABLES.append(save_table(target_by_split, &quot;split_target_distribution__mixed_context.csv&quot;))
+RESULT = {
+    &quot;notebook&quot;: NOTEBOOK_NAME,
+    &quot;tables&quot;: TABLES,
+    &quot;figures&quot;: FIGURES,
+    &quot;findings&quot;: [
+        &quot;Train, validation and test remain chronologically ordered.&quot;,
+        &quot;No duplicate key tuples were found across splits in the defended dataset.&quot;,
+        &quot;Validation is the selection surface while test is reserved for final evaluation.&quot;,
+    ],
+    &quot;limitations&quot;: [
+        &quot;Coverage by profile can still differ across splits because the scenario mix evolves over time.&quot;,
+    ],
+}
+print(json.dumps(RESULT, indent=2))
+</pre><h3>Output</h3><pre>Table saved to: C:\Users\Erick Mercado\Documents\a28-cnp-carnico-neuroevolutivas-materia\reports\tables\eda\split_summary__mixed_context.csv
+Table saved to: C:\Users\Erick Mercado\Documents\a28-cnp-carnico-neuroevolutivas-materia\reports\tables\eda\split_validation_checks__mixed_context.csv
+Table saved to: C:\Users\Erick Mercado\Documents\a28-cnp-carnico-neuroevolutivas-materia\reports\tables\eda\split_target_distribution__mixed_context.csv
+{
+  &quot;notebook&quot;: &quot;06_split_validation_and_leakage_audit.ipynb&quot;,
+  &quot;tables&quot;: [
+    &quot;reports/tables/eda/split_summary__mixed_context.csv&quot;,
+    &quot;reports/tables/eda/split_validation_checks__mixed_context.csv&quot;,
+    &quot;reports/tables/eda/split_target_distribution__mixed_context.csv&quot;
+  ],
+  &quot;figures&quot;: [
+    &quot;reports/figures/eda/split_timeline__mixed_context.png&quot;,
+    &quot;reports/figures/eda/target_by_split__mixed_context.png&quot;,
+    &quot;reports/figures/eda/trigger_by_split__mixed_context.png&quot;,
+    &quot;reports/figures/eda/profile_coverage_by_split__mixed_context.png&quot;
+  ],
+  &quot;findings&quot;: [
+    &quot;Train, validation and test remain chronologically ordered.&quot;,
+    &quot;No duplicate key tuples were found across splits in the defended dataset.&quot;,
+    &quot;Validation is the selection surface while test is reserved for final evaluation.&quot;
+  ],
+  &quot;limitations&quot;: [
+    &quot;Coverage by profile can still differ across splits because the scenario mix evolves over time.&quot;
+  ]
+}
+</pre><table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th>split</th>
+      <th>rows</th>
+      <th>date_min</th>
+      <th>date_max</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>train</td>
+      <td>812</td>
+      <td>2004-02-23</td>
+      <td>2019-09-09</td>
+    </tr>
+    <tr>
+      <td>validation</td>
+      <td>174</td>
+      <td>2019-09-16</td>
+      <td>2023-01-09</td>
+    </tr>
+    <tr>
+      <td>test</td>
+      <td>175</td>
+      <td>2023-01-16</td>
+      <td>2026-05-18</td>
+    </tr>
+  </tbody>
+</table><table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th>check</th>
+      <th>pass</th>
+      <th>detail</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>max_train_before_min_validation</td>
+      <td>True</td>
+      <td>train end before validation start</td>
+    </tr>
+    <tr>
+      <td>max_validation_before_min_test</td>
+      <td>True</td>
+      <td>validation end before test start</td>
+    </tr>
+    <tr>
+      <td>no_overlap_between_splits</td>
+      <td>True</td>
+      <td>no duplicated key tuple across splits</td>
+    </tr>
+  </tbody>
+</table><table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th>split</th>
+      <th>mean</th>
+      <th>median</th>
+      <th>min</th>
+      <th>max</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>test</td>
+      <td>446.865974</td>
+      <td>451.213193</td>
+      <td>149.750371</td>
+      <td>1055.525357</td>
+    </tr>
+    <tr>
+      <td>train</td>
+      <td>205.578954</td>
+      <td>204.071208</td>
+      <td>15.021012</td>
+      <td>519.772503</td>
+    </tr>
+    <tr>
+      <td>validation</td>
+      <td>304.600576</td>
+      <td>305.038578</td>
+      <td>57.919904</td>
+      <td>861.603088</td>
+    </tr>
+  </tbody>
+</table></section>
+<section class='markdown'><pre>## Limitaciones
+
+Un split cronologico no elimina toda deriva temporal. Solo garantiza que la evaluacion final no vea filas posteriores durante la seleccion de configuracion.
+</pre></section>
+<section class='markdown'><pre>## Concluson final
+
+La evidencia conjunta de fechas, no solapamiento y uso diferenciado de validation/test permite defender la estrategia de particionado del pipeline mixed_context.
+</pre></section>
+</body></html>

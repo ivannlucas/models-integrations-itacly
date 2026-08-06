@@ -1,0 +1,30 @@
+column_name,origin_type,source,description,notes
+date,derived,weekly_index,Weekly temporal reference.,Not a plant ERP timestamp.
+demand_index,proxy,external_proxy,External demand proxy.,Not internal orders.
+supply_index,proxy,external_proxy,External supply proxy.,Not inbound receipts.
+purchase_price_index,proxy,external_proxy,External price proxy.,Weak explanatory value in current data.
+manufacturing_context_profile,manufacturing_context,context_profile_assignment,"Manufacturing-context field published for conditioning, EDA and contract tracing.",Used to avoid treating all processed-meat manufacturing modes as equivalent.
+product_family,manufacturing_context,context_profile_assignment,"Manufacturing-context field published for conditioning, EDA and contract tracing.",Used to avoid treating all processed-meat manufacturing modes as equivalent.
+process_type,manufacturing_context,context_profile_assignment,"Manufacturing-context field published for conditioning, EDA and contract tracing.",Used to avoid treating all processed-meat manufacturing modes as equivalent.
+recipe_profile,manufacturing_context,context_profile_assignment,"Manufacturing-context field published for conditioning, EDA and contract tracing.",Used to avoid treating all processed-meat manufacturing modes as equivalent.
+formulation_class,manufacturing_context,context_profile_assignment,"Manufacturing-context field published for conditioning, EDA and contract tracing.",Used to avoid treating all processed-meat manufacturing modes as equivalent.
+expected_yield,manufacturing_context,context_profile_assignment,"Manufacturing-context field published for conditioning, EDA and contract tracing.",Used to avoid treating all processed-meat manufacturing modes as equivalent.
+expected_waste,manufacturing_context,context_profile_assignment,"Manufacturing-context field published for conditioning, EDA and contract tracing.",Used to avoid treating all processed-meat manufacturing modes as equivalent.
+process_lead_time_days,manufacturing_context,context_profile_assignment,"Manufacturing-context field published for conditioning, EDA and contract tracing.",Used to avoid treating all processed-meat manufacturing modes as equivalent.
+shelf_life_class,manufacturing_context,context_profile_assignment,"Manufacturing-context field published for conditioning, EDA and contract tracing.",Used to avoid treating all processed-meat manufacturing modes as equivalent.
+priority_level,manufacturing_context,context_profile_assignment,"Manufacturing-context field published for conditioning, EDA and contract tracing.",Used to avoid treating all processed-meat manufacturing modes as equivalent.
+cost_sensitivity,manufacturing_context,context_profile_assignment,"Manufacturing-context field published for conditioning, EDA and contract tracing.",Used to avoid treating all processed-meat manufacturing modes as equivalent.
+synthetic_plant_production_volume,synthetic,synthetic_plant_simulator,Synthetic signal generated from proxy context plus manufacturing context.,Published synthetic operational signal.
+synthetic_plant_capacity_utilization,synthetic,synthetic_plant_simulator,Synthetic signal generated from proxy context plus manufacturing context.,Published synthetic operational signal.
+synthetic_yield_rate,synthetic,synthetic_plant_simulator,Synthetic signal generated from proxy context plus manufacturing context.,Published synthetic operational signal.
+synthetic_waste_rate,synthetic,synthetic_plant_simulator,Synthetic signal generated from proxy context plus manufacturing context.,Published synthetic operational signal.
+synthetic_raw_material_requirement,synthetic,synthetic_plant_simulator,Synthetic signal generated from proxy context plus manufacturing context.,Published synthetic operational signal.
+synthetic_inventory_coverage_days,synthetic,synthetic_plant_simulator,Synthetic signal generated from proxy context plus manufacturing context.,Published synthetic operational signal.
+synthetic_inventory_level,synthetic,synthetic_plant_simulator,Synthetic signal generated from proxy context plus manufacturing context.,Published synthetic operational signal.
+synthetic_lead_time_days,synthetic,synthetic_plant_simulator,Synthetic signal generated from proxy context plus manufacturing context.,Published synthetic operational signal.
+synthetic_procurement_need_pressure,synthetic_target_variant,synthetic_plant_simulator,Synthetic signal generated from proxy context plus manufacturing context.,Explicit target formulation retained for traceability.
+synthetic_procurement_need_coverage_gap,synthetic_target_variant,synthetic_plant_simulator,Synthetic signal generated from proxy context plus manufacturing context.,Explicit target formulation retained for traceability.
+synthetic_procurement_need_hybrid,synthetic_target_variant,synthetic_plant_simulator,Synthetic signal generated from proxy context plus manufacturing context.,Explicit target formulation retained for traceability.
+synthetic_procurement_need_refined,synthetic_target_alias,synthetic_plant_simulator,Synthetic signal generated from proxy context plus manufacturing context.,Refined comparison-only alias.
+synthetic_procurement_need,synthetic_target_alias,synthetic_plant_simulator,Synthetic signal generated from proxy context plus manufacturing context.,Canonical target alias backed by the 'pressure' formulation.
+synthetic_planned_orders,synthetic,synthetic_plant_simulator,Synthetic signal generated from proxy context plus manufacturing context.,Published synthetic operational signal.

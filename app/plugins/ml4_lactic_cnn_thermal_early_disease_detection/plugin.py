@@ -5,6 +5,7 @@ Serves an externally-trained EfficientNet checkpoint, so train() raises 501.
 from __future__ import annotations
 
 import base64
+import io
 import logging
 import os
 import shutil
@@ -13,6 +14,7 @@ import zipfile
 from datetime import datetime, timezone
 
 import torch
+from PIL import Image
 
 from app.application.dto.stats_dto import InputField, OutputField, RuntimeStats, StatsResponse
 from app.domain.ports.model_plugin_port import ModelPluginPort
@@ -31,7 +33,10 @@ from app.plugins.ml4_lactic_cnn_thermal_early_disease_detection.constants import
     VERSION,
 )
 from app.plugins.ml4_lactic_cnn_thermal_early_disease_detection.model_loader import load_model
-from app.plugins.ml4_lactic_cnn_thermal_early_disease_detection.postprocessing import decode_logits
+from app.plugins.ml4_lactic_cnn_thermal_early_disease_detection.postprocessing import (
+    compute_and_encode_cam,
+    decode_logits,
+)
 from app.plugins.ml4_lactic_cnn_thermal_early_disease_detection.predict_dto import (
     PredictBatchResponse,
     PredictInlineResponse,
@@ -138,8 +143,16 @@ class Ml4LacticCnnThermalEarlyDiseaseDetectionPlugin(ModelPluginPort):
                     try:
                         with open(os.path.join(root, fname), "rb") as fh:
                             image_bytes = fh.read()
-                        result = self._infer_image(image_bytes)
+                        tensor = preprocess_image(image_bytes).to(self._device)
+                        with torch.no_grad():
+                            logits, feature_map = self._model(tensor, return_features=True)
+                        result = decode_logits(logits)
                         row = {"filename": fname, **result}
+                        image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+                        row["heatmap_url"] = compute_and_encode_cam(
+                            feature_map, self._model.classifier[1].weight,
+                            result["predicted_class_index"], image,
+                        )
                         if idx == 0:
                             # Echo the first image back so the platform can request a real
                             # GradCAM explanation for the batch (mirrors the inline flow,
@@ -191,6 +204,8 @@ class Ml4LacticCnnThermalEarlyDiseaseDetectionPlugin(ModelPluginPort):
                 OutputField(name="probability_healthy", type="float",
                             description="P(clase=Healthy)"),
                 OutputField(name="probability_scm", type="float", description="P(clase=SCM)"),
+                OutputField(name="heatmap_url", type="str",
+                            description="Mapa de activación de clase (CAM) superpuesto en base64 JPEG data URI (solo en predict_batch)"),
             ],
             metrics={},
             runtime_stats=RuntimeStats(total_predictions=self._predict_count, avg_latency_ms=None),

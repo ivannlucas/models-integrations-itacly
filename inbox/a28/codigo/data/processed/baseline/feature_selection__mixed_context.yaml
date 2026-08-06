@@ -1,0 +1,490 @@
+target: synthetic_procurement_need
+target_primary: synthetic_procurement_need
+target_alternatives:
+- synthetic_procurement_need_refined
+- synthetic_raw_material_requirement
+selected_features_minimal:
+- date_month
+- date_week_of_year
+- date_year
+- demand_index
+- demand_supply_gap
+- supply_index
+- synthetic_inventory_coverage_days
+- synthetic_lead_time_days
+- synthetic_plant_capacity_utilization
+- synthetic_raw_material_requirement
+- synthetic_raw_material_requirement_lag_1
+- synthetic_raw_material_requirement_roll_mean_4
+- synthetic_waste_rate
+- synthetic_yield_rate
+selected_features_extended: &id001
+- date_month
+- date_week_of_year
+- date_year
+- demand_index
+- demand_supply_gap
+- supply_index
+- synthetic_inventory_coverage_days
+- synthetic_lead_time_days
+- synthetic_plant_capacity_utilization
+- synthetic_raw_material_requirement
+- synthetic_raw_material_requirement_lag_1
+- synthetic_raw_material_requirement_roll_mean_4
+- synthetic_waste_rate
+- synthetic_yield_rate
+- demand_index_lag_1
+- demand_index_lag_4
+- demand_index_roll_mean_4
+- expected_waste
+- expected_yield
+- process_lead_time_days
+- product_family__cooked_emulsion
+- product_family__cured_embutido
+- product_family__fresh_preparation
+- shelf_life_class__long
+- shelf_life_class__medium
+- shelf_life_class__short
+- supply_index_lag_1
+- supply_index_roll_mean_4
+- synthetic_inventory_coverage_days_lag_1
+- synthetic_inventory_coverage_days_roll_mean_4
+- synthetic_lead_time_days_lag_1
+- synthetic_plant_capacity_utilization_lag_1
+- synthetic_plant_production_volume
+- synthetic_plant_production_volume_lag_1
+- synthetic_raw_material_requirement_lag_2
+- synthetic_raw_material_requirement_lag_4
+- synthetic_raw_material_requirement_lag_8
+- synthetic_raw_material_requirement_roll_mean_12
+- synthetic_waste_rate_lag_1
+- synthetic_yield_rate_lag_1
+selected_features: *id001
+feature_sets:
+  ablation_no_context:
+  - date_year
+  - date_month
+  - synthetic_raw_material_requirement_lag_1
+  - synthetic_raw_material_requirement_lag_2
+  - synthetic_raw_material_requirement_lag_4
+  - synthetic_raw_material_requirement_lag_8
+  - synthetic_raw_material_requirement_roll_mean_4
+  - synthetic_raw_material_requirement_roll_mean_12
+  - date_week_of_year
+  - demand_index
+  - supply_index
+  - synthetic_inventory_coverage_days
+  - synthetic_inventory_coverage_days_lag_1
+  - synthetic_inventory_coverage_days_roll_mean_4
+  - synthetic_lead_time_days
+  - synthetic_lead_time_days_lag_1
+  - synthetic_plant_capacity_utilization
+  - synthetic_plant_capacity_utilization_lag_1
+  - synthetic_plant_production_volume
+  - synthetic_plant_production_volume_lag_1
+  - synthetic_raw_material_requirement
+  - synthetic_waste_rate
+  - synthetic_waste_rate_lag_1
+  - synthetic_yield_rate
+  - synthetic_yield_rate_lag_1
+  - demand_index_lag_1
+  - demand_index_lag_4
+  - demand_index_roll_mean_4
+  - supply_index_lag_1
+  - supply_index_roll_mean_4
+  - demand_supply_gap
+  ablation_all_context:
+  - date_year
+  - date_month
+  - synthetic_raw_material_requirement_lag_1
+  - synthetic_raw_material_requirement_lag_2
+  - synthetic_raw_material_requirement_lag_4
+  - synthetic_raw_material_requirement_lag_8
+  - synthetic_raw_material_requirement_roll_mean_4
+  - synthetic_raw_material_requirement_roll_mean_12
+  - date_week_of_year
+  - demand_index
+  - supply_index
+  - synthetic_inventory_coverage_days
+  - synthetic_inventory_coverage_days_lag_1
+  - synthetic_inventory_coverage_days_roll_mean_4
+  - synthetic_lead_time_days
+  - synthetic_lead_time_days_lag_1
+  - synthetic_plant_capacity_utilization
+  - synthetic_plant_capacity_utilization_lag_1
+  - synthetic_plant_production_volume
+  - synthetic_plant_production_volume_lag_1
+  - synthetic_raw_material_requirement
+  - synthetic_waste_rate
+  - synthetic_waste_rate_lag_1
+  - synthetic_yield_rate
+  - synthetic_yield_rate_lag_1
+  - demand_index_lag_1
+  - demand_index_lag_4
+  - demand_index_roll_mean_4
+  - supply_index_lag_1
+  - supply_index_roll_mean_4
+  - demand_supply_gap
+  - expected_yield
+  - expected_waste
+  - process_lead_time_days
+  - product_family__cooked_emulsion
+  - product_family__cured_embutido
+  - product_family__fresh_preparation
+  - process_type__cooking_emulsification
+  - process_type__curing_maturation
+  - process_type__fresh_forming
+  - recipe_profile__fermented_dry_spiced
+  - recipe_profile__high_throughput_standard
+  - recipe_profile__marinated_short_run
+  - formulation_class__cooked_emulsion
+  - formulation_class__cured
+  - formulation_class__fresh_prepared
+  - shelf_life_class__long
+  - shelf_life_class__medium
+  - shelf_life_class__short
+  - priority_level__planned_campaign
+  - priority_level__service_critical
+  - priority_level__standard_service
+  - cost_sensitivity__high
+  - cost_sensitivity__low
+  - cost_sensitivity__medium
+  ablation_product_process_context:
+  - date_year
+  - date_month
+  - synthetic_raw_material_requirement_lag_1
+  - synthetic_raw_material_requirement_lag_2
+  - synthetic_raw_material_requirement_lag_4
+  - synthetic_raw_material_requirement_lag_8
+  - synthetic_raw_material_requirement_roll_mean_4
+  - synthetic_raw_material_requirement_roll_mean_12
+  - date_week_of_year
+  - demand_index
+  - supply_index
+  - synthetic_inventory_coverage_days
+  - synthetic_inventory_coverage_days_lag_1
+  - synthetic_inventory_coverage_days_roll_mean_4
+  - synthetic_lead_time_days
+  - synthetic_lead_time_days_lag_1
+  - synthetic_plant_capacity_utilization
+  - synthetic_plant_capacity_utilization_lag_1
+  - synthetic_plant_production_volume
+  - synthetic_plant_production_volume_lag_1
+  - synthetic_raw_material_requirement
+  - synthetic_waste_rate
+  - synthetic_waste_rate_lag_1
+  - synthetic_yield_rate
+  - synthetic_yield_rate_lag_1
+  - demand_index_lag_1
+  - demand_index_lag_4
+  - demand_index_roll_mean_4
+  - supply_index_lag_1
+  - supply_index_roll_mean_4
+  - demand_supply_gap
+  - product_family__cooked_emulsion
+  - product_family__cured_embutido
+  - product_family__fresh_preparation
+  - process_type__cooking_emulsification
+  - process_type__curing_maturation
+  - process_type__fresh_forming
+  - recipe_profile__fermented_dry_spiced
+  - recipe_profile__high_throughput_standard
+  - recipe_profile__marinated_short_run
+  - formulation_class__cooked_emulsion
+  - formulation_class__cured
+  - formulation_class__fresh_prepared
+  ablation_operational_context:
+  - date_year
+  - date_month
+  - synthetic_raw_material_requirement_lag_1
+  - synthetic_raw_material_requirement_lag_2
+  - synthetic_raw_material_requirement_lag_4
+  - synthetic_raw_material_requirement_lag_8
+  - synthetic_raw_material_requirement_roll_mean_4
+  - synthetic_raw_material_requirement_roll_mean_12
+  - date_week_of_year
+  - demand_index
+  - supply_index
+  - synthetic_inventory_coverage_days
+  - synthetic_inventory_coverage_days_lag_1
+  - synthetic_inventory_coverage_days_roll_mean_4
+  - synthetic_lead_time_days
+  - synthetic_lead_time_days_lag_1
+  - synthetic_plant_capacity_utilization
+  - synthetic_plant_capacity_utilization_lag_1
+  - synthetic_plant_production_volume
+  - synthetic_plant_production_volume_lag_1
+  - synthetic_raw_material_requirement
+  - synthetic_waste_rate
+  - synthetic_waste_rate_lag_1
+  - synthetic_yield_rate
+  - synthetic_yield_rate_lag_1
+  - demand_index_lag_1
+  - demand_index_lag_4
+  - demand_index_roll_mean_4
+  - supply_index_lag_1
+  - supply_index_roll_mean_4
+  - demand_supply_gap
+  - expected_yield
+  - expected_waste
+  - process_lead_time_days
+  - shelf_life_class__long
+  - shelf_life_class__medium
+  - shelf_life_class__short
+  - priority_level__planned_campaign
+  - priority_level__service_critical
+  - priority_level__standard_service
+  - cost_sensitivity__high
+  - cost_sensitivity__low
+  - cost_sensitivity__medium
+  ablation_reduced_context:
+  - date_year
+  - date_month
+  - synthetic_raw_material_requirement_lag_1
+  - synthetic_raw_material_requirement_lag_2
+  - synthetic_raw_material_requirement_lag_4
+  - synthetic_raw_material_requirement_lag_8
+  - synthetic_raw_material_requirement_roll_mean_4
+  - synthetic_raw_material_requirement_roll_mean_12
+  - date_week_of_year
+  - demand_index
+  - supply_index
+  - synthetic_inventory_coverage_days
+  - synthetic_inventory_coverage_days_lag_1
+  - synthetic_inventory_coverage_days_roll_mean_4
+  - synthetic_lead_time_days
+  - synthetic_lead_time_days_lag_1
+  - synthetic_plant_capacity_utilization
+  - synthetic_plant_capacity_utilization_lag_1
+  - synthetic_plant_production_volume
+  - synthetic_plant_production_volume_lag_1
+  - synthetic_raw_material_requirement
+  - synthetic_waste_rate
+  - synthetic_waste_rate_lag_1
+  - synthetic_yield_rate
+  - synthetic_yield_rate_lag_1
+  - demand_index_lag_1
+  - demand_index_lag_4
+  - demand_index_roll_mean_4
+  - supply_index_lag_1
+  - supply_index_roll_mean_4
+  - demand_supply_gap
+  - expected_yield
+  - expected_waste
+  - process_lead_time_days
+  - product_family__cooked_emulsion
+  - product_family__cured_embutido
+  - product_family__fresh_preparation
+  - shelf_life_class__long
+  - shelf_life_class__medium
+  - shelf_life_class__short
+  minimal:
+  - date_year
+  - date_month
+  - synthetic_raw_material_requirement_lag_1
+  - synthetic_raw_material_requirement_roll_mean_4
+  - demand_index
+  - supply_index
+  - synthetic_inventory_coverage_days
+  - synthetic_lead_time_days
+  - synthetic_plant_capacity_utilization
+  - synthetic_raw_material_requirement
+  - synthetic_waste_rate
+  - synthetic_yield_rate
+  - date_week_of_year
+  - demand_supply_gap
+  extended:
+  - date_year
+  - date_month
+  - synthetic_raw_material_requirement_lag_1
+  - synthetic_raw_material_requirement_lag_2
+  - synthetic_raw_material_requirement_lag_4
+  - synthetic_raw_material_requirement_lag_8
+  - synthetic_raw_material_requirement_roll_mean_4
+  - synthetic_raw_material_requirement_roll_mean_12
+  - date_week_of_year
+  - demand_index
+  - supply_index
+  - synthetic_inventory_coverage_days
+  - synthetic_inventory_coverage_days_lag_1
+  - synthetic_inventory_coverage_days_roll_mean_4
+  - synthetic_lead_time_days
+  - synthetic_lead_time_days_lag_1
+  - synthetic_plant_capacity_utilization
+  - synthetic_plant_capacity_utilization_lag_1
+  - synthetic_plant_production_volume
+  - synthetic_plant_production_volume_lag_1
+  - synthetic_raw_material_requirement
+  - synthetic_waste_rate
+  - synthetic_waste_rate_lag_1
+  - synthetic_yield_rate
+  - synthetic_yield_rate_lag_1
+  - demand_index_lag_1
+  - demand_index_lag_4
+  - demand_index_roll_mean_4
+  - supply_index_lag_1
+  - supply_index_roll_mean_4
+  - demand_supply_gap
+  - expected_yield
+  - expected_waste
+  - process_lead_time_days
+  - product_family__cooked_emulsion
+  - product_family__fresh_preparation
+  - product_family__cured_embutido
+  - shelf_life_class__medium
+  - shelf_life_class__long
+  - shelf_life_class__short
+recommended_feature_set: ablation_reduced_context
+review_features: &id002
+- demand_index_lag_2
+- demand_index_lag_8
+- demand_index_roll_mean_12
+- demand_supply_ratio
+- synthetic_lead_time_days_roll_mean_4
+- synthetic_plant_capacity_utilization_lag_2
+- synthetic_plant_capacity_utilization_lag_4
+- synthetic_plant_capacity_utilization_lag_8
+- synthetic_plant_capacity_utilization_roll_mean_12
+- synthetic_plant_capacity_utilization_roll_mean_4
+- synthetic_plant_production_volume_lag_2
+- synthetic_plant_production_volume_lag_4
+- synthetic_plant_production_volume_lag_8
+- synthetic_plant_production_volume_roll_mean_12
+- synthetic_plant_production_volume_roll_mean_4
+- synthetic_waste_rate_lag_2
+- synthetic_waste_rate_lag_4
+- synthetic_waste_rate_lag_8
+- synthetic_waste_rate_roll_mean_12
+- synthetic_waste_rate_roll_mean_4
+- synthetic_yield_rate_lag_2
+- synthetic_yield_rate_lag_4
+- synthetic_yield_rate_lag_8
+- synthetic_yield_rate_roll_mean_12
+- synthetic_yield_rate_roll_mean_4
+review_pool_features: *id002
+excluded_features:
+- baseline_order_quantity_tons
+- cost_sensitivity
+- cost_sensitivity__high
+- cost_sensitivity__low
+- cost_sensitivity__medium
+- current_inventory_tons
+- date
+- date_quarter
+- destination_profile
+- destination_profile__cooked_emulsion
+- destination_profile__cured_embutido
+- destination_profile__fresh_preparation
+- expected_requirement_tons
+- expected_waste_rate
+- expected_yield_rate
+- formulation_class
+- formulation_class__cooked_emulsion
+- formulation_class__cured
+- formulation_class__fresh_prepared
+- lead_time_days
+- manufacturing_context_profile
+- manufacturing_context_profile__cooked_emulsion
+- manufacturing_context_profile__cured_embutido
+- manufacturing_context_profile__fresh_preparation
+- order_quantity_tons
+- priority_level
+- priority_level__planned_campaign
+- priority_level__service_critical
+- priority_level__standard_service
+- process_type
+- process_type__cooking_emulsification
+- process_type__curing_maturation
+- process_type__fresh_forming
+- product_family
+- product_family_alias
+- product_family_alias__cooked_emulsion
+- product_family_alias__cured_embutido
+- product_family_alias__fresh_preparation
+- projected_stock_after_lead_time_tons
+- purchase_price_index
+- purchase_price_index_lag_1
+- purchase_price_index_lag_2
+- purchase_price_index_lag_4
+- purchase_price_index_lag_8
+- purchase_price_index_roll_mean_12
+- purchase_price_index_roll_mean_4
+- purchase_trigger_gap_tons
+- purchase_trigger_label
+- purchase_trigger_proba_heuristic
+- quantity_optimizer_target_tons
+- raw_material_id
+- raw_material_id__rm_cooked_emulsion
+- raw_material_id__rm_cured_embutido
+- raw_material_id__rm_fresh_preparation
+- recipe_profile
+- recipe_profile__fermented_dry_spiced
+- recipe_profile__high_throughput_standard
+- recipe_profile__marinated_short_run
+- replenishment_gap_tons
+- safety_coverage_days
+- safety_stock_tons
+- shelf_life_class
+- shelf_life_days
+- supply_index_lag_2
+- supply_index_lag_4
+- supply_index_lag_8
+- supply_index_roll_mean_12
+- synthetic_inventory_coverage_days_lag_2
+- synthetic_inventory_coverage_days_lag_4
+- synthetic_inventory_coverage_days_lag_8
+- synthetic_inventory_coverage_days_roll_mean_12
+- synthetic_inventory_level
+- synthetic_inventory_level_lag_1
+- synthetic_inventory_level_lag_2
+- synthetic_inventory_level_lag_4
+- synthetic_inventory_level_lag_8
+- synthetic_inventory_level_roll_mean_12
+- synthetic_inventory_level_roll_mean_4
+- synthetic_lead_time_days_lag_2
+- synthetic_lead_time_days_lag_4
+- synthetic_lead_time_days_lag_8
+- synthetic_lead_time_days_roll_mean_12
+- synthetic_planned_orders
+- synthetic_planned_orders_lag_1
+- synthetic_planned_orders_lag_2
+- synthetic_planned_orders_lag_4
+- synthetic_planned_orders_lag_8
+- synthetic_planned_orders_roll_mean_12
+- synthetic_planned_orders_roll_mean_4
+- synthetic_procurement_need
+- synthetic_procurement_need_coverage_gap
+- synthetic_procurement_need_hybrid
+- synthetic_procurement_need_lag_1
+- synthetic_procurement_need_lag_2
+- synthetic_procurement_need_lag_4
+- synthetic_procurement_need_lag_8
+- synthetic_procurement_need_pressure
+- synthetic_procurement_need_refined
+- synthetic_procurement_need_roll_mean_12
+- synthetic_procurement_need_roll_mean_4
+- synthetic_raw_material_requirement_t_plus_4
+- unit_purchase_cost
+prepared_dataset_path: data/processed/baseline/feature_engineering_modeling__mixed_context.csv
+feature_contract_path: data/processed/baseline/feature_contract__mixed_context.csv
+feature_roles_metadata_path: data/processed/baseline/feature_roles_metadata__mixed_context.json
+input_dataset_mode: synthetic_plant_layer__mixed_context
+input_dataset_path: synthetic_plant_layer__mixed_context
+recipe_context:
+  selection_mode: mixed_context
+  mode_resolution: cli_mixed_context_flag
+  scope_type: mixed_context
+  scope_token: mixed_context
+  output_suffix: __mixed_context
+  recipe_profile: null
+  manufacturing_context_profile: null
+  recipe_slug: null
+  recipe_registry_path: config/manufacturing_profiles.yaml
+  available_recipe_profiles:
+  - fermented_dry_spiced
+  - high_throughput_standard
+  - marinated_short_run
+  available_manufacturing_profiles:
+  - cured_embutido
+  - cooked_emulsion
+  - fresh_preparation

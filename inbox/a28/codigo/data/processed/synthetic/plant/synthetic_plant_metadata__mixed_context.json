@@ -1,0 +1,2328 @@
+{
+  "environment_name": "procurement_training_environment",
+  "environment_role": "controlled_weekly_training_validation_and_policy_evaluation_environment_for_procurement_modeling",
+  "time_granularity": "weekly",
+  "validated_base_horizon_weeks": 1,
+  "validated_base_horizon_label": "W+1",
+  "target_projection_window_weeks": 4,
+  "target_roles": {
+    "canonical_target_column": "synthetic_procurement_need",
+    "canonical_variant": "pressure",
+    "requirement_target_column": "synthetic_raw_material_requirement",
+    "decision_output_column": "order_quantity_tons",
+    "decision_role": "downstream_policy_layer",
+    "optimal_quantity_role": "downstream_decision_or_optimization_stage"
+  },
+  "parameters": {
+    "base_weekly_output_tons": 1200.0,
+    "min_weekly_output_tons": 750.0,
+    "nominal_capacity_tons": 1600.0,
+    "demand_weight": 0.75,
+    "supply_weight": 0.25,
+    "seasonality_amplitude": 0.04,
+    "production_noise_std": 0.03,
+    "preferred_capacity_utilization": 0.82,
+    "min_capacity_utilization": 0.45,
+    "max_capacity_utilization": 0.98,
+    "base_yield_rate": 0.84,
+    "min_yield_rate": 0.78,
+    "max_yield_rate": 0.92,
+    "yield_penalty_per_utilization_point": 0.18,
+    "yield_noise_std": 0.004,
+    "base_waste_rate": 0.025,
+    "min_waste_rate": 0.01,
+    "max_waste_rate": 0.06,
+    "waste_penalty_per_utilization_point": 0.05,
+    "waste_noise_std": 0.002,
+    "base_inventory_coverage_days": 11.0,
+    "min_inventory_coverage_days": 6.0,
+    "max_inventory_coverage_days": 18.0,
+    "inventory_supply_bonus_days": 4.0,
+    "inventory_demand_penalty_days": 3.0,
+    "inventory_coverage_noise_std": 0.6,
+    "base_lead_time_days": 5.0,
+    "min_lead_time_days": 2.0,
+    "max_lead_time_days": 9.0,
+    "lead_time_supply_penalty_days": 3.0,
+    "lead_time_noise_std": 0.5,
+    "safety_stock_days": 6.0,
+    "planned_orders_buffer_ratio": 0.05,
+    "manufacturing_context": {
+      "context_window_weeks": 6,
+      "assignment_noise_std": 0.02,
+      "persistence_bonus": 0.12,
+      "profiles": [
+        {
+          "profile_name": "cured_embutido",
+          "destination_profile": "cured_long_horizon",
+          "recipe_profile": "fermented_dry_spiced",
+          "product_family": "cured_embutido",
+          "process_type": "curing_maturation",
+          "formulation_class": "cured",
+          "expected_yield": 0.79,
+          "expected_waste": 0.031,
+          "process_lead_time_days": 11.0,
+          "shelf_life_class": "long",
+          "priority_level": "planned_campaign",
+          "cost_sensitivity": "high",
+          "production_multiplier": 0.93,
+          "coverage_adjustment_days": 2.4,
+          "lead_time_multiplier": 1.35,
+          "pressure_buffer_adjustment_days": 1.3,
+          "requirement_pressure_multiplier": 1.12,
+          "waste_stress_multiplier": 1.15,
+          "yield_stress_multiplier": 1.1,
+          "policy_target_coverage_adjustment_days": 1.5,
+          "policy_excess_penalty_multiplier": 1.1,
+          "policy_need_multiplier": 0.96,
+          "policy_max_order_multiplier": 0.92,
+          "selection_bias": 0.02,
+          "demand_sensitivity": 0.18,
+          "supply_stress_sensitivity": 0.26,
+          "seasonal_quarter_weights": {
+            "q1": 0.3,
+            "q2": -0.08,
+            "q3": -0.16,
+            "q4": 0.38
+          }
+        },
+        {
+          "profile_name": "cooked_emulsion",
+          "destination_profile": "cooked_standard_line",
+          "recipe_profile": "high_throughput_standard",
+          "product_family": "cooked_emulsion",
+          "process_type": "cooking_emulsification",
+          "formulation_class": "cooked_emulsion",
+          "expected_yield": 0.9,
+          "expected_waste": 0.018,
+          "process_lead_time_days": 4.0,
+          "shelf_life_class": "medium",
+          "priority_level": "standard_service",
+          "cost_sensitivity": "medium",
+          "production_multiplier": 1.08,
+          "coverage_adjustment_days": 0.6,
+          "lead_time_multiplier": 0.95,
+          "pressure_buffer_adjustment_days": 0.4,
+          "requirement_pressure_multiplier": 1.0,
+          "waste_stress_multiplier": 0.9,
+          "yield_stress_multiplier": 0.9,
+          "policy_target_coverage_adjustment_days": 0.4,
+          "policy_excess_penalty_multiplier": 0.95,
+          "policy_need_multiplier": 1.0,
+          "policy_max_order_multiplier": 1.0,
+          "selection_bias": 0.18,
+          "demand_sensitivity": 0.12,
+          "supply_stress_sensitivity": 0.12,
+          "seasonal_quarter_weights": {
+            "q1": 0.1,
+            "q2": 0.18,
+            "q3": 0.12,
+            "q4": 0.08
+          }
+        },
+        {
+          "profile_name": "fresh_preparation",
+          "destination_profile": "fresh_short_shelf_life",
+          "recipe_profile": "marinated_short_run",
+          "product_family": "fresh_preparation",
+          "process_type": "fresh_forming",
+          "formulation_class": "fresh_prepared",
+          "expected_yield": 0.85,
+          "expected_waste": 0.027,
+          "process_lead_time_days": 2.5,
+          "shelf_life_class": "short",
+          "priority_level": "service_critical",
+          "cost_sensitivity": "low",
+          "production_multiplier": 1.04,
+          "coverage_adjustment_days": -2.3,
+          "lead_time_multiplier": 0.72,
+          "pressure_buffer_adjustment_days": 0.8,
+          "requirement_pressure_multiplier": 1.08,
+          "waste_stress_multiplier": 1.05,
+          "yield_stress_multiplier": 1.0,
+          "policy_target_coverage_adjustment_days": -1.4,
+          "policy_excess_penalty_multiplier": 1.25,
+          "policy_need_multiplier": 1.06,
+          "policy_max_order_multiplier": 0.84,
+          "selection_bias": 0.04,
+          "demand_sensitivity": 0.32,
+          "supply_stress_sensitivity": 0.18,
+          "seasonal_quarter_weights": {
+            "q1": -0.1,
+            "q2": 0.34,
+            "q3": 0.4,
+            "q4": -0.04
+          }
+        }
+      ]
+    },
+    "procurement_target_parameters": {
+      "canonical_variant": "pressure",
+      "forward_requirement_weights": [
+        0.4,
+        0.3,
+        0.2,
+        0.1
+      ],
+      "available_coverage_current_weight": 0.62,
+      "available_coverage_trailing_weight": 0.38,
+      "pressure_buffer_base_days": 5.0,
+      "pressure_lead_time_weight": 0.85,
+      "pressure_supply_stress_weight": 1.2,
+      "pressure_growth_weight": 2.4,
+      "pressure_ratio_offset": 0.5,
+      "pressure_scaling_divisor": 3.2,
+      "pressure_context_days_weight": 0.8,
+      "pressure_context_multiplier_weight": 0.8,
+      "pressure_snapshot_blend_weight": 0.08,
+      "pressure_coverage_gap_blend_weight": 0.06,
+      "coverage_gap_buffer_base_days": 6.0,
+      "coverage_gap_lead_time_weight": 0.95,
+      "coverage_gap_supply_stress_weight": 1.8,
+      "coverage_gap_growth_weight": 2.6,
+      "coverage_gap_future_requirement_weight": 0.55,
+      "coverage_gap_trailing_requirement_weight": 0.45,
+      "hybrid_buffer_base_days": 5.0,
+      "hybrid_lead_time_weight": 0.95,
+      "hybrid_supply_stress_weight": 1.2,
+      "hybrid_growth_weight": 2.4,
+      "hybrid_ratio_offset": 0.6,
+      "hybrid_scaling_divisor": 3.2,
+      "hybrid_growth_softplus_scale_tons": 45.0,
+      "hybrid_growth_boost_scale": 18.0,
+      "hybrid_growth_boost_weight": 0.12,
+      "hybrid_snapshot_penalty_weight": 0.12
+    }
+  },
+  "manufacturing_context": {
+    "context_columns": [
+      "manufacturing_context_profile",
+      "product_family",
+      "process_type",
+      "recipe_profile",
+      "formulation_class",
+      "expected_yield",
+      "expected_waste",
+      "process_lead_time_days",
+      "shelf_life_class",
+      "priority_level",
+      "cost_sensitivity"
+    ],
+    "assignment_rules": {
+      "context_window_weeks": 6,
+      "profiles": [
+        {
+          "profile_name": "cured_embutido",
+          "destination_profile": "cured_long_horizon",
+          "recipe_profile": "fermented_dry_spiced",
+          "product_family": "cured_embutido",
+          "process_type": "curing_maturation",
+          "formulation_class": "cured",
+          "expected_yield": 0.79,
+          "expected_waste": 0.031,
+          "process_lead_time_days": 11.0,
+          "shelf_life_class": "long",
+          "priority_level": "planned_campaign",
+          "cost_sensitivity": "high",
+          "production_multiplier": 0.93,
+          "coverage_adjustment_days": 2.4,
+          "lead_time_multiplier": 1.35,
+          "pressure_buffer_adjustment_days": 1.3,
+          "requirement_pressure_multiplier": 1.12,
+          "waste_stress_multiplier": 1.15,
+          "yield_stress_multiplier": 1.1,
+          "policy_target_coverage_adjustment_days": 1.5,
+          "policy_excess_penalty_multiplier": 1.1,
+          "policy_need_multiplier": 0.96,
+          "policy_max_order_multiplier": 0.92,
+          "selection_bias": 0.02,
+          "demand_sensitivity": 0.18,
+          "supply_stress_sensitivity": 0.26,
+          "seasonal_quarter_weights": {
+            "q1": 0.3,
+            "q2": -0.08,
+            "q3": -0.16,
+            "q4": 0.38
+          }
+        },
+        {
+          "profile_name": "cooked_emulsion",
+          "destination_profile": "cooked_standard_line",
+          "recipe_profile": "high_throughput_standard",
+          "product_family": "cooked_emulsion",
+          "process_type": "cooking_emulsification",
+          "formulation_class": "cooked_emulsion",
+          "expected_yield": 0.9,
+          "expected_waste": 0.018,
+          "process_lead_time_days": 4.0,
+          "shelf_life_class": "medium",
+          "priority_level": "standard_service",
+          "cost_sensitivity": "medium",
+          "production_multiplier": 1.08,
+          "coverage_adjustment_days": 0.6,
+          "lead_time_multiplier": 0.95,
+          "pressure_buffer_adjustment_days": 0.4,
+          "requirement_pressure_multiplier": 1.0,
+          "waste_stress_multiplier": 0.9,
+          "yield_stress_multiplier": 0.9,
+          "policy_target_coverage_adjustment_days": 0.4,
+          "policy_excess_penalty_multiplier": 0.95,
+          "policy_need_multiplier": 1.0,
+          "policy_max_order_multiplier": 1.0,
+          "selection_bias": 0.18,
+          "demand_sensitivity": 0.12,
+          "supply_stress_sensitivity": 0.12,
+          "seasonal_quarter_weights": {
+            "q1": 0.1,
+            "q2": 0.18,
+            "q3": 0.12,
+            "q4": 0.08
+          }
+        },
+        {
+          "profile_name": "fresh_preparation",
+          "destination_profile": "fresh_short_shelf_life",
+          "recipe_profile": "marinated_short_run",
+          "product_family": "fresh_preparation",
+          "process_type": "fresh_forming",
+          "formulation_class": "fresh_prepared",
+          "expected_yield": 0.85,
+          "expected_waste": 0.027,
+          "process_lead_time_days": 2.5,
+          "shelf_life_class": "short",
+          "priority_level": "service_critical",
+          "cost_sensitivity": "low",
+          "production_multiplier": 1.04,
+          "coverage_adjustment_days": -2.3,
+          "lead_time_multiplier": 0.72,
+          "pressure_buffer_adjustment_days": 0.8,
+          "requirement_pressure_multiplier": 1.08,
+          "waste_stress_multiplier": 1.05,
+          "yield_stress_multiplier": 1.0,
+          "policy_target_coverage_adjustment_days": -1.4,
+          "policy_excess_penalty_multiplier": 1.25,
+          "policy_need_multiplier": 1.06,
+          "policy_max_order_multiplier": 0.84,
+          "selection_bias": 0.04,
+          "demand_sensitivity": 0.32,
+          "supply_stress_sensitivity": 0.18,
+          "seasonal_quarter_weights": {
+            "q1": -0.1,
+            "q2": 0.34,
+            "q3": 0.4,
+            "q4": -0.04
+          }
+        }
+      ],
+      "blocks": [
+        {
+          "date_start": "2003-12-29",
+          "date_end": "2004-02-02",
+          "profile_name": "cured_embutido",
+          "product_family": "cured_embutido",
+          "process_type": "curing_maturation",
+          "quarter": 4,
+          "assignment_score": 0.367617
+        },
+        {
+          "date_start": "2004-02-09",
+          "date_end": "2004-03-15",
+          "profile_name": "cured_embutido",
+          "product_family": "cured_embutido",
+          "process_type": "curing_maturation",
+          "quarter": 1,
+          "assignment_score": 0.423796
+        },
+        {
+          "date_start": "2004-03-22",
+          "date_end": "2004-04-26",
+          "profile_name": "cured_embutido",
+          "product_family": "cured_embutido",
+          "process_type": "curing_maturation",
+          "quarter": 1,
+          "assignment_score": 0.408981
+        },
+        {
+          "date_start": "2004-05-03",
+          "date_end": "2004-06-07",
+          "profile_name": "cooked_emulsion",
+          "product_family": "cooked_emulsion",
+          "process_type": "cooking_emulsification",
+          "quarter": 2,
+          "assignment_score": 0.356558
+        },
+        {
+          "date_start": "2004-06-14",
+          "date_end": "2004-07-19",
+          "profile_name": "cooked_emulsion",
+          "product_family": "cooked_emulsion",
+          "process_type": "cooking_emulsification",
+          "quarter": 2,
+          "assignment_score": 0.484858
+        },
+        {
+          "date_start": "2004-07-26",
+          "date_end": "2004-08-30",
+          "profile_name": "cooked_emulsion",
+          "product_family": "cooked_emulsion",
+          "process_type": "cooking_emulsification",
+          "quarter": 3,
+          "assignment_score": 0.409785
+        },
+        {
+          "date_start": "2004-09-06",
+          "date_end": "2004-10-11",
+          "profile_name": "cooked_emulsion",
+          "product_family": "cooked_emulsion",
+          "process_type": "cooking_emulsification",
+          "quarter": 3,
+          "assignment_score": 0.401292
+        },
+        {
+          "date_start": "2004-10-18",
+          "date_end": "2004-11-22",
+          "profile_name": "cooked_emulsion",
+          "product_family": "cooked_emulsion",
+          "process_type": "cooking_emulsification",
+          "quarter": 4,
+          "assignment_score": 0.386246
+        },
+        {
+          "date_start": "2004-11-29",
+          "date_end": "2005-01-03",
+          "profile_name": "cured_embutido",
+          "product_family": "cured_embutido",
+          "process_type": "curing_maturation",
+          "quarter": 4,
+          "assignment_score": 0.365407
+        },
+        {
+          "date_start": "2005-01-10",
+          "date_end": "2005-02-14",
+          "profile_name": "cured_embutido",
+          "product_family": "cured_embutido",
+          "process_type": "curing_maturation",
+          "quarter": 1,
+          "assignment_score": 0.418439
+        },
+        {
+          "date_start": "2005-02-21",
+          "date_end": "2005-03-28",
+          "profile_name": "cured_embutido",
+          "product_family": "cured_embutido",
+          "process_type": "curing_maturation",
+          "quarter": 1,
+          "assignment_score": 0.453846
+        },
+        {
+          "date_start": "2005-04-04",
+          "date_end": "2005-05-09",
+          "profile_name": "fresh_preparation",
+          "product_family": "fresh_preparation",
+          "process_type": "fresh_forming",
+          "quarter": 2,
+          "assignment_score": 0.35798
+        },
+        {
+          "date_start": "2005-05-16",
+          "date_end": "2005-06-20",
+          "profile_name": "fresh_preparation",
+          "product_family": "fresh_preparation",
+          "process_type": "fresh_forming",
+          "quarter": 2,
+          "assignment_score": 0.439374
+        },
+        {
+          "date_start": "2005-06-27",
+          "date_end": "2005-08-01",
+          "profile_name": "fresh_preparation",
+          "product_family": "fresh_preparation",
+          "process_type": "fresh_forming",
+          "quarter": 2,
+          "assignment_score": 0.4656
+        },
+        {
+          "date_start": "2005-08-08",
+          "date_end": "2005-09-12",
+          "profile_name": "fresh_preparation",
+          "product_family": "fresh_preparation",
+          "process_type": "fresh_forming",
+          "quarter": 3,
+          "assignment_score": 0.518277
+        },
+        {
+          "date_start": "2005-09-19",
+          "date_end": "2005-10-24",
+          "profile_name": "fresh_preparation",
+          "product_family": "fresh_preparation",
+          "process_type": "fresh_forming",
+          "quarter": 3,
+          "assignment_score": 0.52424
+        },
+        {
+          "date_start": "2005-10-31",
+          "date_end": "2005-12-05",
+          "profile_name": "cured_embutido",
+          "product_family": "cured_embutido",
+          "process_type": "curing_maturation",
+          "quarter": 4,
+          "assignment_score": 0.390053
+        },
+        {
+          "date_start": "2005-12-12",
+          "date_end": "2006-01-16",
+          "profile_name": "cured_embutido",
+          "product_family": "cured_embutido",
+          "process_type": "curing_maturation",
+          "quarter": 4,
+          "assignment_score": 0.509843
+        },
+        {
+          "date_start": "2006-01-23",
+          "date_end": "2006-02-27",
+          "profile_name": "cured_embutido",
+          "product_family": "cured_embutido",
+          "process_type": "curing_maturation",
+          "quarter": 1,
+          "assignment_score": 0.406349
+        },
+        {
+          "date_start": "2006-03-06",
+          "date_end": "2006-04-10",
+          "profile_name": "cured_embutido",
+          "product_family": "cured_embutido",
+          "process_type": "curing_maturation",
+          "quarter": 1,
+          "assignment_score": 0.450298
+        },
+        {
+          "date_start": "2006-04-17",
+          "date_end": "2006-05-22",
+          "profile_name": "fresh_preparation",
+          "product_family": "fresh_preparation",
+          "process_type": "fresh_forming",
+          "quarter": 2,
+          "assignment_score": 0.350788
+        },
+        {
+          "date_start": "2006-05-29",
+          "date_end": "2006-07-03",
+          "profile_name": "fresh_preparation",
+          "product_family": "fresh_preparation",
+          "process_type": "fresh_forming",
+          "quarter": 2,
+          "assignment_score": 0.48245
+        },
+        {
+          "date_start": "2006-07-10",
+          "date_end": "2006-08-14",
+          "profile_name": "fresh_preparation",
+          "product_family": "fresh_preparation",
+          "process_type": "fresh_forming",
+          "quarter": 3,
+          "assignment_score": 0.546126
+        },
+        {
+          "date_start": "2006-08-21",
+          "date_end": "2006-09-25",
+          "profile_name": "fresh_preparation",
+          "product_family": "fresh_preparation",
+          "process_type": "fresh_forming",
+          "quarter": 3,
+          "assignment_score": 0.508691
+        },
+        {
+          "date_start": "2006-10-02",
+          "date_end": "2006-11-06",
+          "profile_name": "cured_embutido",
+          "product_family": "cured_embutido",
+          "process_type": "curing_maturation",
+          "quarter": 4,
+          "assignment_score": 0.36831
+        },
+        {
+          "date_start": "2006-11-13",
+          "date_end": "2006-12-18",
+          "profile_name": "cured_embutido",
+          "product_family": "cured_embutido",
+          "process_type": "curing_maturation",
+          "quarter": 4,
+          "assignment_score": 0.522627
+        },
+        {
+          "date_start": "2006-12-25",
+          "date_end": "2007-01-29",
+          "profile_name": "cured_embutido",
+          "product_family": "cured_embutido",
+          "process_type": "curing_maturation",
+          "quarter": 4,
+          "assignment_score": 0.516288
+        },
+        {
+          "date_start": "2007-02-05",
+          "date_end": "2007-03-12",
+          "profile_name": "cured_embutido",
+          "product_family": "cured_embutido",
+          "process_type": "curing_maturation",
+          "quarter": 1,
+          "assignment_score": 0.412474
+        },
+        {
+          "date_start": "2007-03-19",
+          "date_end": "2007-04-23",
+          "profile_name": "cured_embutido",
+          "product_family": "cured_embutido",
+          "process_type": "curing_maturation",
+          "quarter": 1,
+          "assignment_score": 0.402445
+        },
+        {
+          "date_start": "2007-04-30",
+          "date_end": "2007-06-04",
+          "profile_name": "fresh_preparation",
+          "product_family": "fresh_preparation",
+          "process_type": "fresh_forming",
+          "quarter": 2,
+          "assignment_score": 0.36833
+        },
+        {
+          "date_start": "2007-06-11",
+          "date_end": "2007-07-16",
+          "profile_name": "fresh_preparation",
+          "product_family": "fresh_preparation",
+          "process_type": "fresh_forming",
+          "quarter": 2,
+          "assignment_score": 0.4677
+        },
+        {
+          "date_start": "2007-07-23",
+          "date_end": "2007-08-27",
+          "profile_name": "fresh_preparation",
+          "product_family": "fresh_preparation",
+          "process_type": "fresh_forming",
+          "quarter": 3,
+          "assignment_score": 0.507586
+        },
+        {
+          "date_start": "2007-09-03",
+          "date_end": "2007-10-08",
+          "profile_name": "fresh_preparation",
+          "product_family": "fresh_preparation",
+          "process_type": "fresh_forming",
+          "quarter": 3,
+          "assignment_score": 0.548054
+        },
+        {
+          "date_start": "2007-10-15",
+          "date_end": "2007-11-19",
+          "profile_name": "cured_embutido",
+          "product_family": "cured_embutido",
+          "process_type": "curing_maturation",
+          "quarter": 4,
+          "assignment_score": 0.374232
+        },
+        {
+          "date_start": "2007-11-26",
+          "date_end": "2007-12-31",
+          "profile_name": "cured_embutido",
+          "product_family": "cured_embutido",
+          "process_type": "curing_maturation",
+          "quarter": 4,
+          "assignment_score": 0.506606
+        },
+        {
+          "date_start": "2008-01-07",
+          "date_end": "2008-02-11",
+          "profile_name": "cured_embutido",
+          "product_family": "cured_embutido",
+          "process_type": "curing_maturation",
+          "quarter": 1,
+          "assignment_score": 0.426774
+        },
+        {
+          "date_start": "2008-02-18",
+          "date_end": "2008-03-24",
+          "profile_name": "cured_embutido",
+          "product_family": "cured_embutido",
+          "process_type": "curing_maturation",
+          "quarter": 1,
+          "assignment_score": 0.447581
+        },
+        {
+          "date_start": "2008-03-31",
+          "date_end": "2008-05-05",
+          "profile_name": "cured_embutido",
+          "product_family": "cured_embutido",
+          "process_type": "curing_maturation",
+          "quarter": 1,
+          "assignment_score": 0.440447
+        },
+        {
+          "date_start": "2008-05-12",
+          "date_end": "2008-06-16",
+          "profile_name": "fresh_preparation",
+          "product_family": "fresh_preparation",
+          "process_type": "fresh_forming",
+          "quarter": 2,
+          "assignment_score": 0.381263
+        },
+        {
+          "date_start": "2008-06-23",
+          "date_end": "2008-07-28",
+          "profile_name": "fresh_preparation",
+          "product_family": "fresh_preparation",
+          "process_type": "fresh_forming",
+          "quarter": 2,
+          "assignment_score": 0.495692
+        },
+        {
+          "date_start": "2008-08-04",
+          "date_end": "2008-09-08",
+          "profile_name": "fresh_preparation",
+          "product_family": "fresh_preparation",
+          "process_type": "fresh_forming",
+          "quarter": 3,
+          "assignment_score": 0.572093
+        },
+        {
+          "date_start": "2008-09-15",
+          "date_end": "2008-10-20",
+          "profile_name": "fresh_preparation",
+          "product_family": "fresh_preparation",
+          "process_type": "fresh_forming",
+          "quarter": 3,
+          "assignment_score": 0.573742
+        },
+        {
+          "date_start": "2008-10-27",
+          "date_end": "2008-12-01",
+          "profile_name": "cured_embutido",
+          "product_family": "cured_embutido",
+          "process_type": "curing_maturation",
+          "quarter": 4,
+          "assignment_score": 0.43431
+        },
+        {
+          "date_start": "2008-12-08",
+          "date_end": "2009-01-12",
+          "profile_name": "cured_embutido",
+          "product_family": "cured_embutido",
+          "process_type": "curing_maturation",
+          "quarter": 4,
+          "assignment_score": 0.501971
+        },
+        {
+          "date_start": "2009-01-19",
+          "date_end": "2009-02-23",
+          "profile_name": "cured_embutido",
+          "product_family": "cured_embutido",
+          "process_type": "curing_maturation",
+          "quarter": 1,
+          "assignment_score": 0.445755
+        },
+        {
+          "date_start": "2009-03-02",
+          "date_end": "2009-04-06",
+          "profile_name": "cured_embutido",
+          "product_family": "cured_embutido",
+          "process_type": "curing_maturation",
+          "quarter": 1,
+          "assignment_score": 0.409903
+        },
+        {
+          "date_start": "2009-04-13",
+          "date_end": "2009-05-18",
+          "profile_name": "cooked_emulsion",
+          "product_family": "cooked_emulsion",
+          "process_type": "cooking_emulsification",
+          "quarter": 2,
+          "assignment_score": 0.411175
+        },
+        {
+          "date_start": "2009-05-25",
+          "date_end": "2009-06-29",
+          "profile_name": "cooked_emulsion",
+          "product_family": "cooked_emulsion",
+          "process_type": "cooking_emulsification",
+          "quarter": 2,
+          "assignment_score": 0.429723
+        },
+        {
+          "date_start": "2009-07-06",
+          "date_end": "2009-08-10",
+          "profile_name": "fresh_preparation",
+          "product_family": "fresh_preparation",
+          "process_type": "fresh_forming",
+          "quarter": 3,
+          "assignment_score": 0.404369
+        },
+        {
+          "date_start": "2009-08-17",
+          "date_end": "2009-09-21",
+          "profile_name": "fresh_preparation",
+          "product_family": "fresh_preparation",
+          "process_type": "fresh_forming",
+          "quarter": 3,
+          "assignment_score": 0.540432
+        },
+        {
+          "date_start": "2009-09-28",
+          "date_end": "2009-11-02",
+          "profile_name": "fresh_preparation",
+          "product_family": "fresh_preparation",
+          "process_type": "fresh_forming",
+          "quarter": 3,
+          "assignment_score": 0.496876
+        },
+        {
+          "date_start": "2009-11-09",
+          "date_end": "2009-12-14",
+          "profile_name": "cured_embutido",
+          "product_family": "cured_embutido",
+          "process_type": "curing_maturation",
+          "quarter": 4,
+          "assignment_score": 0.372308
+        },
+        {
+          "date_start": "2009-12-21",
+          "date_end": "2010-01-25",
+          "profile_name": "cured_embutido",
+          "product_family": "cured_embutido",
+          "process_type": "curing_maturation",
+          "quarter": 4,
+          "assignment_score": 0.50367
+        },
+        {
+          "date_start": "2010-02-01",
+          "date_end": "2010-03-08",
+          "profile_name": "cured_embutido",
+          "product_family": "cured_embutido",
+          "process_type": "curing_maturation",
+          "quarter": 1,
+          "assignment_score": 0.399239
+        },
+        {
+          "date_start": "2010-03-15",
+          "date_end": "2010-04-19",
+          "profile_name": "cured_embutido",
+          "product_family": "cured_embutido",
+          "process_type": "curing_maturation",
+          "quarter": 1,
+          "assignment_score": 0.465553
+        },
+        {
+          "date_start": "2010-04-26",
+          "date_end": "2010-05-31",
+          "profile_name": "cooked_emulsion",
+          "product_family": "cooked_emulsion",
+          "process_type": "cooking_emulsification",
+          "quarter": 2,
+          "assignment_score": 0.366178
+        },
+        {
+          "date_start": "2010-06-07",
+          "date_end": "2010-07-12",
+          "profile_name": "cooked_emulsion",
+          "product_family": "cooked_emulsion",
+          "process_type": "cooking_emulsification",
+          "quarter": 2,
+          "assignment_score": 0.468701
+        },
+        {
+          "date_start": "2010-07-19",
+          "date_end": "2010-08-23",
+          "profile_name": "cooked_emulsion",
+          "product_family": "cooked_emulsion",
+          "process_type": "cooking_emulsification",
+          "quarter": 3,
+          "assignment_score": 0.399761
+        },
+        {
+          "date_start": "2010-08-30",
+          "date_end": "2010-10-04",
+          "profile_name": "fresh_preparation",
+          "product_family": "fresh_preparation",
+          "process_type": "fresh_forming",
+          "quarter": 3,
+          "assignment_score": 0.437378
+        },
+        {
+          "date_start": "2010-10-11",
+          "date_end": "2010-11-15",
+          "profile_name": "cured_embutido",
+          "product_family": "cured_embutido",
+          "process_type": "curing_maturation",
+          "quarter": 4,
+          "assignment_score": 0.386496
+        },
+        {
+          "date_start": "2010-11-22",
+          "date_end": "2010-12-27",
+          "profile_name": "cured_embutido",
+          "product_family": "cured_embutido",
+          "process_type": "curing_maturation",
+          "quarter": 4,
+          "assignment_score": 0.531207
+        },
+        {
+          "date_start": "2011-01-03",
+          "date_end": "2011-02-07",
+          "profile_name": "cured_embutido",
+          "product_family": "cured_embutido",
+          "process_type": "curing_maturation",
+          "quarter": 1,
+          "assignment_score": 0.44705
+        },
+        {
+          "date_start": "2011-02-14",
+          "date_end": "2011-03-21",
+          "profile_name": "cured_embutido",
+          "product_family": "cured_embutido",
+          "process_type": "curing_maturation",
+          "quarter": 1,
+          "assignment_score": 0.427502
+        },
+        {
+          "date_start": "2011-03-28",
+          "date_end": "2011-05-02",
+          "profile_name": "cured_embutido",
+          "product_family": "cured_embutido",
+          "process_type": "curing_maturation",
+          "quarter": 1,
+          "assignment_score": 0.462162
+        },
+        {
+          "date_start": "2011-05-09",
+          "date_end": "2011-06-13",
+          "profile_name": "cooked_emulsion",
+          "product_family": "cooked_emulsion",
+          "process_type": "cooking_emulsification",
+          "quarter": 2,
+          "assignment_score": 0.383404
+        },
+        {
+          "date_start": "2011-06-20",
+          "date_end": "2011-07-25",
+          "profile_name": "cooked_emulsion",
+          "product_family": "cooked_emulsion",
+          "process_type": "cooking_emulsification",
+          "quarter": 2,
+          "assignment_score": 0.487928
+        },
+        {
+          "date_start": "2011-08-01",
+          "date_end": "2011-09-05",
+          "profile_name": "fresh_preparation",
+          "product_family": "fresh_preparation",
+          "process_type": "fresh_forming",
+          "quarter": 3,
+          "assignment_score": 0.436725
+        },
+        {
+          "date_start": "2011-09-12",
+          "date_end": "2011-10-17",
+          "profile_name": "fresh_preparation",
+          "product_family": "fresh_preparation",
+          "process_type": "fresh_forming",
+          "quarter": 3,
+          "assignment_score": 0.564482
+        },
+        {
+          "date_start": "2011-10-24",
+          "date_end": "2011-11-28",
+          "profile_name": "cured_embutido",
+          "product_family": "cured_embutido",
+          "process_type": "curing_maturation",
+          "quarter": 4,
+          "assignment_score": 0.354601
+        },
+        {
+          "date_start": "2011-12-05",
+          "date_end": "2012-01-09",
+          "profile_name": "cured_embutido",
+          "product_family": "cured_embutido",
+          "process_type": "curing_maturation",
+          "quarter": 4,
+          "assignment_score": 0.491507
+        },
+        {
+          "date_start": "2012-01-16",
+          "date_end": "2012-02-20",
+          "profile_name": "cured_embutido",
+          "product_family": "cured_embutido",
+          "process_type": "curing_maturation",
+          "quarter": 1,
+          "assignment_score": 0.453498
+        },
+        {
+          "date_start": "2012-02-27",
+          "date_end": "2012-04-02",
+          "profile_name": "cured_embutido",
+          "product_family": "cured_embutido",
+          "process_type": "curing_maturation",
+          "quarter": 1,
+          "assignment_score": 0.428875
+        },
+        {
+          "date_start": "2012-04-09",
+          "date_end": "2012-05-14",
+          "profile_name": "cooked_emulsion",
+          "product_family": "cooked_emulsion",
+          "process_type": "cooking_emulsification",
+          "quarter": 2,
+          "assignment_score": 0.385636
+        },
+        {
+          "date_start": "2012-05-21",
+          "date_end": "2012-06-25",
+          "profile_name": "cooked_emulsion",
+          "product_family": "cooked_emulsion",
+          "process_type": "cooking_emulsification",
+          "quarter": 2,
+          "assignment_score": 0.474346
+        },
+        {
+          "date_start": "2012-07-02",
+          "date_end": "2012-08-06",
+          "profile_name": "fresh_preparation",
+          "product_family": "fresh_preparation",
+          "process_type": "fresh_forming",
+          "quarter": 3,
+          "assignment_score": 0.444746
+        },
+        {
+          "date_start": "2012-08-13",
+          "date_end": "2012-09-17",
+          "profile_name": "fresh_preparation",
+          "product_family": "fresh_preparation",
+          "process_type": "fresh_forming",
+          "quarter": 3,
+          "assignment_score": 0.612662
+        },
+        {
+          "date_start": "2012-09-24",
+          "date_end": "2012-10-29",
+          "profile_name": "fresh_preparation",
+          "product_family": "fresh_preparation",
+          "process_type": "fresh_forming",
+          "quarter": 3,
+          "assignment_score": 0.552021
+        },
+        {
+          "date_start": "2012-11-05",
+          "date_end": "2012-12-10",
+          "profile_name": "cured_embutido",
+          "product_family": "cured_embutido",
+          "process_type": "curing_maturation",
+          "quarter": 4,
+          "assignment_score": 0.401207
+        },
+        {
+          "date_start": "2012-12-17",
+          "date_end": "2013-01-21",
+          "profile_name": "cured_embutido",
+          "product_family": "cured_embutido",
+          "process_type": "curing_maturation",
+          "quarter": 4,
+          "assignment_score": 0.514835
+        },
+        {
+          "date_start": "2013-01-28",
+          "date_end": "2013-03-04",
+          "profile_name": "cured_embutido",
+          "product_family": "cured_embutido",
+          "process_type": "curing_maturation",
+          "quarter": 1,
+          "assignment_score": 0.442457
+        },
+        {
+          "date_start": "2013-03-11",
+          "date_end": "2013-04-15",
+          "profile_name": "cured_embutido",
+          "product_family": "cured_embutido",
+          "process_type": "curing_maturation",
+          "quarter": 1,
+          "assignment_score": 0.425509
+        },
+        {
+          "date_start": "2013-04-22",
+          "date_end": "2013-05-27",
+          "profile_name": "cooked_emulsion",
+          "product_family": "cooked_emulsion",
+          "process_type": "cooking_emulsification",
+          "quarter": 2,
+          "assignment_score": 0.404012
+        },
+        {
+          "date_start": "2013-06-03",
+          "date_end": "2013-07-08",
+          "profile_name": "cooked_emulsion",
+          "product_family": "cooked_emulsion",
+          "process_type": "cooking_emulsification",
+          "quarter": 2,
+          "assignment_score": 0.518455
+        },
+        {
+          "date_start": "2013-07-15",
+          "date_end": "2013-08-19",
+          "profile_name": "fresh_preparation",
+          "product_family": "fresh_preparation",
+          "process_type": "fresh_forming",
+          "quarter": 3,
+          "assignment_score": 0.449782
+        },
+        {
+          "date_start": "2013-08-26",
+          "date_end": "2013-09-30",
+          "profile_name": "fresh_preparation",
+          "product_family": "fresh_preparation",
+          "process_type": "fresh_forming",
+          "quarter": 3,
+          "assignment_score": 0.559079
+        },
+        {
+          "date_start": "2013-10-07",
+          "date_end": "2013-11-11",
+          "profile_name": "cured_embutido",
+          "product_family": "cured_embutido",
+          "process_type": "curing_maturation",
+          "quarter": 4,
+          "assignment_score": 0.417962
+        },
+        {
+          "date_start": "2013-11-18",
+          "date_end": "2013-12-23",
+          "profile_name": "cured_embutido",
+          "product_family": "cured_embutido",
+          "process_type": "curing_maturation",
+          "quarter": 4,
+          "assignment_score": 0.521591
+        },
+        {
+          "date_start": "2013-12-30",
+          "date_end": "2014-02-03",
+          "profile_name": "cured_embutido",
+          "product_family": "cured_embutido",
+          "process_type": "curing_maturation",
+          "quarter": 4,
+          "assignment_score": 0.51517
+        },
+        {
+          "date_start": "2014-02-10",
+          "date_end": "2014-03-17",
+          "profile_name": "cured_embutido",
+          "product_family": "cured_embutido",
+          "process_type": "curing_maturation",
+          "quarter": 1,
+          "assignment_score": 0.449072
+        },
+        {
+          "date_start": "2014-03-24",
+          "date_end": "2014-04-28",
+          "profile_name": "cured_embutido",
+          "product_family": "cured_embutido",
+          "process_type": "curing_maturation",
+          "quarter": 1,
+          "assignment_score": 0.446567
+        },
+        {
+          "date_start": "2014-05-05",
+          "date_end": "2014-06-09",
+          "profile_name": "fresh_preparation",
+          "product_family": "fresh_preparation",
+          "process_type": "fresh_forming",
+          "quarter": 2,
+          "assignment_score": 0.375031
+        },
+        {
+          "date_start": "2014-06-16",
+          "date_end": "2014-07-21",
+          "profile_name": "fresh_preparation",
+          "product_family": "fresh_preparation",
+          "process_type": "fresh_forming",
+          "quarter": 2,
+          "assignment_score": 0.504722
+        },
+        {
+          "date_start": "2014-07-28",
+          "date_end": "2014-09-01",
+          "profile_name": "fresh_preparation",
+          "product_family": "fresh_preparation",
+          "process_type": "fresh_forming",
+          "quarter": 3,
+          "assignment_score": 0.58096
+        },
+        {
+          "date_start": "2014-09-08",
+          "date_end": "2014-10-13",
+          "profile_name": "fresh_preparation",
+          "product_family": "fresh_preparation",
+          "process_type": "fresh_forming",
+          "quarter": 3,
+          "assignment_score": 0.520919
+        },
+        {
+          "date_start": "2014-10-20",
+          "date_end": "2014-11-24",
+          "profile_name": "cured_embutido",
+          "product_family": "cured_embutido",
+          "process_type": "curing_maturation",
+          "quarter": 4,
+          "assignment_score": 0.415916
+        },
+        {
+          "date_start": "2014-12-01",
+          "date_end": "2015-01-05",
+          "profile_name": "cured_embutido",
+          "product_family": "cured_embutido",
+          "process_type": "curing_maturation",
+          "quarter": 4,
+          "assignment_score": 0.507935
+        },
+        {
+          "date_start": "2015-01-12",
+          "date_end": "2015-02-16",
+          "profile_name": "cured_embutido",
+          "product_family": "cured_embutido",
+          "process_type": "curing_maturation",
+          "quarter": 1,
+          "assignment_score": 0.430909
+        },
+        {
+          "date_start": "2015-02-23",
+          "date_end": "2015-03-30",
+          "profile_name": "cured_embutido",
+          "product_family": "cured_embutido",
+          "process_type": "curing_maturation",
+          "quarter": 1,
+          "assignment_score": 0.439691
+        },
+        {
+          "date_start": "2015-04-06",
+          "date_end": "2015-05-11",
+          "profile_name": "fresh_preparation",
+          "product_family": "fresh_preparation",
+          "process_type": "fresh_forming",
+          "quarter": 2,
+          "assignment_score": 0.381193
+        },
+        {
+          "date_start": "2015-05-18",
+          "date_end": "2015-06-22",
+          "profile_name": "fresh_preparation",
+          "product_family": "fresh_preparation",
+          "process_type": "fresh_forming",
+          "quarter": 2,
+          "assignment_score": 0.506548
+        },
+        {
+          "date_start": "2015-06-29",
+          "date_end": "2015-08-03",
+          "profile_name": "fresh_preparation",
+          "product_family": "fresh_preparation",
+          "process_type": "fresh_forming",
+          "quarter": 2,
+          "assignment_score": 0.52053
+        },
+        {
+          "date_start": "2015-08-10",
+          "date_end": "2015-09-14",
+          "profile_name": "fresh_preparation",
+          "product_family": "fresh_preparation",
+          "process_type": "fresh_forming",
+          "quarter": 3,
+          "assignment_score": 0.543337
+        },
+        {
+          "date_start": "2015-09-21",
+          "date_end": "2015-10-26",
+          "profile_name": "fresh_preparation",
+          "product_family": "fresh_preparation",
+          "process_type": "fresh_forming",
+          "quarter": 3,
+          "assignment_score": 0.574186
+        },
+        {
+          "date_start": "2015-11-02",
+          "date_end": "2015-12-07",
+          "profile_name": "cured_embutido",
+          "product_family": "cured_embutido",
+          "process_type": "curing_maturation",
+          "quarter": 4,
+          "assignment_score": 0.436476
+        },
+        {
+          "date_start": "2015-12-14",
+          "date_end": "2016-01-18",
+          "profile_name": "cured_embutido",
+          "product_family": "cured_embutido",
+          "process_type": "curing_maturation",
+          "quarter": 4,
+          "assignment_score": 0.556786
+        },
+        {
+          "date_start": "2016-01-25",
+          "date_end": "2016-02-29",
+          "profile_name": "cured_embutido",
+          "product_family": "cured_embutido",
+          "process_type": "curing_maturation",
+          "quarter": 1,
+          "assignment_score": 0.434179
+        },
+        {
+          "date_start": "2016-03-07",
+          "date_end": "2016-04-11",
+          "profile_name": "cured_embutido",
+          "product_family": "cured_embutido",
+          "process_type": "curing_maturation",
+          "quarter": 1,
+          "assignment_score": 0.459512
+        },
+        {
+          "date_start": "2016-04-18",
+          "date_end": "2016-05-23",
+          "profile_name": "fresh_preparation",
+          "product_family": "fresh_preparation",
+          "process_type": "fresh_forming",
+          "quarter": 2,
+          "assignment_score": 0.393689
+        },
+        {
+          "date_start": "2016-05-30",
+          "date_end": "2016-07-04",
+          "profile_name": "fresh_preparation",
+          "product_family": "fresh_preparation",
+          "process_type": "fresh_forming",
+          "quarter": 2,
+          "assignment_score": 0.461411
+        },
+        {
+          "date_start": "2016-07-11",
+          "date_end": "2016-08-15",
+          "profile_name": "fresh_preparation",
+          "product_family": "fresh_preparation",
+          "process_type": "fresh_forming",
+          "quarter": 3,
+          "assignment_score": 0.542663
+        },
+        {
+          "date_start": "2016-08-22",
+          "date_end": "2016-09-26",
+          "profile_name": "fresh_preparation",
+          "product_family": "fresh_preparation",
+          "process_type": "fresh_forming",
+          "quarter": 3,
+          "assignment_score": 0.540099
+        },
+        {
+          "date_start": "2016-10-03",
+          "date_end": "2016-11-07",
+          "profile_name": "cured_embutido",
+          "product_family": "cured_embutido",
+          "process_type": "curing_maturation",
+          "quarter": 4,
+          "assignment_score": 0.375501
+        },
+        {
+          "date_start": "2016-11-14",
+          "date_end": "2016-12-19",
+          "profile_name": "cured_embutido",
+          "product_family": "cured_embutido",
+          "process_type": "curing_maturation",
+          "quarter": 4,
+          "assignment_score": 0.503169
+        },
+        {
+          "date_start": "2016-12-26",
+          "date_end": "2017-01-30",
+          "profile_name": "cured_embutido",
+          "product_family": "cured_embutido",
+          "process_type": "curing_maturation",
+          "quarter": 4,
+          "assignment_score": 0.52803
+        },
+        {
+          "date_start": "2017-02-06",
+          "date_end": "2017-03-13",
+          "profile_name": "cured_embutido",
+          "product_family": "cured_embutido",
+          "process_type": "curing_maturation",
+          "quarter": 1,
+          "assignment_score": 0.432891
+        },
+        {
+          "date_start": "2017-03-20",
+          "date_end": "2017-04-24",
+          "profile_name": "cured_embutido",
+          "product_family": "cured_embutido",
+          "process_type": "curing_maturation",
+          "quarter": 1,
+          "assignment_score": 0.391643
+        },
+        {
+          "date_start": "2017-05-01",
+          "date_end": "2017-06-05",
+          "profile_name": "cooked_emulsion",
+          "product_family": "cooked_emulsion",
+          "process_type": "cooking_emulsification",
+          "quarter": 2,
+          "assignment_score": 0.387905
+        },
+        {
+          "date_start": "2017-06-12",
+          "date_end": "2017-07-17",
+          "profile_name": "cooked_emulsion",
+          "product_family": "cooked_emulsion",
+          "process_type": "cooking_emulsification",
+          "quarter": 2,
+          "assignment_score": 0.468259
+        },
+        {
+          "date_start": "2017-07-24",
+          "date_end": "2017-08-28",
+          "profile_name": "fresh_preparation",
+          "product_family": "fresh_preparation",
+          "process_type": "fresh_forming",
+          "quarter": 3,
+          "assignment_score": 0.442957
+        },
+        {
+          "date_start": "2017-09-04",
+          "date_end": "2017-10-09",
+          "profile_name": "fresh_preparation",
+          "product_family": "fresh_preparation",
+          "process_type": "fresh_forming",
+          "quarter": 3,
+          "assignment_score": 0.552281
+        },
+        {
+          "date_start": "2017-10-16",
+          "date_end": "2017-11-20",
+          "profile_name": "cured_embutido",
+          "product_family": "cured_embutido",
+          "process_type": "curing_maturation",
+          "quarter": 4,
+          "assignment_score": 0.395592
+        },
+        {
+          "date_start": "2017-11-27",
+          "date_end": "2018-01-01",
+          "profile_name": "cured_embutido",
+          "product_family": "cured_embutido",
+          "process_type": "curing_maturation",
+          "quarter": 4,
+          "assignment_score": 0.499845
+        },
+        {
+          "date_start": "2018-01-08",
+          "date_end": "2018-02-12",
+          "profile_name": "cured_embutido",
+          "product_family": "cured_embutido",
+          "process_type": "curing_maturation",
+          "quarter": 1,
+          "assignment_score": 0.422564
+        },
+        {
+          "date_start": "2018-02-19",
+          "date_end": "2018-03-26",
+          "profile_name": "cured_embutido",
+          "product_family": "cured_embutido",
+          "process_type": "curing_maturation",
+          "quarter": 1,
+          "assignment_score": 0.45692
+        },
+        {
+          "date_start": "2018-04-02",
+          "date_end": "2018-05-07",
+          "profile_name": "fresh_preparation",
+          "product_family": "fresh_preparation",
+          "process_type": "fresh_forming",
+          "quarter": 2,
+          "assignment_score": 0.395811
+        },
+        {
+          "date_start": "2018-05-14",
+          "date_end": "2018-06-18",
+          "profile_name": "fresh_preparation",
+          "product_family": "fresh_preparation",
+          "process_type": "fresh_forming",
+          "quarter": 2,
+          "assignment_score": 0.463504
+        },
+        {
+          "date_start": "2018-06-25",
+          "date_end": "2018-07-30",
+          "profile_name": "fresh_preparation",
+          "product_family": "fresh_preparation",
+          "process_type": "fresh_forming",
+          "quarter": 2,
+          "assignment_score": 0.504333
+        },
+        {
+          "date_start": "2018-08-06",
+          "date_end": "2018-09-10",
+          "profile_name": "fresh_preparation",
+          "product_family": "fresh_preparation",
+          "process_type": "fresh_forming",
+          "quarter": 3,
+          "assignment_score": 0.543014
+        },
+        {
+          "date_start": "2018-09-17",
+          "date_end": "2018-10-22",
+          "profile_name": "fresh_preparation",
+          "product_family": "fresh_preparation",
+          "process_type": "fresh_forming",
+          "quarter": 3,
+          "assignment_score": 0.58066
+        },
+        {
+          "date_start": "2018-10-29",
+          "date_end": "2018-12-03",
+          "profile_name": "cured_embutido",
+          "product_family": "cured_embutido",
+          "process_type": "curing_maturation",
+          "quarter": 4,
+          "assignment_score": 0.415229
+        },
+        {
+          "date_start": "2018-12-10",
+          "date_end": "2019-01-14",
+          "profile_name": "cured_embutido",
+          "product_family": "cured_embutido",
+          "process_type": "curing_maturation",
+          "quarter": 4,
+          "assignment_score": 0.479942
+        },
+        {
+          "date_start": "2019-01-21",
+          "date_end": "2019-02-25",
+          "profile_name": "cured_embutido",
+          "product_family": "cured_embutido",
+          "process_type": "curing_maturation",
+          "quarter": 1,
+          "assignment_score": 0.453327
+        },
+        {
+          "date_start": "2019-03-04",
+          "date_end": "2019-04-08",
+          "profile_name": "cured_embutido",
+          "product_family": "cured_embutido",
+          "process_type": "curing_maturation",
+          "quarter": 1,
+          "assignment_score": 0.459428
+        },
+        {
+          "date_start": "2019-04-15",
+          "date_end": "2019-05-20",
+          "profile_name": "fresh_preparation",
+          "product_family": "fresh_preparation",
+          "process_type": "fresh_forming",
+          "quarter": 2,
+          "assignment_score": 0.395201
+        },
+        {
+          "date_start": "2019-05-27",
+          "date_end": "2019-07-01",
+          "profile_name": "fresh_preparation",
+          "product_family": "fresh_preparation",
+          "process_type": "fresh_forming",
+          "quarter": 2,
+          "assignment_score": 0.528159
+        },
+        {
+          "date_start": "2019-07-08",
+          "date_end": "2019-08-12",
+          "profile_name": "fresh_preparation",
+          "product_family": "fresh_preparation",
+          "process_type": "fresh_forming",
+          "quarter": 3,
+          "assignment_score": 0.603099
+        },
+        {
+          "date_start": "2019-08-19",
+          "date_end": "2019-09-23",
+          "profile_name": "fresh_preparation",
+          "product_family": "fresh_preparation",
+          "process_type": "fresh_forming",
+          "quarter": 3,
+          "assignment_score": 0.560886
+        },
+        {
+          "date_start": "2019-09-30",
+          "date_end": "2019-11-04",
+          "profile_name": "fresh_preparation",
+          "product_family": "fresh_preparation",
+          "process_type": "fresh_forming",
+          "quarter": 3,
+          "assignment_score": 0.60604
+        },
+        {
+          "date_start": "2019-11-11",
+          "date_end": "2019-12-16",
+          "profile_name": "cured_embutido",
+          "product_family": "cured_embutido",
+          "process_type": "curing_maturation",
+          "quarter": 4,
+          "assignment_score": 0.414542
+        },
+        {
+          "date_start": "2019-12-23",
+          "date_end": "2020-01-27",
+          "profile_name": "cured_embutido",
+          "product_family": "cured_embutido",
+          "process_type": "curing_maturation",
+          "quarter": 4,
+          "assignment_score": 0.565466
+        },
+        {
+          "date_start": "2020-02-03",
+          "date_end": "2020-03-09",
+          "profile_name": "cured_embutido",
+          "product_family": "cured_embutido",
+          "process_type": "curing_maturation",
+          "quarter": 1,
+          "assignment_score": 0.463182
+        },
+        {
+          "date_start": "2020-03-16",
+          "date_end": "2020-04-20",
+          "profile_name": "cured_embutido",
+          "product_family": "cured_embutido",
+          "process_type": "curing_maturation",
+          "quarter": 1,
+          "assignment_score": 0.436079
+        },
+        {
+          "date_start": "2020-04-27",
+          "date_end": "2020-06-01",
+          "profile_name": "cooked_emulsion",
+          "product_family": "cooked_emulsion",
+          "process_type": "cooking_emulsification",
+          "quarter": 2,
+          "assignment_score": 0.413478
+        },
+        {
+          "date_start": "2020-06-08",
+          "date_end": "2020-07-13",
+          "profile_name": "cooked_emulsion",
+          "product_family": "cooked_emulsion",
+          "process_type": "cooking_emulsification",
+          "quarter": 2,
+          "assignment_score": 0.476461
+        },
+        {
+          "date_start": "2020-07-20",
+          "date_end": "2020-08-24",
+          "profile_name": "fresh_preparation",
+          "product_family": "fresh_preparation",
+          "process_type": "fresh_forming",
+          "quarter": 3,
+          "assignment_score": 0.502546
+        },
+        {
+          "date_start": "2020-08-31",
+          "date_end": "2020-10-05",
+          "profile_name": "fresh_preparation",
+          "product_family": "fresh_preparation",
+          "process_type": "fresh_forming",
+          "quarter": 3,
+          "assignment_score": 0.581268
+        },
+        {
+          "date_start": "2020-10-12",
+          "date_end": "2020-11-16",
+          "profile_name": "cured_embutido",
+          "product_family": "cured_embutido",
+          "process_type": "curing_maturation",
+          "quarter": 4,
+          "assignment_score": 0.408626
+        },
+        {
+          "date_start": "2020-11-23",
+          "date_end": "2020-12-28",
+          "profile_name": "cured_embutido",
+          "product_family": "cured_embutido",
+          "process_type": "curing_maturation",
+          "quarter": 4,
+          "assignment_score": 0.548198
+        },
+        {
+          "date_start": "2021-01-04",
+          "date_end": "2021-02-08",
+          "profile_name": "cured_embutido",
+          "product_family": "cured_embutido",
+          "process_type": "curing_maturation",
+          "quarter": 1,
+          "assignment_score": 0.446635
+        },
+        {
+          "date_start": "2021-02-15",
+          "date_end": "2021-03-22",
+          "profile_name": "cured_embutido",
+          "product_family": "cured_embutido",
+          "process_type": "curing_maturation",
+          "quarter": 1,
+          "assignment_score": 0.444124
+        },
+        {
+          "date_start": "2021-03-29",
+          "date_end": "2021-05-03",
+          "profile_name": "cured_embutido",
+          "product_family": "cured_embutido",
+          "process_type": "curing_maturation",
+          "quarter": 1,
+          "assignment_score": 0.451195
+        },
+        {
+          "date_start": "2021-05-10",
+          "date_end": "2021-06-14",
+          "profile_name": "fresh_preparation",
+          "product_family": "fresh_preparation",
+          "process_type": "fresh_forming",
+          "quarter": 2,
+          "assignment_score": 0.405121
+        },
+        {
+          "date_start": "2021-06-21",
+          "date_end": "2021-07-26",
+          "profile_name": "fresh_preparation",
+          "product_family": "fresh_preparation",
+          "process_type": "fresh_forming",
+          "quarter": 2,
+          "assignment_score": 0.52518
+        },
+        {
+          "date_start": "2021-08-02",
+          "date_end": "2021-09-06",
+          "profile_name": "fresh_preparation",
+          "product_family": "fresh_preparation",
+          "process_type": "fresh_forming",
+          "quarter": 3,
+          "assignment_score": 0.566038
+        },
+        {
+          "date_start": "2021-09-13",
+          "date_end": "2021-10-18",
+          "profile_name": "fresh_preparation",
+          "product_family": "fresh_preparation",
+          "process_type": "fresh_forming",
+          "quarter": 3,
+          "assignment_score": 0.559627
+        },
+        {
+          "date_start": "2021-10-25",
+          "date_end": "2021-11-29",
+          "profile_name": "cured_embutido",
+          "product_family": "cured_embutido",
+          "process_type": "curing_maturation",
+          "quarter": 4,
+          "assignment_score": 0.408599
+        },
+        {
+          "date_start": "2021-12-06",
+          "date_end": "2022-01-10",
+          "profile_name": "cured_embutido",
+          "product_family": "cured_embutido",
+          "process_type": "curing_maturation",
+          "quarter": 4,
+          "assignment_score": 0.563704
+        },
+        {
+          "date_start": "2022-01-17",
+          "date_end": "2022-02-21",
+          "profile_name": "cured_embutido",
+          "product_family": "cured_embutido",
+          "process_type": "curing_maturation",
+          "quarter": 1,
+          "assignment_score": 0.458272
+        },
+        {
+          "date_start": "2022-02-28",
+          "date_end": "2022-04-04",
+          "profile_name": "cured_embutido",
+          "product_family": "cured_embutido",
+          "process_type": "curing_maturation",
+          "quarter": 1,
+          "assignment_score": 0.489171
+        },
+        {
+          "date_start": "2022-04-11",
+          "date_end": "2022-05-16",
+          "profile_name": "fresh_preparation",
+          "product_family": "fresh_preparation",
+          "process_type": "fresh_forming",
+          "quarter": 2,
+          "assignment_score": 0.529066
+        },
+        {
+          "date_start": "2022-05-23",
+          "date_end": "2022-06-27",
+          "profile_name": "fresh_preparation",
+          "product_family": "fresh_preparation",
+          "process_type": "fresh_forming",
+          "quarter": 2,
+          "assignment_score": 0.621592
+        },
+        {
+          "date_start": "2022-07-04",
+          "date_end": "2022-08-08",
+          "profile_name": "fresh_preparation",
+          "product_family": "fresh_preparation",
+          "process_type": "fresh_forming",
+          "quarter": 3,
+          "assignment_score": 0.700506
+        },
+        {
+          "date_start": "2022-08-15",
+          "date_end": "2022-09-19",
+          "profile_name": "fresh_preparation",
+          "product_family": "fresh_preparation",
+          "process_type": "fresh_forming",
+          "quarter": 3,
+          "assignment_score": 0.691126
+        },
+        {
+          "date_start": "2022-09-26",
+          "date_end": "2022-10-31",
+          "profile_name": "fresh_preparation",
+          "product_family": "fresh_preparation",
+          "process_type": "fresh_forming",
+          "quarter": 3,
+          "assignment_score": 0.727535
+        },
+        {
+          "date_start": "2022-11-07",
+          "date_end": "2022-12-12",
+          "profile_name": "cured_embutido",
+          "product_family": "cured_embutido",
+          "process_type": "curing_maturation",
+          "quarter": 4,
+          "assignment_score": 0.499743
+        },
+        {
+          "date_start": "2022-12-19",
+          "date_end": "2023-01-23",
+          "profile_name": "cured_embutido",
+          "product_family": "cured_embutido",
+          "process_type": "curing_maturation",
+          "quarter": 4,
+          "assignment_score": 0.644761
+        },
+        {
+          "date_start": "2023-01-30",
+          "date_end": "2023-03-06",
+          "profile_name": "cured_embutido",
+          "product_family": "cured_embutido",
+          "process_type": "curing_maturation",
+          "quarter": 1,
+          "assignment_score": 0.508292
+        },
+        {
+          "date_start": "2023-03-13",
+          "date_end": "2023-04-17",
+          "profile_name": "cured_embutido",
+          "product_family": "cured_embutido",
+          "process_type": "curing_maturation",
+          "quarter": 1,
+          "assignment_score": 0.569215
+        },
+        {
+          "date_start": "2023-04-24",
+          "date_end": "2023-05-29",
+          "profile_name": "fresh_preparation",
+          "product_family": "fresh_preparation",
+          "process_type": "fresh_forming",
+          "quarter": 2,
+          "assignment_score": 0.604559
+        },
+        {
+          "date_start": "2023-06-05",
+          "date_end": "2023-07-10",
+          "profile_name": "fresh_preparation",
+          "product_family": "fresh_preparation",
+          "process_type": "fresh_forming",
+          "quarter": 2,
+          "assignment_score": 0.683456
+        },
+        {
+          "date_start": "2023-07-17",
+          "date_end": "2023-08-21",
+          "profile_name": "fresh_preparation",
+          "product_family": "fresh_preparation",
+          "process_type": "fresh_forming",
+          "quarter": 3,
+          "assignment_score": 0.729266
+        },
+        {
+          "date_start": "2023-08-28",
+          "date_end": "2023-10-02",
+          "profile_name": "fresh_preparation",
+          "product_family": "fresh_preparation",
+          "process_type": "fresh_forming",
+          "quarter": 3,
+          "assignment_score": 0.730016
+        },
+        {
+          "date_start": "2023-10-09",
+          "date_end": "2023-11-13",
+          "profile_name": "cured_embutido",
+          "product_family": "cured_embutido",
+          "process_type": "curing_maturation",
+          "quarter": 4,
+          "assignment_score": 0.518556
+        },
+        {
+          "date_start": "2023-11-20",
+          "date_end": "2023-12-25",
+          "profile_name": "cured_embutido",
+          "product_family": "cured_embutido",
+          "process_type": "curing_maturation",
+          "quarter": 4,
+          "assignment_score": 0.655075
+        },
+        {
+          "date_start": "2024-01-01",
+          "date_end": "2024-02-05",
+          "profile_name": "cured_embutido",
+          "product_family": "cured_embutido",
+          "process_type": "curing_maturation",
+          "quarter": 1,
+          "assignment_score": 0.547982
+        },
+        {
+          "date_start": "2024-02-12",
+          "date_end": "2024-03-18",
+          "profile_name": "cured_embutido",
+          "product_family": "cured_embutido",
+          "process_type": "curing_maturation",
+          "quarter": 1,
+          "assignment_score": 0.511306
+        },
+        {
+          "date_start": "2024-03-25",
+          "date_end": "2024-04-29",
+          "profile_name": "cured_embutido",
+          "product_family": "cured_embutido",
+          "process_type": "curing_maturation",
+          "quarter": 1,
+          "assignment_score": 0.526148
+        },
+        {
+          "date_start": "2024-05-06",
+          "date_end": "2024-06-10",
+          "profile_name": "fresh_preparation",
+          "product_family": "fresh_preparation",
+          "process_type": "fresh_forming",
+          "quarter": 2,
+          "assignment_score": 0.50757
+        },
+        {
+          "date_start": "2024-06-17",
+          "date_end": "2024-07-22",
+          "profile_name": "fresh_preparation",
+          "product_family": "fresh_preparation",
+          "process_type": "fresh_forming",
+          "quarter": 2,
+          "assignment_score": 0.606815
+        },
+        {
+          "date_start": "2024-07-29",
+          "date_end": "2024-09-02",
+          "profile_name": "fresh_preparation",
+          "product_family": "fresh_preparation",
+          "process_type": "fresh_forming",
+          "quarter": 3,
+          "assignment_score": 0.661534
+        },
+        {
+          "date_start": "2024-09-09",
+          "date_end": "2024-10-14",
+          "profile_name": "fresh_preparation",
+          "product_family": "fresh_preparation",
+          "process_type": "fresh_forming",
+          "quarter": 3,
+          "assignment_score": 0.686858
+        },
+        {
+          "date_start": "2024-10-21",
+          "date_end": "2024-11-25",
+          "profile_name": "cured_embutido",
+          "product_family": "cured_embutido",
+          "process_type": "curing_maturation",
+          "quarter": 4,
+          "assignment_score": 0.483045
+        },
+        {
+          "date_start": "2024-12-02",
+          "date_end": "2025-01-06",
+          "profile_name": "cured_embutido",
+          "product_family": "cured_embutido",
+          "process_type": "curing_maturation",
+          "quarter": 4,
+          "assignment_score": 0.608714
+        },
+        {
+          "date_start": "2025-01-13",
+          "date_end": "2025-02-17",
+          "profile_name": "cured_embutido",
+          "product_family": "cured_embutido",
+          "process_type": "curing_maturation",
+          "quarter": 1,
+          "assignment_score": 0.533483
+        },
+        {
+          "date_start": "2025-02-24",
+          "date_end": "2025-03-31",
+          "profile_name": "cured_embutido",
+          "product_family": "cured_embutido",
+          "process_type": "curing_maturation",
+          "quarter": 1,
+          "assignment_score": 0.528576
+        },
+        {
+          "date_start": "2025-04-07",
+          "date_end": "2025-05-12",
+          "profile_name": "fresh_preparation",
+          "product_family": "fresh_preparation",
+          "process_type": "fresh_forming",
+          "quarter": 2,
+          "assignment_score": 0.501446
+        },
+        {
+          "date_start": "2025-05-19",
+          "date_end": "2025-06-23",
+          "profile_name": "fresh_preparation",
+          "product_family": "fresh_preparation",
+          "process_type": "fresh_forming",
+          "quarter": 2,
+          "assignment_score": 0.650905
+        },
+        {
+          "date_start": "2025-06-30",
+          "date_end": "2025-08-04",
+          "profile_name": "fresh_preparation",
+          "product_family": "fresh_preparation",
+          "process_type": "fresh_forming",
+          "quarter": 2,
+          "assignment_score": 0.640034
+        },
+        {
+          "date_start": "2025-08-11",
+          "date_end": "2025-09-15",
+          "profile_name": "fresh_preparation",
+          "product_family": "fresh_preparation",
+          "process_type": "fresh_forming",
+          "quarter": 3,
+          "assignment_score": 0.7218
+        },
+        {
+          "date_start": "2025-09-22",
+          "date_end": "2025-10-27",
+          "profile_name": "fresh_preparation",
+          "product_family": "fresh_preparation",
+          "process_type": "fresh_forming",
+          "quarter": 3,
+          "assignment_score": 0.734371
+        },
+        {
+          "date_start": "2025-11-03",
+          "date_end": "2025-12-08",
+          "profile_name": "cured_embutido",
+          "product_family": "cured_embutido",
+          "process_type": "curing_maturation",
+          "quarter": 4,
+          "assignment_score": 0.479965
+        },
+        {
+          "date_start": "2025-12-15",
+          "date_end": "2026-01-19",
+          "profile_name": "cured_embutido",
+          "product_family": "cured_embutido",
+          "process_type": "curing_maturation",
+          "quarter": 4,
+          "assignment_score": 0.604665
+        },
+        {
+          "date_start": "2026-01-26",
+          "date_end": "2026-03-02",
+          "profile_name": "cured_embutido",
+          "product_family": "cured_embutido",
+          "process_type": "curing_maturation",
+          "quarter": 1,
+          "assignment_score": 0.563386
+        },
+        {
+          "date_start": "2026-03-09",
+          "date_end": "2026-04-13",
+          "profile_name": "cured_embutido",
+          "product_family": "cured_embutido",
+          "process_type": "curing_maturation",
+          "quarter": 1,
+          "assignment_score": 0.543932
+        },
+        {
+          "date_start": "2026-04-20",
+          "date_end": "2026-05-18",
+          "profile_name": "fresh_preparation",
+          "product_family": "fresh_preparation",
+          "process_type": "fresh_forming",
+          "quarter": 2,
+          "assignment_score": 0.550853
+        }
+      ]
+    },
+    "recipe_runtime_context": {
+      "selection_mode": "mixed_context",
+      "mode_resolution": "cli_mixed_context_flag",
+      "scope_type": "mixed_context",
+      "scope_token": "mixed_context",
+      "output_suffix": "__mixed_context",
+      "recipe_profile": null,
+      "manufacturing_context_profile": null,
+      "recipe_slug": null,
+      "recipe_registry_path": "config/manufacturing_profiles.yaml",
+      "available_recipe_profiles": [
+        "fermented_dry_spiced",
+        "high_throughput_standard",
+        "marinated_short_run"
+      ],
+      "available_manufacturing_profiles": [
+        "cured_embutido",
+        "cooked_emulsion",
+        "fresh_preparation"
+      ]
+    },
+    "recipe_registry_path": "config/manufacturing_profiles.yaml",
+    "statement": "Procurement is conditioned by product family, process and recipe context inside a controlled synthetic environment."
+  },
+  "problem_framing": {
+    "target_vs_decision": "synthetic_procurement_need is the operational target; order_quantity_tons belongs to the downstream policy layer.",
+    "manufacturing_context_statement": "The simulator no longer treats processed meats as a single generic manufacturing mode.",
+    "synthetic_environment_statement": "This remains controlled simulation, not industrial validation."
+  },
+  "input_context": {
+    "rows": 1169,
+    "date_min": "2003-12-29",
+    "date_max": "2026-05-18",
+    "columns": [
+      "date",
+      "supply_index",
+      "purchase_price_index",
+      "demand_index"
+    ]
+  },
+  "context_imputation": {
+    "supply_index_public_column": "preserved_as_nan_before_first_mapa_observation",
+    "simulator_internal_fill_value": 100.0,
+    "simulator_internal_fill_scope": "synthetic_signal_generation_only",
+    "modeling_imputation": "train_median_with_neutral_fallback_inside_training_and_inference",
+    "backfill_applied_to_supply_index": false
+  },
+  "synthetic_columns": [
+    "synthetic_plant_production_volume",
+    "synthetic_plant_capacity_utilization",
+    "synthetic_yield_rate",
+    "synthetic_waste_rate",
+    "synthetic_raw_material_requirement",
+    "synthetic_inventory_coverage_days",
+    "synthetic_inventory_level",
+    "synthetic_lead_time_days",
+    "synthetic_procurement_need_pressure",
+    "synthetic_procurement_need_coverage_gap",
+    "synthetic_procurement_need_hybrid",
+    "synthetic_procurement_need_refined",
+    "synthetic_procurement_need",
+    "synthetic_planned_orders"
+  ],
+  "manufacturing_context_columns": [
+    "manufacturing_context_profile",
+    "product_family",
+    "process_type",
+    "recipe_profile",
+    "formulation_class",
+    "expected_yield",
+    "expected_waste",
+    "process_lead_time_days",
+    "shelf_life_class",
+    "priority_level",
+    "cost_sensitivity"
+  ],
+  "available_target_columns": [
+    "synthetic_procurement_need",
+    "synthetic_procurement_need_refined",
+    "synthetic_raw_material_requirement",
+    "synthetic_procurement_need_pressure",
+    "synthetic_procurement_need_hybrid",
+    "synthetic_procurement_need_coverage_gap"
+  ],
+  "procurement_target_formulations": {
+    "canonical_variant": "pressure",
+    "shared_derived_terms": {
+      "future_requirement_weighted": "Forward weighted average of synthetic_raw_material_requirement over t+1..t+4.",
+      "future_lead_time_weighted": "Forward weighted average of synthetic_lead_time_days over t+1..t+4.",
+      "manufacturing_context_adjustments": "Manufacturing context shifts yield, waste, coverage, lead time and pressure buffers before target computation."
+    },
+    "variants": {
+      "pressure": {
+        "column": "synthetic_procurement_need_pressure"
+      },
+      "coverage_gap": {
+        "column": "synthetic_procurement_need_coverage_gap"
+      },
+      "hybrid": {
+        "column": "synthetic_procurement_need_hybrid"
+      }
+    }
+  },
+  "simulator_environment_summary": {
+    "environment_name": "procurement_training_environment",
+    "environment_role": "controlled_weekly_training_validation_and_policy_evaluation_environment_for_procurement_modeling",
+    "time_granularity": "weekly",
+    "validated_base_horizon_weeks": 1,
+    "validated_base_horizon_label": "W+1",
+    "target_projection_window_weeks": 4,
+    "dataset_summary": {
+      "rows": 1169,
+      "date_min": "2003-12-29",
+      "date_max": "2026-05-18",
+      "synthetic_columns": [
+        "synthetic_plant_production_volume",
+        "synthetic_plant_capacity_utilization",
+        "synthetic_yield_rate",
+        "synthetic_waste_rate",
+        "synthetic_raw_material_requirement",
+        "synthetic_inventory_coverage_days",
+        "synthetic_inventory_level",
+        "synthetic_lead_time_days",
+        "synthetic_procurement_need_pressure",
+        "synthetic_procurement_need_coverage_gap",
+        "synthetic_procurement_need_hybrid",
+        "synthetic_procurement_need_refined",
+        "synthetic_procurement_need",
+        "synthetic_planned_orders"
+      ],
+      "manufacturing_context_columns": [
+        "manufacturing_context_profile",
+        "product_family",
+        "process_type",
+        "recipe_profile",
+        "formulation_class",
+        "expected_yield",
+        "expected_waste",
+        "process_lead_time_days",
+        "shelf_life_class",
+        "priority_level",
+        "cost_sensitivity"
+      ],
+      "active_recipe_profile": null,
+      "recipe_registry_path": "config/manufacturing_profiles.yaml"
+    },
+    "manufacturing_context_summary": {
+      "profile_mix": {
+        "cured_embutido": 582,
+        "fresh_preparation": 467,
+        "cooked_emulsion": 120
+      },
+      "product_family_mix": {
+        "cured_embutido": 582,
+        "fresh_preparation": 467,
+        "cooked_emulsion": 120
+      },
+      "process_type_mix": {
+        "curing_maturation": 582,
+        "fresh_forming": 467,
+        "cooking_emulsification": 120
+      },
+      "recipe_profile_mix": {
+        "fermented_dry_spiced": 582,
+        "marinated_short_run": 467,
+        "high_throughput_standard": 120
+      },
+      "by_product_family": [
+        {
+          "product_family": "cooked_emulsion",
+          "synthetic_raw_material_requirement_mean": 1436.2203824349817,
+          "synthetic_inventory_coverage_days_mean": 11.899759495187375,
+          "synthetic_lead_time_days_mean": 4.083333333333333,
+          "synthetic_procurement_need_mean": 93.77218483613005
+        },
+        {
+          "product_family": "cured_embutido",
+          "synthetic_raw_material_requirement_mean": 1505.2303347393574,
+          "synthetic_inventory_coverage_days_mean": 13.27460747711383,
+          "synthetic_lead_time_days_mean": 9.0,
+          "synthetic_procurement_need_mean": 295.46763311465156
+        },
+        {
+          "product_family": "fresh_preparation",
+          "synthetic_raw_material_requirement_mean": 1635.368609964,
+          "synthetic_inventory_coverage_days_mean": 8.753647432496782,
+          "synthetic_lead_time_days_mean": 2.4518201284796572,
+          "synthetic_procurement_need_mean": 249.64613658411545
+        }
+      ],
+      "by_process_type": [
+        {
+          "process_type": "cooking_emulsification",
+          "synthetic_raw_material_requirement_mean": 1436.2203824349817,
+          "synthetic_inventory_coverage_days_mean": 11.899759495187375,
+          "synthetic_lead_time_days_mean": 4.083333333333333,
+          "synthetic_procurement_need_mean": 93.77218483613005
+        },
+        {
+          "process_type": "curing_maturation",
+          "synthetic_raw_material_requirement_mean": 1505.2303347393574,
+          "synthetic_inventory_coverage_days_mean": 13.27460747711383,
+          "synthetic_lead_time_days_mean": 9.0,
+          "synthetic_procurement_need_mean": 295.46763311465156
+        },
+        {
+          "process_type": "fresh_forming",
+          "synthetic_raw_material_requirement_mean": 1635.368609964,
+          "synthetic_inventory_coverage_days_mean": 8.753647432496782,
+          "synthetic_lead_time_days_mean": 2.4518201284796572,
+          "synthetic_procurement_need_mean": 249.64613658411545
+        }
+      ],
+      "by_recipe_profile": [
+        {
+          "recipe_profile": "fermented_dry_spiced",
+          "synthetic_raw_material_requirement_mean": 1505.2303347393574,
+          "synthetic_inventory_coverage_days_mean": 13.27460747711383,
+          "synthetic_lead_time_days_mean": 9.0,
+          "synthetic_procurement_need_mean": 295.46763311465156
+        },
+        {
+          "recipe_profile": "high_throughput_standard",
+          "synthetic_raw_material_requirement_mean": 1436.2203824349817,
+          "synthetic_inventory_coverage_days_mean": 11.899759495187375,
+          "synthetic_lead_time_days_mean": 4.083333333333333,
+          "synthetic_procurement_need_mean": 93.77218483613005
+        },
+        {
+          "recipe_profile": "marinated_short_run",
+          "synthetic_raw_material_requirement_mean": 1635.368609964,
+          "synthetic_inventory_coverage_days_mean": 8.753647432496782,
+          "synthetic_lead_time_days_mean": 2.4518201284796572,
+          "synthetic_procurement_need_mean": 249.64613658411545
+        }
+      ]
+    },
+    "target_roles": {
+      "canonical_target_column": "synthetic_procurement_need",
+      "canonical_variant": "pressure",
+      "canonical_target_role": "operational_procurement_pressure_metric",
+      "canonical_target_semantics": "weekly procurement pressure diagnosis",
+      "target_legacy_column": "synthetic_procurement_need",
+      "target_refined_column": "synthetic_procurement_need_refined",
+      "refined_variant": "hybrid",
+      "refined_target_role": "comparison_only_candidate",
+      "target_requirement_column": "synthetic_raw_material_requirement",
+      "requirement_target_role": "upstream_requirement_signal",
+      "decision_output_column": "order_quantity_tons",
+      "decision_role": "downstream_policy_layer",
+      "optimal_quantity_role": "downstream_decision_or_optimization_stage"
+    }
+  }
+}

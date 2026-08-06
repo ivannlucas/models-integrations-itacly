@@ -7,12 +7,25 @@ from app.plugins.ml46_dairy_fouling_clog_detection._vendor.common import TrainCo
 from app.plugins.ml46_dairy_fouling_clog_detection._vendor.data import load_telemetry
 from app.plugins.ml46_dairy_fouling_clog_detection._vendor.datasets import AssetSequence, WindowDataset, make_sequences
 from app.plugins.ml46_dairy_fouling_clog_detection._vendor.features import build_feature_matrix, engineer_row_features
-from app.plugins.ml46_dairy_fouling_clog_detection.constants import SEQ_LEN
+from app.plugins.ml46_dairy_fouling_clog_detection.constants import RAW_FIXED_COLUMNS, SEQ_LEN
 
 
 def build_raw_dataframe(rows: list[dict]) -> pd.DataFrame:
     """Build a raw telemetry DataFrame from a list of row dicts (inline predict)."""
     return pd.DataFrame(rows)
+
+
+def validate_raw_columns(raw_df: pd.DataFrame) -> None:
+    """Reject a CSV/row-set missing required raw telemetry columns (input_contract.py parity).
+
+    Without this, load_telemetry()/engineer_row_features() silently fill missing measured
+    columns with defaults/NaN and score a degraded-but-plausible window instead of rejecting
+    the request — see src/predict/input_contract.py::validate_input_contract_columns in the
+    delivered model repo.
+    """
+    missing = [c for c in RAW_FIXED_COLUMNS if c not in raw_df.columns]
+    if missing:
+        raise ValueError(f"CSV falta columnas requeridas: {missing}")
 
 
 def prepare_sequences(
@@ -24,6 +37,7 @@ def prepare_sequences(
 
     Returns (sequences, feature_indices_for_no_clock, asset_ids).
     """
+    validate_raw_columns(raw_df)
     telemetry_df = load_telemetry(raw_df, train_cfg, require_targets=False)
     telemetry_df = engineer_row_features(telemetry_df)
     telemetry_df, full_feature_names, _ = build_feature_matrix(telemetry_df, feature_artifacts, [], train_cfg)

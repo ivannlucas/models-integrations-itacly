@@ -28,6 +28,9 @@ navegación — el detalle de cada tarea vive en su skill correspondiente, no lo
 | Vas a integrar un modelo nuevo desde cero | `.claude/skills/manifest-extraction/SKILL.md` primero, luego `.claude/skills/plugin-integration/SKILL.md` |
 | Vas a generar las fichas institucionales | `.claude/skills/docs-generation/SKILL.md` |
 | Vas a validar que un plugin está listo para PR | `.claude/skills/verification/SKILL.md` |
+| Vas a conectar un plugin ya verificado con el front de la plataforma | `.claude/skills/front-integration/SKILL.md` |
+| Vas a conectar un plugin ya verificado con el servicio de explicabilidad (SHAP) | `.claude/skills/explainability-integration/SKILL.md` |
+| Vas a conectar un plugin ya verificado con el servicio de detección de drift (ODD) | `.claude/skills/odd-integration/SKILL.md` |
 
 ## Orden de trabajo estándar para un modelo nuevo
 

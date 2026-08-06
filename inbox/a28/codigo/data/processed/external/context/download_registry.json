@@ -1,0 +1,11 @@
+[
+  {
+    "source": "INE_CPI",
+    "url": "https://www.ine.es/jaxiT3/files/t/csv_bdsc/76128.csv",
+    "download_timestamp_utc": "2026-06-26T08:34:55.880952+00:00",
+    "sha256": "3172d23378b962c321177b2e3f31e2f18a6c6e8afbf2b8b2f87b35866ee5e9ff",
+    "size_bytes": 17893305,
+    "status": "cached",
+    "path": "C:\\Users\\Erick Mercado\\Documents\\a28-cnp-carnico-neuroevolutivas-materia\\data\\interim\\external\\legacy_raw_cache\\ine_ipc\\76128.csv"
+  }
+]

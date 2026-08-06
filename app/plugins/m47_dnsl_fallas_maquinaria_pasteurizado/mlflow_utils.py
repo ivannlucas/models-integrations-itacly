@@ -6,7 +6,7 @@ import os
 import joblib
 import torch
 
-from app.domain.services.mlflow_tracker import BaseMLflowTracker, download_mlflow_artifacts
+from app.domain.services.mlflow_tracker import BaseMLflowTracker
 from app.plugins.m47_dnsl_fallas_maquinaria_pasteurizado.constants import (
     ARTIFACT_FOLDER_NAME,
     FEATURE_COLUMNS_FILENAME,
@@ -19,10 +19,11 @@ logger = logging.getLogger(__name__)
 
 
 def download_user_model_from_mlflow(run_id: str):
-    result = download_mlflow_artifacts(run_id, artifact_path="model", prefix="mlflow_m47_")
-    if result is None:
+    import tempfile
+    tmp = tempfile.mkdtemp(prefix="mlflow_m47_")
+    local_path = BaseMLflowTracker(run_id).download_artifacts(tmp, artifact_path="model")
+    if not local_path:
         return None
-    tmp, local_path = result
 
     from app.plugins.m47_dnsl_fallas_maquinaria_pasteurizado.model_loader import CNN_Pasteurizer
 
@@ -54,30 +55,7 @@ def upload_artifacts_to_mlflow(
     If mlflow_run_id is provided, logs to that existing run.
     Otherwise starts a new run under the m47 experiment.
     """
-    from mlflow.exceptions import MlflowException
-
-    uris = [BaseMLflowTracker.TRACKING_URI]
-    for fb in BaseMLflowTracker.FALLBACK_URIS:
-        if fb not in uris:
-            uris.append(fb)
-
-    attempts = []
-    last_error = None
-    for uri in uris:
-        try:
-            result = _upload_with_uri(uri, artifact_dir, mlflow_run_id, metrics)
-            attempts.append(f"{uri}=OK")
-            return result
-        except MlflowException as exc:
-            logger.warning("MLflow uri=%s failed: %s", uri, exc)
-            attempts.append(f"{uri}=403({exc})")
-            last_error = exc
-        except Exception as exc:
-            logger.warning("MLflow uri=%s failed (unexpected): %s", uri, exc)
-            attempts.append(f"{uri}=ERR({exc})")
-            last_error = exc
-
-    raise RuntimeError(f"MLflow connection failed. Tried: {'; '.join(attempts)}")
+    return _upload_with_uri(BaseMLflowTracker.TRACKING_URI, artifact_dir, mlflow_run_id, metrics)
 
 
 def _upload_with_uri(

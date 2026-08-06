@@ -1,0 +1,81 @@
+{
+  "scope": "mixed_context",
+  "executed_at_utc": "2026-06-26T08:35:16.121382+00:00",
+  "inputs": [
+    {
+      "path": "data/processed/external/context/context_weekly_for_simulation.csv",
+      "size_bytes": 48199,
+      "sha256": "b5d8f01e6a71f14296d2173df93af6bbc54747b363ae17efe2b70316c924c4e4"
+    }
+  ],
+  "outputs": [
+    {
+      "path": "data/processed/synthetic/plant/synthetic_plant_layer__mixed_context.csv",
+      "size_bytes": 747397,
+      "sha256": "83871cde1438d34c9095e213e098e9bd4bf9621216813f4ab3f9fdc6b42d9d9f"
+    },
+    {
+      "path": "data/processed/synthetic/plant/synthetic_plant_metadata__mixed_context.json",
+      "size_bytes": 81945,
+      "sha256": "9157c69e6aa1f30cf2e8fe11145ec0313e8ed27874b7ce7ddd44c08c60f0d046"
+    },
+    {
+      "path": "data/processed/synthetic/plant/synthetic_plant_column_lineage__mixed_context.csv",
+      "size_bytes": 5581,
+      "sha256": "cbceeb04d6d3abab2d53dddf58c8eaf7f442ab9ef92d7a0f412c17a804962034"
+    }
+  ],
+  "row_count": 1169,
+  "columns": [
+    "date",
+    "supply_index",
+    "purchase_price_index",
+    "demand_index",
+    "manufacturing_context_profile",
+    "product_family",
+    "process_type",
+    "recipe_profile",
+    "formulation_class",
+    "expected_yield",
+    "expected_waste",
+    "process_lead_time_days",
+    "shelf_life_class",
+    "priority_level",
+    "cost_sensitivity",
+    "synthetic_plant_production_volume",
+    "synthetic_plant_capacity_utilization",
+    "synthetic_yield_rate",
+    "synthetic_waste_rate",
+    "synthetic_raw_material_requirement",
+    "synthetic_inventory_coverage_days",
+    "synthetic_inventory_level",
+    "synthetic_lead_time_days",
+    "synthetic_procurement_need_pressure",
+    "synthetic_procurement_need_coverage_gap",
+    "synthetic_procurement_need_hybrid",
+    "synthetic_procurement_need_refined",
+    "synthetic_procurement_need",
+    "synthetic_planned_orders",
+    "destination_profile",
+    "product_family_alias",
+    "raw_material_id",
+    "current_inventory_tons",
+    "expected_requirement_tons",
+    "lead_time_days",
+    "safety_coverage_days",
+    "expected_yield_rate",
+    "expected_waste_rate",
+    "unit_purchase_cost",
+    "shelf_life_days",
+    "projected_stock_after_lead_time_tons",
+    "safety_stock_tons",
+    "purchase_trigger_gap_tons",
+    "purchase_trigger_label",
+    "purchase_trigger_proba_heuristic",
+    "replenishment_gap_tons",
+    "quantity_optimizer_target_tons",
+    "baseline_order_quantity_tons"
+  ],
+  "date_min": "2003-12-29",
+  "date_max": "2026-05-18"
+}
