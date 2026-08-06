@@ -1,0 +1,65 @@
+# Python / entorno
+__pycache__/
+*.py[cod]
+*.pyd
+.venv/
+venv/
+
+# Entornos y caches de herramientas
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+
+# Salidas generadas por el pipeline
+data/raw/*
+!data/raw/.gitkeep
+data/processed/*
+!data/processed/.gitkeep
+data/predictions/*
+!data/predictions/.gitkeep
+data/splits/*
+!data/splits/.gitkeep
+
+models/artifacts/*
+!models/artifacts/.gitkeep
+!models/artifacts/*.json
+!models/artifacts/*.pt
+!models/artifacts/*.pkl
+!models/artifacts/*.joblib
+
+models/metrics/*
+!models/metrics/.gitkeep
+!models/metrics/reporte_modelo.md
+models/metrics/figures/*
+!models/metrics/figures/.gitkeep
+
+# Archivos temporales y logs
+tmp/
+*.log
+*.tmp
+
+# Datasets y resultados sueltos
+*.csv
+*.json
+*.png
+*.pt
+*.pkl
+*.joblib
+*.npz
+*.npy
+!data/splits/*.csv
+
+# Keep model artifacts under version control
+!models/artifacts/*.json
+!models/artifacts/*.pt
+!models/artifacts/*.pkl
+!models/artifacts/*.joblib
+
+# No ignorar documentacion ni codigo fuente
+!README.md
+!requirements.txt
+!config/
+!scripts/
+!src/
+!notebooks/

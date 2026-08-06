@@ -34,6 +34,7 @@ from app.domain.services.exceptions import (
     InfeasibleOptimizationError,
     InsufficientCycleHistoryError,
     InsufficientFramesError,
+    InsufficientSequenceHistoryError,
     InsufficientSensorWindowError,
     InsufficientTelemetryHistoryError,
     InsufficientWindowHistoryError,
@@ -155,6 +156,16 @@ from app.plugins.ml46_dairy_fouling_clog_detection.predict_dto import (
 from app.plugins.ml46_dairy_fouling_clog_detection.train_dto import (
     TrainRequest as Ml46Dairy_TrainReq,
     TrainResponse as Ml46DairyTrainResp,
+)
+from app.plugins.ml9_cereals_infestation_sequence_classifier.predict_dto import (
+    PredictBatchResponse as Ml9CerealsBatchResp,
+    PredictInlineResponse as Ml9CerealsInlineResp,
+    PredictRequest as Ml9Cereals_Request,
+    PredictResponse as Ml9Cereals_Response,
+)
+from app.plugins.ml9_cereals_infestation_sequence_classifier.train_dto import (
+    TrainRequest as Ml9Cereals_TrainReq,
+    TrainResponse as Ml9CerealsTrainResp,
 )
 from app.plugins.m47_dnsl_fallas_maquinaria_pasteurizado.predict_dto import (
     PredictBatchResponse as M47BatchResp,
@@ -843,6 +854,65 @@ def _ml46_dairy_train(plugin: FakePlugin, *, data_path: str) -> Ml46DairyTrainRe
     )
 
 
+def _ml9_cereals_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> Ml9CerealsInlineResp:
+    """Fake inline prediction response for the ml9 cereal infestation sequence classifier."""
+    confidence = 0.9982911
+    return Ml9CerealsInlineResp(
+        model_id="ml9-cereals-infestation-sequence-classifier",
+        sample_id="S_0_0061",
+        window_index=4,
+        timestamp_start="2026-01-03T00:00:00",
+        timestamp_end="2026-01-04T23:00:00",
+        pred_class=0,
+        pred_label="sano",
+        proba_sano=confidence,
+        proba_insectos=0.0016914126,
+        proba_moho_critico=0.0000174922,
+        confidence=confidence,
+        low_confidence=bool(threshold is not None and confidence < threshold),
+        n_rows_used=len(features.get("rows", [])),
+        n_windows_available=37,
+        y_true=None,
+        model_name="ml9-cereals-infestation-sequence-classifier",
+        xai_feature_values={"proba_sano": confidence, "confidence": confidence, "window_size": 48},
+    )
+
+
+def _ml9_cereals_batch(plugin: FakePlugin, *, data_path: str) -> Ml9CerealsBatchResp:
+    """Fake batch prediction response for the ml9 cereal infestation sequence classifier."""
+    return Ml9CerealsBatchResp(
+        model_id="ml9-cereals-infestation-sequence-classifier",
+        n_windows=37,
+        n_series=1,
+        predictions=[{
+            "sample_id": "S_0_0061", "window_index": 4,
+            "timestamp_start": "2026-01-03T00:00:00", "timestamp_end": "2026-01-04T23:00:00",
+            "pred_class": 0, "pred_label": "sano",
+            "proba_sano": 0.9982911, "proba_insectos": 0.0016914126, "proba_moho_critico": 0.0000174922,
+            "confidence": 0.9982911,
+        }],
+        class_distribution={"sano": 37, "insectos": 0, "moho_critico": 0},
+        evaluated_metrics=None,
+        output_path=None,
+    )
+
+
+def _ml9_cereals_train(plugin: FakePlugin, *, data_path: str) -> Ml9CerealsTrainResp:
+    """Fake fine-tuning response for the ml9 cereal infestation sequence classifier."""
+    return Ml9CerealsTrainResp(
+        detail="Fine-tuning completado sobre el checkpoint servido (GRU).",
+        n_series_train=195, n_series_validation=45, n_series_test=60,
+        n_windows_train=7215, n_windows_validation=1665, n_windows_test=2220,
+        epochs_run=7,
+        accuracy=0.9414, balanced_accuracy=0.9452, f1_macro=0.9436,
+        precision_macro=0.9422, recall_macro=0.9452, log_loss=0.1830,
+        validation_f1_macro=0.9543,
+        baseline_f1_macro=0.9436,
+        artifact_path="artifacts/ml9_cereals_infestation_sequence_classifier/user_final_winner.pt",
+        upload_warning=None,
+    )
+
+
 def _m47_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> M47InlineResp:
     """Fake inline response for the m47 DNSL model."""
     return M47InlineResp(
@@ -1069,6 +1139,7 @@ def _ml43_train(plugin: FakePlugin, *, data_path: str) -> Ml43TrainResp:
 
 
 FAKE_FACTORIES: dict[str, tuple[Callable, Callable]] = {
+    "ml9-cereals-infestation-sequence-classifier": (_ml9_cereals_inline, _ml9_cereals_batch),
     "ml46-dairy-fouling-clog-detection": (_ml46_dairy_inline, _ml46_dairy_batch),
     "ml40-meat-refrigeration-aeration-fault-diagnosis": (_ml40_meat_inline, _ml40_meat_batch),
     "ml28-meat-neuroevolutionary-raw-materials-prediction": (_ml28_meat_inline, _ml28_meat_batch),
@@ -1091,6 +1162,7 @@ FAKE_FACTORIES: dict[str, tuple[Callable, Callable]] = {
 }
 
 TRAIN_FACTORIES: dict[str, Callable] = {
+    "ml9-cereals-infestation-sequence-classifier": _ml9_cereals_train,
     "ml46-dairy-fouling-clog-detection": _ml46_dairy_train,
     "ml40-meat-refrigeration-aeration-fault-diagnosis": _ml40_meat_train,
     "ml35-dairy-ann-cleaning-cost": _ml35_dairy_train,
@@ -1232,6 +1304,17 @@ TEST_REGISTRY: list[ModelEntry] = [
         extra_predict_exceptions=(ThermalSafetyViolationError,),
         train_request_type=Ml34Dairy_TrainReq,
         train_response_type=Ml34DairyTrainResp,
+    ),
+    ModelEntry(
+        model_id="ml9-cereals-infestation-sequence-classifier",
+        prefix="/models/ml9-cereals-infestation-sequence-classifier",
+        version="1.0.0",
+        plugin_class=FakePlugin,
+        predict_request_type=Ml9Cereals_Request,
+        predict_response_type=Ml9Cereals_Response,
+        extra_predict_exceptions=(InsufficientSequenceHistoryError,),
+        train_request_type=Ml9Cereals_TrainReq,
+        train_response_type=Ml9CerealsTrainResp,
     ),
     ModelEntry(
         model_id="ml46-dairy-fouling-clog-detection",
