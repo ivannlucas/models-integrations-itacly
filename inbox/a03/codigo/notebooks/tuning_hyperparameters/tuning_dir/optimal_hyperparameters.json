@@ -1,0 +1,43 @@
+{
+    "LSTM": {
+        "lstm_1": 8,
+        "dropout": 0.2,
+        "lstm_2": 32,
+        "learning_rate": 0.001,
+        "batch_size": 512,
+        "_tune_val_acc": 0.7406540513038635,
+        "_tune_val_loss": 0.7324516773223877,
+        "_cv_mean_val_acc": 0.7204531669616699,
+        "_cv_std_val_acc": 0.018483058668591814,
+        "_cv_mean_val_loss": 0.8433169603347779,
+        "_cv_mean_val_mae": 0.07262356281280517
+    },
+    "CNN": {
+        "filters_1": 16,
+        "kernel_1": 3,
+        "filters_2": 32,
+        "kernel_2": 3,
+        "dropout": 0.2,
+        "learning_rate": 0.001,
+        "batch_size": 512,
+        "_tune_val_acc": 0.720414936542511,
+        "_tune_val_loss": 0.7500178813934326,
+        "_cv_mean_val_acc": 0.7288252592086792,
+        "_cv_std_val_acc": 0.011815114151543368,
+        "_cv_mean_val_loss": 0.7399994015693665,
+        "_cv_mean_val_mae": 0.07788539677858353
+    },
+    "BiGRU": {
+        "gru_units": 16,
+        "dropout": 0.2,
+        "dense_units": 8,
+        "learning_rate": 0.001,
+        "batch_size": 512,
+        "_tune_val_acc": 0.7226881384849548,
+        "_tune_val_loss": 0.8047540783882141,
+        "_cv_mean_val_acc": 0.6994437217712403,
+        "_cv_std_val_acc": 0.020259914934297515,
+        "_cv_mean_val_loss": 0.8386935472488404,
+        "_cv_mean_val_mae": 0.08550976514816284
+    }
+}

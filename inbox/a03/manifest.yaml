@@ -1,0 +1,544 @@
+model_id: ml3-wine-disease-pest-forecast
+sector: vitivinicola
+nombre: "Desarrollo de un modelo Deep Ensemble Learning para la predicción de enfermedades y plagas en viñas"
+task_type: timeseries_multiclass_multitask
+  # Deep Ensemble Learning (LSTM + CNN-1D + BiGRU) con doble salida por red:
+  #   - clasificación multiclase (softmax, 11 clases) combinada por Soft Voting (media de probabilidades)
+  #   - regresión de severidad (sigmoid, 0-1) combinada por media aritmética
+  # El input funcional es una ventana temporal de 168 horas (7 días) por ID_Serie.
+framework:
+  - tensorflow>=2.15.0   # requirements.txt: tensorflow>=2.15.0, keras>=3.0.0 (backend Keras 3)
+  - keras>=3.0.0
+  - scikit-learn>=1.3.0  # StandardScaler, LabelEncoder, train_test_split
+  - joblib>=1.3.0
+  - pandas>=2.0.0
+  - numpy>=1.24.0
+  - pyarrow>=14.0.0      # lectura/escritura parquet
+  - PyYAML>=6.0.0
+
+artifacts:
+  folder: models/artifacts/
+  files:
+    - M1_LSTM.keras      # LSTM 8->BN->Dropout0.2->LSTM32->BN; salidas out_class(softmax 11) + out_reg(sigmoid)
+    - M2_CNN.keras       # Conv1D 16->BN->Conv1D 32->BN->GAP->Dropout0.2; salidas out_class + out_reg
+    - M3_BiGRU.keras     # BiGRU 16->BN->Dropout0.2->Dense8(relu); salidas out_class + out_reg
+    - scaler.pkl         # StandardScaler ajustado solo sobre X_train (12 features de modelo)
+    - label_encoder.pkl  # LabelEncoder, 11 clases: ALTICA BLACK_ROT BOTRYTIS EMPOASCA ERINOSIS ESCA
+                         # HEALTHY LOBESIA MILDIU OIDIO RED_MITE
+  # NOTA: no hay extra_files_metrics. Los CSV de models/metrics/* (metrics_DEL_test.csv, etc.) son
+  # solo referencia documental de models/metrics/DEL/metrics_DEL_test.csv (fuente de metrics_reported);
+  # ningún código de runtime los carga, así que NO se suben a S3 ni entran en ArtifactStore.
+
+inputs:
+  window:
+    # El input funcional NO es una fila aislada: es una ventana temporal por ID_Serie.
+    seq_len: 168             # 7 días x 24h, granularidad horaria (1 registro/hora)
+    truncate_pad: >
+      run_inference agrupa por ID_Serie; si la serie tiene >168 filas usa las últimas 168
+      (tail); si tiene <168, repite la primera fila hasta completar 168 (padding). Solo
+      después trunca la ventana aplica apply_feature_engineering.
+    note: >
+      No existe en el código entregado un modo de predicción de "una sola fila": el mínimo
+      operativo es una serie horaria continua de 168 horas. predict_inline recibe
+      {"rows": [>=168 filas horarias]} (misma forma que ml46): el plugin toma la última ventana
+      de 168 y devuelve una predicción; predict_batch recorre todas las ventanas válidas.
+      Los golden_cases referencian la ventana por (ID_Serie, timestamp final) contra
+      data/raw/data_vin_raw.parquet.
+  fixed:
+    - name: Fecha
+      type: datetime
+      description: "Timestamp de cada registro horario. Obligatorio (de él salen Hora_Sin/Hora_Cos); debe ser ordenable dentro de cada serie."
+    - name: Temp_Amb_C
+      type: float
+      unit: "°C"
+      description: "Temperatura ambiente medida por sensor meteorológico."
+      train_range: [-8.7, 41.1]
+    - name: Hum_Rel_Pct
+      type: float
+      unit: "%"
+      description: "Humedad relativa ambiental; clave para punto de rocío y microgotas."
+      train_range: [3.0, 100.0]
+    - name: Lluvia_mm
+      type: float
+      unit: mm
+      description: "Pluviosidad en la ventana de muestreo."
+      train_range: [0.0, 13.8]
+    - name: Viento_kmh
+      type: float
+      unit: "km/h"
+      description: "Velocidad media del viento; dispersa esporas de Oídio/Mildiu/Botrytis."
+      train_range: [0.0, 51.6]
+    - name: Hum_Suelo_Pct
+      type: float
+      unit: "%"
+      description: "Humedad volumétrica del terreno."
+      train_range: [18.42, 35.0]
+    - name: pH_Suelo
+      type: float
+      unit: pH
+      description: "Acidez del terreno."
+      train_range: [5.92, 7.51]
+    - name: CO2_ppm
+      type: float
+      unit: ppm
+      description: "Dióxido de carbono por millón; relacionado con transpiración foliar."
+      train_range: [352.92, 522.54]
+    - name: VOC_ppb
+      type: float
+      unit: ppb
+      description: "Compuestos orgánicos volátiles emitidos por la planta (biomarcador temprano de infección)."
+      train_range: [-18.17, 1983.29]   # admite valores negativos — artefacto del simulador, ver known_issues
+
+  optional:
+    - name: ID_Serie
+      type: int
+      description: >
+        Identificador único de serie temporal (sensor/parcela). Recomendado: agrupa las series
+        y evita mezclar ventanas entre IDs (leakage). Si no viene, todo el input se trata como
+        una sola serie.
+    - name: Parcela_ID
+      type: string
+      description: "Metadato de parcela (no se usa como feature)."
+
+  derived_if_missing:
+    Horas_Humedad_Foliar: "horas consecutivas con (Lluvia_mm>0.1 O Hum_Rel_Pct>90.0), por serie; se reinicia a 0 cuando la hoja se seca"
+    GDD_Acumulado: "integral térmica diaria acumulada: por cada día, max(0, T_media_dia - 10.0), acumulado por serie desde el inicio del input"
+    Hora_Sin: "sin(2*pi*hora/24) a partir de Fecha (hora del día)"
+    Hora_Cos: "cos(2*pi*hora/24) a partir de Fecha"
+
+outputs:
+  predict_inline:
+    # Una fila de salida por ventana (última posición de cada ventana de 168 horas).
+    - name: diagnostico_ia
+      type: string
+      values: [ALTICA, BLACK_ROT, BOTRYTIS, EMPOASCA, ERINOSIS, ESCA, HEALTHY, LOBESIA, MILDIU, OIDIO, RED_MITE]
+      description: "Patología/estado ganador tras Soft Voting del ensemble (clase con mayor probabilidad media)."
+    - name: confianza_clasificacion
+      type: float
+      unit: "-"
+      description: >
+        Probabilidad media (0-1) de la clase ganadora. El código original la formatea como string
+        "XX.XX%" (columna Confianza_Clasificacion); el plugin debe devolver float 0-1.
+    - name: grado_severidad
+      type: float
+      unit: "-"
+      description: "Grado de infección medio de las 3 regresiones (media aritmética de las salidas out_reg), 0-1."
+    - name: tratamiento_recomendado
+      type: string
+      description: >
+        Protocolo químico/biológico/biotecnológico/cultural según la clase predicha, desde
+        base_conocimiento_tratamientos (config.yaml, editable). Determinista dado la clase.
+    - name: fecha_evaluacion
+      type: datetime
+      description: "Timestamp de la última fila de la ventana (hora actual de la predicción)."
+
+training:
+  supported: true  # train.py completo entregado (retraining desde cero del ensemble, no fine-tuning incremental)
+  target_column: [Etiqueta_Num, Grado_Infeccion]
+    # Etiqueta_Num = LabelEncoder(Clase_Entrenamiento); Grado_Infeccion = target de regresión (0-1)
+  required_columns:
+    # train.py consume el dataset YA PROCESADO (data/processed/data_vin_processed.parquet) o los
+    # splits pre-existentes en data/splits/; el plugin debe aplicar apply_feature_engineering sobre
+    # la serie completa antes de entrenar (igual que a40). Columnas mínimas del contrato:
+    - Temp_Amb_C
+    - Hum_Rel_Pct
+    - Lluvia_mm
+    - Viento_kmh
+    - Horas_Humedad_Foliar
+    - GDD_Acumulado
+    - Hum_Suelo_Pct
+    - pH_Suelo
+    - CO2_ppm
+    - VOC_ppb
+    - Hora_Sin
+    - Hora_Cos
+    - Clase_Entrenamiento
+    - Etiqueta_Num
+    - Grado_Infeccion
+    - ID_Serie
+    - Fecha
+  source: codigo_entrenamiento  # src/main.py::train + src/training/train.py + config/config.yaml
+  hyperparams:
+    # Valores reales de config.yaml + src/training/train.py (coinciden con memoria sección 6.2).
+    window_size: 168
+    batch_size: 512
+    epochs: 50
+    early_stopping_patience: 2          # EarlyStopping sobre val_loss, restore_best_weights=True
+    optimizer: Adam
+    learning_rate: 0.001                # idéntico para las 3 arquitecturas
+    loss:
+      out_class: sparse_categorical_crossentropy
+      out_reg: mse
+    loss_weights: {out_class: 1.0, out_reg: 1.0}
+    metrics: {out_class: [accuracy], out_reg: [mae]}
+    scaler: StandardScaler              # fit solo sobre train
+    split: {test_size: 0.30, val_test_ratio: 0.50, random_seed: 42, stratify_by_series: true}
+    architectures:
+      lstm: {lstm_1: 8, dropout: 0.2, lstm_2: 32}
+      cnn: {filters_1: 16, kernel_1: 3, filters_2: 32, kernel_2: 3, dropout: 0.2}
+      bigru: {gru_units: 16, dropout: 0.2, dense_units: 8}
+  source: codigo_entrenamiento  # config/config.yaml::params + src/training/train.py::build_models
+  metrics_returned:
+    - accuracy          # classification_report sobre el split de test (save_metrics=True)
+    - precision_macro
+    - recall_macro
+    - f1_macro
+    - mae               # regresión (grado de infección)
+    - mse
+    - r2
+  source: codigo_entrenamiento  # src/training/train.py::run_training(save_metrics=True)
+  note: >
+    DECISIÓN (sesión manifest): train() se implementa como un ÚNICO endpoint que REENTRENA TODO
+    desde cero — pipeline original completo: apply_feature_engineering sobre la serie completa,
+    ventanas de 168, StandardScaler refit, las 3 arquitecturas Keras y el ensemble, con los
+    hiperparámetros de config.yaml. No es fine-tuning incremental. El código original advierte de
+    que el entrenamiento en CPU es x3-5 más lento. El desacoplo s3/mlflow se respeta igualmente:
+    los artefactos fijos viven en s3://<STORAGE_BUCKET>/artifacts/fixed/<ARTIFACT_FOLDER_NAME>/ y
+    NUNCA se sobreescriben por el usuario; los artefactos del reentrenamiento se sirven/almacenan
+    solo vía mlflow_run_id (BaseMLflowTracker). El reentrenamiento por usuario no está expuesto hoy
+    en la plataforma (coherente con el resto de modelos integrados), pero train() debe quedar
+    implementado (supported: true) y devolver las métricas de metrics_returned.
+
+constraints:
+  ventana_minima_horas: 168
+  clases_fijas: 11  # clases del label_encoder.pkl entregado; la arquitectura out_class se construye con num_classes=len(le.classes_)
+  descripcion: >
+    No hay restricción de negocio tipo umbral de seguridad alimentaria (estilo "PU>=13" de a35).
+    La restricción dura es de integridad de entrada: cada serie debe aportar al menos 168 registros
+    horarios continuos; con menos, el código entregado hace padding repitiendo la primera fila
+    (predicción degradada). El skill plugin-integration debe valorar una excepción de dominio
+    propia si el histórico es insuficiente.
+
+# Métricas REALES del ensemble entregado sobre test hold-out (70/15/15 por ID_Serie, seed 42).
+# Coinciden memoria (Tablas 11 y 12) con el artefacto models/metrics/DEL/metrics_DEL_test.csv.
+metrics_reported:
+  dataset: test_hold_out
+  split: 70/15/15_por_serie
+  random_seed: 42
+  n_series_test: 149
+  n_samples_test_windows: 224374     # sumatorio de (len_serie - 168) sobre las 149 series de test
+  classification:
+    accuracy: 0.7052
+    precision_macro: 0.7494
+    recall_macro: 0.7198
+    f1_macro: 0.7259
+    f1_weighted: 0.7055
+  regression:
+    mae: 0.0610
+    rmse: 0.0936
+    r2: 0.8903
+  source: models/metrics/DEL/metrics_DEL_test.csv + memoria secciones 7.3 (Tablas 11 y 12)
+
+# 20 casos extraídos ejecutando el CÓDIGO ENTREGADO ORIGINAL (inbox/a03/codigo) sobre las últimas
+# 168 filas de cada serie de test en data/raw/data_vin_raw.parquet (tf 2.17.0 / keras 3.12.4).
+# expected = salida del modelo entregado (reproducibilidad del plugin), NO la etiqueta real:
+# donde pred != true_last_class se documenta con "nota". El "input" referencia la ventana por
+# (ID_Serie + timestamp final) contra data/raw/data_vin_raw.parquet en vez de embeber 168 filas
+# (mismo patrón que a46). raw_snapshot = última fila de la ventana, solo para lectura humana.
+golden_cases:
+  - id: caso_001
+    source: dataset_test_split
+    input:
+      id_serie: 552
+      window_end_timestamp: "2021-06-18T00:00:00"
+      window_source: "data/raw/data_vin_raw.parquet filtrado por ID_Serie=552, últimas 168 filas @1h"
+      raw_snapshot: {Temp_Amb_C: 16.6, Hum_Rel_Pct: 91.0, Lluvia_mm: 0.6, Viento_kmh: 2.2, CO2_ppm: 446.21, VOC_ppb: 69.54, Hum_Suelo_Pct: 34.03, pH_Suelo: 6.857}
+    expected:
+      diagnostico_ia: ALTICA
+      confianza_clasificacion: 0.960752
+      grado_severidad: 0.758976
+    tolerance: {clase_exact: true, float_rtol: 0.01}
+
+  - id: caso_002
+    source: dataset_test_split
+    input:
+      id_serie: 862
+      window_end_timestamp: "2020-04-13T18:00:00"
+      window_source: "data/raw/data_vin_raw.parquet filtrado por ID_Serie=862, últimas 168 filas @1h"
+      raw_snapshot: {Temp_Amb_C: 13.9, Hum_Rel_Pct: 73.0, Lluvia_mm: 0.4, Viento_kmh: 9.0, CO2_ppm: 406.85, VOC_ppb: 65.77, Hum_Suelo_Pct: 35.0, pH_Suelo: 6.809}
+    expected:
+      diagnostico_ia: BLACK_ROT
+      confianza_clasificacion: 0.757278
+      grado_severidad: 0.720613
+    tolerance: {clase_exact: true, float_rtol: 0.01}
+
+  - id: caso_003
+    source: dataset_test_split
+    input:
+      id_serie: 450
+      window_end_timestamp: "2022-10-24T21:00:00"
+      window_source: "data/raw/data_vin_raw.parquet filtrado por ID_Serie=450, últimas 168 filas @1h"
+      raw_snapshot: {Temp_Amb_C: 14.2, Hum_Rel_Pct: 71.0, Lluvia_mm: 0.0, Viento_kmh: 4.0, CO2_ppm: 427.54, VOC_ppb: 94.35, Hum_Suelo_Pct: 25.3, pH_Suelo: 6.810}
+    note: "true_last_class=BOTRYTIS; pred=MILDIU con confianza baja (0.33) — error real del modelo, no del plugin."
+    expected:
+      diagnostico_ia: MILDIU
+      confianza_clasificacion: 0.33255
+      grado_severidad: 0.301255
+    tolerance: {clase_exact: true, float_rtol: 0.01}
+
+  - id: caso_004
+    source: dataset_test_split
+    input:
+      id_serie: 100
+      window_end_timestamp: "2015-08-30T05:00:00"
+      window_source: "data/raw/data_vin_raw.parquet filtrado por ID_Serie=100, últimas 168 filas @1h"
+      raw_snapshot: {Temp_Amb_C: 23.6, Hum_Rel_Pct: 38.0, Lluvia_mm: 0.0, Viento_kmh: 14.1, CO2_ppm: 412.88, VOC_ppb: 120.2, Hum_Suelo_Pct: 23.17, pH_Suelo: 6.702}
+    note: "true_last_class=EMPOASCA; pred=OIDIO — error real del modelo."
+    expected:
+      diagnostico_ia: OIDIO
+      confianza_clasificacion: 0.568258
+      grado_severidad: 0.780486
+    tolerance: {clase_exact: true, float_rtol: 0.01}
+
+  - id: caso_005
+    source: dataset_test_split
+    input:
+      id_serie: 671
+      window_end_timestamp: "2022-05-08T20:00:00"
+      window_source: "data/raw/data_vin_raw.parquet filtrado por ID_Serie=671, últimas 168 filas @1h"
+      raw_snapshot: {Temp_Amb_C: 24.6, Hum_Rel_Pct: 21.0, Lluvia_mm: 0.0, Viento_kmh: 13.4, CO2_ppm: 415.32, VOC_ppb: 38.33, Hum_Suelo_Pct: 32.72, pH_Suelo: 6.518}
+    note: "true_last_class=ERINOSIS; pred=HEALTHY — error real del modelo."
+    expected:
+      diagnostico_ia: HEALTHY
+      confianza_clasificacion: 0.422017
+      grado_severidad: 0.091516
+    tolerance: {clase_exact: true, float_rtol: 0.01}
+
+  - id: caso_006
+    source: dataset_test_split
+    input:
+      id_serie: 250
+      window_end_timestamp: "2018-09-23T14:00:00"
+      window_source: "data/raw/data_vin_raw.parquet filtrado por ID_Serie=250, últimas 168 filas @1h"
+      raw_snapshot: {Temp_Amb_C: 29.0, Hum_Rel_Pct: 23.0, Lluvia_mm: 0.0, Viento_kmh: 9.5, CO2_ppm: 406.0, VOC_ppb: 123.14, Hum_Suelo_Pct: 32.43, pH_Suelo: 6.896}
+    expected:
+      diagnostico_ia: ESCA
+      confianza_clasificacion: 0.400751
+      grado_severidad: 0.494715
+    tolerance: {clase_exact: true, float_rtol: 0.01}
+
+  - id: caso_007
+    source: dataset_test_split
+    input:
+      id_serie: 580
+      window_end_timestamp: "2019-07-05T21:00:00"
+      window_source: "data/raw/data_vin_raw.parquet filtrado por ID_Serie=580, últimas 168 filas @1h"
+      raw_snapshot: {Temp_Amb_C: 28.7, Hum_Rel_Pct: 19.0, Lluvia_mm: 0.0, Viento_kmh: 16.3, CO2_ppm: 412.04, VOC_ppb: 28.73, Hum_Suelo_Pct: 22.23, pH_Suelo: 6.862}
+    expected:
+      diagnostico_ia: HEALTHY
+      confianza_clasificacion: 0.997361
+      grado_severidad: 0.049236
+    tolerance: {clase_exact: true, float_rtol: 0.01}
+
+  - id: caso_008
+    source: dataset_test_split
+    input:
+      id_serie: 801
+      window_end_timestamp: "2017-07-29T03:00:00"
+      window_source: "data/raw/data_vin_raw.parquet filtrado por ID_Serie=801, últimas 168 filas @1h"
+      raw_snapshot: {Temp_Amb_C: 20.9, Hum_Rel_Pct: 68.0, Lluvia_mm: 0.0, Viento_kmh: 3.4, CO2_ppm: 459.02, VOC_ppb: 134.4, Hum_Suelo_Pct: 26.49, pH_Suelo: 6.481}
+    note: "true_last_class=LOBESIA; pred=BLACK_ROT — error real del modelo."
+    expected:
+      diagnostico_ia: BLACK_ROT
+      confianza_clasificacion: 0.782021
+      grado_severidad: 0.807961
+    tolerance: {clase_exact: true, float_rtol: 0.01}
+
+  - id: caso_009
+    source: dataset_test_split
+    input:
+      id_serie: 545
+      window_end_timestamp: "2015-10-06T02:00:00"
+      window_source: "data/raw/data_vin_raw.parquet filtrado por ID_Serie=545, últimas 168 filas @1h"
+      raw_snapshot: {Temp_Amb_C: 14.3, Hum_Rel_Pct: 86.0, Lluvia_mm: 0.2, Viento_kmh: 10.7, CO2_ppm: 421.84, VOC_ppb: 51.35, Hum_Suelo_Pct: 31.81, pH_Suelo: 6.483}
+    expected:
+      diagnostico_ia: MILDIU
+      confianza_clasificacion: 0.756275
+      grado_severidad: 0.629311
+    tolerance: {clase_exact: true, float_rtol: 0.01}
+
+  - id: caso_010
+    source: dataset_test_split
+    input:
+      id_serie: 517
+      window_end_timestamp: "2023-08-21T10:00:00"
+      window_source: "data/raw/data_vin_raw.parquet filtrado por ID_Serie=517, últimas 168 filas @1h"
+      raw_snapshot: {Temp_Amb_C: 22.6, Hum_Rel_Pct: 62.0, Lluvia_mm: 0.0, Viento_kmh: 8.7, CO2_ppm: 408.49, VOC_ppb: 59.78, Hum_Suelo_Pct: 32.62, pH_Suelo: 6.733}
+    expected:
+      diagnostico_ia: OIDIO
+      confianza_clasificacion: 0.604654
+      grado_severidad: 0.814065
+    tolerance: {clase_exact: true, float_rtol: 0.01}
+
+  - id: caso_011
+    source: dataset_test_split
+    input:
+      id_serie: 402
+      window_end_timestamp: "2020-07-21T20:00:00"
+      window_source: "data/raw/data_vin_raw.parquet filtrado por ID_Serie=402, últimas 168 filas @1h"
+      raw_snapshot: {Temp_Amb_C: 29.1, Hum_Rel_Pct: 30.0, Lluvia_mm: 0.0, Viento_kmh: 9.2, CO2_ppm: 447.79, VOC_ppb: 86.45, Hum_Suelo_Pct: 21.85, pH_Suelo: 7.161}
+    note: "true_last_class=RED_MITE; pred=EMPOASCA — error real del modelo."
+    expected:
+      diagnostico_ia: EMPOASCA
+      confianza_clasificacion: 0.710688
+      grado_severidad: 0.573809
+    tolerance: {clase_exact: true, float_rtol: 0.01}
+
+  - id: caso_012
+    source: dataset_test_split
+    input:
+      id_serie: 207
+      window_end_timestamp: "2022-06-10T03:00:00"
+      window_source: "data/raw/data_vin_raw.parquet filtrado por ID_Serie=207, últimas 168 filas @1h"
+      raw_snapshot: {Temp_Amb_C: 18.1, Hum_Rel_Pct: 62.0, Lluvia_mm: 0.0, Viento_kmh: 11.2, CO2_ppm: 421.6, VOC_ppb: 49.46, Hum_Suelo_Pct: 23.08, pH_Suelo: 6.495}
+    expected:
+      diagnostico_ia: ALTICA
+      confianza_clasificacion: 0.936209
+      grado_severidad: 0.766861
+    tolerance: {clase_exact: true, float_rtol: 0.01}
+
+  - id: caso_013
+    source: dataset_test_split
+    input:
+      id_serie: 364
+      window_end_timestamp: "2023-10-20T11:00:00"
+      window_source: "data/raw/data_vin_raw.parquet filtrado por ID_Serie=364, últimas 168 filas @1h"
+      raw_snapshot: {Temp_Amb_C: 12.1, Hum_Rel_Pct: 74.0, Lluvia_mm: 0.0, Viento_kmh: 33.7, CO2_ppm: 408.43, VOC_ppb: 14.23, Hum_Suelo_Pct: 26.31, pH_Suelo: 6.755}
+    expected:
+      diagnostico_ia: BLACK_ROT
+      confianza_clasificacion: 0.477046
+      grado_severidad: 0.59883
+    tolerance: {clase_exact: true, float_rtol: 0.01}
+
+  - id: caso_014
+    source: dataset_test_split
+    input:
+      id_serie: 490
+      window_end_timestamp: "2021-12-02T09:00:00"
+      window_source: "data/raw/data_vin_raw.parquet filtrado por ID_Serie=490, últimas 168 filas @1h"
+      raw_snapshot: {Temp_Amb_C: 1.2, Hum_Rel_Pct: 94.0, Lluvia_mm: 0.0, Viento_kmh: 8.1, CO2_ppm: 410.73, VOC_ppb: 63.1, Hum_Suelo_Pct: 31.73, pH_Suelo: 6.916}
+    expected:
+      diagnostico_ia: BOTRYTIS
+      confianza_clasificacion: 0.798503
+      grado_severidad: 0.409982
+    tolerance: {clase_exact: true, float_rtol: 0.01}
+
+  - id: caso_015
+    source: dataset_test_split
+    input:
+      id_serie: 899
+      window_end_timestamp: "2015-09-29T18:00:00"
+      window_source: "data/raw/data_vin_raw.parquet filtrado por ID_Serie=899, últimas 168 filas @1h"
+      raw_snapshot: {Temp_Amb_C: 22.9, Hum_Rel_Pct: 41.0, Lluvia_mm: 0.0, Viento_kmh: 9.7, CO2_ppm: 406.72, VOC_ppb: 71.01, Hum_Suelo_Pct: 33.78, pH_Suelo: 7.18}
+    note: "true_last_class=EMPOASCA; pred=ALTICA con confianza baja (0.35) — error real del modelo."
+    expected:
+      diagnostico_ia: ALTICA
+      confianza_clasificacion: 0.351673
+      grado_severidad: 0.813663
+    tolerance: {clase_exact: true, float_rtol: 0.01}
+
+  - id: caso_016
+    source: dataset_test_split
+    input:
+      id_serie: 106
+      window_end_timestamp: "2022-05-22T11:00:00"
+      window_source: "data/raw/data_vin_raw.parquet filtrado por ID_Serie=106, últimas 168 filas @1h"
+      raw_snapshot: {Temp_Amb_C: 22.4, Hum_Rel_Pct: 47.0, Lluvia_mm: 0.0, Viento_kmh: 13.1, CO2_ppm: 404.54, VOC_ppb: 31.83, Hum_Suelo_Pct: 30.31, pH_Suelo: 6.708}
+    note: "true_last_class=ERINOSIS; pred=MILDIU con confianza baja (0.30) — error real del modelo."
+    expected:
+      diagnostico_ia: MILDIU
+      confianza_clasificacion: 0.302824
+      grado_severidad: 0.137262
+    tolerance: {clase_exact: true, float_rtol: 0.01}
+
+  - id: caso_017
+    source: dataset_test_split
+    input:
+      id_serie: 782
+      window_end_timestamp: "2019-08-26T14:00:00"
+      window_source: "data/raw/data_vin_raw.parquet filtrado por ID_Serie=782, últimas 168 filas @1h"
+      raw_snapshot: {Temp_Amb_C: 20.8, Hum_Rel_Pct: 62.0, Lluvia_mm: 0.0, Viento_kmh: 28.4, CO2_ppm: 408.57, VOC_ppb: 12.23, Hum_Suelo_Pct: 30.92, pH_Suelo: 6.495}
+    note: "true_last_class=ESCA; pred=MILDIU con confianza baja (0.32) — error real del modelo."
+    expected:
+      diagnostico_ia: MILDIU
+      confianza_clasificacion: 0.322408
+      grado_severidad: 0.525987
+    tolerance: {clase_exact: true, float_rtol: 0.01}
+
+  - id: caso_018
+    source: dataset_test_split
+    input:
+      id_serie: 66
+      window_end_timestamp: "2019-05-14T15:00:00"
+      window_source: "data/raw/data_vin_raw.parquet filtrado por ID_Serie=66, últimas 168 filas @1h"
+      raw_snapshot: {Temp_Amb_C: 26.4, Hum_Rel_Pct: 10.0, Lluvia_mm: 0.0, Viento_kmh: 4.9, CO2_ppm: 388.76, VOC_ppb: 151.66, Hum_Suelo_Pct: 23.48, pH_Suelo: 6.842}
+    expected:
+      diagnostico_ia: HEALTHY
+      confianza_clasificacion: 0.925176
+      grado_severidad: 0.15889
+    tolerance: {clase_exact: true, float_rtol: 0.01}
+
+  - id: caso_019
+    source: dataset_test_split
+    input:
+      id_serie: 376
+      window_end_timestamp: "2021-06-18T11:00:00"
+      window_source: "data/raw/data_vin_raw.parquet filtrado por ID_Serie=376, últimas 168 filas @1h"
+      raw_snapshot: {Temp_Amb_C: 17.0, Hum_Rel_Pct: 68.0, Lluvia_mm: 0.0, Viento_kmh: 5.6, CO2_ppm: 406.34, VOC_ppb: 99.05, Hum_Suelo_Pct: 28.45, pH_Suelo: 6.46}
+    expected:
+      diagnostico_ia: OIDIO
+      confianza_clasificacion: 0.561803
+      grado_severidad: 0.825139
+    tolerance: {clase_exact: true, float_rtol: 0.01}
+
+  - id: caso_020
+    source: dataset_test_split
+    input:
+      id_serie: 524
+      window_end_timestamp: "2015-11-09T16:00:00"
+      window_source: "data/raw/data_vin_raw.parquet filtrado por ID_Serie=524, últimas 168 filas @1h"
+      raw_snapshot: {Temp_Amb_C: 19.5, Hum_Rel_Pct: 55.0, Lluvia_mm: 0.0, Viento_kmh: 3.7, CO2_ppm: 399.75, VOC_ppb: 89.28, Hum_Suelo_Pct: 29.88, pH_Suelo: 6.785}
+    note: "true_last_class=MILDIU; pred=HEALTHY con confianza baja (0.32) — error real del modelo."
+    expected:
+      diagnostico_ia: HEALTHY
+      confianza_clasificacion: 0.321775
+      grado_severidad: 0.137297
+    tolerance: {clase_exact: true, float_rtol: 0.01}
+
+known_issues:
+  - >
+    Dataset 100% SINTÉTICO: generado por scripts/data/vid_simulator.py (memoria secciones 3.1-3.2:
+    "Ausencia de Datos y Solución propuesta"). No hay telemetría real de parcela; cualquier cifra
+    de negocio derivada de este modelo requiere validación pendiente frente a datos reales.
+    VOC_ppb admite incluso valores negativos (-18.17), no físicos en un sensor real.
+  - >
+    TRAIN-SERVING SKEW en GDD_Acumulado y Horas_Humedad_Foliar: en entrenamiento (run_data_processing)
+    se calculan sobre la serie completa (GDD acumulado desde el día 1 de la serie, horas de mojado con
+    su historial). En inferencia, run_inference trunca a las últimas 168 filas ANTES de aplicar
+    apply_feature_engineering, con lo que GDD reinicia a 0 al inicio de la ventana y el contador de
+    mojado se reinicia. El plugin DEBE replicar el comportamiento de inferencia (calcular las features
+    sobre la ventana de 168 horas) para reproducir el modelo entregado — no "corregirlo" a la versión
+    de entrenamiento, o las predicciones diferirán del entregable.
+  - >
+    El demo data/predictions/inferencia_vid.csv (1 fila, ALTICA 60.91%) proviene de una versión
+    anterior del modelo: reejecutando el pipeline actual sobre la misma serie sale ALTICA 93.71%.
+    No usar ese CSV como golden case ni como referencia de tolerancia.
+  - >
+    requirements.txt en UTF-8 con CRLF (no el problema de UTF-16LE visto en otros modelos). Solo
+    normalizar a LF antes de usarlo en pip/pip-audit; el encoding es correcto.
+  - >
+    Ninguna serie de test tiene < 168 filas (mínimo 274), por lo que la rama de PADDING del código
+    (serie < 168: repite la primera fila) no está cubierta por los golden_cases. Esa rama solo se
+    ejercita en inputs reales cortos y debe verificarse manualmente en plugin-integration.
+  - >
+    Reproducibilidad numérica de los golden_cases verificada ejecutando el código entregado original
+    (inbox/a03/codigo, con sus .keras) en tf 2.17.0 / keras 3.12.4 / numpy 1.26.4. La tolerancia
+    float_rtol=0.01 da margen a diferencias de softmax/sigmoid entre versiones de TF/Keras en el
+    entorno de verificación; si el entorno coincide, la diferencia esperada es ~1e-7.
+  - >
+    training.supported=true es un hecho del código (train.py completo, retraining desde cero), pero
+    NO implica que el usuario final tenga acceso a reentrenamiento: en el resto de modelos integrados
+    el usuario no dispone de fine-tuning, y los artefactos fijos de s3 nunca se sobreescriben. La
+    decisión de sesión manifest fue implementar train() como un único endpoint que reentrena TODO
+    desde cero (ver training.note); el coste computacional es alto (50 epochs x 3 arquitecturas) y
+    el plugin-integration debe ajustar la lógica desacoplada s3/mlflow.

@@ -1,0 +1,161 @@
+# Rutas de Archivos (relativas a la raíz del proyecto)
+paths:
+  raw_data: "data/raw/data_vin_raw.parquet"
+  processed_dir: "data/processed/"
+  splits_dir: "data/splits/"
+  predictions_dir: "data/predictions/"
+  artifacts_dir: "models/artifacts/"
+  metrics_dir: "models/metrics/"
+  clima_real_dir: "data/clima_real/"
+  clima_clean_dir: "data/clima_real/clean/"
+
+# Lista de variables (Features)
+# 1. Variables Crudas: Se esperan directamente de los sensores/ficheros originales
+raw_features:
+  - "Fecha"
+  - "Temp_Amb_C"
+  - "Hum_Rel_Pct"
+  - "Lluvia_mm"
+  - "Viento_kmh"
+  - "CO2_ppm"
+  - "VOC_ppb"
+  - "Hum_Suelo_Pct"
+  - "pH_Suelo"
+
+# 2. Variables de Modelo: Entrada final a la IA (incluye las generadas en src/data_processing)
+model_features:
+  - "Temp_Amb_C"
+  - "Hum_Rel_Pct"
+  - "Lluvia_mm"
+  - "Viento_kmh"
+  - "Horas_Humedad_Foliar"   # Generada: Horas consecutivas mojado foliar (HR>90% o lluvia)
+  - "GDD_Acumulado"           # Generada: Integral térmica acumulada (base 10°C)
+  - "Hum_Suelo_Pct"
+  - "pH_Suelo"
+  - "CO2_ppm"
+  - "VOC_ppb"
+  - "Hora_Sin"           # Generada: Ciclo temporal
+  - "Hora_Cos"           # Generada: Ciclo temporal
+
+# Nombres de columnas clave (targets y metadatos)
+targets:
+  classification_column: "Clase_Entrenamiento"   # Columna string para LabelEncoder
+  classification_label: "Etiqueta_Num"           # Columna int generada por LabelEncoder
+  regression_column: "Grado_Infeccion"           # Target de regresión (0.0-1.0)
+  stratify_column: "Etiqueta_Clase"              # Columna usada para stratify en splits
+  series_column: "ID_Serie"                      # Identificador de serie temporal
+
+# Columnas que requieren casting a string en preprocesamiento
+string_columns:
+  - "Etiqueta_Clase"
+  - "Clase_Entrenamiento"
+
+# Columna temporal (fecha/hora del registro)
+date_column: "Fecha"
+
+# Nombres de ficheros de salida
+output_files:
+  processed_data: "data_vin_processed.parquet"
+  predictions: "inferencia_vid.csv"
+  train_split: "train.parquet"
+  val_split: "val.parquet"
+  test_split: "test.parquet"
+  feature_descriptions: "feature_descriptions.csv"
+  estadisticas: "estadisticas.csv"
+  metrics_ensemble_dir: "DEL"
+  metrics_ensemble_file: "metrics_DEL_test.csv"
+
+model_names:
+  scaler: "scaler.pkl"
+  label_encoder: "label_encoder.pkl"
+  m1_lstm: "M1_LSTM.keras"
+  m2_cnn: "M2_CNN.keras"
+  m3_bigru: "M3_BiGRU.keras"
+
+# Parámetros de particionado (split)
+split:
+  test_size: 0.30
+  val_test_ratio: 0.50
+  random_seed: 42
+
+# Hiperparámetros del Modelo (Deep Ensemble Learning)
+params:
+  window_size: 168
+  batch_size: 512
+  epochs: 50
+  early_stopping_patience: 2
+  learning_rates:
+    lstm: 0.001
+    cnn: 0.001
+    bigru: 0.001
+  architectures:
+    lstm:
+      lstm_1: 8
+      dropout: 0.2
+      lstm_2: 32
+    cnn:
+      filters_1: 16
+      kernel_1: 3
+      filters_2: 32
+      kernel_2: 3
+      dropout: 0.2
+    bigru:
+      gru_units: 16
+      dropout: 0.2
+      dense_units: 8
+
+# Base de conocimiento de tratamientos para la inferencia (la recomendación es editable)
+base_conocimiento_tratamientos:
+  HEALTHY:
+    Diagnóstico: "Planta sana. No se detectan patrones de estrés biológico."
+    Recomendación: "Mantener monitorización habitual. No requiere intervención."
+  LOBESIA:
+    Químico: "Impregnar bien racimos. Bacillus thuringiensis (inicio eclosión), clorpirifos, fenoxicarb, flufenoxuron, metoxifenocide, tebufenocide."
+    Biológico: "Crysopa carnea, Dybrachys spp., Coccinélidos (poca trascendencia en campaña). Mejor acción parasitaria en invierno sobre crisálidas."
+    Biotecnológico: "Confusión sexual (Isonet L / Quant Lb) a 500/350 difusores/ha. Alternativa: Puffers (4-8 aerosoles/ha) sincronizados con vuelo."
+    Cultural: "Poda en verde para ventilar racimos y exponerlos a insecticidas."
+  EMPOASCA:
+    Químico: "Tratar focos de larvas/ninfas. Acrinatrin (uva de mesa), clorpirifos, flufenoxuron, imidacloprid."
+    Biológico: "Anagrus atomus (baja eficiencia en vid)."
+    Biotecnológico: "Placas amarillas engomadas en perímetros e interior de parcela."
+    Cultural: "Eliminar malas hierbas en invierno (hospedantes). Controlar el vigor para evitar brotación excesivamente tierna."
+  ALTICA:
+    Químico: "Generalmente controlado por tratamientos para Lobesia. Específicos: Lambda cihalotrin y clorpirifos."
+    Biológico: "Depredador Zicrona coerulea (chinche azul) y polífagos."
+    Biotecnológico: "No establecido."
+    Cultural: "Refugios trampa al final del verano (sacos/paja en el tronco) para capturar y destruir adultos invernantes. Mantener terreno limpio."
+  RED_MITE:
+    Químico: "Mojar brotes/madera en invierno. En otoño, mojar haz de las hojas. Aceite mineral (ovicida), acrinatrin, dicofol, fenbutestan, piridaben."
+    Biológico: "Fitoséidos espontáneos (ej. Phytoseiulus persimilis) si no se usan químicos agresivos."
+    Biotecnológico: "No establecido."
+    Cultural: "Eliminar puestas de invierno mediante poda. Controlar vigor. Evitar frutales aislados cercanos a la parcela."
+  ERINOSIS:
+    Químico: "Raramente necesario. Azufre (mismo que Oidio) suele bastar. Dicofol en casos severos de raza de yemas (estados fenológicos C/D y G/H)."
+    Biológico: "Fitoséidos depredadores (Typhlodromus pyri, T. phialatus)."
+    Biotecnológico: "No establecido."
+    Cultural: "Quemar restos de poda infectados. No usar yemas de plantas enfermas para reproducción."
+  ESCA:
+    Químico: "Solo preventivo post-poda en heridas (cubiet, quinosol, tebuconazol+resinas). Inútil si la planta ya está contaminada."
+    Biológico: "No establecido."
+    Biotecnológico: "No establecido."
+    Cultural: "Poda hasta madera sana y aplicar mastic. Podar cepas enfermas al final. Desinfectar herramientas. Marcar cepas en vegetativo. Técnica de abrir la cruz con cuña (aerobiosis)."
+  OIDIO:
+    Químico: "Mojar adecuadamente racimos. Poda/deshojado previo. Azufre y fungicidas antioídio específicos."
+    Biológico: "No establecido."
+    Biotecnológico: "No establecido."
+    Cultural: "Deshojado basal del sarmiento (2-3 hojas). Eliminar brotes secundarios sin fruto. Control del vigor vegetativo excesivo."
+  MILDIU:
+    Químico: "Hasta tamaño guisante: Sistémicos/penetrantes. Desde envero: De contacto. Preventivo al inicio de floración."
+    Biológico: "No establecido."
+    Biotecnológico: "No establecido."
+    Cultural: "Buena aireación (deshojados y podas en verde). Controlar microclima en plantaciones bajo plástico."
+  BOTRYTIS:
+    Químico: "Preventivos fijos o Método 15-15 (humedad/temp). Boscalida, ciprodinil, fenhexamida, fludioxonil, pirimetanil."
+    Biológico: "No establecido."
+    Biotecnológico: "No establecido."
+    Cultural: "Deshojado manual/mecánico de racimos. Control estricto de polilla/oídio (puertas de entrada). Evitar exceso de nitrógeno."
+  BLACK_ROT:
+    Químico: "Preventivo desde brotación a tamaño guisante. Alternar contacto (Mancozeb, folpet) con sistémicos (Miclobutanil, triazoles)."
+    Biológico: "No establecido."
+    Biotecnológico: "Sistemas IoT / Modelos predictivos de humedad foliar (Spotts)."
+    Cultural: "Eliminación obligatoria y quema de 'momias' (uvas secas del año anterior). Deshojado/espergurado para aireación."
