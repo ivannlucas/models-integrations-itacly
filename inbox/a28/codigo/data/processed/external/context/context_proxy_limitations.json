@@ -1,0 +1,72 @@
+{
+  "created_at_utc": "2026-06-26T08:35:15.959348+00:00",
+  "context_weekly_path": "data/processed/external/context/context_weekly_for_simulation.csv",
+  "external_long_path": "data/processed/external/context/external_long.csv",
+  "active_sources": [
+    {
+      "source": "INE",
+      "dataset": "CPI"
+    },
+    {
+      "source": "MAPA",
+      "dataset": "SLAUGHTER_MAPA"
+    }
+  ],
+  "source_coverage": {
+    "MAPA_SLAUGHTER_MAPA": {
+      "date_min": "2021-01-01",
+      "date_max": "2025-01-01"
+    }
+  },
+  "traced_sources": [
+    {
+      "source": "MAPA",
+      "dataset": "PRICES_OM",
+      "status": "fallback_constant"
+    }
+  ],
+  "candidate_sources": [
+    {
+      "source": "DATACOMEX",
+      "dataset": "TRADE_PRESSURE"
+    },
+    {
+      "source": "EUROSTAT",
+      "dataset": "SLAUGHTER"
+    },
+    {
+      "source": "MAPA",
+      "dataset": "CONSUMPTION_PANEL"
+    }
+  ],
+  "limitations": [
+    {
+      "issue": "purchase_price_index_is_placeholder_constant",
+      "status": "traced_not_active",
+      "affected_artifact": "data/processed/external/context/context_weekly_for_simulation.csv",
+      "evidence": {
+        "unique_values": 1,
+        "prices_om_subseries": [
+          "fallback_constant"
+        ]
+      },
+      "technical_comment": "MAPA_PRICES_OM remains traced only. The defended route does not claim an active weekly price feed unless a reproducible weekly series is available."
+    },
+    {
+      "issue": "external_sources_are_contextual_proxies",
+      "status": "documented_scope_boundary",
+      "affected_artifact": "data/processed/external/context/context_weekly_for_simulation.csv",
+      "technical_comment": "External context variables are real/proxy signals and do not represent internal plant inventory, orders or receipts."
+    },
+    {
+      "issue": "supply_index_absent_before_mapa_slaughter_coverage",
+      "status": "no_backward_fill_applied",
+      "affected_artifact": "data/processed/external/context/context_weekly_for_simulation.csv",
+      "evidence": {
+        "first_valid_supply_week": "2021-01-04",
+        "pre_2021_missing_rows": 888
+      },
+      "technical_comment": "MAPA_SLAUGHTER_MAPA starts in 2021 in the local snapshot. supply_index remains NaN before the first observed value; modeling and inference fill NaNs later with train-fitted statistics and an explicit neutral fallback for all-missing train columns."
+    }
+  ]
+}

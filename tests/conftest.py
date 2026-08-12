@@ -34,7 +34,10 @@ from app.domain.services.exceptions import (
     InfeasibleOptimizationError,
     InsufficientCycleHistoryError,
     InsufficientFramesError,
+    InsufficientSequenceHistoryError,
+    InsufficientSensorWindowError,
     InsufficientTelemetryHistoryError,
+    InsufficientWindowHistoryError,
     InvalidImageError,
     InvalidVideoError,
     NoValidSimulationPointError,
@@ -154,11 +157,31 @@ from app.plugins.ml46_dairy_fouling_clog_detection.train_dto import (
     TrainRequest as Ml46Dairy_TrainReq,
     TrainResponse as Ml46DairyTrainResp,
 )
+from app.plugins.ml9_cereals_infestation_sequence_classifier.predict_dto import (
+    PredictBatchResponse as Ml9CerealsBatchResp,
+    PredictInlineResponse as Ml9CerealsInlineResp,
+    PredictRequest as Ml9Cereals_Request,
+    PredictResponse as Ml9Cereals_Response,
+)
+from app.plugins.ml9_cereals_infestation_sequence_classifier.train_dto import (
+    TrainRequest as Ml9Cereals_TrainReq,
+    TrainResponse as Ml9CerealsTrainResp,
+)
 from app.plugins.m47_dnsl_fallas_maquinaria_pasteurizado.predict_dto import (
     PredictBatchResponse as M47BatchResp,
     PredictInlineResponse as M47InlineResp,
     PredictRequest as M47_Request,
     PredictResponse as M47_Response,
+)
+from app.plugins.ml45_cereals_dnsl_critical_point_detection.predict_dto import (
+    PredictBatchResponse as Ml45BatchResp,
+    PredictInlineResponse as Ml45InlineResp,
+    PredictRequest as Ml45_Request,
+    PredictResponse as Ml45_Response,
+)
+from app.plugins.ml45_cereals_dnsl_critical_point_detection.train_dto import (
+    TrainRequest as Ml45_TrainReq,
+    TrainResponse as Ml45TrainResp,
 )
 from app.plugins.ml40_meat_refrigeration_aeration_fault_diagnosis.predict_dto import (
     PredictBatchResponse as Ml40MeatBatchResp,
@@ -169,6 +192,22 @@ from app.plugins.ml40_meat_refrigeration_aeration_fault_diagnosis.predict_dto im
 from app.plugins.ml40_meat_refrigeration_aeration_fault_diagnosis.train_dto import (
     TrainRequest as Ml40Meat_TrainReq,
     TrainResponse as Ml40MeatTrainResp,
+)
+from app.plugins.ml28_meat_neuroevolutionary_raw_materials_prediction.predict_dto import (
+    PredictBatchResponse as Ml28MeatBatchResp,
+    PredictInlineResponse as Ml28MeatInlineResp,
+    PredictRequest as Ml28Meat_Request,
+    PredictResponse as Ml28Meat_Response,
+)
+from app.plugins.ml43_cereals_dnsl_anomaly_fault_detection.predict_dto import (
+    PredictBatchResponse as Ml43BatchResp,
+    PredictInlineResponse as Ml43InlineResp,
+    PredictRequest as Ml43_Request,
+    PredictResponse as Ml43_Response,
+)
+from app.plugins.ml43_cereals_dnsl_anomaly_fault_detection.train_dto import (
+    TrainRequest as Ml43_TrainReq,
+    TrainResponse as Ml43TrainResp,
 )
 from app.plugins.ml3_wine_disease_pest_forecast.predict_dto import (
     PredictBatchResponse as Ml3WineBatchResp,
@@ -825,6 +864,65 @@ def _ml46_dairy_train(plugin: FakePlugin, *, data_path: str) -> Ml46DairyTrainRe
     )
 
 
+def _ml9_cereals_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> Ml9CerealsInlineResp:
+    """Fake inline prediction response for the ml9 cereal infestation sequence classifier."""
+    confidence = 0.9982911
+    return Ml9CerealsInlineResp(
+        model_id="ml9-cereals-infestation-sequence-classifier",
+        sample_id="S_0_0061",
+        window_index=4,
+        timestamp_start="2026-01-03T00:00:00",
+        timestamp_end="2026-01-04T23:00:00",
+        pred_class=0,
+        pred_label="sano",
+        proba_sano=confidence,
+        proba_insectos=0.0016914126,
+        proba_moho_critico=0.0000174922,
+        confidence=confidence,
+        low_confidence=bool(threshold is not None and confidence < threshold),
+        n_rows_used=len(features.get("rows", [])),
+        n_windows_available=37,
+        y_true=None,
+        model_name="ml9-cereals-infestation-sequence-classifier",
+        xai_feature_values={"proba_sano": confidence, "confidence": confidence, "window_size": 48},
+    )
+
+
+def _ml9_cereals_batch(plugin: FakePlugin, *, data_path: str) -> Ml9CerealsBatchResp:
+    """Fake batch prediction response for the ml9 cereal infestation sequence classifier."""
+    return Ml9CerealsBatchResp(
+        model_id="ml9-cereals-infestation-sequence-classifier",
+        n_windows=37,
+        n_series=1,
+        predictions=[{
+            "sample_id": "S_0_0061", "window_index": 4,
+            "timestamp_start": "2026-01-03T00:00:00", "timestamp_end": "2026-01-04T23:00:00",
+            "pred_class": 0, "pred_label": "sano",
+            "proba_sano": 0.9982911, "proba_insectos": 0.0016914126, "proba_moho_critico": 0.0000174922,
+            "confidence": 0.9982911,
+        }],
+        class_distribution={"sano": 37, "insectos": 0, "moho_critico": 0},
+        evaluated_metrics=None,
+        output_path=None,
+    )
+
+
+def _ml9_cereals_train(plugin: FakePlugin, *, data_path: str) -> Ml9CerealsTrainResp:
+    """Fake fine-tuning response for the ml9 cereal infestation sequence classifier."""
+    return Ml9CerealsTrainResp(
+        detail="Fine-tuning completado sobre el checkpoint servido (GRU).",
+        n_series_train=195, n_series_validation=45, n_series_test=60,
+        n_windows_train=7215, n_windows_validation=1665, n_windows_test=2220,
+        epochs_run=7,
+        accuracy=0.9414, balanced_accuracy=0.9452, f1_macro=0.9436,
+        precision_macro=0.9422, recall_macro=0.9452, log_loss=0.1830,
+        validation_f1_macro=0.9543,
+        baseline_f1_macro=0.9436,
+        artifact_path="artifacts/ml9_cereals_infestation_sequence_classifier/user_final_winner.pt",
+        upload_warning=None,
+    )
+
+
 def _m47_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> M47InlineResp:
     """Fake inline response for the m47 DNSL model."""
     return M47InlineResp(
@@ -862,6 +960,60 @@ def _m47_batch(plugin: FakePlugin, *, data_path: str) -> M47BatchResp:
             "model_name": "m47-dnsl-fallas-maquinaria-pasteurizado",
         }],
         output_path=None,
+    )
+
+
+def _ml45_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> Ml45InlineResp:
+    """Fake inline response for the m45 grain-dryer PCC detection model."""
+    return Ml45InlineResp(
+        model_id="ml45-cereals-dnsl-critical-point-detection",
+        window_index=1,
+        timestamp_init="2029-04-15 00:00:00",
+        timestamp_end="2029-04-15 03:59:00",
+        predicted_anomaly_class=0,
+        predicted_anomaly_label="No Fallo",
+        anomaly_probability=0.43,
+        decision_threshold=0.73,
+        **{
+            "Estado interpretativo": "Vigilancia",
+            "Evidencia": "No se identifica un perfil catalogado de criticidad, pero hay indicios de anomalia.",
+            "Probabilidad de anomalia": 0.43,
+            "Umbral de detección de anomalias": 0.73,
+            "Margen respecto al umbral": 0.3,
+            "Recomendacion": "Se recomienda vigilancia reforzada y seguimiento.",
+        },
+    )
+
+
+def _ml45_batch(plugin: FakePlugin, *, data_path: str) -> Ml45BatchResp:
+    """Fake batch response for the m45 grain-dryer PCC detection model."""
+    return Ml45BatchResp(
+        model_id="ml45-cereals-dnsl-critical-point-detection",
+        predictions=[{
+            "window_index": 1,
+            "cycle_id": 2400,
+            "timestamp_init": "2029-04-15 00:00:00",
+            "timestamp_end": "2029-04-15 03:59:00",
+            "predicted_anomaly_class": 0,
+            "predicted_anomaly_label": "No Fallo",
+            "anomaly_probability": 0.43,
+            "decision_threshold": 0.73,
+            "Estado interpretativo": "Vigilancia",
+            "Evidencia": "No se identifica un perfil catalogado de criticidad, pero hay indicios de anomalia.",
+            "Probabilidad de anomalia": 0.43,
+            "Umbral de detección de anomalias": 0.73,
+            "Margen respecto al umbral": 0.3,
+            "Recomendacion": "Se recomienda vigilancia reforzada y seguimiento.",
+        }],
+        output_path=None,
+    )
+
+
+def _ml45_train(plugin: FakePlugin, *, data_path: str) -> Ml45TrainResp:
+    """Fake fine-tuning response for the m45 grain-dryer PCC detection model."""
+    return Ml45TrainResp(
+        detail="Fine-tuning completado",
+        accuracy=0.92, f1=0.87, auc=0.91, n_windows=40, n_epochs=30,
     )
 
 
@@ -909,6 +1061,89 @@ def _ml40_meat_train(plugin: FakePlugin, *, data_path: str) -> Ml40MeatTrainResp
         f1_macro=1.0,
         precision_macro=1.0,
         recall_macro=1.0,
+        upload_warning=None,
+    )
+
+
+def _ml28_meat_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> Ml28MeatInlineResp:
+    """Fake inline response for the ml28 meat raw-material procurement rules engine."""
+    return Ml28MeatInlineResp(
+        model_id="ml28-meat-neuroevolutionary-raw-materials-prediction",
+        date="2025-01-26", raw_material_id="RM_BEEF_TRIM_A", destination_profile="cooked_standard_line",
+        current_inventory_tons=36.0, expected_requirement_tons=24.0, lead_time_days=6.0,
+        safety_coverage_days=11.0, expected_yield_rate=0.88, expected_waste_rate=0.02,
+        unit_purchase_cost=3.88, shelf_life_days=28,
+        purchase_trigger_proba=0.8588, purchase_trigger_flag=1, recommended_action="BUY",
+        quantity_optimizer_recommendation_tons=29.817, order_quantity_tons=29.817,
+        decision_reason="Projected stock after lead time is below safety stock. Purchase triggered and quantity optimized under current policy.",
+        projected_stock_after_lead_time_tons=15.429, safety_stock_tons=37.714, coverage_gap_tons=22.286,
+        risk_level="HIGH", baseline_order_quantity_tons=40.75, delta_order_vs_baseline_tons=-10.933,
+        excess_tons=41.337, stockout_tons=0.0,
+    )
+
+
+def _ml28_meat_batch(plugin: FakePlugin, *, data_path: str) -> Ml28MeatBatchResp:
+    """Fake batch response for the ml28 meat raw-material procurement rules engine."""
+    return Ml28MeatBatchResp(
+        model_id="ml28-meat-neuroevolutionary-raw-materials-prediction",
+        predictions=[{
+            "date": "2025-01-05", "raw_material_id": "RM_BEEF_TRIM_A", "destination_profile": "cooked_standard_line",
+            "current_inventory_tons": 58.0, "expected_requirement_tons": 22.0, "lead_time_days": 5.0,
+            "safety_coverage_days": 10.0, "expected_yield_rate": 0.89, "expected_waste_rate": 0.02,
+            "unit_purchase_cost": 3.80, "shelf_life_days": 28,
+            "purchase_trigger_proba": 0.2658, "purchase_trigger_flag": 0, "recommended_action": "DO_NOT_BUY",
+            "quantity_optimizer_recommendation_tons": 0.0, "order_quantity_tons": 0.0,
+            "decision_reason": "Coverage remains above safety threshold; purchase blocked.",
+            "projected_stock_after_lead_time_tons": 42.286, "safety_stock_tons": 31.429, "coverage_gap_tons": 0.0,
+            "risk_level": "LOW", "baseline_order_quantity_tons": 3.767, "delta_order_vs_baseline_tons": -3.767,
+            "excess_tons": 35.56, "stockout_tons": 0.0,
+        }],
+        summary={"row_count": 1, "triggered_orders": 0, "aggregate_excess_reduction_pct": 20.959, "stockout_guardrail_pass": True},
+        output_path=None,
+    )
+
+
+def _ml43_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> Ml43InlineResp:
+    """Fake inline response for the ml43 cereal dryer DNF anomaly/fault detection model (CU43+CU44)."""
+    return Ml43InlineResp(
+        model_id="ml43-cereals-dnsl-anomaly-fault-detection",
+        predicted_anomaly_class=0,
+        predicted_anomaly_label="No Fallo",
+        anomaly_probability=0.0512,
+        decision_threshold=threshold if threshold is not None else 0.41,
+        xai_feature_values={"temp_zona1": 80.0, "temp_zona2": 82.0},
+        corrective_actions=None,
+        xai_error=None,
+        model_name="ml43-cereals-dnsl-anomaly-fault-detection",
+    )
+
+
+def _ml43_batch(plugin: FakePlugin, *, data_path: str) -> Ml43BatchResp:
+    """Fake batch response for the ml43 cereal dryer DNF anomaly/fault detection model (CU43+CU44)."""
+    return Ml43BatchResp(
+        model_id="ml43-cereals-dnsl-anomaly-fault-detection",
+        predictions=[{
+            "window_index": 1,
+            "cycle_id": "2400",
+            "predicted_anomaly_class": 0,
+            "predicted_anomaly_label": "No Fallo",
+            "anomaly_probability": 0.0512,
+            "decision_threshold": 0.41,
+            "xai_feature_values": {"temp_zona1": 80.0, "temp_zona2": 82.0},
+            "corrective_actions": None,
+            "xai_error": None,
+        }],
+        output_path=None,
+    )
+
+
+def _ml43_train(plugin: FakePlugin, *, data_path: str) -> Ml43TrainResp:
+    """Fake training response for the ml43 cereal dryer DNF anomaly/fault detection model."""
+    return Ml43TrainResp(
+        detail="Entrenamiento completado",
+        accuracy=0.989, macro_f1=0.9498, macro_precision=0.9415, macro_recall=0.9585,
+        fallo_f1=0.9054, fallo_precision=0.8876, fallo_recall=0.9240,
+        n_train=28, n_test=7, n_windows_total=35,
         upload_warning=None,
     )
 
@@ -975,8 +1210,10 @@ def _ml3_wine_train(plugin: FakePlugin, *, data_path: str) -> Ml3WineTrainResp:
 
 
 FAKE_FACTORIES: dict[str, tuple[Callable, Callable]] = {
+    "ml9-cereals-infestation-sequence-classifier": (_ml9_cereals_inline, _ml9_cereals_batch),
     "ml46-dairy-fouling-clog-detection": (_ml46_dairy_inline, _ml46_dairy_batch),
     "ml40-meat-refrigeration-aeration-fault-diagnosis": (_ml40_meat_inline, _ml40_meat_batch),
+    "ml28-meat-neuroevolutionary-raw-materials-prediction": (_ml28_meat_inline, _ml28_meat_batch),
     "ml35-dairy-ann-cleaning-cost": (_ml35_dairy_inline, _ml35_dairy_batch),
     "ml34-dairy-pasteurization-energy-ga": (_ml34_dairy_inline, _ml34_dairy_batch),
     "ml17-meat-market-price-analysis": (_ml17_inline, _ml17_batch),
@@ -991,10 +1228,13 @@ FAKE_FACTORIES: dict[str, tuple[Callable, Callable]] = {
     "ml8-cereals-img-anomaly-detector": (_ml8_cereals_inline, _ml8_cereals_batch),
     "ml5-meat-cow-behaviour": (_ml5_cow_inline, _ml5_cow_batch),
     "m47-dnsl-fallas-maquinaria-pasteurizado": (_m47_inline, _m47_batch),
+    "ml45-cereals-dnsl-critical-point-detection": (_ml45_inline, _ml45_batch),
+    "ml43-cereals-dnsl-anomaly-fault-detection": (_ml43_inline, _ml43_batch),
     "ml3-wine-disease-pest-forecast": (_ml3_wine_inline, _ml3_wine_batch),
 }
 
 TRAIN_FACTORIES: dict[str, Callable] = {
+    "ml9-cereals-infestation-sequence-classifier": _ml9_cereals_train,
     "ml46-dairy-fouling-clog-detection": _ml46_dairy_train,
     "ml40-meat-refrigeration-aeration-fault-diagnosis": _ml40_meat_train,
     "ml35-dairy-ann-cleaning-cost": _ml35_dairy_train,
@@ -1002,6 +1242,8 @@ TRAIN_FACTORIES: dict[str, Callable] = {
     "modelo10-lacteo": _lacteo_train,
     "ml8-cereals-img-anomaly-detector": _ml8_cereals_train,
     "ml30-meat-traceability-detection": _ml30_trace_train,
+    "ml45-cereals-dnsl-critical-point-detection": _ml45_train,
+    "ml43-cereals-dnsl-anomaly-fault-detection": _ml43_train,
     "ml3-wine-disease-pest-forecast": _ml3_wine_train,
 }
 
@@ -1137,6 +1379,17 @@ TEST_REGISTRY: list[ModelEntry] = [
         train_response_type=Ml34DairyTrainResp,
     ),
     ModelEntry(
+        model_id="ml9-cereals-infestation-sequence-classifier",
+        prefix="/models/ml9-cereals-infestation-sequence-classifier",
+        version="1.0.0",
+        plugin_class=FakePlugin,
+        predict_request_type=Ml9Cereals_Request,
+        predict_response_type=Ml9Cereals_Response,
+        extra_predict_exceptions=(InsufficientSequenceHistoryError,),
+        train_request_type=Ml9Cereals_TrainReq,
+        train_response_type=Ml9CerealsTrainResp,
+    ),
+    ModelEntry(
         model_id="ml46-dairy-fouling-clog-detection",
         prefix="/models/ml46-dairy-fouling-clog-detection",
         version="1.0.0",
@@ -1157,6 +1410,17 @@ TEST_REGISTRY: list[ModelEntry] = [
         extra_predict_exceptions=(),
     ),
     ModelEntry(
+        model_id="ml45-cereals-dnsl-critical-point-detection",
+        prefix="/models/ml45-cereals-dnsl-critical-point-detection",
+        version="1.0.0",
+        plugin_class=FakePlugin,
+        predict_request_type=Ml45_Request,
+        predict_response_type=Ml45_Response,
+        extra_predict_exceptions=(InsufficientWindowHistoryError,),
+        train_request_type=Ml45_TrainReq,
+        train_response_type=Ml45TrainResp,
+    ),
+    ModelEntry(
         model_id="ml40-meat-refrigeration-aeration-fault-diagnosis",
         prefix="/models/ml40-meat-refrigeration-aeration-fault-diagnosis",
         version="1.0.0",
@@ -1166,6 +1430,26 @@ TEST_REGISTRY: list[ModelEntry] = [
         extra_predict_exceptions=(InsufficientCycleHistoryError, UnknownDiagnosisSystemError),
         train_request_type=Ml40Meat_TrainReq,
         train_response_type=Ml40MeatTrainResp,
+    ),
+    ModelEntry(
+        model_id="ml28-meat-neuroevolutionary-raw-materials-prediction",
+        prefix="/models/ml28-meat-neuroevolutionary-raw-materials-prediction",
+        version="1.0.0",
+        plugin_class=FakePlugin,
+        predict_request_type=Ml28Meat_Request,
+        predict_response_type=Ml28Meat_Response,
+        extra_predict_exceptions=(),
+    ),
+    ModelEntry(
+        model_id="ml43-cereals-dnsl-anomaly-fault-detection",
+        prefix="/models/ml43-cereals-dnsl-anomaly-fault-detection",
+        version="1.0.0",
+        plugin_class=FakePlugin,
+        predict_request_type=Ml43_Request,
+        predict_response_type=Ml43_Response,
+        extra_predict_exceptions=(InsufficientSensorWindowError,),
+        train_request_type=Ml43_TrainReq,
+        train_response_type=Ml43TrainResp,
     ),
     ModelEntry(
         model_id="ml3-wine-disease-pest-forecast",

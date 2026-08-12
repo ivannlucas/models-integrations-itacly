@@ -1,0 +1,819 @@
+<html><head><meta charset='utf-8'><title>00_data_sources_audit.ipynb</title></head><body>
+<section class='markdown'><pre># CU28 mixed_context - Data Sources Audit
+
+Notebook narrativo de auditoria para el scope `mixed_context`.
+</pre></section>
+<section class='markdown'><pre>## Objetivo
+
+Revisar de forma explicita las fuentes activas, trazadas y candidatas, y verificar su trazabilidad local mediante manifests, URLs oficiales, licencias y artefactos derivados.
+</pre></section>
+<section class='markdown'><pre>## Alcance
+
+Este analisis describe la ruta oficial reproducible `mixed_context`. Las senales externas se tratan como contexto/proxy. Las variables internas de planta siguen siendo sinteticas salvo carga posterior de cliente.
+</pre></section>
+<section class='markdown'><pre>## Inputs
+
+            - `docs/data_sources_registry.md`
+- `data/raw/external/*/source_manifest.json`
+- `data/raw/external/raw_manifest__mixed_context.json`
+- `data_blob_manifest.json`
+</pre></section>
+<section class='markdown'><pre>## Outputs esperados
+
+            - `reports/tables/eda/data_sources_audit__mixed_context.csv`
+- `reports/tables/eda/data_sources_inconsistencies__mixed_context.csv`
+- `reports/figures/eda/data_sources_status_counts__mixed_context.png`
+- `reports/figures/eda/data_sources_type_counts__mixed_context.png`
+- `reports/figures/eda/data_sources_raw_file_counts__mixed_context.png`
+</pre></section>
+<section class='markdown'><pre>## Limitaciones
+
+Este notebook documenta evidencia reproducible del pipeline oficial, pero no sustituye la revision de codigo, la auditoria de datos de origen ni una certificacion operacional de planta.
+</pre></section>
+<section class='code'><h3>Code</h3><pre>from pathlib import Path
+import json
+import numpy as np
+import pandas as pd
+import matplotlib
+matplotlib.use(&quot;Agg&quot;)
+import matplotlib.pyplot as plt
+
+from src.reproducibility.notebook_support import (
+    detect_temporal_columns,
+    ensure_eda_dirs,
+    execution_metadata,
+    first_valid_temporal_range,
+    load_source_manifests,
+    load_tabular_file,
+    parse_markdown_table,
+    print_frame,
+    print_series,
+    project_root,
+    read_json,
+    relative_to_root,
+    save_figure,
+    save_table,
+    sha256_file,
+)
+</pre><h3>Output</h3><pre></pre></section>
+<section class='code'><h3>Code</h3><pre>NOTEBOOK_NAME = &quot;00_data_sources_audit.ipynb&quot;
+PROJECT_ROOT = project_root()
+SCOPE = globals().get(&quot;scope&quot;, &quot;mixed_context&quot;)
+REPORT_DIRS = ensure_eda_dirs()
+META = execution_metadata(SCOPE)
+FIGURES = []
+TABLES = []
+print(json.dumps(META, indent=2))
+</pre><h3>Output</h3><pre>{
+  &quot;scope&quot;: &quot;mixed_context&quot;,
+  &quot;executed_at_utc&quot;: &quot;2026-06-17T10:30:02.965320+00:00&quot;,
+  &quot;commit&quot;: &quot;b2fc273adf68c17087b4637655067bc80d417fa9&quot;
+}
+</pre></section>
+<section class='markdown'><pre>## Carga de datos
+
+Las siguientes celdas cargan los artefactos de entrada y muestran verificaciones intermedias antes de producir tablas y graficas.
+</pre></section>
+<section class='code'><h3>Code</h3><pre>registry_path = PROJECT_ROOT / &quot;docs&quot; / &quot;data_sources_registry.md&quot;
+registry_table = parse_markdown_table(registry_path)
+for column in registry_table.columns:
+    registry_table[column] = registry_table[column].astype(str).str.replace(&quot;`&quot;, &quot;&quot;, regex=False).str.strip()
+print_frame(&quot;Registry markdown table&quot;, registry_table, rows=10)
+display(registry_table.head(10))
+</pre><h3>Output</h3><pre>Registry markdown table
+          source_id status                                                                                               official_url                                                                                                                                                           download_url_or_endpoint access_date                                         license_or_terms_url                                   local_raw_path                                                                                                                                                                       processed_artifact_path                                   redistribution_allowed                                           role                                                                                                  limitations
+            INE_CPI active                                                            https://www.ine.es/dyngs/DAB/index.htm?cid=1722                                                                                                                               https://www.ine.es/jaxiT3/files/t/csv_bdsc/76128.csv  2026-05-18            https://www.ine.es/dyngs/AYU/en/index.htm?cid=125              data/raw/external/INE_CPI/76128.csv data/processed/external/context/external_long.csv, data/processed/external/context/context_weekly_for_simulation.csv, data/processed/baseline/feature_engineering_modeling__mixed_context.csv                           yes_with_attribution_cc_by_4_0 Contextual inflation and price-pressure proxy.                                       No representa compras reales de materia prima ni inventario de planta.
+MAPA_SLAUGHTER_MAPA active  https://www.mapa.gob.es/es/estadistica/temas/estadisticas-agrarias/ganaderia/encuestas-sacrificio-ganado/                                                                          https://www.mapa.gob.es/es/estadistica/temas/estadisticas-agrarias/ganaderia/encuestas-sacrificio-ganado/  2026-05-18 https://www.mapa.gob.es/es/atencion-al-ciudadano/aviso-legal           data/raw/external/MAPA_SLAUGHTER_MAPA/ data/processed/external/context/external_long.csv, data/processed/external/context/context_weekly_for_simulation.csv, data/processed/baseline/feature_engineering_modeling__mixed_context.csv yes_with_source_citation_unless_third_party_rights_apply             Contextual slaughter/supply proxy.                                   Proxy macro sectorial, no ledger semanal de compras de una planta carnica.
+     MAPA_PRICES_OM traced https://servicio.mapa.gob.es/es/alimentacion/temas/observatorio-cadena/cadenas-valor/sistema-de-precios-om https://servicio.mapa.gob.es/dam/mapa/contenido/alimentacion/servicios/observatorio-de-precios-de-los-alimentos/sistema-de-informacion-de-precios-origen---destino/s132026rv0.xlsx  2026-05-18 https://www.mapa.gob.es/es/atencion-al-ciudadano/aviso-legal data/raw/external/MAPA_PRICES_OM/s502025rv0.xlsx                                                             data/processed/external/context/context_weekly_for_simulation.csv, data/processed/external/context/context_proxy_limitations.json yes_with_source_citation_unless_third_party_rights_apply                 Fallback traced evidence only. La ruta oficial no defiende una serie semanal activa; purchase_price_index queda como fallback_constant=100.
+</pre><table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th>source_id</th>
+      <th>status</th>
+      <th>official_url</th>
+      <th>download_url_or_endpoint</th>
+      <th>access_date</th>
+      <th>license_or_terms_url</th>
+      <th>local_raw_path</th>
+      <th>processed_artifact_path</th>
+      <th>redistribution_allowed</th>
+      <th>role</th>
+      <th>limitations</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>INE_CPI</td>
+      <td>active</td>
+      <td>https://www.ine.es/dyngs/DAB/index.htm?cid=1722</td>
+      <td>https://www.ine.es/jaxiT3/files/t/csv_bdsc/76128.csv</td>
+      <td>2026-05-18</td>
+      <td>https://www.ine.es/dyngs/AYU/en/index.htm?cid=125</td>
+      <td>data/raw/external/INE_CPI/76128.csv</td>
+      <td>data/processed/external/context/external_long.csv, data/processed/external/context/context_weekly_for_simulation.csv, data/processed/baseline/feature_engineering_modeling__mixed_context.csv</td>
+      <td>yes_with_attribution_cc_by_4_0</td>
+      <td>Contextual inflation and price-pressure proxy.</td>
+      <td>No representa compras reales de materia prima ni inventario de planta.</td>
+    </tr>
+    <tr>
+      <td>MAPA_SLAUGHTER_MAPA</td>
+      <td>active</td>
+      <td>https://www.mapa.gob.es/es/estadistica/temas/estadisticas-agrarias/ganaderia/encuestas-sacrificio-ganado/</td>
+      <td>https://www.mapa.gob.es/es/estadistica/temas/estadisticas-agrarias/ganaderia/encuestas-sacrificio-ganado/</td>
+      <td>2026-05-18</td>
+      <td>https://www.mapa.gob.es/es/atencion-al-ciudadano/aviso-legal</td>
+      <td>data/raw/external/MAPA_SLAUGHTER_MAPA/</td>
+      <td>data/processed/external/context/external_long.csv, data/processed/external/context/context_weekly_for_simulation.csv, data/processed/baseline/feature_engineering_modeling__mixed_context.csv</td>
+      <td>yes_with_source_citation_unless_third_party_rights_apply</td>
+      <td>Contextual slaughter/supply proxy.</td>
+      <td>Proxy macro sectorial, no ledger semanal de compras de una planta carnica.</td>
+    </tr>
+    <tr>
+      <td>MAPA_PRICES_OM</td>
+      <td>traced</td>
+      <td>https://servicio.mapa.gob.es/es/alimentacion/temas/observatorio-cadena/cadenas-valor/sistema-de-precios-om</td>
+      <td>https://servicio.mapa.gob.es/dam/mapa/contenido/alimentacion/servicios/observatorio-de-precios-de-los-alimentos/sistema-de-informacion-de-precios-origen---destino/s132026rv0.xlsx</td>
+      <td>2026-05-18</td>
+      <td>https://www.mapa.gob.es/es/atencion-al-ciudadano/aviso-legal</td>
+      <td>data/raw/external/MAPA_PRICES_OM/s502025rv0.xlsx</td>
+      <td>data/processed/external/context/context_weekly_for_simulation.csv, data/processed/external/context/context_proxy_limitations.json</td>
+      <td>yes_with_source_citation_unless_third_party_rights_apply</td>
+      <td>Fallback traced evidence only.</td>
+      <td>La ruta oficial no defiende una serie semanal activa; purchase_price_index queda como fallback_constant=100.</td>
+    </tr>
+  </tbody>
+</table></section>
+<section class='code'><h3>Code</h3><pre>raw_root = PROJECT_ROOT / &quot;data&quot; / &quot;raw&quot; / &quot;external&quot;
+source_manifests = load_source_manifests(raw_root)
+manifest_df = pd.DataFrame(
+    [
+        {
+            &quot;source_id&quot;: item[&quot;source_id&quot;],
+            &quot;organization&quot;: item[&quot;organization&quot;],
+            &quot;source_type&quot;: item[&quot;source_type&quot;],
+            &quot;evidence_status&quot;: item[&quot;evidence_status&quot;],
+            &quot;official_url&quot;: item[&quot;official_url&quot;],
+            &quot;download_url_or_endpoint&quot;: item[&quot;download_url_or_endpoint&quot;],
+            &quot;license_or_terms_url&quot;: item[&quot;license_or_terms_url&quot;],
+            &quot;access_date&quot;: item[&quot;access_date&quot;],
+            &quot;retrieval_method&quot;: item[&quot;retrieval_method&quot;],
+            &quot;role&quot;: item[&quot;role&quot;],
+            &quot;limitations&quot;: item[&quot;limitations&quot;],
+            &quot;raw_files_count&quot;: len(item.get(&quot;raw_files&quot;, [])),
+            &quot;derived_artifacts_count&quot;: len(item.get(&quot;derived_artifacts&quot;, [])),
+        }
+        for item in source_manifests
+    ]
+)
+print_frame(&quot;Manifest summary&quot;, manifest_df, rows=10)
+display(manifest_df)
+</pre><h3>Output</h3><pre>Manifest summary
+          source_id                                           organization                            source_type evidence_status                                                                                               official_url                                                                                                                                                           download_url_or_endpoint                                         license_or_terms_url access_date retrieval_method                                                                                            role                                                                                                                                  limitations  raw_files_count  derived_artifacts_count
+            INE_CPI                Instituto Nacional de Estadistica (INE)                 official_open_data_csv          active                                                            https://www.ine.es/dyngs/DAB/index.htm?cid=1722                                                                                                                               https://www.ine.es/jaxiT3/files/t/csv_bdsc/76128.csv            https://www.ine.es/dyngs/AYU/en/index.htm?cid=125  2026-05-18  cached_snapshot             Contextual inflation and price-pressure proxy for the official mixed_context route.               Proxy context only. It is not a plant-level meat raw-material purchase series and does not contain internal factory variables.                1                        3
+     MAPA_PRICES_OM Ministerio de Agricultura, Pesca y Alimentacion (MAPA)          official_spreadsheet_snapshot          traced https://servicio.mapa.gob.es/es/alimentacion/temas/observatorio-cadena/cadenas-valor/sistema-de-precios-om https://servicio.mapa.gob.es/dam/mapa/contenido/alimentacion/servicios/observatorio-de-precios-de-los-alimentos/sistema-de-informacion-de-precios-origen---destino/s132026rv0.xlsx https://www.mapa.gob.es/es/atencion-al-ciudadano/aviso-legal  2026-05-18  cached_snapshot Traced fallback constant reference only; not an active weekly price feed in the defended route. The current processed route uses purchase_price_index as fallback_constant=100. This source must not be defended as an active weekly signal.                1                        2
+MAPA_SLAUGHTER_MAPA Ministerio de Agricultura, Pesca y Alimentacion (MAPA) official_statistics_spreadsheet_bundle          active  https://www.mapa.gob.es/es/estadistica/temas/estadisticas-agrarias/ganaderia/encuestas-sacrificio-ganado/                                                                          https://www.mapa.gob.es/es/estadistica/temas/estadisticas-agrarias/ganaderia/encuestas-sacrificio-ganado/ https://www.mapa.gob.es/es/atencion-al-ciudadano/aviso-legal  2026-05-18  cached_snapshot                         Contextual slaughter/supply proxy for the official mixed_context route.            Used as macro proxy only. It is not an observed weekly purchase ledger for a meat plant and remains external contextual evidence.                5                        3
+</pre><table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th>source_id</th>
+      <th>organization</th>
+      <th>source_type</th>
+      <th>evidence_status</th>
+      <th>official_url</th>
+      <th>download_url_or_endpoint</th>
+      <th>license_or_terms_url</th>
+      <th>access_date</th>
+      <th>retrieval_method</th>
+      <th>role</th>
+      <th>limitations</th>
+      <th>raw_files_count</th>
+      <th>derived_artifacts_count</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>INE_CPI</td>
+      <td>Instituto Nacional de Estadistica (INE)</td>
+      <td>official_open_data_csv</td>
+      <td>active</td>
+      <td>https://www.ine.es/dyngs/DAB/index.htm?cid=1722</td>
+      <td>https://www.ine.es/jaxiT3/files/t/csv_bdsc/76128.csv</td>
+      <td>https://www.ine.es/dyngs/AYU/en/index.htm?cid=125</td>
+      <td>2026-05-18</td>
+      <td>cached_snapshot</td>
+      <td>Contextual inflation and price-pressure proxy for the official mixed_context route.</td>
+      <td>Proxy context only. It is not a plant-level meat raw-material purchase series and does not contain internal factory variables.</td>
+      <td>1</td>
+      <td>3</td>
+    </tr>
+    <tr>
+      <td>MAPA_PRICES_OM</td>
+      <td>Ministerio de Agricultura, Pesca y Alimentacion (MAPA)</td>
+      <td>official_spreadsheet_snapshot</td>
+      <td>traced</td>
+      <td>https://servicio.mapa.gob.es/es/alimentacion/temas/observatorio-cadena/cadenas-valor/sistema-de-precios-om</td>
+      <td>https://servicio.mapa.gob.es/dam/mapa/contenido/alimentacion/servicios/observatorio-de-precios-de-los-alimentos/sistema-de-informacion-de-precios-origen---destino/s132026rv0.xlsx</td>
+      <td>https://www.mapa.gob.es/es/atencion-al-ciudadano/aviso-legal</td>
+      <td>2026-05-18</td>
+      <td>cached_snapshot</td>
+      <td>Traced fallback constant reference only; not an active weekly price feed in the defended route.</td>
+      <td>The current processed route uses purchase_price_index as fallback_constant=100. This source must not be defended as an active weekly signal.</td>
+      <td>1</td>
+      <td>2</td>
+    </tr>
+    <tr>
+      <td>MAPA_SLAUGHTER_MAPA</td>
+      <td>Ministerio de Agricultura, Pesca y Alimentacion (MAPA)</td>
+      <td>official_statistics_spreadsheet_bundle</td>
+      <td>active</td>
+      <td>https://www.mapa.gob.es/es/estadistica/temas/estadisticas-agrarias/ganaderia/encuestas-sacrificio-ganado/</td>
+      <td>https://www.mapa.gob.es/es/estadistica/temas/estadisticas-agrarias/ganaderia/encuestas-sacrificio-ganado/</td>
+      <td>https://www.mapa.gob.es/es/atencion-al-ciudadano/aviso-legal</td>
+      <td>2026-05-18</td>
+      <td>cached_snapshot</td>
+      <td>Contextual slaughter/supply proxy for the official mixed_context route.</td>
+      <td>Used as macro proxy only. It is not an observed weekly purchase ledger for a meat plant and remains external contextual evidence.</td>
+      <td>5</td>
+      <td>3</td>
+    </tr>
+  </tbody>
+</table></section>
+<section class='markdown'><pre>## Inspeccion inicial
+
+Se cruza la tabla de documentacion con los manifests reales para comprobar si ambas vistas coinciden en estado, URLs y rutas locales.
+</pre></section>
+<section class='code'><h3>Code</h3><pre>source_overview = registry_table.merge(
+    manifest_df,
+    left_on=&quot;source_id&quot;,
+    right_on=&quot;source_id&quot;,
+    how=&quot;left&quot;,
+    suffixes=(&quot;_registry&quot;, &quot;_manifest&quot;),
+)
+source_overview[&quot;status_match&quot;] = source_overview[&quot;status&quot;].eq(source_overview[&quot;evidence_status&quot;])
+print_frame(
+    &quot;Overview after joining registry and manifests&quot;,
+    source_overview[[&quot;source_id&quot;, &quot;status&quot;, &quot;evidence_status&quot;, &quot;source_type&quot;, &quot;raw_files_count&quot;, &quot;derived_artifacts_count&quot;, &quot;status_match&quot;]],
+    rows=10,
+)
+display(source_overview[[&quot;source_id&quot;, &quot;status&quot;, &quot;evidence_status&quot;, &quot;source_type&quot;, &quot;status_match&quot;]])
+</pre><h3>Output</h3><pre>Overview after joining registry and manifests
+          source_id status evidence_status                            source_type  raw_files_count  derived_artifacts_count  status_match
+            INE_CPI active          active                 official_open_data_csv                1                        3          True
+MAPA_SLAUGHTER_MAPA active          active official_statistics_spreadsheet_bundle                5                        3          True
+     MAPA_PRICES_OM traced          traced          official_spreadsheet_snapshot                1                        2          True
+</pre><table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th>source_id</th>
+      <th>status</th>
+      <th>evidence_status</th>
+      <th>source_type</th>
+      <th>status_match</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>INE_CPI</td>
+      <td>active</td>
+      <td>active</td>
+      <td>official_open_data_csv</td>
+      <td>True</td>
+    </tr>
+    <tr>
+      <td>MAPA_SLAUGHTER_MAPA</td>
+      <td>active</td>
+      <td>active</td>
+      <td>official_statistics_spreadsheet_bundle</td>
+      <td>True</td>
+    </tr>
+    <tr>
+      <td>MAPA_PRICES_OM</td>
+      <td>traced</td>
+      <td>traced</td>
+      <td>official_spreadsheet_snapshot</td>
+      <td>True</td>
+    </tr>
+  </tbody>
+</table></section>
+<section class='code'><h3>Code</h3><pre>url_checks = source_overview[[
+    &quot;source_id&quot;,
+    &quot;official_url_registry&quot;,
+    &quot;download_url_or_endpoint_registry&quot;,
+    &quot;license_or_terms_url_registry&quot;,
+]].copy()
+url_checks[&quot;official_url_ok&quot;] = url_checks[&quot;official_url_registry&quot;].astype(str).str.startswith(&quot;http&quot;)
+url_checks[&quot;download_url_ok&quot;] = url_checks[&quot;download_url_or_endpoint_registry&quot;].astype(str).str.startswith(&quot;http&quot;)
+url_checks[&quot;license_url_ok&quot;] = url_checks[&quot;license_or_terms_url_registry&quot;].astype(str).str.startswith(&quot;http&quot;)
+print_frame(&quot;URL checks&quot;, url_checks, rows=10)
+display(url_checks)
+</pre><h3>Output</h3><pre>URL checks
+          source_id                                                                                      official_url_registry                                                                                                                                                  download_url_or_endpoint_registry                                license_or_terms_url_registry  official_url_ok  download_url_ok  license_url_ok
+            INE_CPI                                                            https://www.ine.es/dyngs/DAB/index.htm?cid=1722                                                                                                                               https://www.ine.es/jaxiT3/files/t/csv_bdsc/76128.csv            https://www.ine.es/dyngs/AYU/en/index.htm?cid=125             True             True            True
+MAPA_SLAUGHTER_MAPA  https://www.mapa.gob.es/es/estadistica/temas/estadisticas-agrarias/ganaderia/encuestas-sacrificio-ganado/                                                                          https://www.mapa.gob.es/es/estadistica/temas/estadisticas-agrarias/ganaderia/encuestas-sacrificio-ganado/ https://www.mapa.gob.es/es/atencion-al-ciudadano/aviso-legal             True             True            True
+     MAPA_PRICES_OM https://servicio.mapa.gob.es/es/alimentacion/temas/observatorio-cadena/cadenas-valor/sistema-de-precios-om https://servicio.mapa.gob.es/dam/mapa/contenido/alimentacion/servicios/observatorio-de-precios-de-los-alimentos/sistema-de-informacion-de-precios-origen---destino/s132026rv0.xlsx https://www.mapa.gob.es/es/atencion-al-ciudadano/aviso-legal             True             True            True
+</pre><table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th>source_id</th>
+      <th>official_url_registry</th>
+      <th>download_url_or_endpoint_registry</th>
+      <th>license_or_terms_url_registry</th>
+      <th>official_url_ok</th>
+      <th>download_url_ok</th>
+      <th>license_url_ok</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>INE_CPI</td>
+      <td>https://www.ine.es/dyngs/DAB/index.htm?cid=1722</td>
+      <td>https://www.ine.es/jaxiT3/files/t/csv_bdsc/76128.csv</td>
+      <td>https://www.ine.es/dyngs/AYU/en/index.htm?cid=125</td>
+      <td>True</td>
+      <td>True</td>
+      <td>True</td>
+    </tr>
+    <tr>
+      <td>MAPA_SLAUGHTER_MAPA</td>
+      <td>https://www.mapa.gob.es/es/estadistica/temas/estadisticas-agrarias/ganaderia/encuestas-sacrificio-ganado/</td>
+      <td>https://www.mapa.gob.es/es/estadistica/temas/estadisticas-agrarias/ganaderia/encuestas-sacrificio-ganado/</td>
+      <td>https://www.mapa.gob.es/es/atencion-al-ciudadano/aviso-legal</td>
+      <td>True</td>
+      <td>True</td>
+      <td>True</td>
+    </tr>
+    <tr>
+      <td>MAPA_PRICES_OM</td>
+      <td>https://servicio.mapa.gob.es/es/alimentacion/temas/observatorio-cadena/cadenas-valor/sistema-de-precios-om</td>
+      <td>https://servicio.mapa.gob.es/dam/mapa/contenido/alimentacion/servicios/observatorio-de-precios-de-los-alimentos/sistema-de-informacion-de-precios-origen---destino/s132026rv0.xlsx</td>
+      <td>https://www.mapa.gob.es/es/atencion-al-ciudadano/aviso-legal</td>
+      <td>True</td>
+      <td>True</td>
+      <td>True</td>
+    </tr>
+  </tbody>
+</table></section>
+<section class='code'><h3>Code</h3><pre>source_to_manifest = {item[&quot;source_id&quot;]: item for item in source_manifests}
+existence_rows = []
+for source_id, manifest in source_to_manifest.items():
+    raw_paths = [entry[&quot;path&quot;] for entry in manifest.get(&quot;raw_files&quot;, [])]
+    derived_paths = manifest.get(&quot;derived_artifacts&quot;, [])
+    existence_rows.append(
+        {
+            &quot;source_id&quot;: source_id,
+            &quot;raw_exists&quot;: all((PROJECT_ROOT / raw_path).exists() for raw_path in raw_paths) if raw_paths else False,
+            &quot;processed_exists&quot;: all((PROJECT_ROOT / derived_path).exists() for derived_path in derived_paths) if derived_paths else False,
+            &quot;hash_available&quot;: all(bool(entry.get(&quot;sha256&quot;)) for entry in manifest.get(&quot;raw_files&quot;, [])),
+            &quot;raw_path_count&quot;: len(raw_paths),
+            &quot;derived_path_count&quot;: len(derived_paths),
+        }
+    )
+existence_df = pd.DataFrame(existence_rows)
+print_frame(&quot;Existence checks&quot;, existence_df, rows=10)
+display(existence_df)
+</pre><h3>Output</h3><pre>Existence checks
+          source_id  raw_exists  processed_exists  hash_available  raw_path_count  derived_path_count
+            INE_CPI        True              True            True               1                   3
+     MAPA_PRICES_OM        True              True            True               1                   2
+MAPA_SLAUGHTER_MAPA        True              True            True               5                   3
+</pre><table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th>source_id</th>
+      <th>raw_exists</th>
+      <th>processed_exists</th>
+      <th>hash_available</th>
+      <th>raw_path_count</th>
+      <th>derived_path_count</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>INE_CPI</td>
+      <td>True</td>
+      <td>True</td>
+      <td>True</td>
+      <td>1</td>
+      <td>3</td>
+    </tr>
+    <tr>
+      <td>MAPA_PRICES_OM</td>
+      <td>True</td>
+      <td>True</td>
+      <td>True</td>
+      <td>1</td>
+      <td>2</td>
+    </tr>
+    <tr>
+      <td>MAPA_SLAUGHTER_MAPA</td>
+      <td>True</td>
+      <td>True</td>
+      <td>True</td>
+      <td>5</td>
+      <td>3</td>
+    </tr>
+  </tbody>
+</table></section>
+<section class='markdown'><pre>## Interpretacion intermedia
+
+Las fuentes `active` deben tener URL oficial, licencia, raw local y artefactos procesados. La fuente `traced` puede quedar como evidencia de contexto siempre que no se defienda como feed semanal activo.
+</pre></section>
+<section class='code'><h3>Code</h3><pre>inconsistencies_df = source_overview[[
+    &quot;source_id&quot;,
+    &quot;status&quot;,
+    &quot;evidence_status&quot;,
+    &quot;status_match&quot;,
+]].merge(existence_df, on=&quot;source_id&quot;, how=&quot;left&quot;).merge(
+    url_checks[[&quot;source_id&quot;, &quot;official_url_ok&quot;, &quot;download_url_ok&quot;, &quot;license_url_ok&quot;]],
+    on=&quot;source_id&quot;,
+    how=&quot;left&quot;,
+)
+inconsistencies_df[&quot;has_inconsistency&quot;] = ~(
+    inconsistencies_df[&quot;status_match&quot;]
+    &amp; inconsistencies_df[&quot;official_url_ok&quot;]
+    &amp; inconsistencies_df[&quot;license_url_ok&quot;]
+    &amp; (
+        (inconsistencies_df[&quot;status&quot;] != &quot;active&quot;)
+        | (inconsistencies_df[&quot;raw_exists&quot;] &amp; inconsistencies_df[&quot;processed_exists&quot;])
+    )
+)
+print_frame(&quot;Inconsistency table&quot;, inconsistencies_df, rows=10)
+display(inconsistencies_df)
+</pre><h3>Output</h3><pre>Inconsistency table
+          source_id status evidence_status  status_match  raw_exists  processed_exists  hash_available  raw_path_count  derived_path_count  official_url_ok  download_url_ok  license_url_ok  has_inconsistency
+            INE_CPI active          active          True        True              True            True               1                   3             True             True            True              False
+MAPA_SLAUGHTER_MAPA active          active          True        True              True            True               5                   3             True             True            True              False
+     MAPA_PRICES_OM traced          traced          True        True              True            True               1                   2             True             True            True              False
+</pre><table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th>source_id</th>
+      <th>status</th>
+      <th>evidence_status</th>
+      <th>status_match</th>
+      <th>raw_exists</th>
+      <th>processed_exists</th>
+      <th>hash_available</th>
+      <th>raw_path_count</th>
+      <th>derived_path_count</th>
+      <th>official_url_ok</th>
+      <th>download_url_ok</th>
+      <th>license_url_ok</th>
+      <th>has_inconsistency</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>INE_CPI</td>
+      <td>active</td>
+      <td>active</td>
+      <td>True</td>
+      <td>True</td>
+      <td>True</td>
+      <td>True</td>
+      <td>1</td>
+      <td>3</td>
+      <td>True</td>
+      <td>True</td>
+      <td>True</td>
+      <td>False</td>
+    </tr>
+    <tr>
+      <td>MAPA_SLAUGHTER_MAPA</td>
+      <td>active</td>
+      <td>active</td>
+      <td>True</td>
+      <td>True</td>
+      <td>True</td>
+      <td>True</td>
+      <td>5</td>
+      <td>3</td>
+      <td>True</td>
+      <td>True</td>
+      <td>True</td>
+      <td>False</td>
+    </tr>
+    <tr>
+      <td>MAPA_PRICES_OM</td>
+      <td>traced</td>
+      <td>traced</td>
+      <td>True</td>
+      <td>True</td>
+      <td>True</td>
+      <td>True</td>
+      <td>1</td>
+      <td>2</td>
+      <td>True</td>
+      <td>True</td>
+      <td>True</td>
+      <td>False</td>
+    </tr>
+  </tbody>
+</table></section>
+<section class='code'><h3>Code</h3><pre>status_counts = source_overview[&quot;evidence_status&quot;].fillna(&quot;missing_manifest&quot;).value_counts().sort_index()
+fig, ax = plt.subplots(figsize=(7, 4))
+status_counts.plot(kind=&quot;bar&quot;, color=[&quot;#2f6f4f&quot;, &quot;#c98f2b&quot;, &quot;#7f8c8d&quot;], ax=ax)
+ax.set_title(&quot;Sources by evidence status&quot;)
+ax.set_xlabel(&quot;evidence_status&quot;)
+ax.set_ylabel(&quot;source_count&quot;)
+FIGURES.append(save_figure(fig, &quot;data_sources_status_counts__mixed_context.png&quot;))
+plt.close(fig)
+print(status_counts.to_string())
+</pre><h3>Output</h3><pre>Figure saved to: C:\Users\Erick Mercado\Documents\a28-cnp-carnico-neuroevolutivas-materia\reports\figures\eda\data_sources_status_counts__mixed_context.png
+evidence_status
+active    2
+traced    1
+</pre><img src='../figures/eda/data_sources_status_counts__mixed_context.png' alt='data_sources_status_counts__mixed_context.png' style='max-width:100%;height:auto;' /></section>
+<section class='markdown'><pre>### Interpretacion de la figura
+
+La barra de estados debe mostrar que solo INE_CPI y MAPA_SLAUGHTER_MAPA quedan activos en la ruta oficial. MAPA_PRICES_OM se conserva como trazado y no como serie semanal defendible.
+</pre></section>
+<section class='code'><h3>Code</h3><pre>type_counts = manifest_df[&quot;source_type&quot;].value_counts().sort_index()
+fig, ax = plt.subplots(figsize=(8, 4))
+type_counts.plot(kind=&quot;bar&quot;, color=&quot;#3c7dc4&quot;, ax=ax)
+ax.set_title(&quot;Sources by source_type&quot;)
+ax.set_xlabel(&quot;source_type&quot;)
+ax.set_ylabel(&quot;source_count&quot;)
+FIGURES.append(save_figure(fig, &quot;data_sources_type_counts__mixed_context.png&quot;))
+plt.close(fig)
+print(type_counts.to_string())
+</pre><h3>Output</h3><pre>Figure saved to: C:\Users\Erick Mercado\Documents\a28-cnp-carnico-neuroevolutivas-materia\reports\figures\eda\data_sources_type_counts__mixed_context.png
+source_type
+official_open_data_csv                    1
+official_spreadsheet_snapshot             1
+official_statistics_spreadsheet_bundle    1
+</pre><img src='../figures/eda/data_sources_type_counts__mixed_context.png' alt='data_sources_type_counts__mixed_context.png' style='max-width:100%;height:auto;' /></section>
+<section class='markdown'><pre>### Interpretacion de la figura
+
+La mezcla de CSV oficial y bundle de hojas de calculo confirma que el pipeline parte de snapshots heterogeneos. Por eso el manifest por fuente es necesario para una auditoria reproducible.
+</pre></section>
+<section class='code'><h3>Code</h3><pre>raw_file_counts = manifest_df.set_index(&quot;source_id&quot;)[&quot;raw_files_count&quot;].sort_values(ascending=False)
+fig, ax = plt.subplots(figsize=(7, 4))
+raw_file_counts.plot(kind=&quot;bar&quot;, color=&quot;#7a4b94&quot;, ax=ax)
+ax.set_title(&quot;Raw files restored per source&quot;)
+ax.set_xlabel(&quot;source_id&quot;)
+ax.set_ylabel(&quot;raw_files_count&quot;)
+FIGURES.append(save_figure(fig, &quot;data_sources_raw_file_counts__mixed_context.png&quot;))
+plt.close(fig)
+print(raw_file_counts.to_string())
+</pre><h3>Output</h3><pre>Figure saved to: C:\Users\Erick Mercado\Documents\a28-cnp-carnico-neuroevolutivas-materia\reports\figures\eda\data_sources_raw_file_counts__mixed_context.png
+source_id
+MAPA_SLAUGHTER_MAPA    5
+INE_CPI                1
+MAPA_PRICES_OM         1
+</pre><img src='../figures/eda/data_sources_raw_file_counts__mixed_context.png' alt='data_sources_raw_file_counts__mixed_context.png' style='max-width:100%;height:auto;' /></section>
+<section class='markdown'><pre>## Hallazgos parciales
+
+- `INE_CPI` y `MAPA_SLAUGHTER_MAPA` aparecen como fuentes activas con trazabilidad local.
+- `MAPA_PRICES_OM` queda trazada como referencia de respaldo y no como feed semanal activo.
+- Las fuentes candidatas no deben entrar en el blob oficial ni en el pipeline mixto defendible.
+</pre></section>
+<section class='code'><h3>Code</h3><pre>for source_id in [&quot;INE_CPI&quot;, &quot;MAPA_SLAUGHTER_MAPA&quot;, &quot;MAPA_PRICES_OM&quot;]:
+    subset = source_overview[source_overview[&quot;source_id&quot;] == source_id]
+    print(f&quot;Source focus: {source_id}&quot;)
+    if subset.empty:
+        print(&quot;  source not found&quot;)
+        continue
+    row = subset.iloc[0]
+    print(f&quot;  status documented: {row[&#x27;status&#x27;]}&quot;)
+    print(f&quot;  status manifest: {row[&#x27;evidence_status&#x27;]}&quot;)
+    print(f&quot;  official_url: {row[&#x27;official_url_registry&#x27;]}&quot;)
+    print(f&quot;  limitations: {row[&#x27;limitations_registry&#x27;]}&quot;)
+</pre><h3>Output</h3><pre>Source focus: INE_CPI
+  status documented: active
+  status manifest: active
+  official_url: https://www.ine.es/dyngs/DAB/index.htm?cid=1722
+  limitations: No representa compras reales de materia prima ni inventario de planta.
+Source focus: MAPA_SLAUGHTER_MAPA
+  status documented: active
+  status manifest: active
+  official_url: https://www.mapa.gob.es/es/estadistica/temas/estadisticas-agrarias/ganaderia/encuestas-sacrificio-ganado/
+  limitations: Proxy macro sectorial, no ledger semanal de compras de una planta carnica.
+Source focus: MAPA_PRICES_OM
+  status documented: traced
+  status manifest: traced
+  official_url: https://servicio.mapa.gob.es/es/alimentacion/temas/observatorio-cadena/cadenas-valor/sistema-de-precios-om
+  limitations: La ruta oficial no defiende una serie semanal activa; purchase_price_index queda como fallback_constant=100.
+</pre></section>
+<section class='code'><h3>Code</h3><pre>TABLES.append(save_table(source_overview, &quot;data_sources_audit__mixed_context.csv&quot;))
+TABLES.append(save_table(inconsistencies_df, &quot;data_sources_inconsistencies__mixed_context.csv&quot;))
+RESULT = {
+    &quot;notebook&quot;: NOTEBOOK_NAME,
+    &quot;tables&quot;: TABLES,
+    &quot;figures&quot;: FIGURES,
+    &quot;findings&quot;: [
+        &quot;Active sources keep official URLs, license URLs and local raw snapshots.&quot;,
+        &quot;MAPA_PRICES_OM remains traced only and is not treated as active weekly evidence.&quot;,
+        &quot;Candidate sources remain outside the defended mixed_context route.&quot;,
+    ],
+    &quot;limitations&quot;: [
+        &quot;The markdown registry is a curated summary and must stay aligned with source manifests.&quot;,
+    ],
+}
+print(json.dumps(RESULT, indent=2))
+</pre><h3>Output</h3><pre>Table saved to: C:\Users\Erick Mercado\Documents\a28-cnp-carnico-neuroevolutivas-materia\reports\tables\eda\data_sources_audit__mixed_context.csv
+Table saved to: C:\Users\Erick Mercado\Documents\a28-cnp-carnico-neuroevolutivas-materia\reports\tables\eda\data_sources_inconsistencies__mixed_context.csv
+{
+  &quot;notebook&quot;: &quot;00_data_sources_audit.ipynb&quot;,
+  &quot;tables&quot;: [
+    &quot;reports/tables/eda/data_sources_audit__mixed_context.csv&quot;,
+    &quot;reports/tables/eda/data_sources_inconsistencies__mixed_context.csv&quot;
+  ],
+  &quot;figures&quot;: [
+    &quot;reports/figures/eda/data_sources_status_counts__mixed_context.png&quot;,
+    &quot;reports/figures/eda/data_sources_type_counts__mixed_context.png&quot;,
+    &quot;reports/figures/eda/data_sources_raw_file_counts__mixed_context.png&quot;
+  ],
+  &quot;findings&quot;: [
+    &quot;Active sources keep official URLs, license URLs and local raw snapshots.&quot;,
+    &quot;MAPA_PRICES_OM remains traced only and is not treated as active weekly evidence.&quot;,
+    &quot;Candidate sources remain outside the defended mixed_context route.&quot;
+  ],
+  &quot;limitations&quot;: [
+    &quot;The markdown registry is a curated summary and must stay aligned with source manifests.&quot;
+  ]
+}
+</pre><table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th>source_id</th>
+      <th>status</th>
+      <th>official_url_registry</th>
+      <th>download_url_or_endpoint_registry</th>
+      <th>access_date_registry</th>
+      <th>license_or_terms_url_registry</th>
+      <th>local_raw_path</th>
+      <th>processed_artifact_path</th>
+      <th>redistribution_allowed</th>
+      <th>role_registry</th>
+      <th>limitations_registry</th>
+      <th>organization</th>
+      <th>source_type</th>
+      <th>evidence_status</th>
+      <th>official_url_manifest</th>
+      <th>download_url_or_endpoint_manifest</th>
+      <th>license_or_terms_url_manifest</th>
+      <th>access_date_manifest</th>
+      <th>retrieval_method</th>
+      <th>role_manifest</th>
+      <th>limitations_manifest</th>
+      <th>raw_files_count</th>
+      <th>derived_artifacts_count</th>
+      <th>status_match</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>INE_CPI</td>
+      <td>active</td>
+      <td>https://www.ine.es/dyngs/DAB/index.htm?cid=1722</td>
+      <td>https://www.ine.es/jaxiT3/files/t/csv_bdsc/76128.csv</td>
+      <td>2026-05-18</td>
+      <td>https://www.ine.es/dyngs/AYU/en/index.htm?cid=125</td>
+      <td>data/raw/external/INE_CPI/76128.csv</td>
+      <td>data/processed/external/context/external_long.csv, data/processed/external/context/context_weekly_for_simulation.csv, data/processed/baseline/feature_engineering_modeling__mixed_context.csv</td>
+      <td>yes_with_attribution_cc_by_4_0</td>
+      <td>Contextual inflation and price-pressure proxy.</td>
+      <td>No representa compras reales de materia prima ni inventario de planta.</td>
+      <td>Instituto Nacional de Estadistica (INE)</td>
+      <td>official_open_data_csv</td>
+      <td>active</td>
+      <td>https://www.ine.es/dyngs/DAB/index.htm?cid=1722</td>
+      <td>https://www.ine.es/jaxiT3/files/t/csv_bdsc/76128.csv</td>
+      <td>https://www.ine.es/dyngs/AYU/en/index.htm?cid=125</td>
+      <td>2026-05-18</td>
+      <td>cached_snapshot</td>
+      <td>Contextual inflation and price-pressure proxy for the official mixed_context route.</td>
+      <td>Proxy context only. It is not a plant-level meat raw-material purchase series and does not contain internal factory variables.</td>
+      <td>1</td>
+      <td>3</td>
+      <td>True</td>
+    </tr>
+    <tr>
+      <td>MAPA_SLAUGHTER_MAPA</td>
+      <td>active</td>
+      <td>https://www.mapa.gob.es/es/estadistica/temas/estadisticas-agrarias/ganaderia/encuestas-sacrificio-ganado/</td>
+      <td>https://www.mapa.gob.es/es/estadistica/temas/estadisticas-agrarias/ganaderia/encuestas-sacrificio-ganado/</td>
+      <td>2026-05-18</td>
+      <td>https://www.mapa.gob.es/es/atencion-al-ciudadano/aviso-legal</td>
+      <td>data/raw/external/MAPA_SLAUGHTER_MAPA/</td>
+      <td>data/processed/external/context/external_long.csv, data/processed/external/context/context_weekly_for_simulation.csv, data/processed/baseline/feature_engineering_modeling__mixed_context.csv</td>
+      <td>yes_with_source_citation_unless_third_party_rights_apply</td>
+      <td>Contextual slaughter/supply proxy.</td>
+      <td>Proxy macro sectorial, no ledger semanal de compras de una planta carnica.</td>
+      <td>Ministerio de Agricultura, Pesca y Alimentacion (MAPA)</td>
+      <td>official_statistics_spreadsheet_bundle</td>
+      <td>active</td>
+      <td>https://www.mapa.gob.es/es/estadistica/temas/estadisticas-agrarias/ganaderia/encuestas-sacrificio-ganado/</td>
+      <td>https://www.mapa.gob.es/es/estadistica/temas/estadisticas-agrarias/ganaderia/encuestas-sacrificio-ganado/</td>
+      <td>https://www.mapa.gob.es/es/atencion-al-ciudadano/aviso-legal</td>
+      <td>2026-05-18</td>
+      <td>cached_snapshot</td>
+      <td>Contextual slaughter/supply proxy for the official mixed_context route.</td>
+      <td>Used as macro proxy only. It is not an observed weekly purchase ledger for a meat plant and remains external contextual evidence.</td>
+      <td>5</td>
+      <td>3</td>
+      <td>True</td>
+    </tr>
+    <tr>
+      <td>MAPA_PRICES_OM</td>
+      <td>traced</td>
+      <td>https://servicio.mapa.gob.es/es/alimentacion/temas/observatorio-cadena/cadenas-valor/sistema-de-precios-om</td>
+      <td>https://servicio.mapa.gob.es/dam/mapa/contenido/alimentacion/servicios/observatorio-de-precios-de-los-alimentos/sistema-de-informacion-de-precios-origen---destino/s132026rv0.xlsx</td>
+      <td>2026-05-18</td>
+      <td>https://www.mapa.gob.es/es/atencion-al-ciudadano/aviso-legal</td>
+      <td>data/raw/external/MAPA_PRICES_OM/s502025rv0.xlsx</td>
+      <td>data/processed/external/context/context_weekly_for_simulation.csv, data/processed/external/context/context_proxy_limitations.json</td>
+      <td>yes_with_source_citation_unless_third_party_rights_apply</td>
+      <td>Fallback traced evidence only.</td>
+      <td>La ruta oficial no defiende una serie semanal activa; purchase_price_index queda como fallback_constant=100.</td>
+      <td>Ministerio de Agricultura, Pesca y Alimentacion (MAPA)</td>
+      <td>official_spreadsheet_snapshot</td>
+      <td>traced</td>
+      <td>https://servicio.mapa.gob.es/es/alimentacion/temas/observatorio-cadena/cadenas-valor/sistema-de-precios-om</td>
+      <td>https://servicio.mapa.gob.es/dam/mapa/contenido/alimentacion/servicios/observatorio-de-precios-de-los-alimentos/sistema-de-informacion-de-precios-origen---destino/s132026rv0.xlsx</td>
+      <td>https://www.mapa.gob.es/es/atencion-al-ciudadano/aviso-legal</td>
+      <td>2026-05-18</td>
+      <td>cached_snapshot</td>
+      <td>Traced fallback constant reference only; not an active weekly price feed in the defended route.</td>
+      <td>The current processed route uses purchase_price_index as fallback_constant=100. This source must not be defended as an active weekly signal.</td>
+      <td>1</td>
+      <td>2</td>
+      <td>True</td>
+    </tr>
+  </tbody>
+</table><table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th>source_id</th>
+      <th>status</th>
+      <th>evidence_status</th>
+      <th>status_match</th>
+      <th>raw_exists</th>
+      <th>processed_exists</th>
+      <th>hash_available</th>
+      <th>raw_path_count</th>
+      <th>derived_path_count</th>
+      <th>official_url_ok</th>
+      <th>download_url_ok</th>
+      <th>license_url_ok</th>
+      <th>has_inconsistency</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>INE_CPI</td>
+      <td>active</td>
+      <td>active</td>
+      <td>True</td>
+      <td>True</td>
+      <td>True</td>
+      <td>True</td>
+      <td>1</td>
+      <td>3</td>
+      <td>True</td>
+      <td>True</td>
+      <td>True</td>
+      <td>False</td>
+    </tr>
+    <tr>
+      <td>MAPA_SLAUGHTER_MAPA</td>
+      <td>active</td>
+      <td>active</td>
+      <td>True</td>
+      <td>True</td>
+      <td>True</td>
+      <td>True</td>
+      <td>5</td>
+      <td>3</td>
+      <td>True</td>
+      <td>True</td>
+      <td>True</td>
+      <td>False</td>
+    </tr>
+    <tr>
+      <td>MAPA_PRICES_OM</td>
+      <td>traced</td>
+      <td>traced</td>
+      <td>True</td>
+      <td>True</td>
+      <td>True</td>
+      <td>True</td>
+      <td>1</td>
+      <td>2</td>
+      <td>True</td>
+      <td>True</td>
+      <td>True</td>
+      <td>False</td>
+    </tr>
+  </tbody>
+</table></section>
+<section class='markdown'><pre>## Limitaciones
+
+Este notebook verifica coherencia documental y presencia local de artefactos. No evalua por si solo la calidad estadistica de las series ni sustituye la inspeccion de raw y procesados.
+</pre></section>
+<section class='markdown'><pre>## Concluson final
+
+La capa de inventario documental queda defendible cuando el estado de cada fuente coincide entre el registro markdown y el manifest JSON, y cuando los raw y derivados exigidos existen localmente.
+</pre></section>
+</body></html>

@@ -1,6 +1,6 @@
 Usa el skill docs-generation para generar ÚNICAMENTE la ficha técnica y la ficha
 funcional (NO la plantilla de metadatos) de los siguientes modelos ya integrados:
-a34, a40 y a46.
+
 
 Alcance estricto:
 - No toques app/plugins/ ni ejecutes integración ni verificación — los plugins ya

@@ -1,0 +1,115 @@
+project_name: datagia_sequence_infestacion
+paths:
+  raw_dataset: data/raw/dataset_infestacion_cereales_sintetico.csv
+  processed_dataset: data/processed/dataset_infestacion_cereales_sintetico_processed.csv
+  synthetic_summary: data/processed/dataset_infestacion_cereales_sintetico_summary.csv
+  synthetic_metadata: data/processed/dataset_infestacion_cereales_sintetico_metadata.json
+  stats_dataset: data/processed/dataset_column_stats.csv
+  predictions_dir: data/predictions
+  splits_dir: data/splits
+  models_artifacts_dir: models/artifacts
+  models_metrics_dir: models/metrics
+  metrics_figures_dir: models/metrics/figures
+data:
+  group_column: sample_id
+  timestamp_column: timestamp
+  target_column: target
+  split_target_column: target_global
+  sensor_columns:
+  - co2_ppm
+  - temp_c
+  - ambient_rh_pct
+  - humidity_grain_pct
+  leakage_columns:
+  - sample_id
+  - timestamp
+  - step_idx
+  - lag_hours
+  - dataset_version
+  - config_hash
+training:
+  random_state: 42
+  holdout_frac: 0.2
+  device: cuda
+  fallback_to_cpu: true
+  quick: false
+  class_labels:
+  - 0
+  - 1
+  - 2
+synthetic_dataset:
+  seed: 42
+  samples_per_class: 100
+  days: 20
+  step_minutes: 60
+  start: '2026-01-01'
+  osc_amp_mod_strength: 0.22
+  osc_second_harmonic: 0.25
+  osc_weekly_scale: 0.35
+  temporal_labels_v2:
+    enabled: true
+    healthy_min_hours: 36
+    healthy_margin_hours: 18
+    insect_transition_min: 30
+    insect_transition_max: 90
+    moho_transition_min: 30
+    moho_transition_max: 78
+sequence:
+  window_size: 48
+  stride: 12
+  label_mode: last
+  pad_short_sequences: false
+  validation_frac: 0.15
+  selection_metric: f1_macro
+  acceptance_thresholds:
+    f1_macro_min: 0.9
+    recall_macro_min: 0.9
+    accuracy_min: 0.9
+    log_loss_max: 0.2
+    class_recall_min:
+      moho_critico: 0.95
+  feature_columns: auto
+  search:
+    lstm:
+      hidden_size:
+      - 64
+      - 96
+      num_layers:
+      - 1
+      dropout:
+      - 0.1
+      - 0.25
+      bidirectional:
+      - false
+      batch_size:
+      - 64
+      learning_rate:
+      - 0.001
+      weight_decay:
+      - 0.0
+      - 0.0001
+    gru:
+      hidden_size:
+      - 64
+      - 96
+      num_layers:
+      - 1
+      dropout:
+      - 0.1
+      - 0.25
+      bidirectional:
+      - false
+      batch_size:
+      - 64
+      learning_rate:
+      - 0.001
+      weight_decay:
+      - 0.0
+      - 0.0001
+  training:
+    max_epochs: 15
+    patience: 4
+    min_delta: 0.0001
+    grad_clip: 1.0
+    eval_batch_size: 128
+    quick_search_trials: 1

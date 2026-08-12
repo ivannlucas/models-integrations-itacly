@@ -1,0 +1,244 @@
+model_id: ml45_cereals_dnsl_critical_point_detection
+sector: cerealista
+nombre: "CU45 - Implementación del modelo Deep Neuro-Fuzzy para la detección de puntos críticos de control en los procesos y la maquinaria"
+task_type: classification_binary_timeseries_windowed  # ventana deslizante [T=240,F=11] -> anomalía/no-anomalía + capa XAI que reclasifica en 3 estados interpretativos (Normal/Vigilancia/Criticidad detectada)
+framework:
+  - torch==2.5.1        # requirements.txt fija cu121; en este entorno se validó con torch 2.11.0+cu130 (CPU) — ver known_issues
+  - numpy==2.4.6
+  - pandas==3.0.3
+  - scikit-learn==1.8.0
+  - shap==0.51.0         # SOLO usado por la capa XAI interna del modelo (temporal_explainer.py), NO es dependencia del servicio FastAPI principal (no está en requirements.txt del repo) — ver known_issues
+  - scipy==1.17.1
+  - pyyaml==6.0.3
+  # requirements.txt está en ASCII con CRLF (no UTF-16LE, pero igualmente normalizar antes de pip-audit/pip install).
+  # xgboost/optuna/matplotlib/seaborn/ipykernel son solo para notebooks/tuning, no se necesitan en inferencia.
+
+# NO HAY MEMORIA (.docx) EN inbox/a45/entregable/ — la carpeta está vacía. Todo lo extraído sale del
+# código entregado (src/, config/config.yaml, scripts/, notebooks/) y de resultados reales ya calculados
+# (models/metrics/results.json). Cualquier campo que normalmente vendría de la memoria (Paso 3 del
+# skill) se deja explícitamente null con el motivo. Ver known_issues.
+
+artifacts:
+  folder: models/artifacts/
+  files:
+    - best_dnf_model.pt      # checkpoint: {model_state_dict, model_cfg} — model_cfg trae input_features=11, n_stats_features=55, sequence_length=240 embebidos
+    - scaler.pkl              # dict {scaler_x: StandardScaler sobre secuencias [N*T,11], scaler_num: StandardScaler sobre 55 stats agregadas}
+    - xai_background.npy      # background SHAP precalculado (100, 240, 11) — necesario para el TemporalExplainer (SHAP), no para la predicción binaria en sí
+    - baseline_models/        # RF/XGB/ANFIS/LSTM baseline — solo referencia de benchmarking, no se usan en producción
+  config:
+    - config/config.yaml     # sensores, fault_types/profiles, sequence_length=240, solapamiento_beta=0.5, stats_creation, hiperparámetros lstm/fuzzy/training, catálogo PCC completo
+
+inputs:
+  # El input NO es una fila aislada: es una serie temporal por ciclo (cycle_id) de sensores IIoT.
+  # Cada ventana de 240 min consecutivos (solapamiento 50%, step=120) genera UNA predicción — un CSV
+  # de un ciclo completo (600 filas = 10h a 1 muestra/min) produce varias filas de salida (4 en los
+  # ciclos de test, ver golden_cases). No existe un modo predict_inline de "una fila = una predicción"
+  # tal cual lo tienen los modelos tabulares — precedente: m47_dnsl_fallas_maquinaria_pasteurizado (misma
+  # familia DNSL) resuelve esto con predict_inline(data_path=..., features=...) además de predict_batch.
+  fixed:  # 11 sensores IIoT — data_generation.sensors en config.yaml, mismo orden que expected_sensor_columns()
+    - {name: plenum_temp,          type: float, unit: "°C",  range: [-10, 130]}
+    - {name: exhaust_air_temp,     type: float, unit: "°C",  range: [-10, 95]}
+    - {name: exhaust_air_humidity, type: float, unit: "%",   range: [0, 100]}
+    - {name: static_pressure,      type: float, unit: mbar,  range: [-0.5, 100]}
+    - {name: burner_power,         type: float, unit: "%",   range: [0, 100]}
+    - {name: fan_speed,            type: float, unit: RPM,   range: [0, 1800]}
+    - {name: discharge_frequency,  type: float, unit: Hz,    range: [0, 65]}
+    - {name: grain_moisture_in,    type: float, unit: "%",   range: [10, 35]}
+    - {name: ambient_temp,         type: float, unit: "°C",  range: [-15, 50]}
+    - {name: ambient_humidity,     type: float, unit: "%",   range: [0, 100]}
+    - {name: setpoint_temp,        type: float, unit: "°C",  range: [40, 120]}
+  required_metadata:
+    - {name: timestamp,  type: datetime_or_ordinal, description: "Obligatoria. Datetime o entero ordinal — nunca mezclados en el mismo CSV (parse_timestamp_column)."}
+    - {name: cycle_id,   type: int_or_string, description: "Identificador de ciclo. Si falta, se asume una única serie temporal global (ordenada por timestamp) — warning, no error."}
+  optional_metadata:
+    - {name: fault_name,  type: string, description: "Etiqueta textual multi-clase (NORMAL + 5 fallas). Solo evaluación — nunca feature. Se binariza internamente vía normal_tokens."}
+    - {name: fault_label, type: int,    description: "Etiqueta numérica 0-5. Solo evaluación, no feature."}
+    - {name: grain_type, type: string, description: "CORN|WHEAT|BARLEY|SUNFLOWER — metadato de contexto, no es feature del modelo (no está en data_generation.sensors)."}
+    - {name: phase, type: string, description: "Fase operativa del ciclo (metadato de contexto, no feature)."}
+  constraints:
+    min_rows_per_window: 240   # sequence_length — si un ciclo (o la serie global sin cycle_id) tiene menos filas, no genera ventanas y el error debe ser explícito (ValueError del código original)
+    partial_null_max_ratio: 0.10  # nulos parciales por sensor por encima de este ratio -> error; por debajo -> imputación temporal (interpolación + ffill/bfill + mediana)
+  derived_if_missing: {}  # no hay derivación de campos: todos los 11 sensores son obligatorios y se validan explícitamente (validate_model_input_data)
+
+outputs:
+  # Una fila de salida por VENTANA temporal (no por fila de entrada ni por ciclo completo)
+  predict_batch:
+    - {name: window_index, type: int, description: "Índice 1-based de la ventana dentro del CSV procesado."}
+    - {name: cycle_id, type: string, description: "Solo si el CSV trae columna cycle_id."}
+    - {name: timestamp_init, type: datetime}
+    - {name: timestamp_end, type: datetime}
+    - {name: predicted_anomaly_class, type: int, values: [0, 1]}
+    - {name: predicted_anomaly_label, type: string, values: ["No Fallo", "Fallo"]}
+    - {name: anomaly_probability, type: float, description: "Salida de la mezcla tardía (0.8*rama fuzzy + 0.2*rama LSTM), sigmoide ya aplicada — ver model.py forward()."}
+    - {name: decision_threshold, type: float, description: "0.73 — best_threshold guardado en el checkpoint/results.json, no un valor fijo en config.yaml."}
+  # Capa XAI (opcional pero es el objetivo funcional principal del modelo, ver README): añade estado
+  # interpretativo por ventana. Requiere shap + xai_background — ver known_issues sobre si se porta
+  # inline al plugin o se delega al servicio de explicabilidad externo.
+  xai_report_per_window:
+    - {name: "Estado interpretativo", type: string, values: ["Normal", "Vigilancia", "Criticidad detectada"], description: "pcc.py::_compute_online_state — combina probabilidad, margen respecto al umbral, y si hay un perfil PCC catalogado con soporte suficiente."}
+    - {name: "Evidencia", type: string}
+    - {name: "Probabilidad de anomalia", type: float}
+    - {name: "Umbral de detección de anomalias", type: float}
+    - {name: "Margen respecto al umbral", type: float}
+    - {name: "Recomendacion", type: string}
+
+training:
+  supported: true  # pipeline completo: generate_dataset() (sintético) -> data_processing() -> train() -> get_stats(), src/main.py
+  target_column: fault_name  # multi-clase en el CSV crudo; internamente se binariza a anomalía/normal por ventana vía _anomaly_mask()+normal_tokens (nunca se entrena un clasificador multi-clase de 6 salidas)
+  required_columns: [timestamp, cycle_id, plenum_temp, exhaust_air_temp, exhaust_air_humidity, static_pressure, burner_power, fan_speed, discharge_frequency, grain_moisture_in, ambient_temp, ambient_humidity, setpoint_temp, fault_name]
+  hyperparams:  # config.yaml::model + training (idénticos a los usados para generar best_dnf_model.pt, confirmado en results.json::model_config)
+    sequence_length: 240
+    solapamiento_beta: 0.5
+    stats_creation: [mean, std, min, max, slope]
+    lstm: {hidden_size: 64, num_layers: 1, dropout: 0.25, bidirectional: false, embedding_dim: 32}
+    fuzzy: {n_mf: 3, n_rules: 48, temperature: 0.7, t_norm: product, normalize_rules: true, init_alpha: sparse, lambda_anomaly: 0.80}
+    optimizer: {lr_rate: 0.002, weight_decay: 0.00001, batch_size: 128, num_epochs: 200, patience: 20, grad_clip: 1.0, warmup_epochs: 10}
+    scheduler: {type: cosine, factor: 0.6, patience: 3, min_lr: 0.00005, T_max: 200, T_mult: 2, eta_min: 0.000009}
+    dnf_loss: {anomaly_weight: 2.0, aux_anom_dl_weight: 0.35, aux_anom_fuzzy_weight: 1.0, alpha_entropy_weight: 0.02, rule_structure_div_weight: 0.04, rule_usage_balance_weight: 0.05}
+    monitor_metric: "0.50*val_anomaly_f1 + 0.35*fuzzy_f1 - 0.05*dead_rules_ratio - 0.05*alpha_entropy_mean - 0.05*rule_corr"
+    seed: 42
+  metrics_returned: [accuracy, macro_f1, fallo_f1, fallo_precision, fallo_recall, fallo_auc, nofallo_f1, nofallo_precision, nofallo_recall, nofallo_specificity, best_threshold]
+  source: codigo_entrenamiento  # src/training/trainer.py + config/config.yaml + models/metrics/results.json (resultado real de una ejecución ya completada)
+
+constraints: {}  # no hay memoria con restricciones de negocio explícitas (tipo "PU >= 13"); las únicas
+  # reglas duras encontradas en código son de validación de datos de entrada (ver inputs.constraints),
+  # no de negocio.
+
+metrics_reported:  # models/metrics/results.json::test_metrics — evaluación REAL sobre data/splits/test.csv (600 ciclos, 2400 ventanas), no inventado
+  accuracy: 0.9254166666666667
+  macro_f1: 0.8669441348101212
+  macro_precision: 0.9388875761529532
+  macro_recall: 0.8244791666666667
+  fallo_f1: 0.7787391841779975
+  fallo_precision: 0.9574468085106383
+  fallo_recall: 0.65625
+  fallo_auc: 0.9122309027777777
+  nofallo_f1: 0.9551490854422451
+  nofallo_precision: 0.920328343795268
+  nofallo_recall: 0.9927083333333333
+  nofallo_specificity: 0.9927083333333333
+  confusion_matrix: {tp: 315, fp: 14, tn: 1906, fn: 165}
+  selected_threshold: 0.73
+  total_params: 34876
+  source: models/metrics/results.json (resultado de get_stats() sobre el checkpoint entregado, no recalculado por el agente)
+
+golden_cases:
+  # Los 6 casos cubren NORMAL + los 5 tipos de falla. Extraídos de data/splits/test.csv (real, no
+  # sintetizado por el agente) y ejecutados con el pipeline ORIGINAL del equipo de IA
+  # (scripts/predict.py, CPU, seed=42 vía config.yaml) usando el checkpoint entregado
+  # (best_dnf_model.pt) — no se ha inventado ningún valor esperado, son outputs reales reproducidos.
+  # Cada caso = 1 ciclo completo (600 filas) -> 4 ventanas de salida (seq_length=240, step=120).
+  - id: cycle_2400_normal
+    source: dataset_test_split
+    input: {cycle_id: 2400, fault_name_real: NORMAL, split_file: data/splits/test.csv}
+    expected:
+      windows:
+        - {window_index: 1, predicted_anomaly_class: 0, anomaly_probability: 0.4300}
+        - {window_index: 2, predicted_anomaly_class: 0, anomaly_probability: 0.6315}
+        - {window_index: 3, predicted_anomaly_class: 0, anomaly_probability: 0.0863}
+        - {window_index: 4, predicted_anomaly_class: 0, anomaly_probability: 0.0325}
+    tolerance: {prediction_exact: true, probability_atol: 0.005}
+
+  - id: cycle_2405_discharge_jam
+    source: dataset_test_split
+    input: {cycle_id: 2405, fault_name_real: DISCHARGE_JAM, split_file: data/splits/test.csv}
+    expected:
+      windows:
+        - {window_index: 1, predicted_anomaly_class: 1, anomaly_probability: 0.9576}
+        - {window_index: 2, predicted_anomaly_class: 1, anomaly_probability: 1.0000}
+        - {window_index: 3, predicted_anomaly_class: 1, anomaly_probability: 1.0000}
+        - {window_index: 4, predicted_anomaly_class: 1, anomaly_probability: 1.0000}
+    tolerance: {prediction_exact: true, probability_atol: 0.005}
+
+  - id: cycle_2407_humidity_sensor_drift
+    source: dataset_test_split
+    input: {cycle_id: 2407, fault_name_real: HUMIDITY_SENSOR_DRIFT, split_file: data/splits/test.csv}
+    note: >
+      Falso negativo real del modelo entregado: el ciclo SÍ tiene falla (HUMIDITY_SENSOR_DRIFT) pero
+      las 4 ventanas se clasifican como "No Fallo". Esto es consistente con fallo_recall=0.656 en
+      metrics_reported — se conserva tal cual (no se ajusta ni se silencia), sirve para verificar
+      REPRODUCIBILIDAD del puerto, no para validar acierto del modelo.
+    expected:
+      windows:
+        - {window_index: 1, predicted_anomaly_class: 0, anomaly_probability: 0.3549}
+        - {window_index: 2, predicted_anomaly_class: 0, anomaly_probability: 0.2031}
+        - {window_index: 3, predicted_anomaly_class: 0, anomaly_probability: 0.2975}
+        - {window_index: 4, predicted_anomaly_class: 0, anomaly_probability: 0.1375}
+    tolerance: {prediction_exact: true, probability_atol: 0.005}
+
+  - id: cycle_2412_filter_clogged
+    source: dataset_test_split
+    input: {cycle_id: 2412, fault_name_real: FILTER_CLOGGED, split_file: data/splits/test.csv}
+    expected:
+      windows:
+        - {window_index: 1, predicted_anomaly_class: 0, anomaly_probability: 0.4072}
+        - {window_index: 2, predicted_anomaly_class: 1, anomaly_probability: 0.9998}
+        - {window_index: 3, predicted_anomaly_class: 1, anomaly_probability: 1.0000}
+        - {window_index: 4, predicted_anomaly_class: 1, anomaly_probability: 1.0000}
+    tolerance: {prediction_exact: true, probability_atol: 0.005}
+
+  - id: cycle_2423_burner_degraded
+    source: dataset_test_split
+    input: {cycle_id: 2423, fault_name_real: BURNER_DEGRADED, split_file: data/splits/test.csv}
+    expected:
+      windows:
+        - {window_index: 1, predicted_anomaly_class: 0, anomaly_probability: 0.4486}
+        - {window_index: 2, predicted_anomaly_class: 1, anomaly_probability: 0.7942}
+        - {window_index: 3, predicted_anomaly_class: 1, anomaly_probability: 0.9999}
+        - {window_index: 4, predicted_anomaly_class: 1, anomaly_probability: 1.0000}
+    tolerance: {prediction_exact: true, probability_atol: 0.005}
+
+  - id: cycle_2440_plenum_thermal_leak
+    source: dataset_test_split
+    input: {cycle_id: 2440, fault_name_real: PLENUM_THERMAL_LEAK, split_file: data/splits/test.csv}
+    expected:
+      windows:
+        - {window_index: 1, predicted_anomaly_class: 0, anomaly_probability: 0.3478}
+        - {window_index: 2, predicted_anomaly_class: 0, anomaly_probability: 0.6668}
+        - {window_index: 3, predicted_anomaly_class: 1, anomaly_probability: 0.9999}
+        - {window_index: 4, predicted_anomaly_class: 1, anomaly_probability: 0.9999}
+    tolerance: {prediction_exact: true, probability_atol: 0.005}
+
+known_issues:
+  - >
+    SIN MEMORIA: inbox/a45/entregable/ está vacía. No hay memoria .docx del equipo de IA. Todos los
+    campos que normalmente saldrían de la memoria (narrativa de Entradas/Salidas, restricciones de
+    negocio, tablas de escenarios auditados) se han dejado vacíos/null o derivado directamente del
+    código+resultados reales, nunca inventados. La ficha funcional/técnica (docs-generation) tendrá
+    huecos que reportar en vez de rellenar con redacción propia.
+  - >
+    ARQUITECTURA: no existe un modo predict_inline "una fila = una predicción" — la unidad mínima de
+    inferencia es una ventana de 240 timesteps. El precedente más cercano ya integrado en este mismo
+    repo es m47_dnsl_fallas_maquinaria_pasteurizado (misma familia "DNSL"), que expone
+    predict_inline(data_path=..., features=...) ademas de predict_batch — revisar ese plugin como
+    plantilla de arquitectura antes de escribir el de a45.
+  - >
+    SHAP NO ES DEPENDENCIA DEL SERVICIO PRINCIPAL: shap no está en requirements.txt del repo raíz
+    (solo en el requirements.txt de inbox/a45/codigo). El modelo original usa shap para su
+    TemporalExplainer interno (xai/temporal_explainer.py) y necesita xai_background.npy. Decisión
+    pendiente para plugin-integration: (a) portar la capa XAI/PCC completa dentro del plugin
+    (añadiendo shap a requirements.txt del proyecto), o (b) limitar el plugin a la clasificación
+    binaria anomalía/no-anomalía + exponer xai_feature_values (stats agregadas) para que el SHAP
+    genérico lo calcule el servicio externo de explicabilidad, perdiendo el catálogo PCC propio del
+    modelo. El README y el objetivo funcional del CU45 apuntan a que el catálogo PCC es el
+    diferencial del modelo, así que probablemente proceda (a) — confirmar en plugin-integration.
+  - >
+    VERSIONES: requirements.txt fija torch==2.5.1 (+cu121), numpy==2.4.6, pandas==3.0.3,
+    scikit-learn==1.8.0, shap==0.51.0. El entorno del proyecto (.venv) tiene torch 2.11.0+cu130,
+    sklearn 1.9.0, shap 0.52.0 (instalado ad-hoc para poder generar los golden_cases; no estaba
+    antes). Cargar scaler.pkl con sklearn 1.9.0 emite InconsistentVersionWarning (creado con 1.8.0)
+    pero funciona correctamente — confirmado al reproducir los 6 golden_cases. requirements.txt
+    además está en ASCII con CRLF (normalizar antes de pip-audit).
+  - >
+    GPU: en este sandbox, torch no soporta la GPU física (GTX 1060, CC 6.1) — hubo que forzar CPU
+    (CUDA_VISIBLE_DEVICES="") para poder ejecutar el pipeline original y generar los golden_cases.
+    No debería afectar a producción (donde el device se resuelve igual que en el resto de plugins:
+    cuda si está disponible, si no cpu), pero lo dejo registrado por si se repite el síntoma.
+  - >
+    DATASET SINTÉTICO: como en el resto de modelos de este repo, los datos (data/raw, data/splits)
+    son generados sintéticamente (src/data_processing/generate_dataset.py, seed=42). Las cifras de
+    metrics_reported y golden_cases son reales sobre ESE dataset sintético — requieren validación
+    con datos reales de secadoras antes de cualquier despliegue en producción.
+  - >
+    baseline_models/ (RF, XGBoost, ANFIS, LSTM) son solo comparativas de benchmarking del propio
+    equipo de IA (ver notebooks/baseline.ipynb) — no se integran, no son el modelo de producción.

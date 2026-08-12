@@ -1,0 +1,651 @@
+{
+  "scope": "mixed_context",
+  "selection_criterion": "validation_rmse",
+  "upstream": {
+    "baseline_reference_run": {
+      "run_id": "baseline_comparison_mixed_context_20260518_seed42_smoke__synthetic_procurement_need__linear_regression__ablation_reduced_context",
+      "model_family": "linear_regression",
+      "feature_set": "ablation_reduced_context",
+      "target": "synthetic_procurement_need",
+      "validation": {
+        "split": "validation",
+        "model": "linear_regression_ablation_reduced_context",
+        "target": "synthetic_procurement_need",
+        "n_samples": 174,
+        "mae": 47.707647049152065,
+        "rmse": 76.47469717064605,
+        "r2": 0.589011676816338
+      },
+      "test": {
+        "split": "test",
+        "model": "linear_regression_ablation_reduced_context",
+        "target": "synthetic_procurement_need",
+        "n_samples": 175,
+        "mae": 72.82239979926281,
+        "rmse": 105.67102742272888,
+        "r2": 0.12312950024740887
+      },
+      "validation_rmse": 76.47469717064605,
+      "test_rmse": 105.67102742272888
+    },
+    "neuroevolution_reference_run": {
+      "run_id": "baseline_comparison_mixed_context_20260518_seed42_smoke__synthetic_procurement_need__neuroevolution__ablation_reduced_context",
+      "model_family": "neuroevolution",
+      "feature_set": "ablation_reduced_context",
+      "target": "synthetic_procurement_need",
+      "validation": {
+        "split": "validation",
+        "model": "neuroevolution_ablation_reduced_context",
+        "target": "synthetic_procurement_need",
+        "n_samples": 174,
+        "mae": 94.9272365870896,
+        "rmse": 127.61424716008125,
+        "r2": -0.14443801861018368
+      },
+      "test": {
+        "split": "test",
+        "model": "neuroevolution_ablation_reduced_context",
+        "target": "synthetic_procurement_need",
+        "n_samples": 175,
+        "mae": 184.5997901476652,
+        "rmse": 213.46256623034822,
+        "r2": -2.578220107110586
+      },
+      "validation_rmse": 127.61424716008125,
+      "test_rmse": 213.46256623034822
+    },
+    "recommendation": "baseline_retained"
+  },
+  "trigger": {
+    "scope": "mixed_context",
+    "selection_criterion": "validation_false_negative_rate_then_accuracy",
+    "model_family": "logistic_regression",
+    "target_column": "purchase_trigger_label",
+    "feature_columns": [
+      "current_inventory_tons",
+      "expected_requirement_tons",
+      "lead_time_days",
+      "safety_coverage_days",
+      "expected_yield_rate",
+      "expected_waste_rate",
+      "demand_index",
+      "supply_index",
+      "purchase_price_index",
+      "demand_supply_gap",
+      "manufacturing_context_profile__cooked_emulsion",
+      "manufacturing_context_profile__cured_embutido",
+      "manufacturing_context_profile__fresh_preparation",
+      "product_family__cooked_emulsion",
+      "product_family__cured_embutido",
+      "product_family__fresh_preparation",
+      "recipe_profile__fermented_dry_spiced",
+      "recipe_profile__high_throughput_standard",
+      "recipe_profile__marinated_short_run",
+      "shelf_life_class__long",
+      "shelf_life_class__medium",
+      "shelf_life_class__short"
+    ],
+    "feature_imputation": "train_median_with_neutral_fallback_for_all_missing_columns",
+    "leakage_audit": [
+      {
+        "stage": "trigger",
+        "feature_name": "order_quantity_tons",
+        "present_in_dataset": false,
+        "present_in_feature_set": false,
+        "status": "pass",
+        "reason": "prohibited_downstream_or_decision_signal"
+      },
+      {
+        "stage": "trigger",
+        "feature_name": "quantity_optimizer_recommendation_tons",
+        "present_in_dataset": false,
+        "present_in_feature_set": false,
+        "status": "pass",
+        "reason": "prohibited_downstream_or_decision_signal"
+      },
+      {
+        "stage": "trigger",
+        "feature_name": "quantity_optimizer_target_tons",
+        "present_in_dataset": true,
+        "present_in_feature_set": false,
+        "status": "pass",
+        "reason": "prohibited_downstream_or_decision_signal"
+      },
+      {
+        "stage": "trigger",
+        "feature_name": "excess_tons",
+        "present_in_dataset": false,
+        "present_in_feature_set": false,
+        "status": "pass",
+        "reason": "prohibited_downstream_or_decision_signal"
+      },
+      {
+        "stage": "trigger",
+        "feature_name": "stockout_tons",
+        "present_in_dataset": false,
+        "present_in_feature_set": false,
+        "status": "pass",
+        "reason": "prohibited_downstream_or_decision_signal"
+      },
+      {
+        "stage": "trigger",
+        "feature_name": "purchase_trigger_flag",
+        "present_in_dataset": false,
+        "present_in_feature_set": false,
+        "status": "pass",
+        "reason": "prohibited_downstream_or_decision_signal"
+      },
+      {
+        "stage": "trigger",
+        "feature_name": "purchase_trigger_proba",
+        "present_in_dataset": false,
+        "present_in_feature_set": false,
+        "status": "pass",
+        "reason": "prohibited_downstream_or_decision_signal"
+      }
+    ],
+    "train": {
+      "split": "train",
+      "n_samples": 812,
+      "rows": 812,
+      "positive_rate_actual": 0.5443349753694581,
+      "positive_rate_pred": 0.5233990147783252,
+      "accuracy": 0.9519704433497537,
+      "balanced_accuracy": 0.9534609269903387,
+      "precision_by_class": {
+        "BUY": 0.9741176470588235,
+        "DO_NOT_BUY": 0.9276485788113695
+      },
+      "recall_buy": 0.9366515837104072,
+      "recall_do_not_buy": 0.9702702702702702,
+      "f1_buy": 0.9550173010380624,
+      "f1_do_not_buy": 0.9484808454425363,
+      "false_negative_rate": 0.06334841628959276,
+      "support_by_class": {
+        "BUY": 442,
+        "DO_NOT_BUY": 370
+      },
+      "confusion_matrix": {
+        "true_negative": 359,
+        "false_positive": 11,
+        "false_negative": 28,
+        "true_positive": 414
+      },
+      "precision": 0.9741176470588235,
+      "recall": 0.9366515837104072,
+      "f1": 0.9550173010380624,
+      "probability_summary": {
+        "mean": 0.5370458546871313,
+        "std": 0.4451726535400467,
+        "min": 0.00012188401776376628,
+        "max": 0.9999267303197945
+      }
+    },
+    "validation": {
+      "split": "validation",
+      "n_samples": 174,
+      "rows": 174,
+      "positive_rate_actual": 0.7126436781609196,
+      "positive_rate_pred": 0.7183908045977011,
+      "accuracy": 0.9367816091954023,
+      "balanced_accuracy": 0.9198387096774194,
+      "precision_by_class": {
+        "BUY": 0.952,
+        "DO_NOT_BUY": 0.8979591836734694
+      },
+      "recall_buy": 0.9596774193548387,
+      "recall_do_not_buy": 0.88,
+      "f1_buy": 0.9558232931726908,
+      "f1_do_not_buy": 0.888888888888889,
+      "false_negative_rate": 0.04032258064516129,
+      "support_by_class": {
+        "BUY": 124,
+        "DO_NOT_BUY": 50
+      },
+      "confusion_matrix": {
+        "true_negative": 44,
+        "false_positive": 6,
+        "false_negative": 5,
+        "true_positive": 119
+      },
+      "precision": 0.952,
+      "recall": 0.9596774193548387,
+      "f1": 0.9558232931726908,
+      "probability_summary": {
+        "mean": 0.7285293003826675,
+        "std": 0.36828000683209716,
+        "min": 0.00023750648545028307,
+        "max": 0.9999457475852686
+      }
+    },
+    "test": {
+      "split": "test",
+      "n_samples": 175,
+      "rows": 175,
+      "positive_rate_actual": 0.9428571428571428,
+      "positive_rate_pred": 0.9714285714285714,
+      "accuracy": 0.96,
+      "balanced_accuracy": 0.696969696969697,
+      "precision_by_class": {
+        "BUY": 0.9647058823529412,
+        "DO_NOT_BUY": 0.8
+      },
+      "recall_buy": 0.9939393939393939,
+      "recall_do_not_buy": 0.4,
+      "f1_buy": 0.9791044776119404,
+      "f1_do_not_buy": 0.5333333333333333,
+      "false_negative_rate": 0.006060606060606061,
+      "support_by_class": {
+        "BUY": 165,
+        "DO_NOT_BUY": 10
+      },
+      "confusion_matrix": {
+        "true_negative": 4,
+        "false_positive": 6,
+        "false_negative": 1,
+        "true_positive": 164
+      },
+      "precision": 0.9647058823529412,
+      "recall": 0.9939393939393939,
+      "f1": 0.9791044776119404,
+      "probability_summary": {
+        "mean": 0.9520113427906733,
+        "std": 0.13255923252330096,
+        "min": 0.10168890953213154,
+        "max": 0.9999948131235534
+      }
+    },
+    "prediction_paths": {
+      "train": "models/metrics/official/purchase_trigger_predictions_train__mixed_context.csv",
+      "validation": "models/metrics/official/purchase_trigger_predictions_validation__mixed_context.csv",
+      "test": "models/metrics/official/purchase_trigger_predictions_test__mixed_context.csv"
+    }
+  },
+  "quantity_optimizer": {
+    "scope": "mixed_context",
+    "selection_criterion": "validation_rmse",
+    "model_family": "ridge",
+    "target_column": "quantity_optimizer_target_tons",
+    "baseline_comparison": {
+      "name": "baseline_order_quantity_tons",
+      "column": "baseline_order_quantity_tons"
+    },
+    "feature_columns": [
+      "purchase_trigger_proba_heuristic",
+      "current_inventory_tons",
+      "expected_requirement_tons",
+      "lead_time_days",
+      "safety_coverage_days",
+      "expected_yield_rate",
+      "expected_waste_rate",
+      "replenishment_gap_tons",
+      "demand_index",
+      "supply_index",
+      "purchase_price_index",
+      "demand_supply_gap",
+      "manufacturing_context_profile__cooked_emulsion",
+      "manufacturing_context_profile__cured_embutido",
+      "manufacturing_context_profile__fresh_preparation",
+      "product_family__cooked_emulsion",
+      "product_family__cured_embutido",
+      "product_family__fresh_preparation",
+      "recipe_profile__fermented_dry_spiced",
+      "recipe_profile__high_throughput_standard",
+      "recipe_profile__marinated_short_run",
+      "shelf_life_class__long",
+      "shelf_life_class__medium",
+      "shelf_life_class__short"
+    ],
+    "feature_imputation": "train_median_with_neutral_fallback_for_all_missing_columns",
+    "evaluation_population": "rows_with_purchase_trigger_label_equal_1",
+    "leakage_audit": [
+      {
+        "stage": "quantity_optimizer",
+        "feature_name": "order_quantity_tons",
+        "present_in_dataset": false,
+        "present_in_feature_set": false,
+        "status": "pass",
+        "reason": "prohibited_downstream_or_decision_signal"
+      },
+      {
+        "stage": "quantity_optimizer",
+        "feature_name": "quantity_optimizer_recommendation_tons",
+        "present_in_dataset": false,
+        "present_in_feature_set": false,
+        "status": "pass",
+        "reason": "prohibited_downstream_or_decision_signal"
+      },
+      {
+        "stage": "quantity_optimizer",
+        "feature_name": "quantity_optimizer_target_tons",
+        "present_in_dataset": true,
+        "present_in_feature_set": false,
+        "status": "pass",
+        "reason": "prohibited_downstream_or_decision_signal"
+      },
+      {
+        "stage": "quantity_optimizer",
+        "feature_name": "excess_tons",
+        "present_in_dataset": false,
+        "present_in_feature_set": false,
+        "status": "pass",
+        "reason": "prohibited_downstream_or_decision_signal"
+      },
+      {
+        "stage": "quantity_optimizer",
+        "feature_name": "stockout_tons",
+        "present_in_dataset": false,
+        "present_in_feature_set": false,
+        "status": "pass",
+        "reason": "prohibited_downstream_or_decision_signal"
+      },
+      {
+        "stage": "quantity_optimizer",
+        "feature_name": "purchase_trigger_flag",
+        "present_in_dataset": false,
+        "present_in_feature_set": false,
+        "status": "pass",
+        "reason": "prohibited_downstream_or_decision_signal"
+      },
+      {
+        "stage": "quantity_optimizer",
+        "feature_name": "purchase_trigger_proba",
+        "present_in_dataset": false,
+        "present_in_feature_set": false,
+        "status": "pass",
+        "reason": "prohibited_downstream_or_decision_signal"
+      },
+      {
+        "stage": "quantity_optimizer",
+        "feature_name": "purchase_trigger_label",
+        "present_in_dataset": true,
+        "present_in_feature_set": false,
+        "status": "pass",
+        "reason": "prohibited_downstream_or_decision_signal"
+      }
+    ],
+    "train": {
+      "split": "train",
+      "model": "ridge",
+      "target": "quantity_optimizer_target_tons",
+      "n_samples": 442,
+      "rows": 442,
+      "mae": 3.9994645620436904,
+      "rmse": 6.63576813977863,
+      "r2": 0.9997257534492018,
+      "mape": 0.1856676630512659,
+      "prediction_bias": 1.20732385625199,
+      "prediction_mean": 172.01751881594004,
+      "actual_mean": 170.81019495968806,
+      "prediction_std": 399.39740103229974,
+      "actual_std": 400.7011749302037,
+      "variance_ratio": 0.9967462688420341,
+      "slope_pred_vs_actual": 0.9966189781186965,
+      "underprediction_rate": 0.1493212669683258,
+      "baseline_comparison": {
+        "split": "train",
+        "model": "baseline_order_quantity_tons",
+        "target": "quantity_optimizer_target_tons",
+        "n_samples": 442,
+        "rows": 442,
+        "mae": 4.93507267051678,
+        "rmse": 12.065701140216483,
+        "r2": 0.9990932994146666,
+        "mape": 0.040072596825396836
+      }
+    },
+    "validation": {
+      "split": "validation",
+      "model": "ridge",
+      "target": "quantity_optimizer_target_tons",
+      "n_samples": 124,
+      "rows": 124,
+      "mae": 12.900121645653218,
+      "rmse": 19.703367623362663,
+      "r2": 0.9992717128955891,
+      "mape": 0.1503558201612301,
+      "prediction_bias": -8.455566058344457,
+      "prediction_mean": 544.723928959687,
+      "actual_mean": 553.1794950180315,
+      "prediction_std": 723.4483500712929,
+      "actual_std": 730.1114349753975,
+      "variance_ratio": 0.9908738795409647,
+      "slope_pred_vs_actual": 0.990618441114985,
+      "underprediction_rate": 0.5161290322580645,
+      "baseline_comparison": {
+        "split": "validation",
+        "model": "baseline_order_quantity_tons",
+        "target": "quantity_optimizer_target_tons",
+        "n_samples": 124,
+        "rows": 124,
+        "mae": 16.420628261821772,
+        "rmse": 25.03340956316879,
+        "r2": 0.9988243942306193,
+        "mape": 0.04002719487179487
+      }
+    },
+    "test": {
+      "split": "test",
+      "model": "ridge",
+      "target": "quantity_optimizer_target_tons",
+      "n_samples": 165,
+      "rows": 165,
+      "mae": 31.064144337979435,
+      "rmse": 37.0957340841414,
+      "r2": 0.9978737931736812,
+      "mape": 0.09069090529075183,
+      "prediction_bias": -29.510352483504995,
+      "prediction_mean": 1016.8950002156735,
+      "actual_mean": 1046.4053526991784,
+      "prediction_std": 802.9753092172649,
+      "actual_std": 804.491047643092,
+      "variance_ratio": 0.9981159039242665,
+      "slope_pred_vs_actual": 0.9977273605235251,
+      "underprediction_rate": 0.9090909090909091,
+      "baseline_comparison": {
+        "split": "test",
+        "model": "baseline_order_quantity_tons",
+        "target": "quantity_optimizer_target_tons",
+        "n_samples": 165,
+        "rows": 165,
+        "mae": 31.679930543505172,
+        "rmse": 36.30726355666127,
+        "r2": 0.9979632177372101,
+        "mape": 0.0391860352201258
+      }
+    },
+    "prediction_paths": {
+      "train": "models/metrics/official/quantity_optimizer_predictions_train__mixed_context.csv",
+      "validation": "models/metrics/official/quantity_optimizer_predictions_validation__mixed_context.csv",
+      "test": "models/metrics/official/quantity_optimizer_predictions_test__mixed_context.csv"
+    }
+  },
+  "quantity_optimizer_baseline_comparison": {
+    "scope": "mixed_context",
+    "component": "quantity_optimizer",
+    "target": "quantity_optimizer_target_tons",
+    "target_column": "quantity_optimizer_target_tons",
+    "evaluation_filter": "purchase_trigger_label == 1",
+    "training_filter": "DummyRegressor and Ridge are fit only on train rows where purchase_trigger_label == 1.",
+    "baseline": "DummyRegressor(strategy='mean')",
+    "official_model": "Ridge",
+    "official_model_family": "ridge",
+    "selection_criterion": "validation_rmse",
+    "test_usage": "test split is reserved for final evaluation only; it is not used for fitting or model selection.",
+    "feature_columns": [
+      "purchase_trigger_proba_heuristic",
+      "current_inventory_tons",
+      "expected_requirement_tons",
+      "lead_time_days",
+      "safety_coverage_days",
+      "expected_yield_rate",
+      "expected_waste_rate",
+      "replenishment_gap_tons",
+      "demand_index",
+      "supply_index",
+      "purchase_price_index",
+      "demand_supply_gap",
+      "manufacturing_context_profile__cooked_emulsion",
+      "manufacturing_context_profile__cured_embutido",
+      "manufacturing_context_profile__fresh_preparation",
+      "product_family__cooked_emulsion",
+      "product_family__cured_embutido",
+      "product_family__fresh_preparation",
+      "recipe_profile__fermented_dry_spiced",
+      "recipe_profile__high_throughput_standard",
+      "recipe_profile__marinated_short_run",
+      "shelf_life_class__long",
+      "shelf_life_class__medium",
+      "shelf_life_class__short"
+    ],
+    "excluded_feature_columns": [
+      "quantity_optimizer_target_tons",
+      "purchase_trigger_label"
+    ],
+    "leakage_audit": [
+      {
+        "stage": "quantity_optimizer",
+        "feature_name": "order_quantity_tons",
+        "present_in_dataset": false,
+        "present_in_feature_set": false,
+        "status": "pass",
+        "reason": "prohibited_downstream_or_decision_signal"
+      },
+      {
+        "stage": "quantity_optimizer",
+        "feature_name": "quantity_optimizer_recommendation_tons",
+        "present_in_dataset": false,
+        "present_in_feature_set": false,
+        "status": "pass",
+        "reason": "prohibited_downstream_or_decision_signal"
+      },
+      {
+        "stage": "quantity_optimizer",
+        "feature_name": "quantity_optimizer_target_tons",
+        "present_in_dataset": true,
+        "present_in_feature_set": false,
+        "status": "pass",
+        "reason": "prohibited_downstream_or_decision_signal"
+      },
+      {
+        "stage": "quantity_optimizer",
+        "feature_name": "excess_tons",
+        "present_in_dataset": false,
+        "present_in_feature_set": false,
+        "status": "pass",
+        "reason": "prohibited_downstream_or_decision_signal"
+      },
+      {
+        "stage": "quantity_optimizer",
+        "feature_name": "stockout_tons",
+        "present_in_dataset": false,
+        "present_in_feature_set": false,
+        "status": "pass",
+        "reason": "prohibited_downstream_or_decision_signal"
+      },
+      {
+        "stage": "quantity_optimizer",
+        "feature_name": "purchase_trigger_flag",
+        "present_in_dataset": false,
+        "present_in_feature_set": false,
+        "status": "pass",
+        "reason": "prohibited_downstream_or_decision_signal"
+      },
+      {
+        "stage": "quantity_optimizer",
+        "feature_name": "purchase_trigger_proba",
+        "present_in_dataset": false,
+        "present_in_feature_set": false,
+        "status": "pass",
+        "reason": "prohibited_downstream_or_decision_signal"
+      },
+      {
+        "stage": "quantity_optimizer",
+        "feature_name": "purchase_trigger_label",
+        "present_in_dataset": true,
+        "present_in_feature_set": false,
+        "status": "pass",
+        "reason": "prohibited_downstream_or_decision_signal"
+      }
+    ],
+    "metrics": [
+      {
+        "model": "DummyRegressor",
+        "split": "train",
+        "rmse": 400.7011749302037,
+        "mae": 272.0314738724874,
+        "r2": 0.0,
+        "n_rows": 442
+      },
+      {
+        "model": "Ridge",
+        "split": "train",
+        "rmse": 6.63576813977863,
+        "mae": 3.9994645620436904,
+        "r2": 0.9997257534492018,
+        "n_rows": 442
+      },
+      {
+        "model": "DummyRegressor",
+        "split": "validation",
+        "rmse": 824.1777654783837,
+        "mae": 536.3048285513383,
+        "r2": -0.27427595210661004,
+        "n_rows": 124
+      },
+      {
+        "model": "Ridge",
+        "split": "validation",
+        "rmse": 19.703367623362663,
+        "mae": 12.900121645653218,
+        "r2": 0.9992717128955891,
+        "n_rows": 124
+      },
+      {
+        "model": "DummyRegressor",
+        "split": "test",
+        "rmse": 1189.0638023229546,
+        "mae": 901.0212475737835,
+        "r2": -1.1845796593242532,
+        "n_rows": 165
+      },
+      {
+        "model": "Ridge",
+        "split": "test",
+        "rmse": 37.0957340841414,
+        "mae": 31.064144337979435,
+        "r2": 0.9978737931736812,
+        "n_rows": 165
+      }
+    ]
+  },
+  "policy_simulation": {
+    "generated_at_utc": "2026-06-26T08:35:17.737829+00:00",
+    "n_periods": 175,
+    "rows": 175,
+    "baseline_excess_tons": 37374.49442683941,
+    "policy_excess_tons": 29260.17626877957,
+    "absolute_excess_reduction_tons": 8114.318158059839,
+    "aggregate_excess_reduction_pct": 21.710843939156476,
+    "baseline_stockout_tons": 0.0,
+    "policy_stockout_tons": 0.0,
+    "stockout_tons": 0.0,
+    "aggregate_stockout_change_pct": 0.0,
+    "guardrail": {
+      "name": "bounded_stockout_increase",
+      "allowed_stockout_increase_pct": 5.0
+    },
+    "stockout_guardrail_pass": true,
+    "trigger_rule_respected": true,
+    "baseline_policy_name": "operational_simple",
+    "proposed_policy_name": "two_stage_mixed_context",
+    "period_metrics_csv_path": "models/metrics/official/policy_simulation_period_latest__mixed_context.csv",
+    "scenario_metrics_csv_path": "models/metrics/official/policy_simulation_scenario_latest__mixed_context.csv"
+  },
+  "methodology_warnings": [
+    "External sources are contextual proxies, not internal plant history.",
+    "Synthetic plant variables remain synthetic unless replaced by customer-provided inputs.",
+    "Selection of the upstream reference model is based on validation metrics, not test.",
+    "order_quantity_tons is a calculated recommendation output, not an observed purchase record."
+  ]
+}

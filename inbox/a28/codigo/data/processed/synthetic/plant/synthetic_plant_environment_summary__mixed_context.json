@@ -1,0 +1,150 @@
+{
+  "environment_name": "procurement_training_environment",
+  "environment_role": "controlled_weekly_training_validation_and_policy_evaluation_environment_for_procurement_modeling",
+  "time_granularity": "weekly",
+  "validated_base_horizon_weeks": 1,
+  "validated_base_horizon_label": "W+1",
+  "target_projection_window_weeks": 4,
+  "dataset_summary": {
+    "rows": 1169,
+    "date_min": "2003-12-29",
+    "date_max": "2026-05-18",
+    "synthetic_columns": [
+      "synthetic_plant_production_volume",
+      "synthetic_plant_capacity_utilization",
+      "synthetic_yield_rate",
+      "synthetic_waste_rate",
+      "synthetic_raw_material_requirement",
+      "synthetic_inventory_coverage_days",
+      "synthetic_inventory_level",
+      "synthetic_lead_time_days",
+      "synthetic_procurement_need_pressure",
+      "synthetic_procurement_need_coverage_gap",
+      "synthetic_procurement_need_hybrid",
+      "synthetic_procurement_need_refined",
+      "synthetic_procurement_need",
+      "synthetic_planned_orders"
+    ],
+    "manufacturing_context_columns": [
+      "manufacturing_context_profile",
+      "product_family",
+      "process_type",
+      "recipe_profile",
+      "formulation_class",
+      "expected_yield",
+      "expected_waste",
+      "process_lead_time_days",
+      "shelf_life_class",
+      "priority_level",
+      "cost_sensitivity"
+    ],
+    "active_recipe_profile": null,
+    "recipe_registry_path": "config/manufacturing_profiles.yaml"
+  },
+  "manufacturing_context_summary": {
+    "profile_mix": {
+      "cured_embutido": 582,
+      "fresh_preparation": 467,
+      "cooked_emulsion": 120
+    },
+    "product_family_mix": {
+      "cured_embutido": 582,
+      "fresh_preparation": 467,
+      "cooked_emulsion": 120
+    },
+    "process_type_mix": {
+      "curing_maturation": 582,
+      "fresh_forming": 467,
+      "cooking_emulsification": 120
+    },
+    "recipe_profile_mix": {
+      "fermented_dry_spiced": 582,
+      "marinated_short_run": 467,
+      "high_throughput_standard": 120
+    },
+    "by_product_family": [
+      {
+        "product_family": "cooked_emulsion",
+        "synthetic_raw_material_requirement_mean": 1436.2203824349817,
+        "synthetic_inventory_coverage_days_mean": 11.899759495187375,
+        "synthetic_lead_time_days_mean": 4.083333333333333,
+        "synthetic_procurement_need_mean": 93.77218483613005
+      },
+      {
+        "product_family": "cured_embutido",
+        "synthetic_raw_material_requirement_mean": 1505.2303347393574,
+        "synthetic_inventory_coverage_days_mean": 13.27460747711383,
+        "synthetic_lead_time_days_mean": 9.0,
+        "synthetic_procurement_need_mean": 295.46763311465156
+      },
+      {
+        "product_family": "fresh_preparation",
+        "synthetic_raw_material_requirement_mean": 1635.368609964,
+        "synthetic_inventory_coverage_days_mean": 8.753647432496782,
+        "synthetic_lead_time_days_mean": 2.4518201284796572,
+        "synthetic_procurement_need_mean": 249.64613658411545
+      }
+    ],
+    "by_process_type": [
+      {
+        "process_type": "cooking_emulsification",
+        "synthetic_raw_material_requirement_mean": 1436.2203824349817,
+        "synthetic_inventory_coverage_days_mean": 11.899759495187375,
+        "synthetic_lead_time_days_mean": 4.083333333333333,
+        "synthetic_procurement_need_mean": 93.77218483613005
+      },
+      {
+        "process_type": "curing_maturation",
+        "synthetic_raw_material_requirement_mean": 1505.2303347393574,
+        "synthetic_inventory_coverage_days_mean": 13.27460747711383,
+        "synthetic_lead_time_days_mean": 9.0,
+        "synthetic_procurement_need_mean": 295.46763311465156
+      },
+      {
+        "process_type": "fresh_forming",
+        "synthetic_raw_material_requirement_mean": 1635.368609964,
+        "synthetic_inventory_coverage_days_mean": 8.753647432496782,
+        "synthetic_lead_time_days_mean": 2.4518201284796572,
+        "synthetic_procurement_need_mean": 249.64613658411545
+      }
+    ],
+    "by_recipe_profile": [
+      {
+        "recipe_profile": "fermented_dry_spiced",
+        "synthetic_raw_material_requirement_mean": 1505.2303347393574,
+        "synthetic_inventory_coverage_days_mean": 13.27460747711383,
+        "synthetic_lead_time_days_mean": 9.0,
+        "synthetic_procurement_need_mean": 295.46763311465156
+      },
+      {
+        "recipe_profile": "high_throughput_standard",
+        "synthetic_raw_material_requirement_mean": 1436.2203824349817,
+        "synthetic_inventory_coverage_days_mean": 11.899759495187375,
+        "synthetic_lead_time_days_mean": 4.083333333333333,
+        "synthetic_procurement_need_mean": 93.77218483613005
+      },
+      {
+        "recipe_profile": "marinated_short_run",
+        "synthetic_raw_material_requirement_mean": 1635.368609964,
+        "synthetic_inventory_coverage_days_mean": 8.753647432496782,
+        "synthetic_lead_time_days_mean": 2.4518201284796572,
+        "synthetic_procurement_need_mean": 249.64613658411545
+      }
+    ]
+  },
+  "target_roles": {
+    "canonical_target_column": "synthetic_procurement_need",
+    "canonical_variant": "pressure",
+    "canonical_target_role": "operational_procurement_pressure_metric",
+    "canonical_target_semantics": "weekly procurement pressure diagnosis",
+    "target_legacy_column": "synthetic_procurement_need",
+    "target_refined_column": "synthetic_procurement_need_refined",
+    "refined_variant": "hybrid",
+    "refined_target_role": "comparison_only_candidate",
+    "target_requirement_column": "synthetic_raw_material_requirement",
+    "requirement_target_role": "upstream_requirement_signal",
+    "decision_output_column": "order_quantity_tons",
+    "decision_role": "downstream_policy_layer",
+    "optimal_quantity_role": "downstream_decision_or_optimization_stage"
+  }
+}

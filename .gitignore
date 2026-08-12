@@ -86,6 +86,15 @@ __pycache__/
 inbox/a46/codigo/a46-dnsl-dairy-incrustaciones-atascos-maquinaria-procesado/data/processed/*.csv
 inbox/a46/codigo/a46-dnsl-dairy-incrustaciones-atascos-maquinaria-procesado/data/splits/*.csv
 
+# a09: dataset sintético + splits exportados (120 MB en total, regenerables con data_processing.py)
+inbox/a09/codigo/a09-del-cereals-el-clasificacion-objetos-anomalos/data/raw/*.csv
+inbox/a09/codigo/a09-del-cereals-el-clasificacion-objetos-anomalos/data/processed/*.csv
+inbox/a09/codigo/a09-del-cereals-el-clasificacion-objetos-anomalos/data/splits/*.csv
+inbox/a09/codigo/a09-del-cereals-el-clasificacion-objetos-anomalos/data/predictions/*.csv
+
 # Model artifacts live in S3 (artifacts/fixed/...) — never commit local copies
 # (refrigeracion_model.pkl for ml40 alone is 171 MB)
 /artifacts/
+
+# Claude Code local settings (per-machine permissions/config, not shared config)
+.claude/settings.local.json

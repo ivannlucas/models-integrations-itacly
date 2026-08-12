@@ -1,0 +1,29 @@
+{
+    "best_threshold": 0.41000000000000003,
+    "best_epoch": 133,
+    "n_epochs_trained": 163,
+    "validation_metrics (best_epoch)": {
+        "monitor_score": 0.7848015293060463,
+        "validation_f1": 0.9465020576131687,
+        "validation_auc": 0.9983330327807565,
+        "validation_acc": 0.9935
+    },
+    "test_metrics": {
+        "accuracy": 0.989,
+        "fallo_f1": 0.9054441260744985,
+        "fallo_auc": 0.9953633937559818,
+        "fallo_precision": 0.8876404494382022,
+        "fallo_recall": 0.9239766081871345,
+        "nofallo_specificity": 0.9929303640862496,
+        "macro_f1": 0.949802225840293,
+        "macro_precision": 0.9415168937481585,
+        "macro_recall": 0.958453486136692,
+        "nofallo_f1": 0.9941603256060875,
+        "nofallo_precision": 0.9953933380581148,
+        "nofallo_recall": 0.9929303640862496,
+        "tp": 158,
+        "fp": 20,
+        "tn": 2809,
+        "fn": 13
+    }
+}

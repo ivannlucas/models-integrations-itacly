@@ -1,0 +1,53 @@
+{
+  "train": {
+    "accuracy": 0.745125,
+    "fallo_f1": 0.540455262564796,
+    "fallo_precision": 0.9692805173807599,
+    "fallo_recall": 0.3746875,
+    "nofallo_f1": 0.8236616794949408,
+    "nofallo_precision": 0.7041253881413574,
+    "nofallo_recall": 0.9920833333333333,
+    "nofallo_specificity": 0.9920833333333333,
+    "macro_f1": 0.6820584710298685,
+    "macro_precision": 0.8367029527610587,
+    "macro_recall": 0.6833854166666666,
+    "tp": 1199,
+    "fp": 38,
+    "tn": 4762,
+    "fn": 2001
+  },
+  "val": {
+    "accuracy": 0.863125,
+    "fallo_f1": 0.5078651685393258,
+    "fallo_precision": 0.904,
+    "fallo_recall": 0.353125,
+    "nofallo_f1": 0.9205081669691471,
+    "nofallo_precision": 0.8596610169491525,
+    "nofallo_recall": 0.990625,
+    "nofallo_specificity": 0.990625,
+    "macro_f1": 0.7141866677542364,
+    "macro_precision": 0.8818305084745763,
+    "macro_recall": 0.671875,
+    "tp": 113,
+    "fp": 12,
+    "tn": 1268,
+    "fn": 207
+  },
+  "test": {
+    "accuracy": 0.8625,
+    "fallo_f1": 0.4969512195121951,
+    "fallo_precision": 0.9261363636363636,
+    "fallo_recall": 0.33958333333333335,
+    "nofallo_f1": 0.9203667953667954,
+    "nofallo_precision": 0.8574640287769785,
+    "nofallo_recall": 0.9932291666666667,
+    "nofallo_specificity": 0.9932291666666667,
+    "macro_f1": 0.7086590074394953,
+    "macro_precision": 0.8918001962066711,
+    "macro_recall": 0.6664062500000001,
+    "tp": 163,
+    "fp": 13,
+    "tn": 1907,
+    "fn": 317
+  }
+}

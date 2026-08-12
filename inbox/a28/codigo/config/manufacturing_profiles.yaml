@@ -1,0 +1,98 @@
+version: 1
+registry_name: manufacturing_profiles
+selection_key: recipe_profile
+profile_name_key: profile_name
+profiles:
+  - profile_name: cured_embutido
+    destination_profile: cured_long_horizon
+    recipe_profile: fermented_dry_spiced
+    product_family: cured_embutido
+    process_type: curing_maturation
+    formulation_class: cured
+    expected_yield: 0.79
+    expected_waste: 0.031
+    process_lead_time_days: 11.0
+    shelf_life_class: long
+    priority_level: planned_campaign
+    cost_sensitivity: high
+    production_multiplier: 0.93
+    coverage_adjustment_days: 2.4
+    lead_time_multiplier: 1.35
+    pressure_buffer_adjustment_days: 1.3
+    requirement_pressure_multiplier: 1.12
+    waste_stress_multiplier: 1.15
+    yield_stress_multiplier: 1.10
+    policy_target_coverage_adjustment_days: 1.5
+    policy_excess_penalty_multiplier: 1.10
+    policy_need_multiplier: 0.96
+    policy_max_order_multiplier: 0.92
+    selection_bias: 0.02
+    demand_sensitivity: 0.18
+    supply_stress_sensitivity: 0.26
+    seasonal_quarter_weights:
+      q1: 0.30
+      q2: -0.08
+      q3: -0.16
+      q4: 0.38
+  - profile_name: cooked_emulsion
+    destination_profile: cooked_standard_line
+    recipe_profile: high_throughput_standard
+    product_family: cooked_emulsion
+    process_type: cooking_emulsification
+    formulation_class: cooked_emulsion
+    expected_yield: 0.90
+    expected_waste: 0.018
+    process_lead_time_days: 4.0
+    shelf_life_class: medium
+    priority_level: standard_service
+    cost_sensitivity: medium
+    production_multiplier: 1.08
+    coverage_adjustment_days: 0.6
+    lead_time_multiplier: 0.95
+    pressure_buffer_adjustment_days: 0.4
+    requirement_pressure_multiplier: 1.00
+    waste_stress_multiplier: 0.90
+    yield_stress_multiplier: 0.90
+    policy_target_coverage_adjustment_days: 0.4
+    policy_excess_penalty_multiplier: 0.95
+    policy_need_multiplier: 1.00
+    policy_max_order_multiplier: 1.00
+    selection_bias: 0.18
+    demand_sensitivity: 0.12
+    supply_stress_sensitivity: 0.12
+    seasonal_quarter_weights:
+      q1: 0.10
+      q2: 0.18
+      q3: 0.12
+      q4: 0.08
+  - profile_name: fresh_preparation
+    destination_profile: fresh_short_shelf_life
+    recipe_profile: marinated_short_run
+    product_family: fresh_preparation
+    process_type: fresh_forming
+    formulation_class: fresh_prepared
+    expected_yield: 0.85
+    expected_waste: 0.027
+    process_lead_time_days: 2.5
+    shelf_life_class: short
+    priority_level: service_critical
+    cost_sensitivity: low
+    production_multiplier: 1.04
+    coverage_adjustment_days: -2.3
+    lead_time_multiplier: 0.72
+    pressure_buffer_adjustment_days: 0.8
+    requirement_pressure_multiplier: 1.08
+    waste_stress_multiplier: 1.05
+    yield_stress_multiplier: 1.00
+    policy_target_coverage_adjustment_days: -1.4
+    policy_excess_penalty_multiplier: 1.25
+    policy_need_multiplier: 1.06
+    policy_max_order_multiplier: 0.84
+    selection_bias: 0.04
+    demand_sensitivity: 0.32
+    supply_stress_sensitivity: 0.18
+    seasonal_quarter_weights:
+      q1: -0.10
+      q2: 0.34
+      q3: 0.40
+      q4: -0.04

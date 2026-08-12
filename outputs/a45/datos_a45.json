@@ -1,0 +1,76 @@
+{
+  "model_id": "a45",
+  "model_slug": "cereals-dnsl-critical-point-detection",
+  "fecha": "Agosto 2026",
+  "model_key": "ml45-cereals-dnsl-critical-point-detection",
+  "version": "1.0.0",
+  "descripcion": "Modelo híbrido Deep Neuro-Fuzzy (rama LSTM con atención temporal + rama neuro-difusa de reglas TSK) para la detección de anomalías en secadoras de grano de flujo mixto. A partir de ventanas de 240 lecturas consecutivas de 11 sensores IIoT, clasifica cada ventana como Fallo/No Fallo y añade, mediante una capa de explicabilidad propia (SHAP + reglas fuzzy), un estado interpretativo de Punto Crítico de Control (Normal, Vigilancia o Criticidad detectada) con la evidencia y recomendación asociadas.",
+  "task_type": "Clasificación binaria sobre series temporales (ventana deslizante de 240 pasos, solapamiento 50%)",
+  "framework": "PyTorch (LSTM + capa neuro-difusa TSK) con capa de explicabilidad SHAP (GradientExplainer) integrada",
+  "artefacto": "best_dnf_model.pt (checkpoint + configuración de arquitectura embebida), scaler.pkl (StandardScaler de secuencias y de estadísticas agregadas), xai_background.npy (background SHAP precalculado)",
+  "objetivo": "Anticipar fallos de proceso y de maquinaria en secadoras de grano de flujo mixto (atasco de filtro, degradación del quemador, atasco de descarga, deriva del sensor de humedad, fuga térmica del plenum) antes de que afecten a la calidad del grano o provoquen una parada no planificada, devolviendo además una explicación interpretable en vez de un score aislado.",
+  "caso_uso": "El operador o el sistema de monitorización sube un CSV con la telemetría de uno o varios ciclos de secado (11 sensores, timestamp y opcionalmente un identificador de ciclo). El modelo evalúa cada ventana de 240 lecturas consecutivas y devuelve, por ventana, la clasificación de anomalía y el estado de Punto Crítico de Control correspondiente, para decidir si el ciclo requiere revisión.",
+  "inputs": [
+    {"nombre": "timestamp", "tipo": "datetime u ordinal numérico", "descripcion": "Marca temporal de cada lectura; no se permite mezclar formato datetime y ordinal en el mismo fichero", "obligatorio": "Sí", "valor_defecto": "-"},
+    {"nombre": "cycle_id", "tipo": "string/int", "descripcion": "Identificador del ciclo de secado", "obligatorio": "No (si falta, se asume una única serie temporal continua)", "valor_defecto": "-"},
+    {"nombre": "plenum_temp", "tipo": "float (°C)", "descripcion": "Temperatura del plenum", "obligatorio": "Sí", "valor_defecto": "-"},
+    {"nombre": "exhaust_air_temp", "tipo": "float (°C)", "descripcion": "Temperatura del aire de escape", "obligatorio": "Sí", "valor_defecto": "-"},
+    {"nombre": "exhaust_air_humidity", "tipo": "float (%)", "descripcion": "Humedad del aire de escape", "obligatorio": "Sí", "valor_defecto": "-"},
+    {"nombre": "static_pressure", "tipo": "float (mbar)", "descripcion": "Presión estática", "obligatorio": "Sí", "valor_defecto": "-"},
+    {"nombre": "burner_power", "tipo": "float (%)", "descripcion": "Potencia del quemador", "obligatorio": "Sí", "valor_defecto": "-"},
+    {"nombre": "fan_speed", "tipo": "float (RPM)", "descripcion": "Velocidad del ventilador", "obligatorio": "Sí", "valor_defecto": "-"},
+    {"nombre": "discharge_frequency", "tipo": "float (Hz)", "descripcion": "Frecuencia del sistema de descarga", "obligatorio": "Sí", "valor_defecto": "-"},
+    {"nombre": "grain_moisture_in", "tipo": "float (%)", "descripcion": "Humedad de entrada del grano", "obligatorio": "Sí", "valor_defecto": "-"},
+    {"nombre": "ambient_temp", "tipo": "float (°C)", "descripcion": "Temperatura ambiente", "obligatorio": "Sí", "valor_defecto": "-"},
+    {"nombre": "ambient_humidity", "tipo": "float (%)", "descripcion": "Humedad ambiente", "obligatorio": "Sí", "valor_defecto": "-"},
+    {"nombre": "setpoint_temp", "tipo": "float (°C)", "descripcion": "Temperatura de consigna", "obligatorio": "Sí", "valor_defecto": "-"},
+    {"nombre": "fault_name", "tipo": "string", "descripcion": "Etiqueta de falla (NORMAL o tipo de falla) — solo necesaria para reentrenamiento", "obligatorio": "No (solo train)", "valor_defecto": "-"}
+  ],
+  "outputs": [
+    {"nombre": "predicted_anomaly_class", "tipo": "int (0/1)", "descripcion": "Clase binaria de anomalía por ventana", "rango": "{0, 1}", "interpretacion": "1 = ventana clasificada como Fallo"},
+    {"nombre": "anomaly_probability", "tipo": "float", "descripcion": "Probabilidad de anomalía (fusión de rama LSTM y rama fuzzy)", "rango": "[0, 1]", "interpretacion": "por encima del umbral (0,73) se considera Fallo"},
+    {"nombre": "Estado interpretativo", "tipo": "string", "descripcion": "Estado de Punto Crítico de Control", "rango": "Normal | Vigilancia | Criticidad detectada", "interpretacion": "combina la probabilidad, el margen respecto al umbral y si hay un perfil de falla catalogado con soporte suficiente"},
+    {"nombre": "Evidencia", "tipo": "string", "descripcion": "Explicación textual del estado", "rango": "texto libre", "interpretacion": "describe el perfil de variables que sustenta la clasificación"},
+    {"nombre": "Recomendacion", "tipo": "string", "descripcion": "Acción operativa recomendada", "rango": "texto libre", "interpretacion": "qué revisar en la secadora ante ese estado"}
+  ],
+  "metricas": [
+    {"nombre": "Accuracy", "valor": "0,9254", "descripcion": "Sobre el conjunto de test (2.400 ventanas, 600 ciclos), reportado en models/metrics/results.json del equipo de IA", "interpretacion": "el 92,5% de las ventanas se clasifican correctamente"},
+    {"nombre": "Macro F1", "valor": "0,8669", "descripcion": "F1 promedio entre las clases Fallo/No Fallo", "interpretacion": "equilibrio razonable entre ambas clases pese al desbalance (80% No Fallo)"},
+    {"nombre": "Fallo F1", "valor": "0,7787", "descripcion": "F1 de la clase Fallo (minoritaria)", "interpretacion": "peor que el macro F1, coherente con el desbalance de clases"},
+    {"nombre": "Fallo AUC", "valor": "0,9122", "descripcion": "Área bajo la curva ROC para la clase Fallo", "interpretacion": "buena capacidad de discriminación entre ventanas con y sin fallo"},
+    {"nombre": "Fallo Precision", "valor": "0,9574", "descripcion": "Precisión sobre las ventanas marcadas como Fallo", "interpretacion": "cuando el modelo avisa de un fallo, acierta el 95,7% de las veces"},
+    {"nombre": "Fallo Recall", "valor": "0,6563", "descripcion": "Sensibilidad sobre las ventanas con fallo real", "interpretacion": "el modelo solo detecta el 65,6% de los fallos reales — ver limitaciones"},
+    {"nombre": "Verificación post-integración (golden dataset)", "valor": "24/24 ventanas", "descripcion": "6 ciclos reales del split de test (1 normal + 5 tipos de falla), 4 ventanas cada uno, reproducidos exactamente (diferencia 0,0000) contra el plugin real servido por HTTP tras la integración — ver outputs/a45/verification_report.md", "interpretacion": "el plugin integrado reproduce bit a bit el comportamiento del modelo entregado por el equipo de IA, incluido un falso negativo real (ciclo con HUMIDITY_SENSOR_DRIFT no detectado)"}
+  ],
+  "limitaciones": [
+    {"tipo": "Recall moderado en fallos reales", "descripcion": "El recall de la clase Fallo es del 65,6% sobre el conjunto de test: aproximadamente 1 de cada 3 fallos reales no se detecta (falso negativo). Un resultado 'No Fallo' debe tratarse como una señal más, no como garantía de normalidad."},
+    {"tipo": "Dataset sintético", "descripcion": "El modelo se entrenó con un dataset generado sintéticamente por el equipo de IA (semilla fija). Las métricas y el comportamiento requieren validación con datos reales de secadoras antes de cualquier despliegue en producción."},
+    {"tipo": "Ventana mínima de 240 lecturas", "descripcion": "No se puede evaluar un ciclo con menos de 240 lecturas consecutivas (por ciclo, si se informa cycle_id); ciclos o ficheros más cortos no generan predicción."},
+    {"tipo": "Sin memoria del equipo de IA", "descripcion": "Este modelo se integró sin memoria (.docx) original — toda esta ficha se ha construido a partir del código entregado, la configuración y resultados de evaluación reales ya calculados por el equipo de IA, no de una memoria narrativa."}
+  ],
+  "fichero_nombre": "data/splits/test.csv (6 ciclos completos usados como golden dataset: 2400, 2405, 2407, 2412, 2423, 2440)",
+  "fichero_registros": "600 filas por ciclo (10 horas a 1 lectura/minuto) → 4 ventanas de 240 lecturas por ciclo",
+  "fichero_resultado": "24 ventanas de salida (4 por ciclo x 6 ciclos), todas reproducidas exactamente frente al valor esperado del manifest — ver tabla de verificación en outputs/a45/verification_report.md",
+  "observaciones_tecnicas": "Requiere PyTorch (CPU o GPU) y la librería shap (GradientExplainer para la rama LSTM) — única dependencia añadida al proyecto por este modelo, ya que porta su propia capa de explicabilidad en vez de delegarla al servicio externo. Artefactos: checkpoint ~147 KB, scaler ~3,5 KB, background SHAP ~2 MB. Validado en CPU en el entorno de integración (la GPU física del entorno no era compatible con la build de PyTorch usada, sin impacto esperado en producción con GPU compatible).",
+
+  "que_no_responde": "El modelo no indica qué pieza física exacta hay que reparar ni en qué plazo fallará — da una alerta de área/subsistema (térmico, ventilación, descarga, humedad) y una recomendación de revisión, no un diagnóstico de pieza.",
+  "entradas_contexto": "Los datos provienen de los sensores IIoT instalados en la propia secadora (temperatura, humedad, presión, potencia del quemador, velocidad del ventilador, frecuencia de descarga), registrados de forma continua durante el ciclo de secado.",
+  "ejemplo_interpretacion": "Si para una ventana el modelo devuelve anomaly_probability=0,96 con Estado interpretativo='Criticidad detectada' y Evidencia referida a un perfil térmico-humedad, se interpreta como: alta probabilidad de fallo, con un patrón ya catalogado que combina temperatura y humedad — conviene revisar cuanto antes el sistema de transferencia térmica y evacuación de humedad. Si en cambio devuelve anomaly_probability=0,09 con Estado='Normal', la ventana no muestra indicios relevantes de anomalía.",
+  "margen_error": "En el conjunto de prueba, cuando el modelo avisa de un fallo acierta en torno al 96% de las veces, pero solo detecta alrededor de 2 de cada 3 fallos reales — es decir, es fiable cuando avisa, pero no hay que confiar en un 'No Fallo' como confirmación absoluta de normalidad.",
+  "revisar_manualmente": [
+    "Cuando el estado sea 'Vigilancia' sin un perfil de falla claro identificado, conviene contrastar con el histórico reciente de la secadora antes de decidir.",
+    "Ventanas con probabilidad de anomalía cercana al umbral (0,73) deben revisarse con margen de duda, no como blanco o negro.",
+    "Cualquier ciclo con datos reales (no sintéticos) debe tratarse con más cautela hasta validar el modelo contra ese tipo de datos."
+  ],
+  "que_no_hace": [
+    "No sustituye la inspección física periódica de la maquinaria.",
+    "No garantiza la detección de todos los fallos reales (recall 65,6%).",
+    "No identifica la pieza exacta a reparar, solo el subsistema/perfil implicado.",
+    "No ha sido validado todavía con datos reales de planta, solo con datos sintéticos."
+  ],
+  "puede_equivocarse": "Sí puede equivocarse: sobre todo puede dejar pasar fallos reales (falso negativo) con más frecuencia que dar falsas alarmas. Es una ayuda para priorizar revisiones, no una garantía de que la secadora está en buen estado cuando no avisa.",
+  "kpis": [
+    {"kpi": "Fiabilidad de la alerta de fallo", "valor_umbral": "~96% de precisión", "descripcion": "Cuando el sistema avisa de un fallo, en el conjunto de prueba acertó en torno al 96% de las veces — pocas falsas alarmas."},
+    {"kpi": "Cobertura de detección de fallos", "valor_umbral": "~66% de recall", "descripcion": "De cada 3 fallos reales en el conjunto de prueba, el sistema detectó 2 — no hay un compromiso de negocio formal sobre este umbral, ya que no existe memoria original con KPIs de negocio para este modelo; esta cifra requiere validación adicional con datos reales antes de fijar un objetivo de negocio."}
+  ]
+}
