@@ -157,6 +157,16 @@ from app.plugins.ml40_meat_refrigeration_aeration_fault_diagnosis.train_dto impo
     TrainResponse as Ml40Meat_TrainResp,
 )
 
+from app.plugins.ml3_wine_disease_pest_forecast.plugin import Ml3WineDiseasePestForecastPlugin
+from app.plugins.ml3_wine_disease_pest_forecast.predict_dto import (
+    PredictRequest as Ml3Wine_Request,
+    PredictResponse as Ml3Wine_Response,
+)
+from app.plugins.ml3_wine_disease_pest_forecast.train_dto import (
+    TrainRequest as Ml3Wine_TrainReq,
+    TrainResponse as Ml3Wine_TrainResp,
+)
+
 
 # ── Registry entry dataclass ──────────────────────────────────────────────────
 
@@ -333,5 +343,16 @@ REGISTRY: list[ModelEntry] = [
         extra_predict_exceptions=(InsufficientCycleHistoryError, UnknownDiagnosisSystemError),
         train_request_type=Ml40Meat_TrainReq,
         train_response_type=Ml40Meat_TrainResp,
+    ),
+    ModelEntry(
+        model_id="ml3-wine-disease-pest-forecast",
+        prefix="/models/ml3-wine-disease-pest-forecast",
+        version="1.0.0",
+        plugin_class=Ml3WineDiseasePestForecastPlugin,
+        predict_request_type=Ml3Wine_Request,
+        predict_response_type=Ml3Wine_Response,
+        extra_predict_exceptions=(),
+        train_request_type=Ml3Wine_TrainReq,
+        train_response_type=Ml3Wine_TrainResp,
     ),
 ]

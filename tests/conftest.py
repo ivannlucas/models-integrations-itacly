@@ -170,6 +170,16 @@ from app.plugins.ml40_meat_refrigeration_aeration_fault_diagnosis.train_dto impo
     TrainRequest as Ml40Meat_TrainReq,
     TrainResponse as Ml40MeatTrainResp,
 )
+from app.plugins.ml3_wine_disease_pest_forecast.predict_dto import (
+    PredictBatchResponse as Ml3WineBatchResp,
+    PredictInlineResponse as Ml3WineInlineResp,
+    PredictRequest as Ml3Wine_Request,
+    PredictResponse as Ml3Wine_Response,
+)
+from app.plugins.ml3_wine_disease_pest_forecast.train_dto import (
+    TrainRequest as Ml3Wine_TrainReq,
+    TrainResponse as Ml3WineTrainResp,
+)
 
 # ── ModelEntry dataclass (local copy — avoids importing app.registry which loads real plugins) ───
 
@@ -903,6 +913,67 @@ def _ml40_meat_train(plugin: FakePlugin, *, data_path: str) -> Ml40MeatTrainResp
     )
 
 
+def _ml3_wine_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> Ml3WineInlineResp:
+    """Fake inline response for the ml3 wine disease/pest Deep Ensemble plugin."""
+    return Ml3WineInlineResp(
+        model_id="ml3-wine-disease-pest-forecast",
+        id_serie=552,
+        fecha_evaluacion="2021-06-18 00:00:00",
+        diagnostico_ia="ALTICA",
+        confianza_clasificacion=0.960752,
+        grado_severidad=0.758976,
+        tratamiento_recomendado=(
+            "Químico: Generalmente controlado por tratamientos para Lobesia. "
+            "Específicos: Lambda cihalotrin y clorpirifos."
+        ),
+        probabilidades_clases={
+            "ALTICA": 0.960752, "BLACK_ROT": 0.0, "BOTRYTIS": 0.0, "EMPOASCA": 0.0,
+            "ERINOSIS": 0.0, "ESCA": 0.0, "HEALTHY": 0.0, "LOBESIA": 0.0,
+            "MILDIU": 0.0, "OIDIO": 0.039248, "RED_MITE": 0.0,
+        },
+        model_name="ml3-wine-disease-pest-forecast",
+        xai_feature_values={"Temp_Amb_C": 16.6, "Hum_Rel_Pct": 91.0},
+    )
+
+
+def _ml3_wine_batch(plugin: FakePlugin, *, data_path: str) -> Ml3WineBatchResp:
+    """Fake batch response for the ml3 wine disease/pest Deep Ensemble plugin."""
+    return Ml3WineBatchResp(
+        model_id="ml3-wine-disease-pest-forecast",
+        predictions=[
+            {
+                "id_serie": 552,
+                "fecha_evaluacion": "2021-06-18 00:00:00",
+                "diagnostico_ia": "ALTICA",
+                "confianza_clasificacion": 0.960752,
+                "grado_severidad": 0.758976,
+                "tratamiento_recomendado": "Diagnóstico: Planta sana.",
+            }
+        ],
+        output_path=None,
+    )
+
+
+def _ml3_wine_train(plugin: FakePlugin, *, data_path: str) -> Ml3WineTrainResp:
+    """Fake retraining response for the ml3 wine disease/pest Deep Ensemble plugin."""
+    return Ml3WineTrainResp(
+        detail="Reentrenamiento completo del Deep Ensemble (LSTM + CNN + BiGRU) desde cero.",
+        n_windows_train=100000,
+        n_windows_val=21400,
+        n_windows_test=21400,
+        epochs_executed=50,
+        accuracy=0.7052,
+        precision_macro=0.7494,
+        recall_macro=0.7198,
+        f1_macro=0.7259,
+        f1_weighted=0.7055,
+        mae=0.0610,
+        mse=0.00876,
+        r2=0.8903,
+        upload_warning=None,
+    )
+
+
 FAKE_FACTORIES: dict[str, tuple[Callable, Callable]] = {
     "ml46-dairy-fouling-clog-detection": (_ml46_dairy_inline, _ml46_dairy_batch),
     "ml40-meat-refrigeration-aeration-fault-diagnosis": (_ml40_meat_inline, _ml40_meat_batch),
@@ -920,6 +991,7 @@ FAKE_FACTORIES: dict[str, tuple[Callable, Callable]] = {
     "ml8-cereals-img-anomaly-detector": (_ml8_cereals_inline, _ml8_cereals_batch),
     "ml5-meat-cow-behaviour": (_ml5_cow_inline, _ml5_cow_batch),
     "m47-dnsl-fallas-maquinaria-pasteurizado": (_m47_inline, _m47_batch),
+    "ml3-wine-disease-pest-forecast": (_ml3_wine_inline, _ml3_wine_batch),
 }
 
 TRAIN_FACTORIES: dict[str, Callable] = {
@@ -930,6 +1002,7 @@ TRAIN_FACTORIES: dict[str, Callable] = {
     "modelo10-lacteo": _lacteo_train,
     "ml8-cereals-img-anomaly-detector": _ml8_cereals_train,
     "ml30-meat-traceability-detection": _ml30_trace_train,
+    "ml3-wine-disease-pest-forecast": _ml3_wine_train,
 }
 
 
@@ -1093,6 +1166,17 @@ TEST_REGISTRY: list[ModelEntry] = [
         extra_predict_exceptions=(InsufficientCycleHistoryError, UnknownDiagnosisSystemError),
         train_request_type=Ml40Meat_TrainReq,
         train_response_type=Ml40MeatTrainResp,
+    ),
+    ModelEntry(
+        model_id="ml3-wine-disease-pest-forecast",
+        prefix="/models/ml3-wine-disease-pest-forecast",
+        version="1.0.0",
+        plugin_class=FakePlugin,
+        predict_request_type=Ml3Wine_Request,
+        predict_response_type=Ml3Wine_Response,
+        extra_predict_exceptions=(),
+        train_request_type=Ml3Wine_TrainReq,
+        train_response_type=Ml3WineTrainResp,
     ),
 ]
 
