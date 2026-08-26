@@ -1,0 +1,51 @@
+[
+  {
+    "candidate_name": "logistic",
+    "best_params": {
+      "C": 1.0,
+      "penalty": "l1",
+      "solver": "liblinear"
+    },
+    "cv_best_score": 0.6627925327351509,
+    "metrics_test": {
+      "MAE": null,
+      "Pearson": null,
+      "DA": 0.6261111111111111,
+      "AUC": 0.752315249199933
+    }
+  },
+  {
+    "candidate_name": "rf",
+    "best_params": {
+      "max_depth": 3,
+      "min_samples_leaf": 1,
+      "n_estimators": 500
+    },
+    "cv_best_score": 0.7648049891103241,
+    "metrics_test": {
+      "MAE": null,
+      "Pearson": null,
+      "DA": 0.5811111111111111,
+      "AUC": 0.5341733824953974
+    }
+  },
+  {
+    "candidate_name": "xgb",
+    "best_params": {
+      "subsample": 0.7,
+      "reg_lambda": 3.0,
+      "reg_alpha": 0.5,
+      "n_estimators": 350,
+      "max_depth": 3,
+      "learning_rate": 0.05,
+      "colsample_bytree": 0.7
+    },
+    "cv_best_score": 0.7528303877410213,
+    "metrics_test": {
+      "MAE": null,
+      "Pearson": null,
+      "DA": 0.5966666666666667,
+      "AUC": 0.5532558033382191
+    }
+  }
+]

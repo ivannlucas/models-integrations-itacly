@@ -211,6 +211,12 @@ from app.plugins.ml3_wine_disease_pest_forecast.train_dto import (
     TrainResponse as Ml3Wine_TrainResp,
 )
 
+from app.plugins.m21_cereal_price_spatial.plugin import M21CerealPriceSpatialPlugin
+from app.plugins.m21_cereal_price_spatial.predict_dto import (
+    PredictRequest as M21_Request,
+    PredictResponse as M21_Response,
+)
+
 
 # ── Registry entry dataclass ──────────────────────────────────────────────────
 
@@ -440,5 +446,14 @@ REGISTRY: list[ModelEntry] = [
         extra_predict_exceptions=(),
         train_request_type=Ml3Wine_TrainReq,
         train_response_type=Ml3Wine_TrainResp,
+    ),
+    ModelEntry(
+        model_id="m21-cereal-price-spatial",
+        prefix="/models/m21-cereal-price-spatial",
+        version="1.0.0",
+        plugin_class=M21CerealPriceSpatialPlugin,
+        predict_request_type=M21_Request,
+        predict_response_type=M21_Response,
+        extra_predict_exceptions=(),
     ),
 ]

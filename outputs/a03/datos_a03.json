@@ -1,0 +1,89 @@
+{
+  "model_id": "a03",
+  "model_slug": "vine-disease-pest-del-ensemble",
+  "fecha": "Julio 2026",
+  "model_key": "ml3-wine-disease-pest-forecast",
+  "version": "3.0",
+
+  "descripcion": "Modelo de Deep Ensemble Learning (DEL) que combina tres arquitecturas de Deep Learning — LSTM, 1D-CNN y BiGRU — para predecir de forma simultánea la enfermedad o plaga de la vid (clasificación multiclase entre 11 estados fitosanitarios) y su grado de severidad (regresión continua 0-1). El sistema ingiere ventanas temporales de 168 horas (7 días) de telemetría agroclimática procedente de sensores IIoT y genera un diagnóstico con tratamiento fitosanitario recomendado.",
+
+  "task_type": "clasificación multiclase + regresión (multitarea)",
+
+  "framework": "TensorFlow / Keras (backend Keras 3), scikit-learn, pandas, numpy, joblib, pyarrow",
+
+  "artefacto": "M1_LSTM.keras, M2_CNN.keras, M3_BiGRU.keras, scaler.pkl, label_encoder.pkl",
+
+  "objetivo": "Optimizar el monitoreo de viñedos en tiempo real mediante predicción temprana de enfermedades y plagas, permitiendo aplicar tratamientos fitosanitarios solo cuando son necesarios. El KPI de negocio es lograr una reducción del 10% en el consumo de productos fitosanitarios respecto al manejo preventivo sistemático convencional.",
+
+  "caso_uso": "El sistema se emplea como herramienta de soporte a la decisión en viticultura de precisión. Se alimenta de series temporales horarias procedentes de redes de sensores IIoT distribuidas por parcelas (temperatura, humedad, lluvia, viento, CO2, VOC, pH del suelo, etc.). El modelo procesa las últimas 168 horas de datos y emite un diagnóstico del estado fitosanitario más probable junto con el grado de severidad y un protocolo de tratamiento. El resultado se presenta en un CSV con el diagnóstico, confianza, severidad y tratamiento recomendado.",
+
+  "inputs": [
+    {"nombre": "Fecha", "tipo": "datetime", "descripcion": "Timestamp de cada registro horario. Obligatorio: de él se derivan las variables cíclicas Hora_Sin y Hora_Cos.", "obligatorio": "Sí", "valor_defecto": "-"},
+    {"nombre": "Temp_Amb_C", "tipo": "float", "descripcion": "Temperatura ambiente medida por sensor meteorológico (°C). Rango de entrenamiento: [-8.7, 41.1].", "obligatorio": "Sí", "valor_defecto": "-"},
+    {"nombre": "Hum_Rel_Pct", "tipo": "float", "descripcion": "Humedad relativa ambiental (%). Rango de entrenamiento: [3.0, 100.0].", "obligatorio": "Sí", "valor_defecto": "-"},
+    {"nombre": "Lluvia_mm", "tipo": "float", "descripcion": "Pluviosidad en la ventana de muestreo (mm). Rango de entrenamiento: [0.0, 13.8].", "obligatorio": "Sí", "valor_defecto": "-"},
+    {"nombre": "Viento_kmh", "tipo": "float", "descripcion": "Velocidad media del viento (km/h). Rango de entrenamiento: [0.0, 51.6].", "obligatorio": "Sí", "valor_defecto": "-"},
+    {"nombre": "Hum_Suelo_Pct", "tipo": "float", "descripcion": "Humedad volumétrica del terreno (%). Rango de entrenamiento: [18.42, 35.0].", "obligatorio": "Sí", "valor_defecto": "-"},
+    {"nombre": "pH_Suelo", "tipo": "float", "descripcion": "Acidez del terreno (pH). Rango de entrenamiento: [5.92, 7.51].", "obligatorio": "Sí", "valor_defecto": "-"},
+    {"nombre": "CO2_ppm", "tipo": "float", "descripcion": "Dióxido de carbono por millón (ppm). Rango de entrenamiento: [352.92, 522.54].", "obligatorio": "Sí", "valor_defecto": "-"},
+    {"nombre": "VOC_ppb", "tipo": "float", "descripcion": "Compuestos orgánicos volátiles emitidos por la planta, biomarcador temprano de infección (ppb). Rango de entrenamiento: [-18.17, 1983.29].", "obligatorio": "Sí", "valor_defecto": "-"},
+    {"nombre": "ID_Serie", "tipo": "int", "descripcion": "Identificador único de serie temporal (sensor/parcela). Recomendado para agrupar series y evitar mezclar ventanas entre IDs.", "obligatorio": "No (recomendado)", "valor_defecto": "Si no viene, todo el input se trata como una sola serie."}
+  ],
+
+  "outputs": [
+    {"nombre": "diagnostico_ia", "tipo": "string", "descripcion": "Patología o estado ganador tras Soft Voting del ensemble entre 11 clases: ALTICA, BLACK_ROT, BOTRYTIS, EMPOASCA, ERINOSIS, ESCA, HEALTHY, LOBESIA, MILDIU, OIDIO, RED_MITE.", "rango": "11 clases discretas", "interpretacion": "Es la enfermedad o plaga más probable según el consenso de las tres redes neuronales."},
+    {"nombre": "confianza_clasificacion", "tipo": "float", "descripcion": "Probabilidad media (0-1) de la clase ganadora, obtenida del promedio de las salidas Softmax de las tres redes.", "rango": "0.0 - 1.0", "interpretacion": "Valores más altos indican mayor certeza del modelo en el diagnóstico emitido."},
+    {"nombre": "grado_severidad", "tipo": "float", "descripcion": "Grado de infección predicho, media aritmética de las tres salidas sigmoid de regresión del ensemble.", "rango": "0.0 - 1.0", "interpretacion": "Valores cercanos a 0 indican daño mínimo; valores cercanos a 1 indican severidad alta de la patología detectada."},
+    {"nombre": "tratamiento_recomendado", "tipo": "string", "descripcion": "Protocolo químico, biológico, biotecnológico o cultural recomendado según la clase predicha, extraído de una base de conocimiento editable en config.yaml.", "rango": "Texto descriptivo", "interpretacion": "Recomendación orientativa basada en la literatura fitosanitaria; requiere validación por un agrónomo antes de su aplicación."},
+    {"nombre": "fecha_evaluacion", "tipo": "datetime", "descripcion": "Timestamp de la última fila de la ventana (hora actual de la predicción).", "rango": " datetime", "interpretacion": "Momento temporal al que corresponde el diagnóstico emitido."}
+  ],
+
+  "metricas": [
+    {"nombre": "Accuracy (Clasificación)", "valor": "0.7052", "descripcion": "Exactitud global en el conjunto de test hold-out (70/15/15 por serie, seed 42, 149 series de test).", "interpretacion": "El modelo acierta la patología correcta o el estado sano en el 70.52% de los casos evaluados."},
+    {"nombre": "Precision Macro (Clasificación)", "valor": "0.7494", "descripcion": "Fiabilidad media de las alertas emitidas por clase en test.", "interpretacion": "Cuando el modelo predice una enfermedad concreta, acierta el 74.94% de las veces, minimizando falsos positivos."},
+    {"nombre": "Recall Macro (Clasificación)", "valor": "0.7198", "descripcion": "Capacidad de detección media por clase en test.", "interpretacion": "El modelo identifica exitosamente el 71.98% de los casos reales de enfermedad."},
+    {"nombre": "F1-Score Macro (Clasificación)", "valor": "0.7259", "descripcion": "Equilibrio medio entre precisión y recall por clase en test. Métrica principal de éxito del proyecto.", "interpretacion": "Supera el umbral objetivo (≥0.70), validando la viabilidad del ensamble para filtrar tratamientos innecesarios."},
+    {"nombre": "MAE (Regresión)", "valor": "0.0610", "descripcion": "Error absoluto medio en la predicción del grado de infección (0-1) en test.", "interpretacion": "El modelo se desvía de media solo 6.1 puntos porcentuales respecto al valor real de severidad."},
+    {"nombre": "RMSE (Regresión)", "valor": "0.0936", "descripcion": "Raíz del error cuadrático medio en regresión en test.", "interpretacion": "El margen de error estándar se mueve en torno al 9.36%, confirmando estimaciones de severidad estables."},
+    {"nombre": "R2 (Regresión)", "valor": "0.8903", "descripcion": "Coeficiente de determinación en test. Métrica principal de regresión del proyecto.", "interpretacion": "El modelo explica el 89.03% de la varianza real en la evolución de las infecciones, superando el umbral objetivo (≥0.85)."},
+    {"nombre": "F1-Score Operativo (por familias de tratamiento)", "valor": "0.8469", "descripcion": "F1-Score agrupando las 11 clases en familias funcionales de tratamiento agronómico.", "interpretacion": "Cuando se agrupan las patologías por protocolo de actuación, la precisión alcanza el 84.69%, validando la utilidad práctica para el viticultor."}
+  ],
+
+  "limitaciones": [
+    {"tipo": "Dataset sintético", "descripcion": "El 100% del dataset es sintético (generado por vid_simulator.py con clima histórico real y comportamiento biológico simulado). No se ha validado con telemetría de campo real, por lo que las métricas de test son indicativas y requieren validación cruzada con diagnósticos empíricos de parcela."},
+    {"tipo": "11 clases fijas", "descripcion": "El clasificador está restringido a las 11 patologías parametrizadas. Patologías exóticas, mutaciones o plagas invasoras no catalogadas serán indetectables o generarán falsos positivos al forzar al vector Softmax a clasificar dentro de las fronteras de decisión conocidas."},
+    {"tipo": "Confusión intra-fúngica", "descripcion": "Existe solapamiento en las firmas climáticas de enfermedades fúngicas dependientes de alta humedad libre (Botrytis, Mildiu, Black Rot), lo que degrada el rendimiento de estas clases específicas (F1 entre 0.42 y 0.58)."},
+    {"tipo": "Brecha Sim-to-Real", "descripcion": "Se anticipa una degradación controlada de las métricas nominales al operar sobre viñedos reales debido a la variabilidad microclimática a nivel de hoja, la resistencia genética diferencial de variedades y el impacto de tratamientos previos."},
+    {"tipo": "Ruido instrumental no modelado", "descripcion": "El dataset no contempla errores de hardware de campo: descalibraciones de sensores, pérdidas de paquetes de red o degradación química de sondas edáficas, que afectarán al rendimiento en producción."},
+    {"tipo": "Ventana mínima de 168h", "descripcion": "El modelo requiere series de al menos 168 registros horarios continuos. Con datos insuficientes, el código realiza padding por repetición degradando la calidad de la predicción."},
+    {"tipo": "Uso exclusivo como soporte", "descripcion": "El modelo es una herramienta de apoyo a la decisión; no sustituye el juicio empírico ni la supervisión de ingenieros agrónomos. Cualquier intervención fitosanitaria requiere validación humana obligatoria en campo."}
+  ],
+
+  "fichero_nombre": "data_vin_raw.parquet (split test: 149 series, 224.374 ventanas de 168h)",
+  "fichero_registros": "224.374 ventanas de test (149 series horarias continuas)",
+  "fichero_resultado": "CSV con columnas Fecha_Evaluacion, Diagnostico_IA, Confianza_Clasificacion, Grado_Severidad, Tratamiento_Recomendado, ID_Serie. Diagnóstico consistente con el modelo entregado (tolerancia clase_exact=true, float_rtol=0.01).",
+
+  "observaciones_tecnicas": "Hardware de referencia: Intel Core i9-14900K, NVIDIA RTX 4070, 64 GB RAM. Entrenamiento: ~80 min (GPU); inferencia: ~0.2 s por ventana. Artefactos totales: ~5 GB (código + datasets + modelos .keras + scalers). Entorno: Python 3.10, TensorFlow ≥2.15.0, Keras ≥3.0.0. El reentrenamiento desde cero es posible pero costoso (50 epochs x 3 arquitecturas); en producción se usan los artefactos fijos (.keras, .pkl) descargados del repositorio.",
+
+  "que_no_responde": "El modelo no garantiza la certeza del diagnóstico; no sustituye el análisis fenológico en campo ni la supervisión de un agrónomo experto.",
+  "entradas_contexto": "Los datos provienen de redes de sensores IIoT distribuidas por las parcelas del viñedo, que registran telemetría agroclimática de forma horaria continua.",
+  "ejemplo_interpretacion": "Si el modelo emite Diagnostico_IA=MILDIU con Confianza_Clasificacion=0.76 y Grado_Severidad=0.63, se interpreta que hay un 76% de probabilidad de que la parcela esté afectada por Mildiu, con un nivel de severidad moderado-alto (63%). Se recomienda inspeccionar visualmente la parcela y, en caso de confirmación, aplicar el protocolo de tratamiento anti-Mildiu indicado.",
+  "margen_error": "El error medio absoluto en la estimación de severidad es de 6.1 puntos porcentuales (MAE=0.061). En la práctica, una diferencia de severidad inferior a dicho margen no es significativa y no debería alterar la decisión de tratamiento.",
+  "revisar_manualmente": [
+    "Cualquier predicción con confianza de clasificación inferior a 0.50 debe ser validada en campo antes de actuar.",
+    "Las predicciones de patologías fúngicas (Botrytis, Mildiu, Black Rot) tienen mayor tasa de confusión entre sí; conviene confirmar visualmente.",
+    "Si la serie de entrada tiene menos de 168 horas y se aplica padding, la predicción es menos fiable."
+  ],
+  "que_no_hace": [
+    "No sustituye el juicio agronómico ni el monitoreo visual de campo.",
+    "No predice la evolución futura de la infección; solo diagnostica el estado actual basándose en las últimas 168 horas.",
+    "No tiene en cuenta tratamientos fitosanitarios previos aplicados a la parcela.",
+    "No es capaz de detectar patologías no incluidas en las 11 clases de entrenamiento."
+  ],
+  "puede_equivocarse": "Sí, el modelo puede equivocarse, especialmente en patologías fúngicas con firmas climáticas similares (F1 entre 0.42 y 0.58 para Botrytis, Mildiu y Black Rot). La tasa global de acierto es del 70.5% en clasificación. Es una herramienta de apoyo que mejora la eficiencia del manejo fitosanitario, pero no una garantía de diagnóstico.",
+  "kpis": [
+    {"kpi": "Reducción de fitosanitarios", "valor_umbral": "10%", "descripcion": "El KPI de negocio es lograr una reducción del 10% en el consumo de productos fitosanitarios respecto al manejo preventivo sistemático, filtrando los tratamientos rutinarios en ventanas que el modelo clasifica correctamente como sanas (Verdaderos Negativos)."},
+    {"kpi": "F1-Score Macro", "valor_umbral": "≥ 0.70", "descripcion": "Métrica técnica de clasificación que garantiza equilibrio entre precisión y recall para las 11 clases, minimizando tanto falsos positivos (tratamientos innecesarios) como falsos negativos (infecciones no detectadas)."},
+    {"kpi": "R² en regresión", "valor_umbral": "≥ 0.85", "descripcion": "El modelo debe explicar al menos el 85% de la varianza en el grado de infección para que las estimaciones de severidad sean fiables y útiles para la toma de decisiones."}
+  ]
+}

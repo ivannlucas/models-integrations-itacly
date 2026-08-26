@@ -219,6 +219,16 @@ from app.plugins.ml3_wine_disease_pest_forecast.train_dto import (
     TrainRequest as Ml3Wine_TrainReq,
     TrainResponse as Ml3WineTrainResp,
 )
+from app.plugins.m21_cereal_price_spatial.predict_dto import (
+    PredictBatchResponse as M21BatchResp,
+    PredictInlineResponse as M21InlineResp,
+    PredictRequest as M21_Request,
+    PredictResponse as M21_Response,
+)
+from app.plugins.m21_cereal_price_spatial.train_dto import (
+    TrainRequest as M21_TrainReq,
+    TrainResponse as M21TrainResp,
+)
 
 # ── ModelEntry dataclass (local copy — avoids importing app.registry which loads real plugins) ───
 
@@ -1209,6 +1219,59 @@ def _ml3_wine_train(plugin: FakePlugin, *, data_path: str) -> Ml3WineTrainResp:
     )
 
 
+def _m21_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> M21InlineResp:
+    """Fake inline response for the m21 ESP-CEREAL spatial cereal price model."""
+    return M21InlineResp(
+        model_id="m21-cereal-price-spatial",
+        province="Burgos",
+        cereal="trigo",
+        month="2024-01",
+        geo_risk=False,
+        timing_label="SEGUIMIENTO ACTIVO",
+        causal_drivers=["Trigo Internacional (al alza, z=1.23)", "EUR/USD (a la baja, z=0.87)", "Precipitacion (al alza, z=0.65)"],
+        card_text="FICHA DE DECISION DATAGIA v1.1\n...",
+        predictions={
+            "H1": {"horizon": 1, "signal": "NEUTRAL/ESPERA", "confidence": 55.0, "expected_return": 0.012, "prob_up": 0.55},
+            "H2": {"horizon": 2, "signal": "ALCISTA", "confidence": 68.0, "expected_return": 0.025, "prob_up": 0.68},
+            "H3": {"horizon": 3, "signal": "NEUTRAL/ESPERA", "confidence": 52.0, "expected_return": 0.008, "prob_up": 0.52},
+        },
+        model_version="1.0.0",
+        xai_feature_values={"corn_intl_eur_lag_1": 185.0, "wheat_intl_eur_lag_1": 210.0},
+    )
+
+
+def _m21_batch(plugin: FakePlugin, *, data_path: str) -> M21BatchResp:
+    """Fake batch response for the m21 ESP-CEREAL spatial cereal price model."""
+    return M21BatchResp(
+        model_id="m21-cereal-price-spatial",
+        predictions=[
+            {
+                "row": 0,
+                "provincia": "Burgos",
+                "cereal_predominante": "trigo",
+                "ret_h1": 0.012, "ret_h2": 0.025, "ret_h3": 0.008,
+                "prob_up_h1": 0.55, "prob_up_h2": 0.68, "prob_up_h3": 0.52,
+                "signal_h1": "NEUTRAL/ESPERA", "signal_h2": "ALCISTA", "signal_h3": "NEUTRAL/ESPERA",
+                "confidence_h1": 55.0, "confidence_h2": 68.0, "confidence_h3": 52.0,
+            }
+        ],
+        output_path=None,
+    )
+
+
+def _m21_train(plugin: FakePlugin, *, data_path: str) -> M21TrainResp:
+    """Fake training response for the m21 ESP-CEREAL spatial cereal price model."""
+    return M21TrainResp(
+        detail="Training completado — 6 modelos entrenados (3H × reg+clf)",
+        mae_h1=0.0508, mae_h2=0.0674, mae_h3=0.1012,
+        pearson_h1=0.3785, pearson_h2=0.2653, pearson_h3=0.2093,
+        da_h1=0.5591, da_h2=0.5656, da_h3=0.6250,
+        auc_h1=0.7116, auc_h2=0.7441, auc_h3=0.7523,
+        n_train=1500, n_test=500,
+        upload_warning=None,
+    )
+
+
 FAKE_FACTORIES: dict[str, tuple[Callable, Callable]] = {
     "ml9-cereals-infestation-sequence-classifier": (_ml9_cereals_inline, _ml9_cereals_batch),
     "ml46-dairy-fouling-clog-detection": (_ml46_dairy_inline, _ml46_dairy_batch),
@@ -1231,6 +1294,7 @@ FAKE_FACTORIES: dict[str, tuple[Callable, Callable]] = {
     "ml45-cereals-dnsl-critical-point-detection": (_ml45_inline, _ml45_batch),
     "ml43-cereals-dnsl-anomaly-fault-detection": (_ml43_inline, _ml43_batch),
     "ml3-wine-disease-pest-forecast": (_ml3_wine_inline, _ml3_wine_batch),
+    "m21-cereal-price-spatial": (_m21_inline, _m21_batch),
 }
 
 TRAIN_FACTORIES: dict[str, Callable] = {
@@ -1245,6 +1309,7 @@ TRAIN_FACTORIES: dict[str, Callable] = {
     "ml45-cereals-dnsl-critical-point-detection": _ml45_train,
     "ml43-cereals-dnsl-anomaly-fault-detection": _ml43_train,
     "ml3-wine-disease-pest-forecast": _ml3_wine_train,
+    "m21-cereal-price-spatial": _m21_train,
 }
 
 
@@ -1461,6 +1526,17 @@ TEST_REGISTRY: list[ModelEntry] = [
         extra_predict_exceptions=(),
         train_request_type=Ml3Wine_TrainReq,
         train_response_type=Ml3WineTrainResp,
+    ),
+    ModelEntry(
+        model_id="m21-cereal-price-spatial",
+        prefix="/models/m21-cereal-price-spatial",
+        version="1.0.0",
+        plugin_class=FakePlugin,
+        predict_request_type=M21_Request,
+        predict_response_type=M21_Response,
+        extra_predict_exceptions=(),
+        train_request_type=M21_TrainReq,
+        train_response_type=M21TrainResp,
     ),
 ]
 

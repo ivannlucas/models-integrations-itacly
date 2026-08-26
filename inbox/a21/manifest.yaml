@@ -1,0 +1,203 @@
+model_id: m21_cereal_price_spatial
+sector: cerealista
+nombre: "Desarrollo de un modelo espacial de predicción de precios en áreas concretas del sector cerealístico"
+acronimo: "ESP-CEREAL — Modelo Espacial de Predicción de Precios Cerealísticos"
+version_modelo: "1.0"
+task_type: regression_classification  # dual: regressión (retorno esperado) + clasificación (dirección alcista/bajista)
+framework:
+  - scikit-learn>=1.3
+  - xgboost>=2.0
+  - pandas>=2.0
+  - numpy>=1.24
+  - joblib>=1.3
+
+# Artefactos: 6 modelos.joblib (3 reg + 3 clf) + metadata JSON
+artifacts:
+  folder: models/artifacts
+  files:
+    - models/artifacts/datagia_best_h1_reg.joblib
+    - models/artifacts/datagia_best_h1_clf.joblib
+    - models/artifacts/datagia_best_h2_reg.joblib
+    - models/artifacts/datagia_best_h2_clf.joblib
+    - models/artifacts/datagia_best_h3_reg.joblib
+    - models/artifacts/datagia_best_h3_clf.joblib
+    - models/artifacts/model_metadata.json
+  note: >
+    6 modelos serializados con joblib (2 por horizonte H1/H2/H3: 1 regresión + 1 clasificación).
+    H1/H2 usan ExtraTrees (reg) + LogisticRegression (clf). H3 usa XGBoost (reg) + LogisticRegression (clf).
+    model_metadata.json contiene selected_models, expected_columns por modelo, y feature_importances.
+
+inputs:
+  fixed:
+    - name: provincia
+      type: str
+      description: "Provincia española (e.g., 'Burgos', 'Zamora', 'Córdoba'). Se codifica como one-hot."
+    - name: cereal_predominante
+      type: str
+      description: "Tipo de cereal predominante ('trigo', 'cebada', 'maíz'). Se codifica como one-hot."
+    - name: date
+      type: str (YYYY-MM)
+      description: "Mes de predicción. Determina fase de cosecha, lags temporales y ventana de features."
+  derived_if_missing:
+    lat_centroide: "Se obtiene del dataset base por provincia"
+    lon_centroide: "Se obtiene del dataset base por provincia"
+    fase_siembra/fase_crecimiento/fase_cosecha: "Derivadas del mes according to calendar cerealístico"
+    month_sin/month_cos: "Codificación cíclica del mes"
+
+  # Features del modelo (todas las columnas de expected_columns en model_metadata.json):
+  # - Precios internacionales: corn_intl_eur_*, wheat_intl_eur_* (lags 1-3, MA3, vol3)
+  # - EUR/USD: eur_usd_lag_1, eur_usd_lag_2
+  # - Índices MAPA: idx_*_lag_3/4 (fertilizantes, fitosanitarios, semillas, etc.)
+  # - Costes prepagados: prepag1_*_lag_3/4 (urea, DAP), prepag2_*_lag_3/4 (paja, torta girasol)
+  # - Clima: precip_provincial_lag_1/2, precip_std_mm_lag_1/2, precip_relative_shock, temp_*, z_clima_adverso_*
+  # - Superficie: sup_cereal_predominante_lag_1, total_sup_* (trigo, cebada, maíz)
+  # - Geo: dist_puerto_min_km, presion_combustible_puerto, puerto_referencia_* (one-hot)
+  # - Provincia: provincia_* (one-hot), provincia_id
+  # - Fase fenológica: fase_siembra, fase_crecimiento, fase_cosecha
+
+outputs:
+  predict_inline:
+    - name: predictions
+      type: "dict[h1/h2/h3 -> {signal, confidence, expected_return, prob_up}]"
+      description: "Predicción por horizonte: señal (ALCISTA/BAJISTA/NEUTRAL), confianza %, retorno esperado, probabilidad de subida"
+    - name: province
+      type: str
+      description: "Provincia evaluada"
+    - name: cereal
+      type: str
+      description: "Cereal evaluado"
+    - name: month
+      type: str
+      description: "Mes evaluado (YYYY-MM)"
+    - name: geo_risk
+      type: bool
+      description: "True si la provincia tiene riesgo geográfico alto"
+    - name: timing_label
+      type: str
+      description: "Timing operativo: COMPRA YA / VENDE YA / ESPERA / SEGUIMIENTO ACTIVO"
+    - name: causal_drivers
+      type: "list[str]"
+      description: "Top 3 factores causales con dirección e intensidad"
+    - name: card_text
+      type: str
+      description: "Ficha de decisión completa en texto plano"
+
+  predict_batch:
+    - name: predictions_csv
+      type: "DataFrame"
+      description: "Predicciones batch con columnas: provincia, cereal_predominante, ret_h1-3, prob_up_h1-3, signal_h1-3, risk_geo_alto"
+    - name: bulletin_path
+      type: str
+      description: "Ruta al informe táctico generado (si se solicita)"
+
+training:
+  supported: true
+  target_column: "precio_provincial_TARGET_H{horizon}"  # variable por horizonte
+  required_columns:
+    - date
+    - provincia
+    - cereal_predominante
+    - precio_provincial_lag_1
+    - precio_provincial_TARGET_H1
+    - precio_provincial_TARGET_H2
+    - precio_provincial_TARGET_H3
+    - corn_intl_eur_lag_1
+    - wheat_intl_eur_lag_1
+    - eur_usd_lag_1
+    - precip_provincial_lag_1
+    - temp_provincial_lag_1
+    # + todas las columnas del dataset de entrenamiento
+  hyperparams:
+    search_type: "grid+randomized"
+    random_state: 42
+    cut_date: "2021-01-01"
+    regression:
+      H1: {model: extra_trees, max_depth: 2, min_samples_leaf: 1, n_estimators: 500}
+      H2: {model: extra_trees, max_depth: 2, min_samples_leaf: 1, n_estimators: 500}
+      H3: {model: xgb, max_depth: 2, n_estimators: 250, learning_rate: 0.05, subsample: 0.7, colsample_bytree: 0.7, reg_alpha: 0.5, reg_lambda: 10.0}
+    classification:
+      H1: {model: logistic, C: 0.01, penalty: l1, solver: liblinear}
+      H2: {model: logistic, C: 0.1, penalty: l1, solver: liblinear}
+      H3: {model: logistic, C: 1.0, penalty: l1, solver: liblinear}
+  metrics_returned:
+    - MAE
+    - Pearson
+    - DA (Direction Accuracy)
+    - AUC
+  source: codigo_entrenamiento (train.py + model_metadata.json)
+
+# Restricciones de negocio
+constraints:
+  MAPA_ADMIN_LAG: 3  # meses de desfase en publicación oficial de datos MAPA
+  PROB_BULL: 0.65    # probabilidad mínima para señal alcista
+  PROB_BEAR: 0.35    # probabilidad máxima para señal bajista
+  RET_BULL: 0.015    # retorno mínimo esperado para señal alcista (1.5%)
+  RET_BEAR: -0.015   # retorno máximo esperado para señal bajista (-1.5%)
+  SPREAD_MIN: 0.01   # spread mínimo para arbitraje geográfico (1%)
+  CONFIDENCE_HIGH_UP: 0.60
+  CONFIDENCE_HIGH_DOWN: 0.40
+  blacklisted_columns:
+    - precio_provincial_lag_1
+    - precio_provincial_lag_2
+    - precio_provincial_lag_3
+    - precio_vecinos_media_lag1
+    - precio_nacional_base_ma3
+    - precio_nacional_base_ma6
+    - precio_nacional_base_vol3
+    - precio_nacional_base_vol6
+  note: "Estas columnas se excluyen de features para evitar data leakage (contienen información del target)"
+
+# Métricas de test (model_metadata.json)
+metrics_reported:
+  H1_regression:
+    MAE: 0.0508
+    Pearson: 0.3785
+    DA: 0.5591
+  H1_classification:
+    DA: 0.6172
+    AUC: 0.7116
+  H2_regression:
+    MAE: 0.0674
+    Pearson: 0.2653
+    DA: 0.5656
+  H2_classification:
+    DA: 0.6612
+    AUC: 0.7441
+  H3_regression:
+    MAE: 0.1012
+    Pearson: 0.2093
+    DA: 0.6250
+  H3_classification:
+    DA: 0.6261
+    AUC: 0.7523
+
+# Golden cases — del test split (CUT_DATE=2021-01-01)
+# Nota: sin splits explícitos en el repo; los golden cases se generarán durante
+# la verificación (skill verification) usando el dataset real.
+golden_cases: []
+
+known_issues:
+  - "SIN SPLITS EXPLÍCITOS: el código no genera splits train/test exportados. Los golden cases
+    se deben generar extrayendo filas del dataset base (dataset_entrenamiento_final.csv) con
+    date >= CUT_DATE (2021-01-01). Requiere ejecutar prepare_data.get_prepared_data() para
+    obtener las features alineadas."
+  - "BLACKLIST CRÍTICO: las columnas precio_provincial_lag_1/2/3 y precio_nacional_base_*
+    contienen información del target y DEBEN excluirse de features (prepare_data.BLACKLIST).
+    El plugin debe replicar este filtrado exacto."
+  - "FEATURE ENCODING: el código usa pd.get_dummies() con drop_first=False sobre columnas
+    object/category, y reindexa alfabéticamente. Esto genera columnas one-hot como
+    'provincia_Burgos', 'cereal_predominante_trigo', etc. El plugin debe replicar este
+    encoding exacto para alinear con expected_columns del metadata."
+  - "MODELOS POR HORIZONTE: H1/H2 usan ExtraTrees (regresión) + LogisticRegression (clasificación).
+    H3 usa XGBoost (regresión) + LogisticRegression (clasificación). El plugin debe cargar los
+    6 modelos y usar el correcto por horizonte."
+  - "ENTRENAMIENTO REQUIERE DATASET COMPLETO: training.required_columns incluye todas las
+    columnas del dataset base. El dataset (dataset_entrenamiento_final.csv) NO se incluye en
+    artifacts — debe estar en data/processed/ para poder reentrenar."
+  - "REENTRENAMIENTO IMPLEMENTADO: train() ejecuta GridSearchCV sobre los mismos modelos del
+    repo original (ExtraTrees para H1/H2 reg, XGBoost para H3 reg, LogisticRegression para clf).
+    Sube artefactos a MLflow. El CSV de entrada debe ser el dataset_entrenamiento_final.csv con
+    las columnas target incluidas."
+  - "FEATURES CON ESPACIOS: prepag1_urea 46, prepag2_paja cereales, prepag2_torta de girasol
+    contienen espacios. El encoding one-hot genera columnas con estos espacios — el plugin
+    debe preservarlos exactamente."
