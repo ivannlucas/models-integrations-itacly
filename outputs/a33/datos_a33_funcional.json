@@ -1,0 +1,105 @@
+{
+ "model_id": "a33",
+ "model_slug": "cereals-reuse-strategy-optimizer",
+ "fecha": "Agosto 2026",
+ "descripcion": "Herramienta que, para cada lote de subproducto de cereal que se genera (cascarilla, paja, polvo de silo, salvado), decide a qué vía de reutilización enviarlo — pienso animal, compostaje, biochar o combustión de biomasa — para que el conjunto de la planta emita la menor cantidad de CO2 posible ese día, sin sobrepasar la capacidad de cada vía.",
+ "objetivo": "Reducir la huella de carbono asociada a la gestión de subproductos cerealistas, proponiendo automáticamente el mejor reparto posible de cada lote entre las vías de reutilización disponibles, respetando cuánto puede procesar cada una en un día.",
+ "caso_uso": "Introduces los lotes generados (volumen, humedad, tipo de subproducto) de un día o de una tanda, y la herramienta te devuelve, para cada lote, la vía de reutilización recomendada y la emisión estimada. También puedes procesar un fichero con muchos lotes de una vez. No aprende de tus datos ni necesita entrenamiento: calcula, para las capacidades que le indiques, el reparto que menos emite.",
+ "que_no_responde": "No predice cuánto subproducto vas a generar ni cuándo; parte de los lotes que ya le indicas y solo decide a qué vía enviarlos. Tampoco mide la emisión real de la planta: la estima con una fórmula, no con sensores.",
+ "entradas_contexto": "Los datos de cada lote (volumen generado, humedad, tipo de subproducto) vienen de la operativa diaria de la planta — registro manual, ERP de producción o sensor IIoT, según cómo esté integrado en cada caso.",
+ "inputs": [
+  {
+   "nombre": "Volumen del lote",
+   "descripcion": "Cuántas toneladas de subproducto se han generado."
+  },
+  {
+   "nombre": "Humedad del lote",
+   "descripcion": "Porcentaje de humedad del subproducto."
+  },
+  {
+   "nombre": "Tipo de subproducto",
+   "descripcion": "Cascarilla, paja, polvo de silo o salvado."
+  },
+  {
+   "nombre": "Capacidad de cada vía (opcional)",
+   "descripcion": "Cuánto puede procesar cada vía de reutilización (pienso, compostaje, biochar, combustión) en un día; si no se indica, se usan los valores validados por defecto."
+  },
+  {
+   "nombre": "Fichero con varios lotes",
+   "descripcion": "Puedes subir un fichero con muchos lotes para procesarlos todos de una vez."
+  }
+ ],
+ "outputs": [
+  {
+   "nombre": "Vía de reutilización recomendada",
+   "descripcion": "A qué destino enviar cada lote: pienso animal, compostaje, biochar o combustión de biomasa.",
+   "interpretacion": "Es la decisión operativa a aplicar para ese lote."
+  },
+  {
+   "nombre": "Emisión estimada",
+   "descripcion": "Cuánto CO2 se estima que genera ese lote con la vía asignada.",
+   "interpretacion": "Cuanto menor, mejor; es lo que la herramienta intenta minimizar en conjunto."
+  },
+  {
+   "nombre": "¿Fue una decisión de guarda?",
+   "descripcion": "Indica si el lote no cupo en ninguna vía por falta de capacidad y se envió a una vía de emergencia.",
+   "interpretacion": "Si aparece con frecuencia, es una señal de que la capacidad configurada se ha quedado corta para el volumen que estás generando."
+  },
+  {
+   "nombre": "Resumen de la tanda",
+   "descripcion": "Cuántos lotes fueron a cada vía y la emisión total estimada del conjunto.",
+   "interpretacion": "Da la foto global de un día o de un fichero completo de lotes."
+  }
+ ],
+ "ejemplo_interpretacion": "Sobre un día simulado de 15 lotes, la herramienta reparte, por ejemplo, 3 lotes a pienso animal, 4 a compostaje, 4 a biochar y 4 a combustión de biomasa — la combinación que menos CO2 total genera ese día respetando la capacidad de cada vía. En una prueba a gran escala (10 000 lotes simulados), este reparto automático redujo la emisión total estimada en un 27.6% frente a un reparto de referencia.",
+ "margen_error": "El cálculo es exacto y reproducible para los datos y capacidades que le des — no hay incertidumbre estadística como en un modelo que aprende de datos. La fiabilidad del resultado depende de que las capacidades de cada vía que configures reflejen la realidad de la planta.",
+ "revisar_manualmente": [
+  "Si la herramienta marca muchos lotes con 'decisión de guarda', revisa si la capacidad configurada de alguna vía es realmente demasiado baja para el volumen que estás generando.",
+  "Las capacidades por vía solo se pueden ajustar en el modo de un lote/tanda concreta; el procesado de ficheros grandes usa siempre las capacidades validadas por defecto.",
+  "El campo 'estación' se pide pero no influye en la decisión — no esperes que cambie el resultado.",
+  "Para ficheros muy grandes (miles de lotes), la respuesta puede tardar varios minutos.",
+  "La cifra de ahorro (27.6%) procede de una simulación con datos sintéticos, no de mediciones reales de planta; trátala como una estimación a validar, no como un resultado garantizado."
+ ],
+ "que_no_hace": [
+  "No predice cuánto subproducto se va a generar ni cuándo.",
+  "No mide la emisión real: la estima con una fórmula, no con sensores de planta.",
+  "No aprende ni se ajusta con tus datos: es un cálculo determinista, no un modelo entrenado.",
+  "No decide la capacidad de cada vía por ti: la capacidad la configuras tú (o se usan los valores validados por defecto).",
+  "No sustituye una auditoría de emisiones real."
+ ],
+ "puede_equivocarse": "El reparto que propone es siempre el matemáticamente óptimo para los datos y capacidades que le das — no se 'equivoca' en ese sentido. Donde sí puede fallar es si las capacidades configuradas no reflejan la realidad de la planta, o si se aplica fuera del contexto para el que se validó (datos sintéticos, no operación real). Es una ayuda a la decisión operativa diaria, no una garantía de ahorro de emisiones ni un sustituto de una medición real.",
+ "kpis": [
+  {
+   "kpi": "Reducción de emisión de CO2",
+   "valor_umbral": "~27.6% frente a un reparto de referencia (en simulación, sobre 10 000 lotes)",
+   "descripcion": "Cuánto CO2 estimado se ahorra usando el reparto que propone la herramienta en vez de un reparto no optimizado."
+  },
+  {
+   "kpi": "Lotes en decisión de guarda",
+   "valor_umbral": "0% con las capacidades validadas por defecto",
+   "descripcion": "Ningún lote debería quedarse sin vía asignada si las capacidades configuradas son realistas."
+  }
+ ],
+ "limitaciones": [
+  {
+   "tipo": "Resultado de simulación, no de planta real",
+   "descripcion": "El 27.6% de ahorro y el resto de cifras de impacto proceden de datos generados por simulación, no de mediciones reales; hay que validarlas con datos reales antes de tomarlas como un compromiso operativo."
+  },
+  {
+   "tipo": "No aprende de tus datos",
+   "descripcion": "Es un cálculo determinista de reparto óptimo, no un modelo que mejora con el uso."
+  },
+  {
+   "tipo": "Depende de las capacidades que configures",
+   "descripcion": "Si las capacidades de cada vía no reflejan la realidad de la planta, el reparto propuesto puede no ser aplicable tal cual."
+  },
+  {
+   "tipo": "Ficheros grandes tardan",
+   "descripcion": "Procesar miles de lotes de una vez puede tardar varios minutos."
+  },
+  {
+   "tipo": "No sustituye a la neuroevolución del proyecto original",
+   "descripcion": "El proyecto original también entrenó una política de aprendizaje automático (neuroevolución) como comparación; esta herramienta usa el cálculo exacto, que el propio equipo de IA demostró que reduce más emisión que esa alternativa aprendida."
+  }
+ ]
+}

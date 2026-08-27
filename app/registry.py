@@ -87,6 +87,14 @@ from app.plugins.ml31_cereals_residue_optimizer.predict_dto import (
     PredictResponse as Ml31Residue_Response,
 )
 
+from app.plugins.ml33_cereals_reuse_strategy_optimizer.plugin import (
+    Ml33CerealsReuseStrategyOptimizerPlugin,
+)
+from app.plugins.ml33_cereals_reuse_strategy_optimizer.predict_dto import (
+    PredictRequest as Ml33Reuse_Request,
+    PredictResponse as Ml33Reuse_Response,
+)
+
 from app.plugins.ml4_lactic_cnn_thermal_early_disease_detection.plugin import (
     Ml4LacticCnnThermalEarlyDiseaseDetectionPlugin,
 )
@@ -313,6 +321,15 @@ REGISTRY: list[ModelEntry] = [
         predict_request_type=Ml31Residue_Request,
         predict_response_type=Ml31Residue_Response,
         extra_predict_exceptions=(InfeasibleOptimizationError,),
+    ),
+    ModelEntry(
+        model_id="ml33-cereals-reuse-strategy-optimizer",
+        prefix="/models/ml33-cereals-reuse-strategy-optimizer",
+        version="1.0.0",
+        plugin_class=Ml33CerealsReuseStrategyOptimizerPlugin,
+        predict_request_type=Ml33Reuse_Request,
+        predict_response_type=Ml33Reuse_Response,
+        extra_predict_exceptions=(),
     ),
     ModelEntry(
         model_id="ml4-lactic-cnn-thermal-early-disease-detection",

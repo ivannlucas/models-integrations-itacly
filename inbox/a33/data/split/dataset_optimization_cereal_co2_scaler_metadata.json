@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "split_prefix": "dataset_optimization_cereal_co2",
+  "random_state": 42,
+  "test_size": 0.2,
+  "scaled_columns": [
+    "generated_volume_tons",
+    "moisture_pct",
+    "process_temperature_c"
+  ],
+  "neural_policy_input_columns": [
+    "generated_volume_tons",
+    "moisture_pct",
+    "subproduct_type_Husk",
+    "subproduct_type_Straw",
+    "subproduct_type_Silo dust",
+    "subproduct_type_Bran",
+    "season_Rainy",
+    "season_Dry"
+  ],
+  "excluded_from_neural_policy_inputs": [
+    "process_temperature_c"
+  ],
+  "non_scaled_columns": [
+    "subproduct_type_*",
+    "season_*"
+  ],
+  "note": "One-hot encoded categorical columns (subproduct_type, season) are NOT scaled. Only scaled_columns above are min-max normalized to [0, 1].",
+  "ranges": {
+    "generated_volume_tons": {
+      "data_min": 0.1,
+      "data_max": 61.69384365474239,
+      "scale": 0.016235388809397764,
+      "min_offset": -0.0016235388809397765,
+      "denormalization_formula": "value_physical = value_normalized / 0.0162353888 + 0.1"
+    },
+    "moisture_pct": {
+      "data_min": 0.1,
+      "data_max": 38.04370928856135,
+      "scale": 0.026354829792601845,
+      "min_offset": -0.002635482979260185,
+      "denormalization_formula": "value_physical = value_normalized / 0.0263548298 + 0.1"
+    },
+    "process_temperature_c": {
+      "data_min": 3.703147291989694,
+      "data_max": 1474.4673257011286,
+      "scale": 0.0006799186536360004,
+      "min_offset": -0.002517838920985434,
+      "denormalization_formula": "value_physical = value_normalized / 0.0006799187 + 3.703147291989694"
+    }
+  },
+  "usage": {
+    "forward": "Use scaler.transform() or MinMaxScaler with these ranges to normalize new data.",
+    "inverse": "Use scaler.inverse_transform() or apply denormalization_formula manually to recover physical units."
+  }
+}

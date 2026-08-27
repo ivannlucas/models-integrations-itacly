@@ -1,0 +1,73 @@
+{
+  "seasons": [
+    "Dry",
+    "Rainy"
+  ],
+  "subproducts": [
+    "Husk",
+    "Bran",
+    "Straw",
+    "Silo dust"
+  ],
+  "strategies": [
+    "Biomass combustion",
+    "Animal feed",
+    "Composting",
+    "Biochar"
+  ],
+  "physical_minimum": 0.1,
+  "volume_by_subproduct": {
+    "Husk": {
+      "mean": 20.0,
+      "std": 5.0
+    },
+    "Bran": {
+      "mean": 15.0,
+      "std": 5.0
+    },
+    "Straw": {
+      "mean": 46.3,
+      "std": 4.0
+    },
+    "Silo dust": {
+      "mean": 5.0,
+      "std": 2.0
+    }
+  },
+  "humidity_by_subproduct_and_season": {
+    "Husk": {
+      "Dry": { "mean": 8.0, "std": 2.0 },
+      "Rainy": { "mean": 14.0, "std": 3.0 }
+    },
+    "Bran": {
+      "Dry": { "mean": 15.0, "std": 3.0 },
+      "Rainy": { "mean": 22.0, "std": 4.0 }
+    },
+    "Straw": {
+      "Dry": { "mean": 10.0, "std": 2.0 },
+      "Rainy": { "mean": 18.0, "std": 5.0 }
+    },
+    "Silo dust": {
+      "Dry": { "mean": 5.0, "std": 1.0 },
+      "Rainy": { "mean": 9.0, "std": 2.0 }
+    }
+  },
+  "temperature_by_strategy": {
+    "Animal feed": {
+      "mean": 60.0,
+      "std": 10.0
+    },
+    "Composting": {
+      "mean": 60.0,
+      "std": 8.0
+    },
+    "Biochar": {
+      "mean": 450.0,
+      "std": 100.0
+    },
+    "Biomass combustion": {
+      "mean": 900.0,
+      "std": 150.0
+    }
+  }
+}

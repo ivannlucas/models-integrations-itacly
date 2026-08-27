@@ -1,0 +1,21 @@
+{
+  "rows": 10000,
+  "distribution_original_pct_normalized": {
+    "biochar": 26.82,
+    "animal_feed": 26.16,
+    "biomass_combustion": 23.73,
+    "composting": 23.29
+  },
+  "distribution_ai_pct_normalized": {
+    "composting": 46.56,
+    "animal_feed": 30.41,
+    "biochar": 14.14,
+    "biomass_combustion": 8.89
+  },
+  "baseline_total_emissions_kg": 42548061.68,
+  "ai_estimated_total_emissions_kg": 26421449.16,
+  "total_emissions_reduction_pct": 37.9,
+  "baseline_mean_emissions_kg": 4254.8062,
+  "ai_estimated_mean_emissions_kg": 2642.1449,
+  "mean_emissions_reduction_pct": 37.9
+}

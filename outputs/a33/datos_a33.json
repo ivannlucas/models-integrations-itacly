@@ -1,0 +1,165 @@
+{
+ "model_id": "a33",
+ "model_slug": "cereals-reuse-strategy-optimizer",
+ "fecha": "Agosto 2026",
+ "model_key": "ml33-cereals-reuse-strategy-optimizer",
+ "version": "1.0",
+ "descripcion": "Optimizador determinista de asignación (Programación Lineal Entera Mixta, scipy.optimize.milp, backend HiGHS) que decide a qué estrategia de reutilización enviar cada lote de subproducto cerealista generado — Animal feed, Composting, Biochar o Biomass combustion — minimizando la emisión de CO2 simulada, bajo capacidades diarias de planta que se resetean cada 'lots_per_day' lotes. No es un modelo con pesos entrenados: resuelve un problema de asignación exacta por bloque a partir de una función de emisión determinista. La neuroevolución (NEAT) que trae el delivery original se mantiene por el equipo de IA únicamente como referencia comparativa (benchmark), no como motor desplegado.",
+ "task_type": "optimization (asignación exacta MILP)",
+ "framework": "scipy.optimize.milp (HiGHS)==1.11+, numpy, pandas, pydantic",
+ "artefacto": "Sin pesos entrenados ni artefactos serializados. El 'modelo' es código determinista: la función de emisión strategy_emissions() más el solver MILP sobre bloques de lots_per_day lotes.",
+ "objetivo": "Reducir la emisión de CO2 asociada a la gestión de subproductos de cereal (cascarilla, paja, polvo de silo, salvado), decidiendo de forma óptima y auditable a qué vía de reutilización enviar cada lote generado, respetando las capacidades operativas diarias de cada vía.",
+ "caso_uso": "Servido en /models/ml33-cereals-reuse-strategy-optimizer/predict con dos modos por el discriminador 'mode'. Modo inline: recibe una lista de 1 o más lotes (volumen, humedad, tipo de subproducto, estación) más los parámetros de ejecución (lots_per_day, capacidades por estrategia, estrategia de guarda); devuelve la estrategia asignada por lote, su fuente (solución MILP exacta o guarda defensiva), la emisión estimada y un resumen de distribución. Modo batch: recibe la ruta de un CSV con los mismos 4 campos por fila y aplica el mismo motor sobre todo el fichero, siempre con el régimen de capacidades por defecto (las capacidades solo son configurables en modo inline). El reentrenamiento por usuario no aplica: /train devuelve HTTP 501 (optimizador determinista, no hay pesos que ajustar).",
+ "inputs": [
+  {
+   "nombre": "generated_volume_tons",
+   "tipo": "float (t)",
+   "descripcion": "Volumen del lote de subproducto generado",
+   "obligatorio": "Sí",
+   "valor_defecto": "-"
+  },
+  {
+   "nombre": "moisture_pct",
+   "tipo": "float (%)",
+   "descripcion": "Humedad del lote",
+   "obligatorio": "Sí",
+   "valor_defecto": "-"
+  },
+  {
+   "nombre": "subproduct_type",
+   "tipo": "str",
+   "descripcion": "Categoría del subproducto: Husk, Straw, Silo dust o Bran",
+   "obligatorio": "Sí",
+   "valor_defecto": "-"
+  },
+  {
+   "nombre": "season",
+   "tipo": "str",
+   "descripcion": "Estación (Dry/Rainy). Validada como columna requerida pero NO interviene en la fórmula de emisión — campo vestigial del esquema de entrada de NEAT en el delivery original",
+   "obligatorio": "Sí",
+   "valor_defecto": "-"
+  },
+  {
+   "nombre": "process_temperature_c",
+   "tipo": "float | null",
+   "descripcion": "Aceptado por compatibilidad de esquema; NUNCA usado como entrada de decisión — la temperatura se deriva de la estrategia elegida, no al revés",
+   "obligatorio": "No",
+   "valor_defecto": "null"
+  },
+  {
+   "nombre": "lots_per_day",
+   "tipo": "int",
+   "descripcion": "Nº de lotes antes de resetear las capacidades (bloque operativo/día simulado) [solo modo inline]",
+   "obligatorio": "No",
+   "valor_defecto": "15"
+  },
+  {
+   "nombre": "animal_feed_capacity / composting_capacity / biochar_capacity / biomass_combustion_capacity",
+   "tipo": "float (t)",
+   "descripcion": "Capacidad diaria de cada estrategia [solo modo inline]",
+   "obligatorio": "No",
+   "valor_defecto": "90.0 / 140.0 / 45.0 / 10000.0"
+  },
+  {
+   "nombre": "fallback_strategy",
+   "tipo": "str",
+   "descripcion": "Estrategia de guarda si el MILP no puede colocar un lote (con las capacidades por defecto no llega a activarse) [solo modo inline]",
+   "obligatorio": "No",
+   "valor_defecto": "Biomass combustion"
+  },
+  {
+   "nombre": "data_path",
+   "tipo": "str",
+   "descripcion": "Modo batch: ruta a un CSV con un lote por fila (mismas 4 columnas obligatorias)",
+   "obligatorio": "Sí (modo batch)",
+   "valor_defecto": "-"
+  }
+ ],
+ "outputs": [
+  {
+   "nombre": "ai_assigned_strategy",
+   "tipo": "str",
+   "descripcion": "Estrategia de reutilización asignada al lote",
+   "rango": "Animal feed | Composting | Biochar | Biomass combustion",
+   "interpretacion": "Es la decisión operativa: a qué vía enviar el lote"
+  },
+  {
+   "nombre": "ai_assignment_source",
+   "tipo": "str",
+   "descripcion": "Origen de la decisión",
+   "rango": "exact_min_emissions | capacity_fallback",
+   "interpretacion": "exact_min_emissions = solución óptima probada por el MILP; capacity_fallback = guarda defensiva (no ocurre con las capacidades por defecto)"
+  },
+  {
+   "nombre": "ai_is_fallback",
+   "tipo": "bool",
+   "descripcion": "True si se usó la guarda defensiva en vez del MILP",
+   "rango": "true/false",
+   "interpretacion": "Señal de alerta operativa si aparece con frecuencia: indica capacidades insuficientes para el volumen entrante"
+  },
+  {
+   "nombre": "estimated_emissions_kg",
+   "tipo": "float (kg CO2)",
+   "descripcion": "Emisión de CO2 estimada del lote bajo la estrategia asignada",
+   "rango": "positivo",
+   "interpretacion": "Menor es mejor; es la magnitud que minimiza el MILP"
+  },
+  {
+   "nombre": "distribution / capacity_fallback_count / total_estimated_emissions_kg",
+   "tipo": "dict / int / float",
+   "descripcion": "Agregados de la petición: conteo/% por estrategia, nº de lotes en guarda defensiva y emisión total estimada",
+   "rango": "-",
+   "interpretacion": "Resumen de la tanda de lotes procesada, útil para un lote o para un batch completo"
+  }
+ ],
+ "metricas": [
+  {
+   "nombre": "Reducción de emisión vs baseline (declarada por el equipo de IA)",
+   "valor": "27.63 %",
+   "descripcion": "models/metrics/inference_evaluation_report.json del delivery, sobre el split de test completo (10 000 filas) con capacidades por defecto, frente a una estrategia baseline sintética",
+   "interpretacion": "el motor exacto reduce en más de una cuarta parte la emisión simulada frente al reparto de referencia"
+  },
+  {
+   "nombre": "Reducción vs ladder de comparación (declarada)",
+   "valor": "exacto 27.63 % / codicioso 12.19 % / NEAT 11.31 %",
+   "descripcion": "models/metrics/baseline_comparison.json: el MILP exacto (desplegado) domina al heurístico codicioso por lote y al benchmark neuroevolutivo por resolver todo el bloque a la vez, no lote a lote",
+   "interpretacion": "justifica por qué el motor desplegado es el MILP exacto y no la política aprendida"
+  },
+  {
+   "nombre": "Verificación golden dataset (post-integración)",
+   "valor": "3/3 casos exactos + 10 000/10 000 filas exactas",
+   "descripcion": "Los 3 golden cases del manifest y, adicionalmente, el split de test completo (10 000 filas) reproducidos sin ninguna discrepancia frente a la salida auditada del delivery original — ver outputs/a33/verification_report.md",
+   "interpretacion": "el port del motor a este repo es numéricamente idéntico al del equipo de IA, no una reimplementación aproximada"
+  }
+ ],
+ "limitaciones": [
+  {
+   "tipo": "Dataset sintético",
+   "descripcion": "Todo el dataset de referencia se generó por simulación (CTGAN + reglas causales configurables en config/data_generation_params.json), no procede de mediciones de planta real. El 27.63% de reducción es una estimación sobre un entorno de decisión sintético y requiere validación con datos reales antes de usarse como cifra operativa."
+  },
+  {
+   "tipo": "No es un modelo aprendido",
+   "descripcion": "Es un solver de asignación exacta; su calidad depende de la fórmula de emisión por estrategia y de las capacidades configuradas, no de un entrenamiento con datos."
+  },
+  {
+   "tipo": "'season' no afecta a la decisión",
+   "descripcion": "El campo season es obligatorio en el contrato de entrada pero la fórmula de emisión no lo utiliza — es vestigial del esquema de entrada del benchmark NEAT del delivery original."
+  },
+  {
+   "tipo": "Capacidades solo configurables en modo inline",
+   "descripcion": "El modo batch siempre usa el régimen de capacidades por defecto (90/140/45/10000 t); para simular otras capacidades hay que usar el modo inline."
+  },
+  {
+   "tipo": "Latencia en CSV grandes",
+   "descripcion": "El modo batch resuelve un MILP por cada bloque de forma secuencial dentro de una única petición HTTP síncrona; para el split de test completo (10 000 filas / 667 bloques) la respuesta tarda del orden de minutos en un entorno de un solo worker."
+  },
+  {
+   "tipo": "NEAT no expuesto",
+   "descripcion": "El delivery original incluye una política neuroevolutiva (NEAT) y su artefacto (winner_genome.pkl) como benchmark de referencia; este plugin implementa únicamente el motor MILP exacto, que la propia comparación del equipo de IA identifica como superior (27.63% vs 11.31% de NEAT)."
+  }
+ ],
+ "fichero_nombre": "Golden dataset del manifest (inbox/a33/manifest.yaml): 2 bloques de 15 lotes consecutivos de data/split/dataset_optimization_cereal_co2_test_raw.csv + data/predictions/inference_with_constraints.csv, y el split de test completo (10 000 filas) como verificación exhaustiva adicional.",
+ "fichero_registros": "3 golden cases (2 bloques de 15 lotes + 1 caso agregado sobre 10 000 filas), más verificación exhaustiva fila a fila sobre las 10 000 filas completas del split de test original.",
+ "fichero_resultado": "3/3 golden cases reproducidos exactos (asignación categórica sin margen de tolerancia) y 10 000/10 000 filas del split de test completo sin ninguna discrepancia frente a la salida auditada del delivery original (distribución 37.18/27.27/17.86/17.69% y emisión total 30 893 908.4 kg, ambas exactas). Ver outputs/a33/verification_report.md.",
+ "observaciones_tecnicas": "Ejecutable en CPU, sin GPU ni dependencias pesadas de ML (única dependencia nueva: scipy>=1.11.0, ya transitiva vía scikit-learn en este repo, añadida explícitamente a requirements.txt por ser ahora importada directamente). Determinista y reproducible: sin semilla aleatoria, sin artefactos que cargar. Solve MILP del orden de milisegundos por bloque de 15 lotes; un batch de 10 000 filas (667 bloques) tarda del orden de minutos en un entorno de un solo worker por ser secuencial dentro de una petición síncrona. mlflow_utils.py presente por convención del repo (siempre devuelve None: no hay artefacto de usuario que descargar). train() → HTTP 501. Sin excepción de dominio nueva: la infactibilidad se resuelve con una guarda defensiva interna (ai_assignment_source=capacity_fallback), no con un error 422."
+}

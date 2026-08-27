@@ -108,6 +108,12 @@ from app.plugins.ml31_cereals_residue_optimizer.predict_dto import (
     PredictRequest as Ml31Residue_Request,
     PredictResponse as Ml31Residue_Response,
 )
+from app.plugins.ml33_cereals_reuse_strategy_optimizer.predict_dto import (
+    PredictBatchResponse as Ml33ReuseBatchResp,
+    PredictInlineResponse as Ml33ReuseInlineResp,
+    PredictRequest as Ml33Reuse_Request,
+    PredictResponse as Ml33Reuse_Response,
+)
 from app.plugins.ml4_lactic_cnn_thermal_early_disease_detection.predict_dto import (
     PredictBatchResponse as Ml4ThermalBatchResp,
     PredictInlineResponse as Ml4ThermalInlineResp,
@@ -644,6 +650,43 @@ def _ml31_residue_batch(plugin: FakePlugin, *, data_path: str) -> Ml31ResidueBat
                       "status": "OPTIMAL", "optimized_residue_t": 45.0,
                       "optimized_benefit_eur": 1000.0, "residue_reduction_pct": 10.0,
                       "verdict": "PASADO"}],
+        output_path=None,
+    )
+
+
+def _ml33_reuse_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> Ml33ReuseInlineResp:
+    """Fake inline response for the ml33 cereal reuse-strategy MILP optimizer."""
+    n_lots = len(features.get("lots", [])) or 1
+    return Ml33ReuseInlineResp(
+        model_id="ml33-cereals-reuse-strategy-optimizer",
+        results=[
+            {
+                "row": i,
+                "ai_assigned_strategy": "Animal feed",
+                "ai_assignment_source": "exact_min_emissions",
+                "ai_is_fallback": False,
+                "estimated_emissions_kg": 120.5,
+            }
+            for i in range(n_lots)
+        ],
+        distribution={"counts": {"Animal feed": n_lots}, "percentages": {"Animal feed": 100.0}},
+        capacity_fallback_count=0,
+        total_estimated_emissions_kg=120.5 * n_lots,
+    )
+
+
+def _ml33_reuse_batch(plugin: FakePlugin, *, data_path: str) -> Ml33ReuseBatchResp:
+    """Fake batch response for the ml33 cereal reuse-strategy MILP optimizer."""
+    return Ml33ReuseBatchResp(
+        model_id="ml33-cereals-reuse-strategy-optimizer",
+        n_rows=1,
+        predictions=[{
+            "row": 0, "ai_assigned_strategy": "Composting", "ai_assignment_source": "exact_min_emissions",
+            "ai_is_fallback": False, "estimated_emissions_kg": 85.3,
+        }],
+        distribution={"counts": {"Composting": 1}, "percentages": {"Composting": 100.0}},
+        capacity_fallback_count=0,
+        total_estimated_emissions_kg=85.3,
         output_path=None,
     )
 
@@ -1283,6 +1326,7 @@ FAKE_FACTORIES: dict[str, tuple[Callable, Callable]] = {
     "ml23-lactic-market-price-forecast": (_ml23_inline, _ml23_batch),
     "ml4-lactic-cnn-thermal-early-disease-detection": (_ml4_thermal_inline, _ml4_thermal_batch),
     "ml31-cereals-residue-optimizer": (_ml31_residue_inline, _ml31_residue_batch),
+    "ml33-cereals-reuse-strategy-optimizer": (_ml33_reuse_inline, _ml33_reuse_batch),
     "ml30-meat-traceability-detection": (_ml30_trace_inline, _ml30_trace_batch),
     "ml7-cereals-grain-pest-detection": (_ml7_grain_inline, _ml7_grain_batch),
     "ml2-fungal-cnn-disease-detection": (_ml2_fungal_inline, _ml2_fungal_batch),
@@ -1393,6 +1437,15 @@ TEST_REGISTRY: list[ModelEntry] = [
         predict_request_type=Ml31Residue_Request,
         predict_response_type=Ml31Residue_Response,
         extra_predict_exceptions=(InfeasibleOptimizationError,),
+    ),
+    ModelEntry(
+        model_id="ml33-cereals-reuse-strategy-optimizer",
+        prefix="/models/ml33-cereals-reuse-strategy-optimizer",
+        version="1.0.0",
+        plugin_class=FakePlugin,
+        predict_request_type=Ml33Reuse_Request,
+        predict_response_type=Ml33Reuse_Response,
+        extra_predict_exceptions=(),
     ),
     ModelEntry(
         model_id="ml4-lactic-cnn-thermal-early-disease-detection",

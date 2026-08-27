@@ -1,0 +1,78 @@
+[NEAT]
+fitness_criterion      = max
+fitness_threshold      = -100
+pop_size               = 150
+reset_on_extinction    = False
+# Run the full number of generations (no early stop), exactly like the main
+# NEAT config, so the ONLY difference between this baseline and NEAT is the
+# fixed linear topology (see below), not the training budget.
+no_fitness_termination = True
+
+[DefaultGenome]
+# Fixed LINEAR topology: 8 inputs directly connected to 4 outputs, no hidden
+# nodes. This baseline exists to answer the auditor: it optimizes a linear
+# model's WEIGHTS with the SAME fitness function as NEAT, under identical
+# training conditions, isolating the contribution of topology augmentation.
+num_inputs              = 8
+num_outputs             = 4
+num_hidden              = 0
+initial_connection      = full_direct
+feed_forward            = True
+
+enabled_default         = True
+enabled_mutate_rate     = 0.0
+
+compatibility_disjoint_coefficient = 1.0
+compatibility_weight_coefficient   = 0.5
+
+# Structural mutation DISABLED: the topology cannot grow or shrink, so only
+# connection weights and biases evolve on the fixed 8 -> 4 linear map.
+conn_add_prob           = 0.0
+conn_delete_prob        = 0.0
+node_add_prob           = 0.0
+node_delete_prob        = 0.0
+
+activation_default      = sigmoid
+activation_mutate_rate  = 0.0
+activation_options      = sigmoid
+
+aggregation_default     = sum
+aggregation_mutate_rate = 0.0
+aggregation_options     = sum
+
+weight_init_mean        = 0.0
+weight_init_stdev       = 1.0
+weight_max_value        = 30
+weight_min_value        = -30
+weight_mutate_power     = 0.5
+weight_mutate_rate      = 0.8
+weight_replace_rate     = 0.1
+
+bias_init_mean          = 0.0
+bias_init_stdev         = 1.0
+bias_max_value          = 30.0
+bias_min_value          = -30.0
+bias_mutate_power       = 0.5
+bias_mutate_rate        = 0.7
+bias_replace_rate       = 0.1
+
+response_init_mean      = 1.0
+response_init_stdev     = 0.0
+response_max_value      = 30.0
+response_min_value      = -30.0
+response_mutate_power   = 0.0
+response_mutate_rate    = 0.0
+response_replace_rate   = 0.0
+
+[DefaultSpeciesSet]
+compatibility_threshold = 3.0
+
+[DefaultStagnation]
+species_fitness_func = max
+max_stagnation       = 20
+species_elitism      = 2
+
+[DefaultReproduction]
+elitism            = 2
+survival_threshold = 0.2
+min_species_size   = 2

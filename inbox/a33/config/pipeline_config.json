@@ -1,0 +1,41 @@
+{
+  "random_state": 42,
+  "causal_params_path": "config/data_generation_params.json",
+  "data_generation": {
+    "raw_seed_output_path": "data/raw/dataset_optimization_cereal_co2_seed.csv",
+    "processed_output_path": "data/processed/dataset_optimization_cereal_co2.csv",
+    "n_real_samples": 1500,
+    "ctgan_epochs": 100,
+    "n_synthetic_samples": 50000
+  },
+  "preprocessing": {
+    "split_dir": "data/split",
+    "split_prefix": "dataset_optimization_cereal_co2",
+    "test_size": 0.2
+  },
+  "training": {
+    "dataset_path": "data/split/dataset_optimization_cereal_co2_train_scaled.csv",
+    "model_path": "models/artifacts/winner_genome.pkl",
+    "sample_size": 500,
+    "generations": 50,
+    "neat_config_path": "config/config-feedforward.txt"
+  },
+  "inference": {
+    "dataset_path": "data/split/dataset_optimization_cereal_co2_test_raw.csv",
+    "model_path": "models/artifacts/winner_genome.pkl",
+    "neat_config_path": "config/config-feedforward.txt",
+    "output_path": "data/predictions/inference_with_constraints.csv",
+    "lots_per_day": 15,
+    "animal_feed_capacity": 90.0,
+    "composting_capacity": 140.0,
+    "biochar_capacity": 45.0,
+    "biomass_combustion_capacity": 10000.0
+  },
+  "evaluation": {
+    "input_path": "data/predictions/inference_with_constraints.csv",
+    "report_path": "models/metrics/inference_evaluation_report.json",
+    "stochastic_runs": 200,
+    "random_state": 42,
+    "allow_causal_params_fallback": true
+  }
+}

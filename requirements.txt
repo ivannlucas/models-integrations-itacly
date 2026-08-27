@@ -55,6 +55,11 @@ deap==1.4.3
 # Added for ml31 (cereal residue optimizer) — Linear Programming
 pulp>=2.7.0
 
+# Added for ml33 (cereal reuse-strategy optimizer) — exact MILP assignment solver
+# (scipy.optimize.milp, HiGHS backend). Was previously only a transitive dep via
+# scikit-learn; pinned explicitly since it's now imported directly.
+scipy>=1.11.0
+
 # Added for ml45 (grain dryer PCC detection) — DNFLExplainer's TemporalExplainer uses SHAP
 # GradientExplainer for the LSTM branch. Deliberate deviation from this repo's usual pattern
 # (SHAP normally delegated to the external explainability microservice) — the PCC catalog is

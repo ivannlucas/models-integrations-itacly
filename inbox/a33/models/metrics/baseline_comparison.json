@@ -1,0 +1,72 @@
+{
+  "rows": 10000,
+  "baseline_total_emissions_kg": 42691705.58,
+  "policies": {
+    "exact_optimum": {
+      "total_emissions_kg": 30893908.4,
+      "total_reduction_pct": 27.63,
+      "strategy_distribution_pct": {
+        "Composting": 37.18,
+        "Animal feed": 27.27,
+        "Biomass combustion": 17.86,
+        "Biochar": 17.69
+      }
+    },
+    "oracle": {
+      "total_emissions_kg": 37489636.18,
+      "total_reduction_pct": 12.19,
+      "strategy_distribution_pct": {
+        "Composting": 46.47,
+        "Animal feed": 24.44,
+        "Biomass combustion": 18.25,
+        "Biochar": 10.84
+      }
+    },
+    "neat": {
+      "total_emissions_kg": 37862747.3,
+      "total_reduction_pct": 11.31,
+      "strategy_distribution_pct": {
+        "Composting": 39.73,
+        "Animal feed": 30.07,
+        "Biomass combustion": 18.33,
+        "Biochar": 11.87
+      }
+    },
+    "linear_fitness": {
+      "total_emissions_kg": 38575205.01,
+      "total_reduction_pct": 9.64,
+      "strategy_distribution_pct": {
+        "Composting": 42.01,
+        "Animal feed": 29.26,
+        "Biomass combustion": 18.33,
+        "Biochar": 10.4
+      }
+    },
+    "logistic_reg": {
+      "total_emissions_kg": 48146193.41,
+      "total_reduction_pct": -12.78,
+      "strategy_distribution_pct": {
+        "Composting": 50.81,
+        "Animal feed": 26.04,
+        "Biomass combustion": 22.01,
+        "Biochar": 1.14
+      }
+    },
+    "random": {
+      "total_emissions_kg": 51397293.13,
+      "total_reduction_pct": -20.39,
+      "strategy_distribution_pct": {
+        "Biomass combustion": 35.16,
+        "Composting": 28.53,
+        "Animal feed": 22.05,
+        "Biochar": 14.26
+      }
+    }
+  },
+  "interpretation": {
+    "exact_vs_oracle_gap_pp": 15.44,
+    "exact_vs_neat_gap_pp": 16.32,
+    "neat_vs_linear_fitness_gap_pp": 1.67,
+    "note": "The deployed model is 'exact_optimum': a per-block mixed-integer linear program that solves the capacity-constrained assignment to proven optimality (reduction=27.63%). It dominates the greedy per-lot heuristic ('oracle'=12.19%) by 15.44pp because it allocates scarce low-emission capacity across the whole operational block instead of consuming it on early lots. The neuroevolution policy ('neat'=11.31%) and a fixed LINEAR policy trained with the SAME fitness function ('linear_fitness'=9.64%) land within 1.67pp of each other: topology augmentation adds little in this first-order simulator, confirming the auditor's intuition that the problem does not require a deep learned model. Supervised logistic regression ('logistic_reg'=-12.78%) underperforms because per-row label imitation ignores sequential capacity depletion. NEAT is therefore reported as a learned-policy benchmark, while the exact optimizer is the deployed decision engine."
+  }
+}

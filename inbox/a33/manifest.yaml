@@ -1,0 +1,318 @@
+model_id: ml33_cereals_reuse_strategy_optimizer
+sector: cerealista
+# No hay memoria .docx entregada para este modelo (ver known_issues) — título tomado
+# literalmente del README.md del código entregado, único documento de negocio disponible.
+nombre: "DATAGIA - CO2 Reuse-Strategy Optimization: optimización exacta (MILP) de la
+  estrategia de reutilización de subproductos cerealistas por lote, bajo restricciones
+  de capacidad de planta, para minimizar emisiones de CO2 simuladas"
+task_type: optimization  # asignación combinatoria exacta (MILP); no hay red predictiva desplegada
+framework:
+  - scipy==1.15.3     # scipy.optimize.milp (HiGHS) — motor desplegado
+  - numpy==2.2.6
+  - pandas==2.3.3
+  - neat-python==2.0.0  # SOLO para el benchmark NEAT retenido (ver known_issues); no se usa en el motor desplegado
+
+# Sin artefactos serializados: el motor desplegado (ExactEmissionsOptimizer,
+# src/predict/exact_optimizer.py) es un solver MILP autocontenido — no carga pesos,
+# scaler ni genoma. Ver known_issues sobre el genoma NEAT (models/artifacts/winner_genome.pkl),
+# que pertenece al benchmark, no al modelo productivo.
+artifacts:
+  folder: null
+  files: []
+  note: >
+    No hay pesos que cargar. El "modelo" es la función determinista strategy_emissions()
+    + el solver MILP (scipy.optimize.milp, backend HiGHS) sobre bloques de
+    lots_per_day lotes. Misma entrada -> mismo resultado siempre (sin semilla aleatoria).
+
+inputs:
+  # Una fila = un lote de subproducto a asignar. El motor procesa lotes en bloques de
+  # `lots_per_day` (capacidades se resetean al empezar cada bloque).
+  fixed:
+    - name: generated_volume_tons
+      type: float
+      unit: t
+      description: "Volumen del lote de subproducto generado"
+      train_range: [0.1, 61.75]  # min/max observados en data/split/*_test_raw.csv
+    - name: moisture_pct
+      type: float
+      unit: "%"
+      description: "Porcentaje de humedad del lote"
+      train_range: [0.1, 37.53]
+    - name: subproduct_type
+      type: categorical
+      categories: [Husk, Straw, "Silo dust", Bran]
+      description: "Categoría del subproducto cerealista"
+    - name: season
+      type: categorical
+      categories: [Dry, Rainy]
+      description: >
+        Estación. Validada como columna requerida por infer_dataframe() pero NO
+        interviene en la fórmula strategy_emissions() del motor desplegado (solo
+        subproduct_type/moisture_pct/generated_volume_tons la usan) — ver known_issues.
+    - name: process_temperature_c
+      type: float
+      optional: true
+      description: >
+        Campo opcional aceptado por el esquema de entrada de NEAT (InferenceInput) pero
+        NUNCA usado como entrada de decisión por el motor desplegado: la temperatura se
+        deriva determinísticamente de la estrategia elegida (STRATEGY_TEMPERATURE_C), no
+        al revés. Se ignora si se envía.
+
+  # Parámetros de ejecución del optimizador — no son atributos del lote sino configuración
+  # de la ejecución/bloque; llegan con valores por defecto de config/pipeline_config.json.
+  control:
+    - name: lots_per_day
+      type: int
+      default: 15
+      description: "Nº de lotes antes de resetear las capacidades (bloque operativo/día simulado)"
+    - name: animal_feed_capacity
+      type: float
+      default: 90.0
+      unit: t
+      description: "Capacidad diaria de la estrategia 'Animal feed'"
+    - name: composting_capacity
+      type: float
+      default: 140.0
+      unit: t
+      description: "Capacidad diaria de la estrategia 'Composting'"
+    - name: biochar_capacity
+      type: float
+      default: 45.0
+      unit: t
+      description: "Capacidad diaria de la estrategia 'Biochar'"
+    - name: biomass_combustion_capacity
+      type: float
+      default: 10000.0
+      unit: t
+      description: "Capacidad diaria de 'Biomass combustion' (deliberadamente muy alta: garantiza factibilidad de bloque, ver exact_optimizer.py)"
+    - name: fallback_strategy
+      type: categorical
+      default: "Biomass combustion"
+      description: "Estrategia aplicada a un lote que el MILP no puede colocar (guarda defensiva; el bloque siempre es factible con la capacidad por defecto)"
+
+  derived_if_missing: {}  # no hay derivación automática; todas las columnas fixed son obligatorias
+
+outputs:
+  predict_inline:
+    - name: ai_assigned_strategy
+      type: str
+      description: "Estrategia de reutilización asignada al lote (una de las 4 STRATEGY_ORDER)"
+    - name: ai_assignment_source
+      type: str
+      description: "exact_min_emissions (solución MILP óptima) | capacity_fallback (guarda defensiva si el MILP es infactible)"
+    - name: ai_is_fallback
+      type: bool
+      description: "True si ai_assignment_source == capacity_fallback"
+    - name: estimated_emissions_kg
+      type: float
+      description: "Emisión de CO2 estimada del lote bajo la estrategia asignada (strategy_emissions())"
+
+  # Agregados devueltos junto a la lista de asignaciones (predict_inline con >1 lote, y predict_batch)
+  batch_summary:
+    - name: distribution
+      type: dict
+      description: "Conteo y % por estrategia asignada (summarize_strategy_distribution)"
+    - name: capacity_fallback_count
+      type: int
+      description: "Nº de lotes resueltos por guarda defensiva en vez de por el MILP"
+    - name: total_estimated_emissions_kg
+      type: float
+      description: "Suma de estimated_emissions_kg de todos los lotes procesados"
+
+constraints:
+  descripcion: >
+    Restricciones duras del problema de asignación, no violables por diseño del MILP
+    (no son excepciones de negocio como en a35/PU>=13): cada lote se asigna a EXACTAMENTE
+    una estrategia (sum_s x[i,s] = 1), y el volumen total asignado a cada estrategia dentro
+    de un bloque no puede superar su capacidad diaria restante (sum_i vol_i*x[i,s] <= cap_s).
+    Si el MILP resulta infactible/no resuelto (mensaje HiGHS != success), el motor NO lanza
+    excepción: degrada a una guarda greedy por lote (_greedy_block) y, si tampoco encuentra
+    hueco, usa fallback_strategy. Con las capacidades por defecto esto no ocurre nunca
+    (biomass_combustion_capacity=10000 garantiza factibilidad). No se ha identificado
+    necesidad de una excepción de dominio nueva — la trazabilidad va en
+    ai_assignment_source/ai_is_fallback, no en un error 422.
+
+training:
+  supported: false  # el motor desplegado es un solver MILP exacto, no hay pesos que aprender ni target que ajustar
+  target_column: null
+  required_columns: null
+  hyperparams: null
+  metrics_returned: null
+  source: >
+    src/predict/exact_optimizer.py (docstring del módulo) + README.md ("Neuroevolution (NEAT)
+    is retained as a learned-policy benchmark and is bounded above by the exact optimum").
+    El repo SÍ trae código de entrenamiento NEAT (src/training/evolution.py,
+    scripts/run_optimization.py) y un genoma serializado (models/artifacts/winner_genome.pkl),
+    pero son del benchmark retenido, no del modelo desplegado — ver known_issues.
+
+metrics_reported:
+  # models/metrics/inference_evaluation_report.json — comparación motor desplegado (exact) vs
+  # baseline sintético, sobre el split de test completo (10000 filas), capacidades por defecto.
+  protocolo: "Determinista: exact_optimum resuelve cada bloque de 15 lotes a optimalidad probada (MILP). Comparación vs baseline sintético (reuse_strategy) del propio dataset generado."
+  n_rows_test: 10000
+  ai_estimated_total_emissions_kg: 30893908.4
+  baseline_total_emissions_kg: 42691705.58
+  total_emissions_reduction_pct: 27.63
+  distribution_ai_pct_normalized:
+    composting: 37.18
+    animal_feed: 27.27
+    biomass_combustion: 17.86
+    biochar: 17.69
+  # Monte Carlo (models/metrics/inference_evaluation_report.json, stochastic_runs=200, seed=42)
+  stochastic_total_reduction_pct_p05: 27.27
+  stochastic_total_reduction_pct_p50: 27.66
+  stochastic_total_reduction_pct_p95: 28.04
+  # Escalera de comparación completa (models/metrics/baseline_comparison.json) — referencia,
+  # no verificable 1:1 vía API (son ejecuciones de scripts/run_baselines.py, no del plugin):
+  ladder_reference:
+    exact_optimum_reduction_pct: 27.63    # = motor desplegado
+    oracle_greedy_reduction_pct: 12.19    # cota inferior codiciosa por lote
+    neat_reduction_pct: 11.31             # benchmark aprendido, NO desplegado
+    linear_fitness_reduction_pct: 9.64
+    logistic_reg_reduction_pct: -12.78
+    random_reduction_pct: -20.39
+
+# =============================================================================================
+# GOLDEN CASES — extraídos literalmente de data/predictions/inference_with_constraints.csv
+# (salida real y ya auditada de scripts/run_inference.py --selector exact sobre
+# data/split/dataset_optimization_cereal_co2_test_raw.csv, capacidades/lots_per_day por
+# defecto de config/pipeline_config.json). Ningún caso ha sido inventado ni recalculado por
+# el agente. La asignación depende del BLOQUE completo (capacidad compartida entre los 15
+# lotes de cada bloque) — por eso cada golden case es un bloque de 15 lotes consecutivos
+# íntegro, no filas sueltas: verificar fila a fila fuera de su bloque no es reproducible.
+# =============================================================================================
+golden_cases:
+  - id: bloque_001_filas_1_15
+    source: dataset_test_split  # data/split/dataset_optimization_cereal_co2_test_raw.csv filas 1-15 (input) + data/predictions/inference_with_constraints.csv filas 1-15 (expected)
+    input:
+      lots_per_day: 15
+      animal_feed_capacity: 90.0
+      composting_capacity: 140.0
+      biochar_capacity: 45.0
+      biomass_combustion_capacity: 10000.0
+      fallback_strategy: "Biomass combustion"
+      lots:
+        - {subproduct_type: Husk,      season: Rainy, generated_volume_tons: 12.53581586819494,  moisture_pct: 19.48103407628226}
+        - {subproduct_type: "Silo dust", season: Dry,  generated_volume_tons: 60.1242613388751,   moisture_pct: 12.715916798277473}
+        - {subproduct_type: Husk,      season: Dry,   generated_volume_tons: 46.172934640527885, moisture_pct: 21.42845614091188}
+        - {subproduct_type: Straw,     season: Dry,   generated_volume_tons: 50.41271004729212,  moisture_pct: 20.99686680273937}
+        - {subproduct_type: Bran,      season: Rainy, generated_volume_tons: 32.55187627255256,  moisture_pct: 31.823850396405163}
+        - {subproduct_type: Straw,     season: Rainy, generated_volume_tons: 58.07459257381273,  moisture_pct: 16.29926233207015}
+        - {subproduct_type: "Silo dust", season: Rainy, generated_volume_tons: 49.85468789104666, moisture_pct: 12.531818543570944}
+        - {subproduct_type: "Silo dust", season: Dry,  generated_volume_tons: 55.39475814910509,  moisture_pct: 9.903132359142605}
+        - {subproduct_type: Husk,      season: Rainy, generated_volume_tons: 44.643324223583406, moisture_pct: 24.15701794445286}
+        - {subproduct_type: Husk,      season: Dry,   generated_volume_tons: 21.179016912153696, moisture_pct: 17.97078786490619}
+        - {subproduct_type: Husk,      season: Rainy, generated_volume_tons: 14.54879118972811,  moisture_pct: 13.50492529998212}
+        - {subproduct_type: "Silo dust", season: Rainy, generated_volume_tons: 9.036638824736876, moisture_pct: 25.706063786980096}
+        - {subproduct_type: Bran,      season: Rainy, generated_volume_tons: 11.018699967754404, moisture_pct: 9.466568280096896}
+        - {subproduct_type: "Silo dust", season: Rainy, generated_volume_tons: 9.644142495238988, moisture_pct: 18.57865943162804}
+        - {subproduct_type: Husk,      season: Dry,   generated_volume_tons: 7.838859074449967,  moisture_pct: 28.874939335075737}
+    expected:
+      ai_assigned_strategy: [
+        "Animal feed", "Composting", "Biomass combustion", "Composting", "Animal feed",
+        "Biomass combustion", "Biomass combustion", "Biomass combustion", "Animal feed", "Composting",
+        "Biochar", "Biochar", "Biochar", "Biochar", "Composting"
+      ]
+      ai_assignment_source: ["exact_min_emissions"] # las 15 filas comparten fuente
+      ai_is_fallback: false  # ninguna fila del bloque cae en fallback
+    exact_match: true  # salida categórica determinista, sin tolerancia numérica
+
+  - id: bloque_002_filas_16_30
+    source: dataset_test_split  # mismos ficheros, filas 16-30
+    input:
+      lots_per_day: 15
+      animal_feed_capacity: 90.0
+      composting_capacity: 140.0
+      biochar_capacity: 45.0
+      biomass_combustion_capacity: 10000.0
+      fallback_strategy: "Biomass combustion"
+      lots:
+        - {subproduct_type: Husk,  season: Dry,   generated_volume_tons: 26.62127707945601,  moisture_pct: 19.02847737600104}
+        - {subproduct_type: Husk,  season: Rainy, generated_volume_tons: 18.80803994109137,  moisture_pct: 29.931660566922545}
+        - {subproduct_type: Husk,  season: Rainy, generated_volume_tons: 11.554358008199744, moisture_pct: 8.24712645810193}
+        - {subproduct_type: Husk,  season: Rainy, generated_volume_tons: 15.423056064441568, moisture_pct: 12.931612648238444}
+        - {subproduct_type: Straw, season: Dry,   generated_volume_tons: 18.97404097578729,  moisture_pct: 22.69949286942504}
+        - {subproduct_type: Bran,  season: Rainy, generated_volume_tons: 38.06280493997608,  moisture_pct: 20.49090137950993}
+        - {subproduct_type: "Silo dust", season: Rainy, generated_volume_tons: 53.51074785831268, moisture_pct: 14.171298857058218}
+        - {subproduct_type: Straw, season: Dry,   generated_volume_tons: 40.99615665445583,  moisture_pct: 18.59968860748574}
+        - {subproduct_type: Straw, season: Rainy, generated_volume_tons: 0.1,                 moisture_pct: 11.387474486671406}
+        - {subproduct_type: Straw, season: Rainy, generated_volume_tons: 34.52057239709038,  moisture_pct: 15.094391484736713}
+        - {subproduct_type: Bran,  season: Rainy, generated_volume_tons: 25.696797761044813, moisture_pct: 2.4450978598380155}
+        - {subproduct_type: Bran,  season: Dry,   generated_volume_tons: 56.99374562466501,  moisture_pct: 9.73994026638142}
+        - {subproduct_type: Husk,  season: Rainy, generated_volume_tons: 24.29545634427781,  moisture_pct: 10.017996499667204}
+        - {subproduct_type: Bran,  season: Rainy, generated_volume_tons: 24.734163321661555, moisture_pct: 12.753660249731674}
+        - {subproduct_type: Straw, season: Rainy, generated_volume_tons: 7.586571784131847,  moisture_pct: 20.84929170193845}
+      # nota: este bloque arranca con capacidades reseteadas a los defaults (nuevo bloque de 15)
+    expected:
+      ai_assigned_strategy: [
+        "Composting", "Composting", "Biochar", "Biomass combustion", "Composting",
+        "Biomass combustion", "Biomass combustion", "Composting", "Animal feed", "Composting",
+        "Biochar", "Animal feed", "Biomass combustion", "Animal feed", "Animal feed"
+      ]
+      ai_assignment_source: ["exact_min_emissions"]
+      ai_is_fallback: false
+    exact_match: true
+
+  # Caso agregado para validar predict_batch de extremo a extremo (no fila a fila): al correr
+  # el batch completo sobre data/split/dataset_optimization_cereal_co2_test_raw.csv (10000 filas,
+  # capacidades por defecto), la distribución final normalizada debe reproducir
+  # distribution_ai_pct_normalized de metrics_reported (fuente: models/metrics/inference_evaluation_report.json).
+  - id: batch_full_test_split_distribution
+    source: models/metrics/inference_evaluation_report.json
+    input:
+      data_path: data/split/dataset_optimization_cereal_co2_test_raw.csv
+      lots_per_day: 15
+      animal_feed_capacity: 90.0
+      composting_capacity: 140.0
+      biochar_capacity: 45.0
+      biomass_combustion_capacity: 10000.0
+    expected:
+      n_rows: 10000
+      distribution_pct:
+        composting: 37.18
+        animal_feed: 27.27
+        biomass_combustion: 17.86
+        biochar: 17.69
+      total_estimated_emissions_kg: 30893908.4
+      capacity_fallback_count: 0
+    tolerance_pct: 0.5  # agregado sobre 10000 filas; pequeño margen de redondeo por acumulación
+
+known_issues:
+  - "SIN MEMORIA .DOCX: a diferencia de otros modelos de este repo, no se entregó memoria/entregable
+     en inbox/a33-.../entregable/. El README.md de este delivery es exhaustivo y de código real
+     (fórmulas exactas, defaults reproducibles, reportes JSON auditados), así que este manifest se
+     construyó enteramente desde código + README + JSON de métricas, sin ningún dato de la memoria.
+     Revisión humana recomendada antes de docs-generation por si existe una memoria oficial fuera
+     de este repo que deba prevalecer sobre el README como fuente de la ficha funcional."
+  - "LINAJE DEL PROYECTO: el nombre de carpeta tal como se entregó
+     ('a33-cnp-cereals-neuroevolutivo-reduccion-ambiental-residuos', renombrada a inbox/a33 por
+     convención del repo — ver README.md original conservado en inbox/a33/README.md)
+     y el dominio de negocio (cereales, reducción de residuos, técnicas neuroevolutivas) coinciden
+     con el linaje de a31 (hoy app/plugins/ml31_cereals_residue_optimizer), cuyo propio manifest
+     documenta que YA es una v2.0 que sustituyó una v1.x ANN+GA bajo el mismo nombre de carpeta.
+     El código de a33 es, sin embargo, técnicamente distinto de a31 (asignación de lotes a
+     estrategia de reuso vía MILP vs. reasignación de superficie de cultivo vía LP) — mismo
+     dataset/columnas no comparables. Por decisión explícita del usuario (2026-08-27), a33 se
+     integra como plugin NUEVO e independiente (ml33_cereals_reuse_strategy_optimizer), sin tocar
+     ml31_cereals_residue_optimizer. Si en el futuro se determina que ambos deben unificarse,
+     tratarlo como una migración explícita, no como un descubrimiento de este manifest."
+  - "NEAT RETENIDO SOLO COMO BENCHMARK: el repo entregado trae entrenamiento NEAT completo
+     (src/training/evolution.py, config/config-feedforward*.txt, models/artifacts/winner_genome.pkl)
+     y un selector --selector neat en scripts/run_inference.py, pero el propio README califica
+     el motor MILP como 'the deployed decision engine' y a NEAT como 'learned-policy benchmark,
+     bounded above by the exact optimum' (ver models/metrics/baseline_comparison.json: NEAT
+     reduce 11.31% vs 27.63% del MILP exacto). Este plugin implementa ÚNICAMENTE el motor MILP
+     desplegado — no se expone el selector NEAT ni se carga winner_genome.pkl."
+  - "COLUMNA 'season' NO USADA POR LA FÓRMULA DE EMISIONES: infer_dataframe() la exige como
+     columna requerida (ValueError si falta) pero strategy_emissions() nunca la lee — es
+     vestigial del esquema de entrada de NEAT (InferenceInput / POLICY_INPUT_COLUMNS). Se
+     mantiene como campo obligatorio en el contrato del plugin por fidelidad al código fuente
+     (para no romper la validación de columnas si en el futuro se reintroduce), pero no
+     afecta al resultado numérico ni de asignación."
+  - "SINTÉTICO, NO OPERACIONAL: el propio README (sección 'Methodological Scope') advierte que
+     todo el dataset es sintético (CTGAN + reglas causales configurables), y que 'AI-vs-baseline
+     results reflect improvement against an artificial reference' — el 27.63% de reducción no es
+     una medición de planta real. Documentar esto tal cual en la ficha funcional, no como un
+     resultado operacional verificado."
+  - "requirements.txt de este delivery está en UTF-8/ASCII estándar (verificado), a diferencia de
+     otros modelos del repo con requirements.txt en UTF-16LE — no requiere normalización."

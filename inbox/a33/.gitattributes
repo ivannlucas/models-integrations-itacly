@@ -1,0 +1,22 @@
+# Enforce a single, deterministic byte representation for text files across
+# Windows, Linux and macOS. Without this, core.autocrlf rewrites line endings
+# per platform (CRLF on Windows, LF elsewhere), which silently changes file
+# SHA-256 hashes and breaks the reproducibility guarantees recorded in the
+# model metadata. Forcing LF keeps text-file hashes identical everywhere.
+* text=auto eol=lf
+
+# Files that are hashed for reproducibility must never be EOL-normalized.
+*.csv   text eol=lf
+*.txt   text eol=lf
+*.json  text eol=lf
+
+# Binary artifacts: never apply text/EOL conversion.
+*.pkl     binary
+*.joblib  binary
+*.npy     binary
+*.npz     binary
+*.parquet binary
+*.png     binary
+*.jpg     binary
+*.jpeg    binary
+*.pdf     binary
