@@ -142,3 +142,25 @@ no funcional.
 correctitud exacta (0 discrepancias) contra el golden dataset completo del manifest y contra las
 10 000 filas del split de test original. Puntos 1–4 de arriba son para revisión humana, no
 bloqueantes de corrección.
+
+## Addendum (2026-08-27) — campo `candidates` (explicabilidad local)
+
+Al conectar ml33 con el resto de la plataforma se decidió (con el usuario, ver
+`inbox/a33/manifest.yaml` known_issues) NO registrar el modelo en
+`retech-lote2-xai-explicabilidad` — igual que ml31/ml28/ml45, no hay pesos entrenados contra los
+que correr SHAP. En su lugar se añadió `optimizer.candidate_breakdown()` y el campo `candidates`
+en `LotResult`/`predict_batch` (fila 0): emisión exacta de las 4 estrategias candidatas por
+lote, no solo la elegida — mismo tipo de explicación local-exacta que `ml31._compute_sensitivity`.
+
+Re-verificado tras el cambio:
+- `pytest tests/unit/test_ml33_cereals_reuse_strategy_optimizer.py tests/unit/test_ml31_cereals_residue_optimizer.py` → 15/15 passed (en este repo y en el clon Bitbucket sincronizado, `GitHub-repos/Bitbucket`).
+- `flake8` sobre el paquete del plugin → 0 errores (ambos repos).
+- Motor real contra las 10 000 filas completas del split de test → **0 discrepancias** (el cambio es puramente aditivo; `ai_assigned_strategy`/`estimated_emissions_kg` no se tocaron).
+- Comprobación manual de un caso: fila 0 del split de test se asigna a "Animal feed" (676.9 kg)
+  aunque "Composting" en aislado sería más barato (363.5 kg) — el campo `candidates` lo muestra
+  correctamente como `feasible: true` pero no elegido, ilustrando honestamente que el MILP
+  optimiza el bloque conjunto, no lote a lote (la propia `feasible` de `candidates` documenta
+  esta limitación explícitamente).
+
+Sin cambios en el resto del checklist técnico ni en los golden cases del manifest (no se tocó
+`ai_assigned_strategy`/`estimated_emissions_kg`, solo se añadió información).

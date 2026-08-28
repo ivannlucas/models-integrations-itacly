@@ -111,6 +111,7 @@ class Ml33CerealsReuseStrategyOptimizerPlugin(ModelPluginPort):
                 ai_assignment_source=str(row["ai_assignment_source"]),
                 ai_is_fallback=bool(row["ai_is_fallback"]),
                 estimated_emissions_kg=float(row["estimated_emissions_kg"]),
+                candidates=row["candidate_emissions"],
             )
             for idx, row in trace_df.iterrows()
         ]
@@ -160,16 +161,23 @@ class Ml33CerealsReuseStrategyOptimizerPlugin(ModelPluginPort):
         engine = self._build_engine({})
         trace_df = engine.infer_dataframe(df)
 
-        predictions = [
-            {
+        predictions = []
+        for idx, row in trace_df.iterrows():
+            row_out = {
                 "row": int(idx),
                 "ai_assigned_strategy": row["ai_assigned_strategy"],
                 "ai_assignment_source": row["ai_assignment_source"],
                 "ai_is_fallback": bool(row["ai_is_fallback"]),
                 "estimated_emissions_kg": float(row["estimated_emissions_kg"]),
             }
-            for idx, row in trace_df.iterrows()
-        ]
+            # "candidates" (why this strategy) is only surfaced for row 0 of a batch —
+            # the platform's XAI panel only ever explains one row at a time, and
+            # repeating it for every one of up to 10k rows would needlessly bloat an
+            # already large batch response (mirrors ml31's own predict_batch, which
+            # applies the same idx==0 restriction to its own explanation field).
+            if idx == 0:
+                row_out["candidates"] = row["candidate_emissions"]
+            predictions.append(row_out)
         distribution = summarize_strategy_distribution(trace_df["ai_assigned_strategy"])
         self._record()
         logger.info("predict_batch done — %d lots", len(predictions))
@@ -238,6 +246,8 @@ class Ml33CerealsReuseStrategyOptimizerPlugin(ModelPluginPort):
                 OutputField(name="ai_assignment_source", type="str", description="exact_min_emissions | capacity_fallback"),
                 OutputField(name="ai_is_fallback", type="bool", description="True si se usó la guarda defensiva en vez del MILP"),
                 OutputField(name="estimated_emissions_kg", type="float", description="Emisión de CO2 estimada del lote bajo la estrategia asignada"),
+                OutputField(name="candidates", type="list",
+                            description="Emisión estimada de las 4 estrategias candidatas (exacta, no SHAP) — explica por qué se eligió ai_assigned_strategy [inline; solo fila 0 en batch]"),
                 OutputField(name="distribution", type="dict", description="Conteo/% por estrategia asignada (agregado)"),
                 OutputField(name="capacity_fallback_count", type="int", description="Nº de lotes resueltos por guarda defensiva"),
             ],

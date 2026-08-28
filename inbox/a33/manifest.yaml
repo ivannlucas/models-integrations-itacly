@@ -106,6 +106,19 @@ outputs:
     - name: estimated_emissions_kg
       type: float
       description: "Emisión de CO2 estimada del lote bajo la estrategia asignada (strategy_emissions())"
+    - name: candidates
+      type: list[dict]
+      description: >
+        AÑADIDO tras la integración inicial (explainability-integration, 2026-08-27): emisión
+        estimada de las 4 estrategias candidatas para el lote (no solo la elegida), con
+        feasible=volume_tons<=capacidad de esa estrategia EN AISLADO (no contempla contención
+        con otros lotes del mismo bloque — ver ai_assignment_source para el resultado conjunto
+        real). Exacto (misma fórmula que minimiza el MILP), no una aproximación SHAP. Sustituye
+        a un registro en el servicio de explicabilidad estándar: al no haber pesos entrenados,
+        no aplica SHAP (mismo motivo por el que ml31/ml28/ml45 tampoco están registrados allí;
+        decisión explícita del usuario). Solo se devuelve para la fila 0 en modo batch (mismo
+        criterio que ml31._compute_sensitivity, para no multiplicar el tamaño de la respuesta
+        en CSVs grandes).
 
   # Agregados devueltos junto a la lista de asignaciones (predict_inline con >1 lote, y predict_batch)
   batch_summary:
@@ -278,6 +291,14 @@ golden_cases:
     tolerance_pct: 0.5  # agregado sobre 10000 filas; pequeño margen de redondeo por acumulación
 
 known_issues:
+  - "SIN REGISTRO EN retech-lote2-xai-explicabilidad (decisión explícita, 2026-08-27): igual que
+     ml31/ml28/ml45 en este mismo repo, ml33 no tiene pesos entrenados ni artefacto que cargar,
+     así que SHAP no aplica (el servicio de explicabilidad asume una función predict_fn(numpy)
+     sobre un modelo cargado desde S3). En su lugar, plugin.py expone un campo `candidates` con
+     la emisión exacta de las 4 estrategias candidatas por lote (ver outputs.predict_inline más
+     abajo) — la misma fórmula que minimiza el MILP, no una aproximación. front-integration debe
+     tratar ml33 igual que cereal_residue_optimizer (modelo-31): sin xaiModelId real, con
+     short-circuit propio en el front en vez de llamar a /explanations."
   - "SIN MEMORIA .DOCX: a diferencia de otros modelos de este repo, no se entregó memoria/entregable
      en inbox/a33-.../entregable/. El README.md de este delivery es exhaustivo y de código real
      (fórmulas exactas, defaults reproducibles, reportes JSON auditados), así que este manifest se

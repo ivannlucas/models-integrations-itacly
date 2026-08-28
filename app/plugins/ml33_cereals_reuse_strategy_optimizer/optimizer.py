@@ -208,6 +208,52 @@ def solve_block(
     return assigned, sources
 
 
+def candidate_breakdown(
+    volume_tons: float,
+    moisture_pct: float,
+    subproduct_type: str,
+    capacities: dict[str, float],
+) -> list[dict[str, Any]]:
+    """Per-lot explanation: estimated emissions for EVERY candidate strategy, not just
+    the chosen one — the "why" for this deterministic solver.
+
+    Exact, not an approximation (unlike SHAP): strategy_emissions() is the same pure
+    function the MILP itself minimizes, so this is simply evaluating it once per
+    candidate instead of only for the winner. Sorted ascending by emissions, so the
+    chosen strategy normally appears first among the feasible ones.
+
+    ``feasible`` here checks only whether the strategy's total daily capacity covers
+    THIS lot's own volume in isolation (volume_tons <= capacities[strategy]) — it does
+    NOT account for contention with the other lots in the same block, which is what the
+    joint MILP solve (solve_block) actually decides. A strategy marked feasible here can
+    still lose to another lot's claim on the same shared capacity; see
+    ai_assignment_source for the real, block-level outcome.
+
+    Args:
+        volume_tons: Lot volume in tons.
+        moisture_pct: Lot moisture percentage.
+        subproduct_type: Residue category label.
+        capacities: Daily capacity per strategy label (the block's starting capacities).
+
+    Returns:
+        list[dict[str, Any]]: One entry per STRATEGY_ORDER member, each
+        {strategy, estimated_emissions_kg, feasible}, sorted by estimated_emissions_kg.
+    """
+
+    candidates = [
+        {
+            "strategy": strategy,
+            "estimated_emissions_kg": strategy_emissions(
+                volume_tons, moisture_pct, strategy, subproduct_type
+            ),
+            "feasible": volume_tons <= capacities.get(strategy, 0.0),
+        }
+        for strategy in STRATEGY_ORDER
+    ]
+    candidates.sort(key=lambda c: c["estimated_emissions_kg"])
+    return candidates
+
+
 class ExactEmissionsOptimizer:
     """Deployed decision engine: exact per-block emissions minimization.
 
@@ -240,7 +286,8 @@ class ExactEmissionsOptimizer:
 
         Returns:
             pd.DataFrame: Traceability columns (ai_assigned_strategy,
-            ai_assignment_source, ai_is_fallback, estimated_emissions_kg).
+            ai_assignment_source, ai_is_fallback, estimated_emissions_kg,
+            candidate_emissions — see candidate_breakdown()).
 
         Raises:
             ValueError: If required columns are missing.
@@ -284,12 +331,19 @@ class ExactEmissionsOptimizer:
             strategy_emissions(float(volumes[i]), float(moistures[i]), assigned[i], str(subproducts[i]))
             for i in range(n_rows)
         ]
+        candidates = [
+            candidate_breakdown(
+                float(volumes[i]), float(moistures[i]), str(subproducts[i]), self.capacities
+            )
+            for i in range(n_rows)
+        ]
 
         trace_df = pd.DataFrame(
             {
                 "ai_assigned_strategy": assigned,
                 "ai_assignment_source": sources,
                 "estimated_emissions_kg": estimated_emissions,
+                "candidate_emissions": candidates,
             }
         )
         trace_df["ai_is_fallback"] = trace_df["ai_assignment_source"].isin(
