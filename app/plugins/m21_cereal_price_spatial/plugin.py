@@ -21,18 +21,9 @@ from app.domain.ports.model_plugin_port import ModelPluginPort
 from app.domain.services.exceptions import ModelNotLoadedError
 from app.infrastructure.artifact_store import local_file_path
 from app.plugins.m21_cereal_price_spatial.constants import (
-    BENCHMARK_BREAK_DELTA,
-    CONFIDENCE_HIGH_DOWN,
-    CONFIDENCE_HIGH_UP,
     FRAMEWORK,
     GEO_RISK_DEFAULT_PROVINCES,
-    MAPA_ADMIN_LAG,
     MODEL_ID,
-    PROB_BEAR,
-    PROB_BULL,
-    RET_BEAR,
-    RET_BULL,
-    SPREAD_MIN,
     TIMING_DELTA,
     VALID_HORIZONS,
     VERSION,
@@ -43,7 +34,6 @@ from app.plugins.m21_cereal_price_spatial.preprocessing import (
     build_features_from_row,
     get_selected_feature_columns,
     signal_from_prob_return,
-    validate_expected_columns,
 )
 
 logger = logging.getLogger(__name__)
@@ -298,7 +288,6 @@ class M21CerealPriceSpatialPlugin(ModelPluginPort):
 
             predictions = self._predict_single(raw_row, self._metadata, self._models)
 
-            h3_signal = predictions[3]["signal"]
             h1_ret = predictions[1]["expected_return"]
             h2_ret = predictions[2]["expected_return"]
             h3_ret = predictions[3]["expected_return"]

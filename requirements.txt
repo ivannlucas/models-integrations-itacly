@@ -21,8 +21,8 @@ uvicorn[standard]==0.30.6
 pydantic==2.9.2
 
 
-torch>=2.6.0
-torchvision==0.26.0
+torch>=2.13.0
+torchvision==0.28.0
 
 # Detectron2 — must be installed from source after torch is available:
 #   python -m pip install --no-build-isolation \
@@ -48,6 +48,11 @@ fvcore>=0.1.5
 
 # MLflow integration
 mlflow>=2.20.0
+
+# Pinned below mlflow's own cap (cryptography<50,>=43.0.0, as of mlflow 3.15.2).
+# pip-audit flags PYSEC-2026-3552 (fixed in 50.0.0) — cannot be resolved until
+# mlflow raises its upper bound; do not bump without also bumping mlflow's pin.
+cryptography<50,>=43.0.0
 
 # Added for ml34 (dairy pasteurization energy) — single-objective GA optimizer
 deap==1.4.3
