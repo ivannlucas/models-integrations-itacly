@@ -1,0 +1,191 @@
+{
+  "model_id": "a16",
+  "model_slug": "meat-raw-material-price-alert",
+  "fecha": "Agosto 2026",
+  "model_key": "ml16-meat-raw-material-price-alert",
+  "version": "1.0.0",
+  "descripcion": "Sistema de alerta temprana de precios para el sector cárnico, compuesto por dos clasificadores binarios independientes que comparten el mismo bloque de ingeniería de características sobre una serie mensual: XGBoost para el índice de precios de animales (ganado) y Regresión Logística para el índice de precios de insumos (cereales de pienso). Cada mes, el sistema evalúa el histórico reciente (ventana de 3 meses) y predice si el índice correspondiente subirá un 2,5% o más dentro de 4 meses, permitiendo anticipar encarecimientos en la compra de materias primas.",
+  "task_type": "Clasificación binaria multi-objetivo sobre series temporales mensuales (2 targets independientes: animales e insumos)",
+  "framework": "XGBoost (target_animales) + scikit-learn LogisticRegression (target_insumos), con bagging bootstrap (12 variantes por target) para estimar incertidumbre; pandas/numpy/joblib",
+  "artefacto": "model_target_animales.joblib + model_target_insumos.joblib + scaler_target_animales.joblib + scaler_target_insumos.joblib + bagging_target_animales.joblib + bagging_target_insumos.joblib + train_config.json",
+  "objetivo": "Anticipar con 4 meses de antelación un encarecimiento crítico (>= 2,5%) en el coste de las materias primas de la industria de transformación cárnica —tanto del ganado como de los cereales usados en piensos— para que el departamento de compras pueda ajustar presupuestos, adelantar coberturas o renegociar contratos de suministro antes de que el mercado se tense.",
+  "caso_uso": "Modo predict batch: CSV con una serie histórica mensual continua (índices de precios, precipitación, animales afectados por epidemias); el sistema aplica la ingeniería de variables (momentum, medias móviles, volatilidad, lags) y devuelve una predicción —clase, probabilidad y rango de incertidumbre— por cada mes objetivo que el histórico permite calcular. Modo predict inline: la misma serie histórica como lista de filas, devolviendo la predicción del mes objetivo más reciente (mínimo 10 meses de histórico). Modo train: reentrena ambos clasificadores desde cero sobre un CSV etiquetado, replicando el procedimiento original del equipo de IA (validación temporal walk-forward, búsqueda de umbral, bagging), sin sobrescribir los artefactos fijos.",
+  "inputs": [
+    {
+      "nombre": "fecha, month",
+      "tipo": "date / int",
+      "descripcion": "Primer día del mes (YYYY-MM-01) y mes 1-12. 'month' se deriva automáticamente de 'fecha' si no se aporta (añadido del plugin sobre el código original)",
+      "obligatorio": "Sí",
+      "valor_defecto": "month se deriva de fecha si falta"
+    },
+    {
+      "nombre": "indice_animales",
+      "tipo": "float (EUR)",
+      "descripcion": "Índice mensual de precios del sector cárnico — media de 13 cotizaciones de referencia (bovino, porcino, ovino) del MAPA",
+      "obligatorio": "Sí",
+      "valor_defecto": "-"
+    },
+    {
+      "nombre": "indice_insumos",
+      "tipo": "float (EUR)",
+      "descripcion": "Índice mensual de precios de cereales para pienso — media de 5 cotizaciones (cebada, maíz, trigo) del MAPA",
+      "obligatorio": "Sí",
+      "valor_defecto": "-"
+    },
+    {
+      "nombre": "precip_total, wet_days",
+      "tipo": "float",
+      "descripcion": "Precipitación total mensual (mm) y días de lluvia, promedio nacional (Google Earth Engine) — afectan al coste de los cereales de pienso",
+      "obligatorio": "Sí",
+      "valor_defecto": "-"
+    },
+    {
+      "nombre": "precip_max, wash_days",
+      "tipo": "float",
+      "descripcion": "Precipitación máxima mensual y días de lavado — forman parte del esquema de entrada pero no influyen en la predicción de ningún target",
+      "obligatorio": "Sí (esquema), sin efecto en la predicción",
+      "valor_defecto": "-"
+    },
+    {
+      "nombre": "animales_afectados",
+      "tipo": "int",
+      "descripcion": "Total de animales afectados por epidemias veterinarias a nivel nacional en el mes (0 si no hay focos reportados)",
+      "obligatorio": "Sí",
+      "valor_defecto": "0"
+    }
+  ],
+  "outputs": [
+    {
+      "nombre": "fecha",
+      "tipo": "date",
+      "descripcion": "Mes objetivo de la predicción",
+      "rango": "último mes de entrada + 4 meses",
+      "interpretacion": "es el mes al que se refiere la alerta, no el mes de los datos de entrada"
+    },
+    {
+      "nombre": "target_animales_pred / target_animales_proba",
+      "tipo": "int (0/1) / float",
+      "descripcion": "Alerta de encarecimiento del índice de animales (XGBoost) y su probabilidad",
+      "rango": "pred: 0/1; proba: 0-1 (umbral de decisión 0,48)",
+      "interpretacion": "1 = se espera una subida >= 2,5% en el índice de animales dentro de 4 meses"
+    },
+    {
+      "nombre": "target_animales_proba_low / _high",
+      "tipo": "float",
+      "descripcion": "Rango de incertidumbre (percentil 10-90 de 12 variantes bootstrap)",
+      "rango": "0-1, siempre contiene a target_animales_proba",
+      "interpretacion": "un rango amplio indica menor consenso entre las variantes del modelo"
+    },
+    {
+      "nombre": "target_insumos_pred / target_insumos_proba",
+      "tipo": "int (0/1) / float",
+      "descripcion": "Alerta de encarecimiento del índice de insumos (Regresión Logística) y su probabilidad",
+      "rango": "pred: 0/1; proba: 0-1 (umbral de decisión 0,30, fijado manualmente para priorizar sensibilidad)",
+      "interpretacion": "1 = se espera una subida >= 2,5% en el índice de insumos dentro de 4 meses"
+    },
+    {
+      "nombre": "target_insumos_proba_low / _high",
+      "tipo": "float",
+      "descripcion": "Rango de incertidumbre (percentil 10-90 de 12 variantes bootstrap)",
+      "rango": "0-1, siempre contiene a target_insumos_proba",
+      "interpretacion": "un rango amplio indica menor consenso entre las variantes del modelo"
+    }
+  ],
+  "metricas": [
+    {
+      "nombre": "Test — target_animales (declarado en memoria v1.5, Tabla 9)",
+      "valor": "Accuracy=0,750; Precision=0,714; Recall=0,833; F1=0,769; AUC=0,944 (umbral 0,46)",
+      "descripcion": "Cifras tal como las reporta la memoria entregada por el equipo de IA",
+      "interpretacion": "NO coincide con el artefacto realmente entregado — ver siguiente entrada y limitaciones"
+    },
+    {
+      "nombre": "Test — target_animales (artefacto real entregado)",
+      "valor": "Accuracy=0,833; Precision=0,833; Recall=0,833; F1=0,833; AUC=0,917 (umbral 0,48)",
+      "descripcion": "models/metrics/hibrido_xgb_logreg_resumen.json — métricas reales del checkpoint XGBoost tal como se entrega en inbox/a16/codigo/",
+      "interpretacion": "el modelo acierta 5 de 6 alertas de subida en el histórico de test (12 meses); 1 falso negativo y 1 falso positivo"
+    },
+    {
+      "nombre": "Test — target_insumos (declarado en memoria v1.5, Tabla 9)",
+      "valor": "Accuracy=0,583; Precision=0,375; Recall=1,000; F1=0,545; AUC=0,889 (umbral 0,30)",
+      "descripcion": "Cifras tal como las reporta la memoria entregada por el equipo de IA",
+      "interpretacion": "NO coincide con el artefacto realmente entregado — ver siguiente entrada y limitaciones"
+    },
+    {
+      "nombre": "Test — target_insumos (artefacto real entregado)",
+      "valor": "Accuracy=0,667; Precision=0,429; Recall=1,000; F1=0,600; AUC=0,741 (umbral 0,30)",
+      "descripcion": "models/metrics/hibrido_xgb_logreg_resumen.json — métricas reales del checkpoint LogisticRegression tal como se entrega",
+      "interpretacion": "captura el 100% de las subidas reales de insumos (3 de 3) a costa de más falsas alarmas — decisión deliberada de negocio (umbral manual 0,30)"
+    },
+    {
+      "nombre": "Verificación golden dataset (post-integración)",
+      "valor": "12/12 casos, coincidencia exacta a 4 decimales en ambos targets",
+      "descripcion": "Re-ejecución del pipeline de inferencia entregado (predictor.py original) y del plugin integrado sobre los 12 meses de test hold-out (sep-2023 a ago-2024)",
+      "interpretacion": "el servicio integrado reproduce exactamente el comportamiento del código entregado; es fidelidad del wiring, no acierto adicional del modelo"
+    }
+  ],
+  "limitaciones": [
+    {
+      "tipo": "Discrepancia memoria vs. artefacto entregado",
+      "descripcion": "La memoria v1.5 (Tabla 9) reporta un umbral de decisión y unas métricas de test para target_animales que no coinciden con el checkpoint realmente entregado (umbral 0,46 en memoria vs. 0,48 en el artefacto; ver tabla de métricas). Probablemente el modelo se reentrenó tras cerrar la redacción de la memoria. Este documento usa siempre las cifras del artefacto real."
+    },
+    {
+      "tipo": "Serie histórica corta",
+      "descripcion": "El entrenamiento final usa solo 35 secuencias de train y 12 de test (56 meses de histórico total, jul-2020 a dic-2024). Con tan pocas observaciones, un único mes mal clasificado altera notablemente las métricas de recall/F1."
+    },
+    {
+      "tipo": "Variables sin efecto real",
+      "descripcion": "precip_max y wash_days forman parte del esquema de entrada obligatorio (igual que en el dataset original del equipo de IA) pero no aparecen entre las variables que usa ningún modelo — se aceptan por compatibilidad de esquema, no porque aporten señal."
+    },
+    {
+      "tipo": "Umbral de insumos ajustado manualmente",
+      "descripcion": "Para target_insumos se sustituye el umbral óptimo estadístico (0,52) por un umbral manual de 0,30 para priorizar la sensibilidad (no perder alertas de subida) a costa de más falsas alarmas — es una decisión de negocio explícita del equipo de IA, no un defecto del modelo."
+    },
+    {
+      "tipo": "Cobertura geográfica agregada",
+      "descripcion": "Los índices de precio son promedios nacionales; el modelo capta la macrotendencia del mercado pero no detecta micro-crisis de precios limitadas a una provincia o región concreta."
+    },
+    {
+      "tipo": "Requiere monitorización y reentrenamiento periódico",
+      "descripcion": "El propio equipo de IA recomienda revisión mensual y reentrenamiento si el AUC cae más de 0,1 respecto a la validación de referencia, o si el Recall baja de 0,65 (animales) / 0,50 (insumos) en dos cortes consecutivos — este modelo debe operar en modo de apoyo a la decisión (human-in-the-loop), nunca como automatismo de compra."
+    }
+  ],
+  "fichero_nombre": "inbox/a16/codigo/data/processed/dataset_clasificacion_base.csv",
+  "fichero_registros": "56 meses de histórico (jul-2020 a dic-2024); bloque de test hold-out: 12 meses (sep-2023 a ago-2024)",
+  "fichero_resultado": "predict batch sobre el CSV completo reproduce exactamente (4 decimales) los 12 golden_cases del manifest en ambos targets, y predict inline sobre las mismas filas coincide con la última fila del batch",
+  "observaciones_tecnicas": "Solo CPU, sin GPU (XGBoost + Regresión Logística sobre datos tabulares). Artefactos ligeros (< 2 MB en total salvo el bagging de animales, ~1,8 MB); RAM mínima recomendada 4 GB. La deserialización con scikit-learn/xgboost más recientes que los usados en el entrenamiento original genera avisos de compatibilidad (InconsistentVersionWarning) sin afectar al resultado numérico (verificado con reproducción exacta). Histórico mínimo exigido: 10 meses consecutivos sin huecos (6 de calentamiento de variables + 3 de ventana + 1). El bagging bootstrap (rango de incertidumbre) es opcional: si falta, el servicio sigue funcionando sin rango de confianza.",
+  "que_no_responde": "El sistema no predice el precio exacto ni el porcentaje concreto de subida: solo indica si se espera o no un encarecimiento igual o superior al 2,5% dentro de 4 meses, y con qué probabilidad. Tampoco explica automáticamente la causa de la subida esperada.",
+  "entradas_contexto": "Los datos parten de fuentes públicas ya existentes: precios medios mensuales del MAPA (ganado y cereales de pienso), precipitaciones mensuales de Google Earth Engine y focos de epidemias veterinarias del sistema RASVE. Solo hay que aportar la serie histórica mensual ya consolidada, con al menos 10 meses consecutivos sin huecos.",
+  "ejemplo_interpretacion": "Si para el mes objetivo de diciembre de 2024 el sistema devuelve target_animales_pred=1 con probabilidad 0,93, significa que, según la evolución reciente del mercado, es muy probable que el índice de precios de animales suba un 2,5% o más hacia ese mes: conviene adelantar compras o asegurar cobertura de precio. Si además devuelve target_insumos_pred=1 con probabilidad 0,33 (justo por encima del umbral manual de 0,30), la alerta de insumos es más débil y merece seguimiento, no una decisión inmediata.",
+  "margen_error": "En las pruebas, el modelo de animales acierta 5 de cada 6 alertas de subida real y solo emite 1 falsa alarma sobre 12 meses de test; el de insumos captura todas las subidas reales pero, al usar un umbral deliberadamente bajo, emite más falsas alarmas de las que confirma. Esto es una decisión de negocio: es preferible pecar de prudente en insumos (avisar de más) que arriesgarse a no detectar una subida. Como la serie de test es corta (12 meses), estas cifras deben tomarse como una foto orientativa, no como una garantía estadística sólida.",
+  "revisar_manualmente": [
+    "Cualquier alerta de target_insumos: al usar un umbral bajo deliberado (0,30), genera más falsas alarmas de las que confirma — hay que contrastarla con criterio antes de actuar.",
+    "Predicciones con proba muy próxima al umbral de decisión (0,48 en animales, 0,30 en insumos): son las más sensibles a pequeñas variaciones de los datos de entrada.",
+    "Rangos de incertidumbre (proba_low/proba_high) amplios: indican que las 12 variantes del modelo no están de acuerdo entre sí.",
+    "Cualquier resultado mientras no se haya completado al menos un ciclo de reentrenamiento/calibración con datos posteriores a agosto de 2024 (fin del histórico de test)."
+  ],
+  "que_no_hace": [
+    "No predice el precio exacto ni la magnitud de la subida, solo si supera o no el umbral del 2,5% en 4 meses.",
+    "No sustituye el criterio del departamento de compras: es una herramienta de apoyo a la decisión, no un automatismo de compra.",
+    "No detecta crisis de precio limitadas a una región o provincia concreta — trabaja con índices agregados a nivel nacional.",
+    "No funciona con menos de 10 meses de histórico mensual continuo, ni con huecos en la serie temporal.",
+    "No incorpora factores geopolíticos, normativos o de shocks de mercado repentinos que no estén ya reflejados en los datos históricos de precios, clima y epidemias."
+  ],
+  "puede_equivocarse": "Sí. En el histórico de test disponible (12 meses), el modelo de animales se equivoca en 2 de 12 meses (1 subida real no detectada, 1 falsa alarma) y el de insumos, aunque no deja pasar ninguna subida real, genera más falsas alarmas de las que confirma por diseño. Estas cifras provienen de una serie histórica corta (56 meses en total) y deben interpretarse con cautela estadística, tal como advierte el propio equipo de IA. Es una herramienta de alerta temprana de apoyo a la decisión de compras, no una garantía de acierto ni un sustituto del seguimiento de mercado.",
+  "kpis": [
+    {
+      "kpi": "Recall target_animales",
+      "valor_umbral": ">= 0,65 (umbral de reentrenamiento fijado por el equipo de IA)",
+      "descripcion": "Resultado en test: 0,833 — cumplido. Por debajo de este umbral en dos cortes consecutivos, la memoria recomienda reentrenar."
+    },
+    {
+      "kpi": "Recall target_insumos",
+      "valor_umbral": ">= 0,50 (umbral de reentrenamiento fijado por el equipo de IA)",
+      "descripcion": "Resultado en test: 1,000 — cumplido con margen amplio, gracias al umbral manual de decisión (0,30) que prioriza no perder alertas."
+    },
+    {
+      "kpi": "Estabilidad de AUC (deriva)",
+      "valor_umbral": "caída < 0,10 respecto a la validación de referencia",
+      "descripcion": "AUC en validación: 0,833 (animales) / 0,917 (insumos); AUC en test: 0,917 (animales) / 0,741 (insumos). La caída de insumos (-0,176) supera el umbral de alerta de deriva definido por el propio equipo de IA — señal a vigilar en el primer reentrenamiento."
+    }
+  ]
+}

@@ -1,0 +1,330 @@
+model_id: ml16_meat_raw_material_price_alert
+sector: carnico
+nombre: "Desarrollo de un modelo predictivo de costes de materias primas de transformación cárnica"
+task_type: classification_binary_multi_target_timeseries_windowed
+task_type_note: >
+  Dos clasificadores binarios independientes (XGBoost para target_animales, Regresión Logística
+  para target_insumos) que comparten el mismo bloque de ingeniería de características y de
+  ventanas temporales (lookback=3, aplanadas a vector 2D) sobre una serie mensual multivariante
+  agregada a nivel nacional. No es un modelo de una sola cabeza ni un regresor -- el equipo de IA
+  descartó explícitamente la regresión de valores numéricos (ver memoria, sec. "Conclusiones de
+  los resultados con regresión") por inestabilidad frente a datos no vistos, y también descartó
+  RNN/LSTM/GRU por sobreajuste con el histórico mensual disponible (56 meses).
+
+framework:
+  - pandas==2.3.3
+  - numpy==2.0.2
+  - scikit-learn==1.6.1   # verificado con sklearn 1.9.0 -- InconsistentVersionWarning al deserializar
+                           # MinMaxScaler/LogisticRegression, no bloqueante (ver known_issues)
+  - xgboost==2.1.4         # verificado con una versión más reciente de la serie 2.x -- warning de
+                           # serialización pickle "antigua" al cargar, no bloqueante (ver known_issues)
+  - joblib==1.5.3
+  - PyYAML==6.0.2
+  # requirements.txt del código entregado está en ASCII con CRLF -- SIN problema de encoding
+  # (a diferencia de otros modelos de este repo que llegan en UTF-16LE).
+  # tensorflow/keras/keras-tuner/statsmodels/matplotlib/seaborn/plotly están en requirements.txt
+  # pero solo se usan en notebooks de exploración (RNN/LSTM/GRU, EDA, tuning) -- no se necesitan
+  # en el pipeline de inferencia (predictor.py solo importa pandas, numpy, joblib).
+
+artifacts:
+  folder: models/artifacts/
+  files:
+    - model_target_animales.joblib     # XGBClassifier (canónico, horizonte h=4)
+    - model_target_insumos.joblib      # LogisticRegression (canónico, horizonte h=4)
+    - scaler_target_animales.joblib    # MinMaxScaler fit en train, columnas específicas de animales (18 cols)
+    - scaler_target_insumos.joblib     # MinMaxScaler fit en train, columnas específicas de insumos (19 cols)
+    - bagging_target_animales.joblib   # lista de 12 XGBClassifier bootstrap -- OPCIONAL, solo rango de incertidumbre
+    - bagging_target_insumos.joblib    # lista de 12 LogisticRegression bootstrap -- OPCIONAL
+    - train_config.json                 # input_cols_per_target, lookback, horizon, final_thresholds
+                                         # -- imprescindible, define el contrato exacto de inferencia
+    # NO incluidos en el plugin (fuera de alcance, ver README del modelo):
+    #   model_target_*_h1.joblib / _h2.joblib / _h4.joblib y sus scalers -- artefactos del pipeline
+    #   multi-horizonte (Fase 3, scripts/train_multi_horizon.py), ADITIVO e independiente del
+    #   pipeline canónico h=4. No hay evidencia en la memoria de que deban exponerse en producción;
+    #   el modo de despliegue descrito (sec. "Modo de Despliegue") solo cubre predict.py canónico.
+  config:
+    - config/config.yaml
+  metrics_file: models/metrics/hibrido_xgb_logreg_resumen.json  # fuente de verdad de métricas
+                                                                    # según el propio README del modelo
+
+inputs:
+  # El input NO es una fila aislada: predictor.py::prepare_input() exige un CSV con serie histórica
+  # mensual CONTINUA y ordenada por fecha (mismo esquema que dataset_clasificacion_base.csv).
+  # Internamente recalcula create_endogenous_features() (momentum, MA3, volatilidad, z-score,
+  # spread, seno/coseno de mes, lags de epidemias y precipitación) y aplica ventanas lookback=3
+  # antes de escalar y predecir con cada modelo -- no existe un modo "una fila = una predicción"
+  # sin historial previo.
+  fixed:
+    - {name: fecha, type: date, description: "Primer día del mes (YYYY-MM-01). El DataFrame se reordena internamente por fecha ascendente."}
+    - {name: month, type: int, range: [1, 12], description: "Mes del registro. FUNCIONALMENTE NECESARIO: create_endogenous_features() lo lee directamente para month_sin/month_cos -- NO se deriva de 'fecha' en el código original (preprocess.py no hace df['fecha'].dt.month en ningún punto de prepare_input/create_endogenous_features). Si el plugin lo deriva de 'fecha' como conveniencia, el resultado es idéntico (fecha es siempre día 1 del mes) pero debe documentarse como comportamiento añadido, no heredado."}
+    - {name: indice_animales, type: float, unit: EUR, description: "Media aritmética de 13 cotizaciones de referencia del sector cárnico (ver columns.animales en config.yaml)."}
+    - {name: indice_insumos, type: float, unit: EUR, description: "Media aritmética de 5 cotizaciones de cereales para pienso (ver columns.insumos en config.yaml)."}
+    - {name: precip_total, type: float, unit: mm, description: "Precipitación total mensual, promedio nacional de CCAA (fuente Google Earth Engine)."}
+    - {name: precip_max, type: float, unit: mm, description: "Precipitación máxima mensual, promedio nacional. Presente en el esquema base (README, dataset_clasificacion_base.csv) pero NO aparece en input_cols_per_target de ningún target -- no se usa como feature real (ver known_issues)."}
+    - {name: wet_days, type: float, description: "Número de días con lluvia al mes, promedio nacional. Sí se usa (exog_cols.target_insumos)."}
+    - {name: wash_days, type: float, description: "Número de días de lavado al mes, promedio nacional. Presente en el esquema base pero NO aparece en input_cols_per_target de ningún target -- no se usa como feature real (ver known_issues)."}
+    - {name: animales_afectados, type: int, description: "Total de animales afectados por epidemias veterinarias a nivel nacional en el mes (0 si no hay focos reportados -- ausencia de reporte se trata como información válida, no como missing)."}
+  optional:
+    - {name: year, type: int, description: "Año del registro. Presente en el esquema base (dataset_clasificacion_base.csv) pero no lo lee ninguna función de feature engineering ni de inferencia -- se acepta/ignora por paridad de esquema, nunca obligatorio."}
+  derived_if_missing: {}  # ninguno -- todas las derivadas (mom_*, ma3_*, vol3_*, dev_*, spread,
+                            # month_sin/cos, lags de epidemias y precipitación) se recalculan SIEMPRE
+                            # internamente a partir de las fixed; nunca se aceptan como input directo.
+  constraints:
+    min_historical_rows: 10  # _FEATURE_WARMUP_ROWS(6, dominado por precip_total_lag6) + lookback(3) + 1
+                              # -- ver predictor.py:23 y prepare_input():142. Por debajo, ValueError explícito.
+    ordering: "estrictamente cronológico. El código NO valida explícitamente la ausencia de huecos mensuales -- ver known_issues."
+
+outputs:
+  # Una fila de salida por fecha válida tras el lookback. IMPORTANTE: la fecha de salida es la
+  # fecha del ÚLTIMO dato de entrada usado en la ventana + horizon(4) meses -- la predicción es
+  # PARA ese mes futuro (predictor.py::prepare_input(), bloque "Fechas desplazadas al horizonte").
+  # Esto difiere de cómo trainer.py etiqueta data/predictions/predicciones_test.csv, donde 'fecha'
+  # es la fecha t de la fila de entrada, no t+horizon -- ver known_issues (relevante para diseñar
+  # el contrato de la API del plugin y para no confundir "mes observado" con "mes predicho").
+  predict_batch:
+    - {name: fecha, type: date, description: "Mes objetivo de la predicción (fecha del último dato de entrada usado + 4 meses)."}
+    - {name: target_animales_pred, type: int, values: [0, 1], description: "1 = alerta de encarecimiento (índice animales sube >= 2.5% en 4 meses)."}
+    - {name: target_animales_proba, type: float, description: "predict_proba del XGBClassifier, redondeado a 4 decimales en save_predictions()."}
+    - {name: target_animales_proba_low, type: float, description: "Percentil 10 de las 12 variantes bootstrap (bagging), acotado a <= proba. Ausente/igual a proba si no existe bagging_target_animales.joblib."}
+    - {name: target_animales_proba_high, type: float, description: "Percentil 90 de las variantes bootstrap, acotado a >= proba."}
+    - {name: target_insumos_pred, type: int, values: [0, 1], description: "1 = alerta de encarecimiento (índice insumos sube >= 2.5% en 4 meses)."}
+    - {name: target_insumos_proba, type: float}
+    - {name: target_insumos_proba_low, type: float}
+    - {name: target_insumos_proba_high, type: float}
+
+training:
+  supported: true
+  target_column: [target_animales, target_insumos]  # DOS targets binarios independientes generados
+    # por create_targets() a partir de indice_animales/indice_insumos -- no una única columna.
+    # trainer.py::run_training() valida explícitamente `len(target_cols) != 2` y lanza ValueError
+    # si no son exactamente 2 -- el código NO está preparado para más targets sin refactor (ver known_issues).
+  required_columns: [fecha, month, indice_animales, indice_insumos, precip_total, precip_max, wet_days, wash_days, animales_afectados]
+    # dataset_clasificacion_base.csv ya incluye target_animales/target_insumos calculados por
+    # create_targets() -- no se aportan manualmente en el CSV de entrenamiento.
+  hyperparams:  # config/config.yaml -- idénticos a los usados para generar los artefactos entregados
+    seed: 42
+    lookback: 3
+    test_size: 12
+    n_splits_cv: 5
+    n_bagging: 12
+    manual_threshold_insumos: 0.30
+    use_manual_threshold: true
+    xgboost: {n_estimators: 200, max_depth: 3, learning_rate: 0.05, subsample: 0.8, colsample_bytree: 0.8, min_child_weight: 2, gamma: 0.1, reg_alpha: 0.5, reg_lambda: 1.0}
+    logreg: {C: 0.1, max_iter: 1000, solver: lbfgs}
+  metrics_returned: [accuracy, precision, recall, f1, auc]
+  source: codigo_entrenamiento  # config/config.yaml + src/training/trainer.py::run_training()
+
+constraints: {}
+  # No hay reglas duras de negocio tipo "PU >= 13" en el código ni en la memoria. La única
+  # política documentada es operativa/MLOps (memoria, sec. "Limitaciones, Riesgos y
+  # Consideraciones"): revisión mensual en ventana móvil de 6 meses, reentrenamiento si AUC cae
+  # >0.1 respecto a validación de referencia o si Recall < 0.65 (animales) / 0.50 (insumos) en dos
+  # cortes consecutivos, reentrenamiento preventivo cada 6 meses, y operación "human-in-the-loop"
+  # (alerta de soporte a decisión, nunca automatismo de compra). No se traduce en una excepción de
+  # dominio del plugin -- es proceso externo al código, no una validación de input/output.
+
+metrics_reported:
+  # Fuente de verdad: models/metrics/hibrido_xgb_logreg_resumen.json (persistido con los artefactos
+  # entregados). Verificado reproduciéndolo íntegramente: se ejecutó scripts/predict.py del código
+  # ORIGINAL del equipo de IA sobre dataset_clasificacion_base.csv completo (uv run efímero,
+  # pandas/numpy/scikit-learn/xgboost/joblib/PyYAML en sus versiones más recientes disponibles,
+  # 2026-08-31) y las probabilidades de salida coinciden EXACTAMENTE (4 decimales) con las 12 filas
+  # de data/predictions/predicciones_test.csv, una vez se compensa el desplazamiento de fecha
+  # t -> t+horizon (ver known_issues) -- confirma reproducibilidad end-to-end pese al warning de
+  # InconsistentVersionWarning de sklearn y al de serialización antigua de xgboost.
+  # NO coincide con la Tabla 9 de la memoria v1.5 (ver known_issues): la memoria reporta umbral
+  # animales=0.46 y métricas de test distintas; el artefacto entregado usa umbral=0.48.
+  target_animales:
+    modelo: XGBoost
+    umbral: 0.48
+    validacion: {Accuracy: 0.72, Precision: 0.65, Recall: 1.0, F1: 0.788, AUC: 0.833}
+    test: {Accuracy: 0.833, Precision: 0.833, Recall: 0.833, F1: 0.833, AUC: 0.917}
+  target_insumos:
+    modelo: LogReg
+    umbral: 0.30
+    validacion: {Accuracy: 0.36, Precision: 0.304, Recall: 1.0, F1: 0.467, AUC: 0.917}
+    test: {Accuracy: 0.667, Precision: 0.429, Recall: 1.0, F1: 0.6, AUC: 0.741}
+  source: models/metrics/hibrido_xgb_logreg_resumen.json + models/metrics/hibrido_xgb_logreg_metricas.csv
+
+golden_cases:
+  # 12 casos = TODO el bloque de test hold-out (2023-09 a 2024-08, 12 meses, el máximo disponible
+  # -- por debajo del recomendado 15-20 porque el dataset histórico es corto, ver memoria sec.
+  # "Limitaciones"). Fuente: data/predictions/predicciones_test.csv (generado por
+  # trainer.py::run_training() Fase 6/7 al evaluar los modelos finales sobre X_test real -- no
+  # inventado por el agente). Cross-verificado el 2026-08-31 ejecutando el pipeline de inferencia
+  # ORIGINAL (scripts/predict.py) sobre inbox/a16/codigo/data/processed/dataset_clasificacion_base.csv
+  # completo con los artefactos tal cual entregados: las probabilidades de salida en la fecha
+  # t+4 meses coinciden EXACTAMENTE (4 decimales) con las de predicciones_test.csv en la fecha t.
+  #
+  # 'fecha' abajo es la fecha t de la FILA DE ENTRADA (convención de predicciones_test.csv, igual
+  # que en la memoria). Al verificar el plugin end-to-end, la fila de salida correspondiente
+  # aparecerá fechada t+4 meses (ver outputs.predict_batch) -- no comparar por igualdad de fecha,
+  # comparar por desplazamiento de 4 meses.
+  - id: caso_2023-09
+    source: dataset_test_split
+    input: {fecha: "2023-09-01", historial_minimo_requerido: "dataset_clasificacion_base.csv completo hasta esta fecha (>= 10 meses previos)"}
+    expected:
+      target_animales: {real: 1, pred: 0, proba: 0.2503}
+      target_insumos:  {real: 0, pred: 1, proba: 0.3581}
+    tolerance: {prediction_exact: true, probability_atol: 0.0005}
+  - id: caso_2023-10
+    source: dataset_test_split
+    input: {fecha: "2023-10-01"}
+    expected:
+      target_animales: {real: 0, pred: 0, proba: 0.1201}
+      target_insumos:  {real: 0, pred: 1, proba: 0.3531}
+    tolerance: {prediction_exact: true, probability_atol: 0.0005}
+  - id: caso_2023-11
+    source: dataset_test_split
+    input: {fecha: "2023-11-01"}
+    expected:
+      target_animales: {real: 0, pred: 0, proba: 0.0696}
+      target_insumos:  {real: 0, pred: 1, proba: 0.3116}
+    tolerance: {prediction_exact: true, probability_atol: 0.0005}
+  - id: caso_2023-12
+    source: dataset_test_split
+    input: {fecha: "2023-12-01"}
+    expected:
+      target_animales: {real: 0, pred: 0, proba: 0.3257}
+      target_insumos:  {real: 0, pred: 0, proba: 0.2881}
+    tolerance: {prediction_exact: true, probability_atol: 0.0005}
+  - id: caso_2024-01
+    source: dataset_test_split
+    input: {fecha: "2024-01-01"}
+    expected:
+      target_animales: {real: 1, pred: 1, proba: 0.7624}
+      target_insumos:  {real: 0, pred: 0, proba: 0.2914}
+    tolerance: {prediction_exact: true, probability_atol: 0.0005}
+  - id: caso_2024-02
+    source: dataset_test_split
+    input: {fecha: "2024-02-01"}
+    expected:
+      target_animales: {real: 0, pred: 0, proba: 0.4404}
+      target_insumos:  {real: 0, pred: 0, proba: 0.2902}
+    tolerance: {prediction_exact: true, probability_atol: 0.0005}
+  - id: caso_2024-03
+    source: dataset_test_split
+    input: {fecha: "2024-03-01"}
+    expected:
+      target_animales: {real: 0, pred: 0, proba: 0.1711}
+      target_insumos:  {real: 0, pred: 0, proba: 0.2859}
+    tolerance: {prediction_exact: true, probability_atol: 0.0005}
+  - id: caso_2024-04
+    source: dataset_test_split
+    input: {fecha: "2024-04-01"}
+    note: >
+      Falso positivo real del modelo entregado en target_animales (real=0, pred=1, proba=0.5704
+      apenas por encima del umbral 0.48) -- se conserva tal cual, no se ajusta ni se silencia.
+      Útil para verificar reproducibilidad exacta cerca del umbral de decisión.
+    expected:
+      target_animales: {real: 0, pred: 1, proba: 0.5704}
+      target_insumos:  {real: 0, pred: 0, proba: 0.2808}
+    tolerance: {prediction_exact: true, probability_atol: 0.0005}
+  - id: caso_2024-05
+    source: dataset_test_split
+    input: {fecha: "2024-05-01"}
+    expected:
+      target_animales: {real: 1, pred: 1, proba: 0.7445}
+      target_insumos:  {real: 0, pred: 1, proba: 0.3276}
+    tolerance: {prediction_exact: true, probability_atol: 0.0005}
+  - id: caso_2024-06
+    source: dataset_test_split
+    input: {fecha: "2024-06-01"}
+    expected:
+      target_animales: {real: 1, pred: 1, proba: 0.7193}
+      target_insumos:  {real: 1, pred: 1, proba: 0.3161}
+    tolerance: {prediction_exact: true, probability_atol: 0.0005}
+  - id: caso_2024-07
+    source: dataset_test_split
+    input: {fecha: "2024-07-01"}
+    expected:
+      target_animales: {real: 1, pred: 1, proba: 0.9334}
+      target_insumos:  {real: 1, pred: 1, proba: 0.3524}
+    tolerance: {prediction_exact: true, probability_atol: 0.0005}
+  - id: caso_2024-08
+    source: dataset_test_split
+    input: {fecha: "2024-08-01"}
+    expected:
+      target_animales: {real: 1, pred: 1, proba: 0.9339}
+      target_insumos:  {real: 1, pred: 1, proba: 0.3345}
+    tolerance: {prediction_exact: true, probability_atol: 0.0005}
+
+known_issues:
+  - >
+    DISCREPANCIA MEMORIA vs ARTEFACTOS ENTREGADOS: la memoria v1.5 (Tabla 9, sec. "Métricas y
+    Rendimiento") reporta para target_animales umbral=0.46 y test {Accuracy=0.750, Precision=0.714,
+    Recall=0.833, F1=0.769, AUC=0.944}; para target_insumos test {Accuracy=0.583, Precision=0.375,
+    Recall=1.000, F1=0.545, AUC=0.889}. Los artefactos REALMENTE entregados
+    (models/metrics/hibrido_xgb_logreg_resumen.json + train_config.json) usan umbral
+    target_animales=0.48 y reportan test {Accuracy=0.833, Precision=0.833, Recall=0.833, F1=0.833,
+    AUC=0.917} para animales y {Accuracy=0.667, Precision=0.429, Recall=1.0, F1=0.6, AUC=0.741}
+    para insumos. Recall/F1/AUC de insumos también difieren (memoria: Recall=1.0 F1=0.545 AUC=0.889;
+    artefacto: Recall=1.0 F1=0.6 AUC=0.741). Se ha verificado que el artefacto entregado es
+    internamente consistente (las probabilidades de predicciones_test.csv reproducen exactamente
+    estas métricas al recalcularlas, y son las mismas que reproduce scripts/predict.py ejecutado
+    de cero) -- probablemente el modelo se reentrenó tras cerrar la redacción de la memoria v1.5 sin
+    actualizar la Tabla 9. Se usan las cifras del artefacto real como metrics_reported, siguiendo el
+    principio de autoridad de artefactos que el propio README del modelo declara explícitamente.
+  - >
+    DESPLAZAMIENTO DE FECHA ENTRE ENTRENAMIENTO E INFERENCIA: trainer.py::run_training() etiqueta
+    data/predictions/predicciones_test.csv con la fecha t de la FILA DE ENTRADA (el mes que se
+    observa, no el mes que se predice). predictor.py::prepare_input(), en cambio, calcula
+    'fechas' como t + horizon(4) meses -- la fecha del mes OBJETIVO de la predicción. Ambas
+    convenciones son coherentes con su propósito (evaluación vs. producción) pero un consumidor
+    del plugin (front, ODD) podría interpretar mal a qué mes corresponde una fila si no se
+    documenta explícitamente esta diferencia. El plugin debe exponer con claridad si la fecha
+    devuelta es "mes observado" o "mes predicho" -- se recomienda usar la convención de
+    predictor.py (mes predicho) por ser la que ve producción, y documentarla en la respuesta.
+  - >
+    'wash_days' Y 'precip_max' forman parte del esquema de columnas obligatorio de
+    dataset_clasificacion_base.csv y del CSV de entrada esperado por prepare_input() (aparecen en
+    README, sec. "Formato de entrada para inferencia" y "Variables climáticas agregadas"), pero
+    NINGUNA de las dos aparece en input_cols_per_target de train_config.json ni en
+    features.input_cols/exog_cols de config.yaml -- no son features reales del modelo, solo forman
+    parte del esquema base heredado del merge de clima (de las 4 variables climáticas mencionadas
+    en la memoria como "fundamentales para evaluar el estrés de los cultivos de cereal", solo
+    precip_total y wet_days llegan realmente al modelo). El plugin debe seguir aceptándolas en el
+    input (para no romper la paridad de esquema con dataset_clasificacion_base.csv) aunque no
+    influyan en la predicción.
+  - >
+    'month' es una columna de entrada FUNCIONALMENTE NECESARIA (create_endogenous_features() la
+    lee directamente para month_sin/month_cos) que el código original NUNCA deriva de 'fecha' --
+    debe venir informada en el CSV/filas de entrada tal cual lo hace dataset_clasificacion_base.csv.
+    Si el plugin decide derivarla automáticamente de 'fecha' como conveniencia para el caller (fecha
+    es siempre día 1 del mes, por lo que el resultado numérico es idéntico), es una adición del
+    plugin, no un comportamiento heredado del código entregado -- debe documentarse como tal y no
+    presentarse como parte del contrato original.
+  - >
+    trainer.py::run_training() valida `if len(target_cols) != 2: raise ValueError(...)` -- el
+    pipeline de entrenamiento canónico (h=4) está codificado explícitamente para exactamente dos
+    targets (target_animales vía XGBoost, target_insumos vía LogReg) y no generaliza sin refactor
+    del código fuente. Si en el futuro se quisiera reentrenar con más/menos targets, no basta con
+    cambiar config.yaml.
+  - >
+    predictor.py::prepare_input() NO valida que el histórico de entrada no tenga huecos mensuales
+    (fechas no consecutivas) -- solo valida el número total de filas (>= min_rows_required). Un CSV
+    con fechas discontinuas pero con >= 10 filas pasaría la validación y generaría rolling/lag
+    features incorrectas silenciosamente (p.ej. precip_total_lag6 podría estar tomando un valor de
+    hace 8 meses reales si hay huecos). Debe documentarse como responsabilidad del caller o
+    añadirse validación explícita en el plugin.
+  - >
+    Los artefactos de bagging (bagging_target_*.joblib, 12 variantes bootstrap cada uno) son
+    opcionales en tiempo de inferencia (predictor.py::load_model() los carga con try/except y cae a
+    lista vacía si faltan o fallan al cargar) -- si faltan, proba_low/proba_high colapsan a ser
+    iguales a proba (sin rango de incertidumbre real), pero el pipeline no falla. El plugin debe
+    reproducir esta degradación elegante, no tratarla como error.
+  - >
+    Al deserializar los .joblib con versiones de scikit-learn/xgboost más recientes que las usadas
+    para entrenar (sklearn 1.6.1 -> 1.9.0, xgboost 2.1.4 -> más reciente) aparecen
+    InconsistentVersionWarning y un warning de xgboost sobre formato de serialización antiguo.
+    Confirmado que NO afectan al resultado numérico (reproducción exacta a 4 decimales, ver
+    golden_cases) pero deben capturarse/silenciarse explícitamente en el plugin para no ensuciar
+    logs de producción, y considerar re-serializar los modelos con Booster.save_model()/formato
+    nativo en un futuro reentrenamiento.
+  - >
+    El pipeline multi-horizonte (Fase 3: scripts/train_multi_horizon.py, horizontes h=1 y h=2,
+    dataset_clasificacion_multi_horizonte.csv, modelos model_target_*_h{1,2,4}.joblib) es ADITIVO,
+    independiente del pipeline canónico h=4, y no está cubierto por la memoria como parte del modo
+    de despliegue oficial (sec. "Modo de Despliegue" solo documenta predict.py canónico). Se ha
+    dejado FUERA del alcance de este manifest/plugin -- si en el futuro se pide exponer horizontes
+    de 1 y 2 meses, requiere manifest y verificación propios.

@@ -34,6 +34,7 @@ from app.domain.services.exceptions import (
     InfeasibleOptimizationError,
     InsufficientCycleHistoryError,
     InsufficientFramesError,
+    InsufficientRowsError,
     InsufficientSequenceHistoryError,
     InsufficientSensorWindowError,
     InsufficientTelemetryHistoryError,
@@ -234,6 +235,16 @@ from app.plugins.m21_cereal_price_spatial.predict_dto import (
 from app.plugins.m21_cereal_price_spatial.train_dto import (
     TrainRequest as M21_TrainReq,
     TrainResponse as M21TrainResp,
+)
+from app.plugins.ml16_meat_raw_material_price_alert.predict_dto import (
+    PredictBatchResponse as Ml16BatchResp,
+    PredictInlineResponse as Ml16InlineResp,
+    PredictRequest as Ml16_Request,
+    PredictResponse as Ml16_Response,
+)
+from app.plugins.ml16_meat_raw_material_price_alert.train_dto import (
+    TrainRequest as Ml16_TrainReq,
+    TrainResponse as Ml16TrainResp,
 )
 
 # ── ModelEntry dataclass (local copy — avoids importing app.registry which loads real plugins) ───
@@ -1315,6 +1326,64 @@ def _m21_train(plugin: FakePlugin, *, data_path: str) -> M21TrainResp:
     )
 
 
+def _ml16_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> Ml16InlineResp:
+    """Fake inline response for the ml16 meat raw-material price alert model."""
+    return Ml16InlineResp(
+        model_id="ml16-meat-raw-material-price-alert",
+        fecha="2024-12-01",
+        target_animales_pred=1,
+        target_animales_proba=0.9339,
+        target_animales_proba_low=0.7613,
+        target_animales_proba_high=0.9453,
+        target_insumos_pred=1,
+        target_insumos_proba=0.3345,
+        target_insumos_proba_low=0.2865,
+        target_insumos_proba_high=0.3879,
+        n_rows_used=len(features.get("rows", [])),
+        n_predictions_available=47,
+        model_name="ml16-meat-raw-material-price-alert",
+        xai_feature_values={"target_animales_proba": 0.9339, "target_insumos_proba": 0.3345},
+    )
+
+
+def _ml16_batch(plugin: FakePlugin, *, data_path: str) -> Ml16BatchResp:
+    """Fake batch response for the ml16 meat raw-material price alert model."""
+    return Ml16BatchResp(
+        model_id="ml16-meat-raw-material-price-alert",
+        predictions=[{
+            "fecha": "2024-01-01",
+            "target_animales_pred": 0, "target_animales_proba": 0.2503,
+            "target_animales_proba_low": 0.16, "target_animales_proba_high": 0.6625,
+            "target_insumos_pred": 1, "target_insumos_proba": 0.3581,
+            "target_insumos_proba_low": 0.3351, "target_insumos_proba_high": 0.3982,
+        }],
+        n_predictions=1,
+        output_path=None,
+    )
+
+
+def _ml16_train(plugin: FakePlugin, *, data_path: str) -> Ml16TrainResp:
+    """Fake retraining response for the ml16 meat raw-material price alert model."""
+    return Ml16TrainResp(
+        detail="Reentrenamiento completado (XGBoost + LogisticRegression, procedimiento original).",
+        n_train_rows=35,
+        n_test_rows=12,
+        target_animales_threshold=0.48,
+        target_animales_accuracy=0.833,
+        target_animales_precision=0.833,
+        target_animales_recall=0.833,
+        target_animales_f1=0.833,
+        target_animales_auc=0.917,
+        target_insumos_threshold=0.30,
+        target_insumos_accuracy=0.667,
+        target_insumos_precision=0.429,
+        target_insumos_recall=1.0,
+        target_insumos_f1=0.6,
+        target_insumos_auc=0.741,
+        upload_warning=None,
+    )
+
+
 FAKE_FACTORIES: dict[str, tuple[Callable, Callable]] = {
     "ml9-cereals-infestation-sequence-classifier": (_ml9_cereals_inline, _ml9_cereals_batch),
     "ml46-dairy-fouling-clog-detection": (_ml46_dairy_inline, _ml46_dairy_batch),
@@ -1339,6 +1408,7 @@ FAKE_FACTORIES: dict[str, tuple[Callable, Callable]] = {
     "ml43-cereals-dnsl-anomaly-fault-detection": (_ml43_inline, _ml43_batch),
     "ml3-wine-disease-pest-forecast": (_ml3_wine_inline, _ml3_wine_batch),
     "m21-cereal-price-spatial": (_m21_inline, _m21_batch),
+    "ml16-meat-raw-material-price-alert": (_ml16_inline, _ml16_batch),
 }
 
 TRAIN_FACTORIES: dict[str, Callable] = {
@@ -1354,6 +1424,7 @@ TRAIN_FACTORIES: dict[str, Callable] = {
     "ml43-cereals-dnsl-anomaly-fault-detection": _ml43_train,
     "ml3-wine-disease-pest-forecast": _ml3_wine_train,
     "m21-cereal-price-spatial": _m21_train,
+    "ml16-meat-raw-material-price-alert": _ml16_train,
 }
 
 
@@ -1590,6 +1661,17 @@ TEST_REGISTRY: list[ModelEntry] = [
         extra_predict_exceptions=(),
         train_request_type=M21_TrainReq,
         train_response_type=M21TrainResp,
+    ),
+    ModelEntry(
+        model_id="ml16-meat-raw-material-price-alert",
+        prefix="/models/ml16-meat-raw-material-price-alert",
+        version="1.0.0",
+        plugin_class=FakePlugin,
+        predict_request_type=Ml16_Request,
+        predict_response_type=Ml16_Response,
+        extra_predict_exceptions=(InsufficientRowsError,),
+        train_request_type=Ml16_TrainReq,
+        train_response_type=Ml16TrainResp,
     ),
 ]
 

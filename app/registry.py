@@ -11,6 +11,7 @@ from app.domain.services.exceptions import (
     InfeasibleOptimizationError,
     InsufficientCycleHistoryError,
     InsufficientFramesError,
+    InsufficientRowsError,
     InsufficientSequenceHistoryError,
     InsufficientSensorWindowError,
     InsufficientTelemetryHistoryError,
@@ -223,6 +224,16 @@ from app.plugins.m21_cereal_price_spatial.plugin import M21CerealPriceSpatialPlu
 from app.plugins.m21_cereal_price_spatial.predict_dto import (
     PredictRequest as M21_Request,
     PredictResponse as M21_Response,
+)
+
+from app.plugins.ml16_meat_raw_material_price_alert.plugin import Ml16MeatRawMaterialPriceAlertPlugin
+from app.plugins.ml16_meat_raw_material_price_alert.predict_dto import (
+    PredictRequest as Ml16_Request,
+    PredictResponse as Ml16_Response,
+)
+from app.plugins.ml16_meat_raw_material_price_alert.train_dto import (
+    TrainRequest as Ml16_TrainReq,
+    TrainResponse as Ml16_TrainResp,
 )
 
 
@@ -472,5 +483,16 @@ REGISTRY: list[ModelEntry] = [
         predict_request_type=M21_Request,
         predict_response_type=M21_Response,
         extra_predict_exceptions=(),
+    ),
+    ModelEntry(
+        model_id="ml16-meat-raw-material-price-alert",
+        prefix="/models/ml16-meat-raw-material-price-alert",
+        version="1.0.0",
+        plugin_class=Ml16MeatRawMaterialPriceAlertPlugin,
+        predict_request_type=Ml16_Request,
+        predict_response_type=Ml16_Response,
+        extra_predict_exceptions=(InsufficientRowsError,),
+        train_request_type=Ml16_TrainReq,
+        train_response_type=Ml16_TrainResp,
     ),
 ]
