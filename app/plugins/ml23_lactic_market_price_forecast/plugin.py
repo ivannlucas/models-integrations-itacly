@@ -154,6 +154,14 @@ class Ml23LacticMarketPriceForecastPlugin(ModelPluginPort):
             df = pd.read_csv(local_path)
         if "fecha" in df.columns:
             df["fecha"] = pd.to_datetime(df["fecha"], errors="coerce")
+        # dataset_forecast_ready.csv (el propio dataset de entrenamiento/inferencia del
+        # modelo) trae 'target_precio_medio', no 'current_price' -- misma derivación que
+        # el código original (predictor.py::_prepare_input_df()). Sin ella, _run_on_df()
+        # descarta todas las filas de todos los grupos por falta de 'current_price' y
+        # predict_batch devuelve predictions=[] en silencio (ver inbox/a23/manifest.yaml
+        # known_issues).
+        if "current_price" not in df.columns and "target_precio_medio" in df.columns:
+            df["current_price"] = df["target_precio_medio"]
 
         t0 = time.perf_counter()
         predictions = self._run_on_df(df)

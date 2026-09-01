@@ -1,0 +1,238 @@
+model_id: ml23_lactic_market_price_forecast
+sector: lacteo
+nombre: "Desarrollo de un modelo de análisis y predicción de precios de mercado de productos lácteos"
+task_type: time_series_regression_multiseries
+task_type_note: >
+  GRU (PyTorch) que predice el precio medio mensual de leche líquida a horizonte fijo de 6
+  meses, sobre 16 series independientes (4 productos × 4 canales de distribución), usando
+  ventanas deslizantes de longitud seq_len=6. Se seleccionó frente a LSTM, XGBoost y baselines
+  Naive/Drift por menor RMSE en walk-forward CV (ver models/metrics/model_comparison.json del
+  código entregado) -- no es el único candidato entrenado, pero sí el único artefacto que el
+  plugin debe servir.
+  NOTA IMPORTANTE (manifest generado retroactivamente): este modelo ya tenía un plugin
+  integrado en app/plugins/ml23_lactic_market_price_forecast/ ANTES de que existiera este
+  manifest -- viola el orden de trabajo estándar del repo (manifest-extraction siempre antes
+  de plugin-integration). Este manifest se generó ahora, a partir del código original
+  reordenado en inbox/a23/codigo/, específicamente para poder ejecutar el skill de
+  verification contra el plugin ya existente -- lo cual reveló un bug real de correctitud
+  (ver known_issues) que había pasado desapercibido precisamente por saltarse ese orden.
+
+framework:
+  - torch>=2.2.0    # requirements.txt del código entregado, sin pin exacto
+  - numpy>=1.24.0
+  - pandas>=2.0.0
+  - xgboost>=2.0.0  # solo para el candidato XGBoost descartado -- no se usa en el plugin (selected_model=GRU)
+  # requirements.txt es ASCII, sin problema de encoding.
+
+artifacts:
+  folder: models/artifacts/
+  files:
+    - gru_model.pt      # state_dict del GRUModel(input_size=32, hidden_size=64, num_layers=2, dropout=0.3)
+    - rnn_scaler.npz     # {mean, scale} -- StandardScaler congelado, ajustado en train
+    - manifest.json      # selected_model, horizon, seq_len, hidden_size, feature_cols (32),
+                          # xgb_features, group_cols, categorical_categories -- imprescindible,
+                          # define el contrato exacto de inferencia
+    # NO incluidos en el plugin (candidatos descartados en la selección de modelo):
+    #   lstm_model.pt, xgboost_model.json -- LSTM y XGBoost quedaron documentados en
+    #   model_comparison.json como comparativa, pero manifest.json fija selected_model=GRU;
+    #   el plugin solo carga y sirve el GRU.
+  config: []
+  metrics_file: models/metrics/final_test_metrics.json
+
+inputs:
+  # Modo batch: CSV histórico con las 32 feature_cols + producto + canal + fecha. El plugin
+  # ordena por fecha dentro de cada grupo (producto, canal) y desliza una ventana de longitud
+  # seq_len=6 -- una predicción por ventana válida (grupos con menos de 6 filas se descartan).
+  # Modo inline: un único diccionario de features (sin producto/canal, ver known_issues) que el
+  # plugin REPLICA seq_len=6 veces para construir una secuencia sintética -- no hay forma de
+  # hacer una predicción "de una sola fila" fiel al modelo sin inventar historial (mismo tipo de
+  # limitación estructural que ml16/modelo-40/modelo-46 en este repo).
+  fixed:
+    - {name: fecha, type: date, description: "Fecha del mes de referencia (primer día de mes). Solo obligatoria en modo batch, para ordenar y agrupar."}
+    - {name: producto, type: string, values: [leche_desnatada, leche_entera, leche_semidesnatada, total_leche_liquida], description: "Tipo de leche líquida. Solo en modo batch -- agrupa la serie temporal."}
+    - {name: canal, type: string, values: [DISCOUNTS, HIPERMERCADOS, "SUPER+AUTOS", "T.ESPAÑA"], description: "Canal de distribución. Solo en modo batch -- agrupa la serie temporal."}
+    - {name: current_price, type: float, unit: "EUR/L", description: "Precio observado en el mes de referencia. FUNCIONALMENTE NECESARIO como feature de entrada del modelo (última columna de feature_cols) -- ver known_issues sobre su derivación desde 'target_precio_medio'."}
+    - {name: year, type: int}
+    - {name: mes, type: int, range: [1, 12]}
+    - {name: trimestre, type: int, range: [1, 4]}
+    - {name: es_verano, type: int, values: [0, 1]}
+    - {name: es_navidad, type: int, values: [0, 1]}
+    - {name: precio_lag_1, type: float}
+    - {name: precio_lag_3, type: float}
+    - {name: precio_lag_12, type: float}
+    - {name: variacion_mensual, type: float}
+    - {name: media_movil_3, type: float}
+    - {name: media_movil_12, type: float}
+    - {name: hicp_all_es_lag1, type: float}
+    - {name: hicp_dairy_es_lag1, type: float}
+    - {name: hicp_energy_es_lag1, type: float}
+    - {name: ipc_alimentos_lag1, type: float}
+    - {name: ipc_general_lag1, type: float}
+    - {name: ipc_vivienda_energia_lag1, type: float}
+    - {name: mapa_indper7_cultivos_forrajeros_lag1, type: float}
+    - {name: mapa_indper8_ganado_para_abasto_lag1, type: float}
+    - {name: mapa_indper8_leche_lag1, type: float}
+    - {name: mapa_indper8_vacuno_para_abasto_lag1, type: float}
+    - {name: mapa_indpermov10_ganado_para_abasto_lag1, type: float}
+    - {name: mapa_indpermov10_leche_lag1, type: float}
+    - {name: mapa_indpermov10_vacuno_para_abasto_lag1, type: float}
+    - {name: mapa_indpermov9_cereales_lag1, type: float}
+    - {name: mapa_indpermov9_cultivos_forrajeros_lag1, type: float}
+    - {name: mapa_indpermov9_leguminosas_pienso_lag1, type: float}
+    - {name: mapa_preper5_leche_cabra_100_litros_lag1, type: float}
+    - {name: mapa_preper5_leche_oveja_100_litros_lag1, type: float}
+    - {name: mapa_preper5_leche_vaca_100_litros_lag1, type: float}
+    - {name: mapa_preper6_vacas_paridas_100kg_vivo_lag1, type: float}
+  derived_if_missing:
+    current_price: "target_precio_medio, si 'current_price' no viene informado -- ver predictor.py::_prepare_input_df() del código original. El plugin actual NO implementa esta derivación (ver known_issues, bug confirmado)."
+  constraints:
+    min_rows_per_group: 6  # seq_len -- grupos (producto, canal) con menos filas se descartan en modo batch, sin error explícito (solo logger.warning)
+
+outputs:
+  predict_batch:
+    - {name: fecha, type: date, description: "Fecha del mes de referencia (fila de entrada usada para construir la ventana) -- NO es la fecha objetivo t+6."}
+    - {name: producto, type: string}
+    - {name: canal, type: string}
+    - {name: current_price, type: float}
+    - {name: y_pred, type: float, description: "Precio predicho (EUR/L) a 6 meses vista (fecha + horizon)."}
+    - {name: model_id, type: string}
+    - {name: horizon, type: int, description: "6 (meses)."}
+  predict_inline:
+    - {name: prediction, type: float}
+    - {name: horizon, type: int}
+    - {name: features_used, type: "list[string]"}
+
+training:
+  supported: false  # externally trained; el plugin lanza TrainingNotSupportedError explícitamente
+  target_column: null
+  required_columns: null
+  hyperparams: null
+  metrics_returned: null
+  source: "plugin.py::train() -- sin procedimiento de reentrenamiento entregado en este repo"
+
+constraints: {}  # no hay restricciones de negocio explícitas; single-instance GRU sin reglas duras
+
+metrics_reported:
+  # IMPORTANTE -- discrepancia confirmada entre lo reportado como "métricas del modelo GRU" y
+  # lo que el artefacto REALMENTE desplegado (gru_model.pt, seed=42, seleccionado por
+  # "best_seed_by_validation_rmse") produce. Ver known_issues.
+  gru_mean_across_3_seeds:  # "GRU" en final_test_metrics.json -- promedio de 3 semillas, NO es el artefacto servido
+    MAE: 0.0177
+    RMSE: 0.0226
+    MAPE_pct: 1.7767
+    R2: 0.7957
+    direction_acc_pct: 93.2333
+  gru_shipped_artifact_seed42:  # "GRU_artifact_metrics" en final_test_metrics.json -- SÍ es gru_model.pt
+    MAE: 0.013472696283459668
+    RMSE: 0.0169822828247763
+    MAPE_pct: 1.33
+    R2: 0.8994110336510438
+    direction_acc_pct: 90.6
+  source: models/metrics/final_test_metrics.json (ambos bloques ya presentes en el fichero real)
+
+golden_cases:
+  # 8 casos reales del bloque out-of-sample (fecha=2025-09-01, fecha_objetivo=2026-03-01 --
+  # última ventana completa del dataset entregado), uno por producto x 2 canales. Fuente:
+  # ejecución REAL del código original (scripts/predict.py --model gru, artefacto gru_model.pt
+  # entregado) sobre inbox/a23/codigo/data/processed/dataset_forecast_ready.csv, reproducida el
+  # 2026-09-01 -- no son los valores de test_predictions_h6_gru.csv (ese fichero reporta la
+  # media de 3 semillas, no el artefacto único servido; ver known_issues) sino la salida directa
+  # y reproducible del artefacto que de verdad se sirve en producción. Cross-verificado
+  # ejecutando también app/plugins/ml23_lactic_market_price_forecast/plugin.py::_run_on_df()
+  # directamente (una vez añadida la derivación current_price=target_precio_medio que el
+  # código entregado sí hace y el plugin no hacía -- ver known_issues): coincide exactamente
+  # (4 decimales) con la reproducción del código original.
+  - id: caso_leche_desnatada_discounts
+    source: dataset_real_reproducido
+    input: {fecha: "2025-09-01", producto: leche_desnatada, canal: DISCOUNTS, current_price: 0.8962}
+    expected: {y_pred: 0.9113}
+    tolerance: {atol: 0.001}
+  - id: caso_leche_desnatada_hipermercados
+    source: dataset_real_reproducido
+    input: {fecha: "2025-09-01", producto: leche_desnatada, canal: HIPERMERCADOS, current_price: 1.0159}
+    expected: {y_pred: 0.9996}
+    tolerance: {atol: 0.001}
+  - id: caso_leche_entera_discounts
+    source: dataset_real_reproducido
+    input: {fecha: "2025-09-01", producto: leche_entera, canal: DISCOUNTS, current_price: 1.0409}
+    expected: {y_pred: 1.0433}
+    tolerance: {atol: 0.001}
+  - id: caso_leche_entera_hipermercados
+    source: dataset_real_reproducido
+    input: {fecha: "2025-09-01", producto: leche_entera, canal: HIPERMERCADOS, current_price: 1.1204}
+    expected: {y_pred: 1.0987}
+    tolerance: {atol: 0.001}
+  - id: caso_leche_semidesnatada_super_autos
+    source: dataset_real_reproducido
+    input: {fecha: "2025-09-01", producto: leche_semidesnatada, canal: "SUPER+AUTOS", current_price: 1.0174}
+    expected: {y_pred: 1.0255}
+    tolerance: {atol: 0.001}
+  - id: caso_leche_semidesnatada_tespana
+    source: dataset_real_reproducido
+    input: {fecha: "2025-09-01", producto: leche_semidesnatada, canal: "T.ESPAÑA", current_price: 1.0097}
+    expected: {y_pred: 1.0168}
+    tolerance: {atol: 0.001}
+  - id: caso_total_leche_liquida_super_autos
+    source: dataset_real_reproducido
+    input: {fecha: "2025-09-01", producto: total_leche_liquida, canal: "SUPER+AUTOS", current_price: 1.0257}
+    expected: {y_pred: 1.0311}
+    tolerance: {atol: 0.001}
+  - id: caso_total_leche_liquida_tespana
+    source: dataset_real_reproducido
+    input: {fecha: "2025-09-01", producto: total_leche_liquida, canal: "T.ESPAÑA", current_price: 1.0222}
+    expected: {y_pred: 1.0267}
+    tolerance: {atol: 0.001}
+
+known_issues:
+  - >
+    BUG CONFIRMADO EN predict_batch() (antes de esta revisión): plugin.py nunca deriva
+    'current_price' a partir de 'target_precio_medio' -- derivación que SÍ hace el código
+    original (predictor.py::_prepare_input_df()) y que es imprescindible porque
+    dataset_forecast_ready.csv (el propio dataset de entrenamiento/inferencia del modelo) NO
+    trae una columna 'current_price', solo 'target_precio_medio'. Sin esa derivación,
+    _run_on_df() descarta TODAS las filas de TODOS los grupos (producto, canal) con
+    "Missing cols... ['current_price']" y predict_batch devuelve predictions=[] -- HTTP 200
+    con lista vacía, sin ningún error visible. Confirmado ejecutando el plugin real contra el
+    CSV real del modelo. Corregido en esta revisión (ver verification_report.md).
+  - >
+    DISCREPANCIA MÉTRICAS REPORTADAS vs ARTEFACTO SERVIDO: el bloque "GRU" de
+    final_test_metrics.json (MAE=0.0177, RMSE=0.0226, R2=0.7957) es la métrica MEDIA de 3
+    semillas de entrenamiento independientes (política "mean_across_seeds"), no la del
+    artefacto único (gru_model.pt, seed=42, "best_seed_by_validation_rmse") que el plugin
+    realmente sirve. El propio fichero incluye el bloque correcto bajo
+    "GRU_artifact_metrics" (MAE=0.0135, RMSE=0.0170, R2=0.899) -- son notablemente MEJORES que
+    las reportadas como "las" métricas del modelo. Se ha usado GRU_artifact_metrics como
+    metrics_reported.gru_shipped_artifact_seed42 arriba; la documentación institucional
+    (ficha técnica) debería citar esa fuente, no el bloque "GRU" a secas.
+  - >
+    predict_inline() replica (tile) la fila de entrada seq_len=6 veces para simular una
+    secuencia -- no existe en el código original ningún mecanismo de predicción "de una sola
+    fila": el modelo siempre se evaluó sobre 6 meses reales consecutivos y distintos entre sí
+    (cada mes con su propio lag/rolling feature). Tilear una fila constante elimina toda señal
+    de evolución temporal que el GRU aprendió a explotar -- la predicción inline debe
+    considerarse una aproximación de conveniencia, no equivalente a una predicción real de
+    producción (mismo patrón ya documentado para dairy_price_forecast en
+    retech-lote2-xai-plataforma/predict-task-manager.ts). No se ha cuantificado aquí el error
+    que introduce esta aproximación frente a una ventana real de 6 meses.
+  - >
+    model_loader.py llama a ArtifactStore.download_all_if_needed(), que lanza
+    EnvironmentError inmediatamente si STORAGE_BUCKET no está seteado -- SIN comprobar antes
+    si los ficheros ya existen localmente. Esto hace que load() falle en cualquier entorno de
+    desarrollo/CI local sin STORAGE_BUCKET configurado, incluso con los 3 artefactos ya
+    vendorizados en artifacts/ml23_lactic_market_price_forecast/. Mismo patrón (y mismo bug)
+    en otros 5 plugins de este repo (m21_cereal_price_spatial, ml25_wine_sulphites,
+    ml5_meat_cow_behaviour, ml17_meat_market_price_analysis, modelo10_lacteo) -- todos usan
+    download_all_if_needed() en vez del patrón lazy _store.path(filename) que usan
+    correctamente los otros ~18 plugins del repo. Corregido para ml23 en esta revisión; los
+    otros 5 quedan fuera de alcance de esta tarea (no se tocan sin que se pida explícitamente).
+  - >
+    Falta mlflow_utils.py en app/plugins/ml23_lactic_market_price_forecast/ -- viola la regla
+    del repo "todo plugin lleva mlflow_utils.py, sin excepción" (CLAUDE.md / skill
+    plugin-integration), aunque el modelo no soporte hoy reentrenamiento por usuario. Añadido
+    en esta revisión (plantilla base, ya que no hay lógica de descarga de modelo de usuario
+    que implementar mientras train() siga sin soportarse).
+  - >
+    No existía inbox/a23/manifest.yaml (este fichero) antes de esta revisión: el plugin se
+    integró sin pasar por el skill manifest-extraction, saltándose el orden de trabajo estándar
+    del repo. Es plausible que el bug de current_price hubiera aparecido en el skill
+    verification si este manifest hubiera existido desde el principio.

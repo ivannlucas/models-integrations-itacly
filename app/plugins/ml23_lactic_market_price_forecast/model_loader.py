@@ -19,9 +19,17 @@ _store = ArtifactStore(ARTIFACT_FOLDER_NAME)
 
 
 def load_model_bundle() -> tuple[GRUModel, np.ndarray, np.ndarray, dict]:
-    """Download artifacts if needed and return (model, mean, scale, manifest)."""
-    _store.download_all_if_needed()
+    """Return (model, mean, scale, manifest), downloading each artifact lazily if missing.
 
+    _store.path(filename) only reaches out to S3 for a given file if it isn't already
+    present locally (and only if STORAGE_BUCKET is set) -- unlike the previous
+    _store.download_all_if_needed() call this replaces, which raised EnvironmentError
+    immediately whenever STORAGE_BUCKET was unset, even with all 3 artifacts already
+    vendored locally under artifacts/ml23_lactic_market_price_forecast/. That broke
+    load() in every local/dev/CI environment without S3 configured (see
+    inbox/a23/manifest.yaml known_issues) -- same pattern already used correctly by
+    most other plugins in this repo (e.g. ml16_meat_raw_material_price_alert).
+    """
     with open(_store.path(MANIFEST_FILENAME), encoding="utf-8") as fh:
         manifest = json.load(fh)
 

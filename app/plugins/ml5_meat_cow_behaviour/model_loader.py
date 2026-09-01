@@ -92,8 +92,15 @@ def _load_classifier(classifier_path: str, device: str):
 
 
 def load_model_bundle() -> dict:
-    """Load detector + classifier from ArtifactStore and return a runtime bundle dict."""
-    _store.download_all_if_needed()
+    """Load detector + classifier from ArtifactStore and return a runtime bundle dict.
+
+    Each file is fetched lazily via _store.path(filename) below, which only reaches out
+    to S3 for a file that isn't already present locally (and only if STORAGE_BUCKET is
+    set) — unlike the unconditional _store.download_all_if_needed() this used to call,
+    which raised EnvironmentError immediately whenever STORAGE_BUCKET was unset, even
+    with artifacts already vendored locally (same bug found and fixed for ml23; see
+    inbox/a23/manifest.yaml known_issues).
+    """
     detector_path = _store.path(DETECTOR_FILENAME)
     classifier_path = _store.path(CLASSIFIER_FILENAME)
 

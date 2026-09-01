@@ -32,9 +32,14 @@ def load_model_bundle() -> tuple[dict[str, dict[str, Any]], dict[str, Any]]:
         "H2": {"reg": model, "clf": model},
         "H3": {"reg": model, "clf": model},
     }
-    """
-    _store.download_all_if_needed()
 
+    Each file is fetched lazily via _store.path(filename) below, which only reaches out
+    to S3 for a file that isn't already present locally (and only if STORAGE_BUCKET is
+    set) — unlike the unconditional _store.download_all_if_needed() this used to call,
+    which raised EnvironmentError immediately whenever STORAGE_BUCKET was unset, even
+    with artifacts already vendored locally (same bug found and fixed for ml23; see
+    inbox/a23/manifest.yaml known_issues).
+    """
     with open(_store.path(METADATA_FILENAME), encoding="utf-8") as fh:
         metadata = json.load(fh)
 

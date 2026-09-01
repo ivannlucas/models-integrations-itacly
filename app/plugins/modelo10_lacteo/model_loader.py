@@ -52,9 +52,15 @@ def load_detector_and_classifier(device: torch.device):
     """
     Carga el detector YOLO y el clasificador MobileNetV3 desde artifacts/.
     Devuelve (detector, classifier, class_names).
-    """
-    _store.download_all_if_needed()
 
+    Cada fichero se descarga de forma perezosa vía _store.path(filename) más abajo, que
+    solo recurre a S3 si el fichero no existe ya localmente (y solo si STORAGE_BUCKET
+    está seteado) -- a diferencia de la llamada incondicional a
+    _store.download_all_if_needed() que había aquí antes, que lanzaba EnvironmentError
+    inmediatamente si STORAGE_BUCKET no estaba seteado, incluso con los artefactos ya
+    vendorizados localmente (mismo bug encontrado y corregido para ml23; ver
+    inbox/a23/manifest.yaml known_issues).
+    """
     detector_path = _store.path(DETECTOR_FILENAME)
     classifier_path = _store.path(CLASSIFIER_FILENAME)
     class_names_path = _store.path(CLASS_NAMES_FILENAME)

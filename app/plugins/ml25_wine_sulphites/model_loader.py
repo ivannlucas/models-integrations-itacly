@@ -24,8 +24,15 @@ def get_artifacts_dir():
 
 
 def load_artifacts() -> tuple[Any, Any, dict]:
-    """Load quality model, bound SO2 model, and metadata from artifact storage."""
-    _store.download_all_if_needed()
+    """Load quality model, bound SO2 model, and metadata from artifact storage.
+
+    Each file is fetched lazily via _store.path(filename) below, which only reaches out
+    to S3 for a file that isn't already present locally (and only if STORAGE_BUCKET is
+    set) — unlike the unconditional _store.download_all_if_needed() this used to call,
+    which raised EnvironmentError immediately whenever STORAGE_BUCKET was unset, even
+    with artifacts already vendored locally (same bug found and fixed for ml23; see
+    inbox/a23/manifest.yaml known_issues).
+    """
     quality_path = _store.path(QUALITY_RF_MODEL_FILENAME)
     bound_path = _store.path(BOUND_RF_MODEL_FILENAME)
     metadata_path = _store.path(METADATA_FILENAME)
