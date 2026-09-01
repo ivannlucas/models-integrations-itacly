@@ -92,6 +92,13 @@ inbox/a09/codigo/a09-del-cereals-el-clasificacion-objetos-anomalos/data/processe
 inbox/a09/codigo/a09-del-cereals-el-clasificacion-objetos-anomalos/data/splits/*.csv
 inbox/a09/codigo/a09-del-cereals-el-clasificacion-objetos-anomalos/data/predictions/*.csv
 
+# a16/a23: el equipo de IA entrega codigo/ con su propio .git interno -- sin esta regla, git lo
+# rastrea como gitlink (submódulo huérfano, sin .gitmodules) y cualquier cambio dentro queda
+# "modified content" imposible de commitear ni descartar desde el repo padre. codigo/ nunca se
+# commitea (ver CLAUDE.md), así que se ignora entero, no solo los CSV pesados.
+inbox/a16/codigo/
+inbox/a23/codigo/
+
 # Model artifacts live in S3 (artifacts/fixed/...) — never commit local copies
 # (refrigeracion_model.pkl for ml40 alone is 171 MB)
 /artifacts/
