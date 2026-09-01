@@ -76,8 +76,18 @@ def build_predictions_frame(
     y_seq: np.ndarray | None,
     *,
     has_target: bool,
+    x_seq: np.ndarray | None = None,
+    feature_columns: list[str] | None = None,
 ) -> pd.DataFrame:
-    """Assemble one output row per window: identity + predicted class + per-class probabilities."""
+    """Assemble one output row per window: identity + predicted class + per-class probabilities.
+
+    When *x_seq*/*feature_columns* are given (predict_batch), also attaches xai_feature_values
+    per row — same 65 engineered features predict_inline already returns — so the platform's
+    explainability panel has something to explain for batch results too (previously batch never
+    set this field at all, unlike inline). Computed BEFORE the sort below, while row position i
+    here still lines up 1:1 with x_seq[i] (both come straight from window_meta/proba in the same
+    pre-sort order) — sort_values() afterward carries this column along with the rest of the row.
+    """
     out = window_meta.reset_index(drop=True).copy()
     pred = np.argmax(proba, axis=1) if len(proba) else np.zeros((0,), dtype=int)
 
@@ -87,6 +97,11 @@ def build_predictions_frame(
         field = PROBA_FIELD_BY_CLASS.get(class_idx, f"proba_clase_{class_idx}")
         out[field] = proba[:, class_idx]
     out["confidence"] = proba.max(axis=1) if len(proba) else np.zeros((0,), dtype=float)
+
+    if x_seq is not None and feature_columns is not None and len(out):
+        out["xai_feature_values"] = [
+            window_feature_values(x_seq, feature_columns, i) for i in range(len(out))
+        ]
 
     if has_target and y_seq is not None and np.size(y_seq):
         out["y_true"] = np.asarray(y_seq).astype(int)

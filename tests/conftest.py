@@ -668,6 +668,12 @@ def _ml31_residue_batch(plugin: FakePlugin, *, data_path: str) -> Ml31ResidueBat
 def _ml33_reuse_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> Ml33ReuseInlineResp:
     """Fake inline response for the ml33 cereal reuse-strategy MILP optimizer."""
     n_lots = len(features.get("lots", [])) or 1
+    fake_candidates = [
+        {"strategy": "Animal feed", "estimated_emissions_kg": 120.5, "feasible": True},
+        {"strategy": "Composting", "estimated_emissions_kg": 145.0, "feasible": True},
+        {"strategy": "Biochar", "estimated_emissions_kg": 200.0, "feasible": True},
+        {"strategy": "Biomass combustion", "estimated_emissions_kg": 300.0, "feasible": True},
+    ]
     return Ml33ReuseInlineResp(
         model_id="ml33-cereals-reuse-strategy-optimizer",
         results=[
@@ -677,6 +683,7 @@ def _ml33_reuse_inline(plugin: FakePlugin, *, features: dict, model_key, thresho
                 "ai_assignment_source": "exact_min_emissions",
                 "ai_is_fallback": False,
                 "estimated_emissions_kg": 120.5,
+                "candidates": fake_candidates,
             }
             for i in range(n_lots)
         ],

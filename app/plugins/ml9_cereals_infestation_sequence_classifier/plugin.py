@@ -143,6 +143,7 @@ class Ml9CerealsInfestationSequenceClassifierPlugin(ModelPluginPort):
             proba = postprocessing.run_inference(self._checkpoint, self._scaler, payload["X_seq"])
             pred_df = postprocessing.build_predictions_frame(
                 payload["window_meta"], proba, payload["y_seq"], has_target=has_target,
+                x_seq=payload["X_seq"], feature_columns=payload["feature_columns"],
             )
 
             evaluated = None

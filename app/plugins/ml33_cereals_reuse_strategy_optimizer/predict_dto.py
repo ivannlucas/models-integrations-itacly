@@ -59,6 +59,20 @@ class _ExecutionParams(BaseModel):
     fallback_strategy: str = Field(default=DEFAULT_FALLBACK_STRATEGY, description="Estrategia de guarda si el MILP no puede colocar un lote")
 
 
+class StrategyCandidate(BaseModel):
+    """Estimated emissions of one candidate strategy for a lot — exact, not an
+    approximation (same pure function the MILP itself minimizes). See
+    optimizer.candidate_breakdown() for the ``feasible`` caveat (per-lot volume only,
+    not block-level capacity contention).
+    """
+
+    strategy: str
+    estimated_emissions_kg: float
+    feasible: bool = Field(
+        ..., description="volume_tons <= capacity for this strategy in isolation (not block-level)"
+    )
+
+
 class LotResult(BaseModel):
     """Assignment result for a single lot."""
 
@@ -69,6 +83,14 @@ class LotResult(BaseModel):
     ai_assignment_source: str = Field(..., description="exact_min_emissions | capacity_fallback")
     ai_is_fallback: bool
     estimated_emissions_kg: float
+    candidates: list[StrategyCandidate] = Field(
+        ...,
+        description=(
+            "Emisión estimada para las 4 estrategias candidatas (no solo la elegida), "
+            "ordenadas ascendente — explica por qué se eligió ai_assigned_strategy. "
+            "Exacto (misma fórmula que minimiza el MILP), no una aproximación SHAP."
+        ),
+    )
 
 
 # ── inline ──────────────────────────────────────────────────────────────────
