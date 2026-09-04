@@ -1,8 +1,0 @@
-source_id,path,temporal_column,date_min,date_max
-INE_CPI,data/raw/external/INE_CPI/76128.csv,,,
-MAPA_PRICES_OM,data/raw/external/MAPA_PRICES_OM/s502025rv0.xlsx,,,
-MAPA_SLAUGHTER_MAPA,data/raw/external/MAPA_SLAUGHTER_MAPA/boletin--diciembre-2025-web.xlsx,,,
-MAPA_SLAUGHTER_MAPA,data/raw/external/MAPA_SLAUGHTER_MAPA/sacrificio_anual_2024.xlsx,,,
-MAPA_SLAUGHTER_MAPA,data/raw/external/MAPA_SLAUGHTER_MAPA/sacrificio_exhaustivo_2023.xlsx,,,
-MAPA_SLAUGHTER_MAPA,data/raw/external/MAPA_SLAUGHTER_MAPA/web-mapa-1-junio-24-25-web-0.xlsx,,,
-MAPA_SLAUGHTER_MAPA,data/raw/external/MAPA_SLAUGHTER_MAPA/web-mapa-2-diciembre-24-25-web.xlsx,,,

@@ -195,12 +195,30 @@ def estimate_prefix_baseline(asset_df: pd.DataFrame, global_baseline: Mapping[st
 
 def build_feature_matrix(df: pd.DataFrame, artifacts: FeatureArtifacts, train_assets: Sequence[str], cfg: TrainConfig) -> Tuple[pd.DataFrame, List[str], List[str]]:
     """Apply the fitted artifacts: z-score numeric features, add residuals + one-hot categoricals."""
+    validate_feature_artifacts(artifacts, cfg, require_feature_lists=False)
     out = df.copy()
     full_feature_cols: List[str] = []
+
+    missing_numeric = [c for c in artifacts.numeric_feature_names if c not in out.columns]
+    if missing_numeric:
+        raise ValueError(
+            "Feature artifact compatibility check failed: the input dataframe does not contain "
+            f"the numeric features expected by feature_artifacts: {missing_numeric[:20]}"
+        )
+
+    missing_medians = [c for c in artifacts.numeric_feature_names if c not in artifacts.medians]
+    missing_iqrs = [c for c in artifacts.numeric_feature_names if c not in artifacts.iqrs]
+    if missing_medians or missing_iqrs:
+        raise ValueError(
+            "Feature artifact compatibility check failed: missing scaling statistics "
+            f"medians={missing_medians[:20]} iqrs={missing_iqrs[:20]}"
+        )
 
     for c in artifacts.numeric_feature_names:
         med = artifacts.medians[c]
         iqr = artifacts.iqrs[c]
+        if not np.isfinite(float(iqr)) or float(iqr) <= 0.0:
+            raise ValueError(f"Feature artifact compatibility check failed: invalid IQR for feature '{c}': {iqr}")
         col = pd.to_numeric(out[c], errors="coerce").fillna(med)
         out[f"z_{c}"] = ((col - med) / iqr).astype(np.float32)
         full_feature_cols.append(f"z_{c}")
@@ -244,4 +262,88 @@ def build_feature_matrix(df: pd.DataFrame, artifacts: FeatureArtifacts, train_as
 
     artifacts.full_feature_names = list(full_feature_cols)
     artifacts.no_clock_feature_names = list(no_clock_feature_cols)
+    validate_feature_artifacts(artifacts, cfg, scenario="full", expected_feature_names=full_feature_cols, require_feature_lists=True)
+    if cfg.ablate_clocks:
+        validate_feature_artifacts(artifacts, cfg, scenario="no_clock", expected_feature_names=no_clock_feature_cols, require_feature_lists=True)
     return out, full_feature_cols, no_clock_feature_cols
+
+
+def validate_feature_artifacts(
+    artifacts: FeatureArtifacts,
+    cfg: TrainConfig,
+    *,
+    scenario: str | None = None,
+    expected_feature_names: Sequence[str] | None = None,
+    require_feature_lists: bool = True,
+) -> None:
+    """Validate that persisted feature artifacts are internally consistent before reuse."""
+    numeric = list(artifacts.numeric_feature_names)
+    if not numeric:
+        raise ValueError("feature_artifacts.numeric_feature_names is empty; feature scaling cannot be reproduced.")
+    duplicated_numeric = sorted({name for name in numeric if numeric.count(name) > 1})
+    if duplicated_numeric:
+        raise ValueError(f"Duplicated numeric features in feature_artifacts: {duplicated_numeric[:10]}.")
+
+    missing_medians = [name for name in numeric if name not in artifacts.medians]
+    missing_iqrs = [name for name in numeric if name not in artifacts.iqrs]
+    bad_iqrs = [name for name in numeric if float(artifacts.iqrs.get(name, 0.0)) <= 0.0]
+    if missing_medians or missing_iqrs or bad_iqrs:
+        raise ValueError(
+            "Invalid feature scaling artifacts: "
+            f"missing medians={missing_medians[:10]}, missing iqrs={missing_iqrs[:10]}, non-positive iqrs={bad_iqrs[:10]}."
+        )
+
+    missing_global_baseline = [name for name in BASELINE_COLS if name not in artifacts.global_baseline]
+    if missing_global_baseline:
+        raise ValueError(f"feature_artifacts.global_baseline is missing baseline columns: {missing_global_baseline}.")
+    for asset_id, baseline in artifacts.train_asset_baselines.items():
+        missing = [name for name in BASELINE_COLS if name not in baseline]
+        if missing:
+            raise ValueError(f"Baseline for train asset {asset_id!r} is missing columns: {missing}.")
+
+    if len(artifacts.stage_class_weights) != 3:
+        raise ValueError("stage_class_weights must contain exactly 3 values for stable/incipient/advanced.")
+    for name, value in {
+        "foul_pos_weight": artifacts.foul_pos_weight,
+        "clog_pos_weight": artifacts.clog_pos_weight,
+        "actionable_foul_pos_weight": artifacts.actionable_foul_pos_weight,
+    }.items():
+        if float(value) <= 0.0:
+            raise ValueError(f"{name} must be positive in feature_artifacts.")
+
+    if not require_feature_lists:
+        return
+
+    full = list(artifacts.full_feature_names)
+    no_clock = list(artifacts.no_clock_feature_names)
+    if not full or not no_clock:
+        raise ValueError("feature_artifacts must contain non-empty full_feature_names and no_clock_feature_names before reuse.")
+    if sorted(set(full)) != sorted(full) or sorted(set(no_clock)) != sorted(no_clock):
+        raise ValueError("feature_artifacts contains duplicated names in full_feature_names or no_clock_feature_names.")
+    if not set(no_clock).issubset(set(full)):
+        raise ValueError("no_clock_feature_names must be a subset of full_feature_names.")
+
+    clock_features = set(cfg.clock_feature_names())
+    leaked_clocks = []
+    for feature in no_clock:
+        raw = feature[2:] if feature.startswith("z_") else feature
+        if raw in clock_features:
+            leaked_clocks.append(feature)
+    if leaked_clocks:
+        raise ValueError(f"no_clock_feature_names still contains direct clock features: {leaked_clocks}.")
+
+    for feature in full:
+        if feature.startswith("z_"):
+            raw = feature[2:]
+            if raw not in artifacts.numeric_feature_names:
+                raise ValueError(f"Scaled feature {feature!r} has no raw numeric artifact {raw!r}.")
+
+    if scenario is not None:
+        if scenario not in {"full", "no_clock"}:
+            raise ValueError(f"Unsupported scenario {scenario!r}; expected 'full' or 'no_clock'.")
+        declared = full if scenario == "full" else no_clock
+        if expected_feature_names is not None and list(expected_feature_names) != declared:
+            raise ValueError(
+                f"Feature list mismatch for scenario {scenario}: expected {len(declared)} persisted features, "
+                f"received {len(expected_feature_names)}."
+            )

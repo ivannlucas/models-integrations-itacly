@@ -1,9 +1,67 @@
 # Verificación — ml46-dairy-fouling-clog-detection (a46)
 
-Fecha: 2026-07-08
+## ACTUALIZACIÓN 2026-09-04 — resincronización tras cambio sustancial del código entregado
+
+El código entregado en `inbox/a46/codigo/` cambió de forma sustancial desde la verificación de
+2026-07-08 (ver detalle completo en `inbox/a46/manifest.yaml` → `known_issues`): dataset de
+entrenamiento 10x más grande (10→100 activos, 198.615→2.288.800 filas), split de activos
+completamente distinto (train/val/test 6/2/2 → 61/21/20, **con activos de test totalmente
+distintos**: los `asset_00`/`asset_06` de julio ahora son de validación), hiperparámetros
+corregidos para coincidir con la memoria (`batch_size` 64→128, `epochs` 8→4), y aparición de
+varios ficheros de contrato oficiales que antes no existían (`artifact_contract.json`,
+`inference_input_contract.json/csv`, `kpi_design_definition.json`).
+
+**Esto invalidó los 13 golden_cases anteriores** (referenciaban activos que ya no son de test) —
+se regeneraron 14 nuevos ejecutando el código original (`scripts/predict.py --scenario no_clock
+--device cpu`) sobre el nuevo split de test. También se detectó y corrigió un desfase real de
+código: `src/training/features.py::build_feature_matrix()` en el código entregado ahora incluye
+`validate_feature_artifacts()` + comprobaciones explícitas de columnas/medianas/IQR faltantes o
+inválidas (antes ausentes en el `_vendor/features.py` del plugin) — se ha portado fielmente
+(mismo comportamiento, sin inventar validaciones nuevas). `_vendor/data.py` se revisó también:
+las funciones realmente usadas por el plugin (`load_telemetry`, `load_maintenance`,
+`align_future_labels`) resultaron ser algorítmicamente idénticas a las del código actual — el
+tamaño distinto del fichero se explica por completo por `build_asset_profiles`/`_score_asset_split`/
+`split_assets`, que ya estaban deliberadamente excluidas (el `train()` del plugin hace fine-tuning
+sobre el checkpoint servido, no re-parte activos desde cero) y siguen estándolo correctamente.
+
+**Re-verificación end-to-end tras el fix**: se cargaron los artifacts nuevos
+(`selected_model.pt`, `feature_artifacts.json`, `training_config.json`, `model_manifest.json`,
+`policy_thresholds.json` ← `models/metrics/no_clock_policy_thresholds.json`) en
+`artifacts/ml46_dairy_fouling_clog_detection/`. `plugin.load()` carga correctamente y las
+validaciones internas del propio plugin (`_vendor/artifact_validation.py::validate_feature_artifacts`,
+`validate_checkpoint_compatibility`) pasan sin error contra el nuevo bundle. Los **14/14 golden
+cases** nuevos coinciden con `plugin.predict_batch(data_path="data/splits/test_rows.csv")` con
+diferencia absoluta ≤ 1e-6 (muy por debajo de `float_rtol=1e-4`). Nota metodológica confirmada de
+nuevo con el dataset nuevo: `predict_inline` sobre una ventana aislada de 120 filas para un activo
+no visto en entrenamiento (todo activo de test) NO reproduce el resultado exacto — hace falta el
+historial completo del activo para que `estimate_prefix_baseline()` calcule el mismo residuo que
+`predict_batch`; verificado explícitamente: con solo 120 filas, `caso_011` (asset_57) predice
+`pred_stage=1` en vez de `2` (discrepancia real, no ruido); con el historial completo del activo
+hasta la misma fecha, coincide exactamente. Sin cambios de comportamiento respecto a lo ya
+documentado en julio — mismo mecanismo, mismo tipo de caso, ahora con el dataset nuevo.
+
+**Checklist técnico re-ejecutado**: flake8 limpio (`app/plugins/ml46_dairy_fouling_clog_detection/`),
+pylint 8.11/10 (antes del fix: 8.14/10 — variación de -0.03 por líneas largas en la validación
+portada, dentro de la misma categoría de ruido ya documentada, no una regresión de fondo), suite
+completa del repo **400/400 passed** sin regresiones.
+
+**Estado: LISTO PARA PR** con los artifacts/manifest/plugin ya resincronizados. Pendiente para
+revisión humana (no bloqueante, ver `known_issues` del manifest para el detalle): (1) confirmar
+si el equipo de IA puede añadir por fin `last_maintenance_type` al contrato de entrada oficial
+(`inference_input_contract.json` v1.3) — sigue sin aparecer pese al contrato nuevo; (2) el modelo
+tiene recall=0.0 en eventos de "fouling" a nivel de episodio consolidado sobre el split de test
+nuevo, pese a AUC=0.986 a nivel de ventana — la degradación ocurre en la política de alertas
+(`evaluation.py::consolidate_alerts`), no en el TCN, y no se ha investigado más a fondo.
+
+---
+
+## Verificación original — 2026-07-08
+
 Rama: `feature/model-46-integration`
 Plugin: `app/plugins/ml46_dairy_fouling_clog_detection/`
-Manifest: `inbox/a46/manifest.yaml`
+Manifest: `inbox/a46/manifest.yaml` (versión de julio — ver actualización de septiembre arriba
+para el estado vigente; la tabla de golden_cases de la sección siguiente referencia los 13 casos
+antiguos, ya sustituidos)
 
 ## Checklist técnico
 

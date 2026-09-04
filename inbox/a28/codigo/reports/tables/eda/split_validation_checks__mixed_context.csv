@@ -1,4 +1,0 @@
-check,pass,detail
-max_train_before_min_validation,True,train end before validation start
-max_validation_before_min_test,True,validation end before test start
-no_overlap_between_splits,True,no duplicated key tuple across splits

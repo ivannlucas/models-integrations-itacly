@@ -1,4 +1,0 @@
-source_id,status,evidence_status,status_match,raw_exists,processed_exists,hash_available,raw_path_count,derived_path_count,official_url_ok,download_url_ok,license_url_ok,has_inconsistency
-INE_CPI,active,active,True,True,True,True,1,3,True,True,True,False
-MAPA_SLAUGHTER_MAPA,active,active,True,True,True,True,5,3,True,True,True,False
-MAPA_PRICES_OM,traced,traced,True,True,True,True,1,2,True,True,True,False

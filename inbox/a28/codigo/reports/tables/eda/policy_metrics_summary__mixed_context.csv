@@ -1,3 +1,0 @@
-generated_at_utc,rows,baseline_excess_tons,policy_excess_tons,baseline_stockout_tons,stockout_tons,aggregate_excess_reduction_pct,aggregate_stockout_change_pct,stockout_guardrail_pass,trigger_rule_respected,baseline_policy_name,proposed_policy_name,policy,excess_tons,policy,stockout_tons
-2026-06-17T10:28:48.580967+00:00,175.0,37374.49442683941,29260.17626877957,0.0,0.0,21.710843939156476,0.0,True,True,operational_simple,two_stage_mixed_context,operational_simple,37374.49442683941,operational_simple,0.0
-,,,,,,,,,,,,two_stage_mixed_context,29260.17626877957,two_stage_mixed_context,0.0

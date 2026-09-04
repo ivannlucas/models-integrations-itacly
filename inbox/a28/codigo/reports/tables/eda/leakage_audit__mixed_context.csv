@@ -1,8 +1,0 @@
-feature_name,present_in_dataset,in_upstream,in_trigger,in_quantity_optimizer,status
-order_quantity_tons,False,False,False,False,pass
-quantity_optimizer_recommendation_tons,False,False,False,False,pass
-quantity_optimizer_target_tons,True,False,False,False,pass
-excess_tons,False,False,False,False,pass
-stockout_tons,False,False,False,False,pass
-purchase_trigger_flag,False,False,False,False,pass
-purchase_trigger_proba,False,False,False,False,pass
