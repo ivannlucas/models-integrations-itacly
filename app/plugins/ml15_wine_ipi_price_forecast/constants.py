@@ -1,0 +1,75 @@
+"""Constants for ml15 — national phytosanitary price index (IPI) forecast, t+6 (Ridge, sklearn).
+
+Values mirror the AI team's config/config.yaml and the trained artifact payload delivered in
+inbox/a15/codigo/ (see inbox/a15/manifest.yaml for provenance and known issues — in particular,
+the folder is named "a15-rnn-..." but the production model is Ridge, not a recurrent network).
+"""
+
+MODEL_ID = "ml15-wine-ipi-price-forecast"
+ARTIFACT_FOLDER_NAME = "ml15_wine_ipi_price_forecast"
+VERSION = "1.0.0"
+FRAMEWORK = "scikit-learn"
+
+MODEL_FILENAME = "horizon_6_ridge.pkl"
+HORIZON = 6
+MODEL_KIND = "ridge"
+MODEL_NAME = "Ridge"
+ALPHA = 25.0  # config.yaml::production_deployment.models.horizon_6.params.alpha
+
+TARGET_COLUMN = "ipi_national_t_plus_6"
+ANCHOR_COLUMN = "ipi_national_current"
+
+# Exact feature_columns contract persisted inside the delivered artifact (models/artifacts/
+# horizon_6_ridge.pkl), verified in inbox/a15/manifest.yaml golden_cases against model.predict().
+FEATURE_COLUMNS = [
+    "ipi_national_current",
+    "ipi_national_lag_1",
+    "ipi_national_lag_2",
+    "ipi_national_lag_3",
+    "ipi_national_lag_4",
+    "ipi_national_lag_5",
+    "ipi_national_lag_6",
+    "chem_sector_lag_11",
+    "copper_lag_14",
+    "eur_usd_lag_17",
+    "oil_brent_lag_12",
+    "usa_lag_1",
+    "month_sin",
+    "month_cos",
+    "quarter",
+    "is_spring_risk",
+]
+
+# Features the plugin can derive automatically from a supplied 'date'/'origin_date' if the
+# caller omits them — see preprocessing.py::build_feature_row.
+CALENDAR_DERIVED_COLUMNS = ("month_sin", "month_cos", "quarter", "is_spring_risk")
+
+# Filenames used for user-retrained artifacts (never overwrite the fixed S3 artifact above)
+USER_MODEL_FILENAME = f"user_{MODEL_FILENAME}"
+
+# Default chronological holdout fraction used by train() to report test metrics when the
+# generic retraining CSV doesn't carry the AI team's original fixed train/val/test date cuts
+# (2016-06/2023-12/2024-12/2026-01). ~15% is close to the original test proportion (13/116 ≈
+# 11.2%) while staying usable on smaller retraining CSVs. See training.py.
+TEST_HOLDOUT_FRACTION = 0.15
+
+# Hold-out test metrics of the delivered artifact — models/metrics/final_evaluation.json,
+# horizon t+6, Ridge alpha=25.0 (matches memoria Tabla 4; recomputed and verified bit-for-bit
+# in inbox/a15/manifest.yaml golden_cases). Used for stats() when no retraining has happened yet.
+METRICS_REPORTED = {
+    "dataset": "test_holdout",
+    "n_observations_evaluable": 8,
+    "rmse": 1.0395874222606034,
+    "mae": 0.9439915488990067,
+    "mape_pct": 0.7377164503991782,
+    "r2": 0.17513892031416456,
+    "mda_pct": 100.0,
+    "baseline_persistence_rmse": 2.26194606478581,
+    "rmse_reduction_vs_baseline_pct": 54.040132147932326,
+    "kpi_contractual": "accuracy = 1 - MAPE >= 80% (MAPE <= 20%) -- CUMPLE (MAPE test = 0.74%)",
+    "known_issues_note": (
+        "El nombre del directorio original sugiere una RNN (LSTM/GRU aparecen en el glosario de "
+        "la memoria), pero el modelo productivo entregado y servido aquí es Ridge Regression "
+        "(sklearn) -- ver inbox/a15/manifest.yaml known_issues."
+    ),
+}

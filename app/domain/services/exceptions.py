@@ -77,6 +77,11 @@ class InsufficientSensorWindowError(ValueError):
     allowed ratio, or too few rows survive to build a 180-row temporal window (ml43)."""
 
 
+class MissingRequiredFeatureError(ValueError):
+    """Raised when a required model feature is missing from the input and cannot be derived
+    automatically from 'date'/'origin_date' (ml15)."""
+
+
 class InfeasibleOptimizationError(ValueError):
     """Raised when the LP crop-allocation problem is infeasible/unbounded (ml31).
 

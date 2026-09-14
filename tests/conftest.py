@@ -41,6 +41,7 @@ from app.domain.services.exceptions import (
     InsufficientWindowHistoryError,
     InvalidImageError,
     InvalidVideoError,
+    MissingRequiredFeatureError,
     NoValidSimulationPointError,
     PuConstraintViolationError,
     ThermalSafetyViolationError,
@@ -245,6 +246,16 @@ from app.plugins.ml16_meat_raw_material_price_alert.predict_dto import (
 from app.plugins.ml16_meat_raw_material_price_alert.train_dto import (
     TrainRequest as Ml16_TrainReq,
     TrainResponse as Ml16TrainResp,
+)
+from app.plugins.ml15_wine_ipi_price_forecast.predict_dto import (
+    PredictBatchResponse as Ml15BatchResp,
+    PredictInlineResponse as Ml15InlineResp,
+    PredictRequest as Ml15_Request,
+    PredictResponse as Ml15_Response,
+)
+from app.plugins.ml15_wine_ipi_price_forecast.train_dto import (
+    TrainRequest as Ml15_TrainReq,
+    TrainResponse as Ml15TrainResp,
 )
 
 # ── ModelEntry dataclass (local copy — avoids importing app.registry which loads real plugins) ───
@@ -1391,6 +1402,43 @@ def _ml16_train(plugin: FakePlugin, *, data_path: str) -> Ml16TrainResp:
     )
 
 
+def _ml15_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> Ml15InlineResp:
+    """Fake inline response for the ml15 national phytosanitary IPI (Ridge) forecast model."""
+    return Ml15InlineResp(
+        model_id="ml15-wine-ipi-price-forecast",
+        origin_date=features.get("date", "2025-01-01"),
+        target_date="2025-07-01",
+        horizon=6,
+        y_pred=125.4807,
+        y_anchor=float(features.get("ipi_national_current", 123.85)),
+        model_name="Ridge",
+        xai_feature_values={"ipi_national_current": float(features.get("ipi_national_current", 123.85))},
+    )
+
+
+def _ml15_batch(plugin: FakePlugin, *, data_path: str) -> Ml15BatchResp:
+    """Fake batch response for the ml15 national phytosanitary IPI (Ridge) forecast model."""
+    return Ml15BatchResp(
+        model_id="ml15-wine-ipi-price-forecast",
+        predictions=[{
+            "row": 0, "origin_date": "2025-01-01", "target_date": "2025-07-01", "horizon": 6,
+            "y_pred": 125.4807, "y_anchor": 123.85, "model_id": "ml15-wine-ipi-price-forecast",
+        }],
+        n_predictions=1,
+        output_path=None,
+    )
+
+
+def _ml15_train(plugin: FakePlugin, *, data_path: str) -> Ml15TrainResp:
+    """Fake retraining response for the ml15 national phytosanitary IPI (Ridge) forecast model."""
+    return Ml15TrainResp(
+        detail="Reentrenamiento completado (Ridge, procedimiento original).",
+        n_train_rows=98, n_test_rows=18,
+        rmse=1.0396, mae=0.9440, mape_pct=0.7377, r2=0.1751, mda_pct=100.0,
+        upload_warning=None,
+    )
+
+
 FAKE_FACTORIES: dict[str, tuple[Callable, Callable]] = {
     "ml9-cereals-infestation-sequence-classifier": (_ml9_cereals_inline, _ml9_cereals_batch),
     "ml46-dairy-fouling-clog-detection": (_ml46_dairy_inline, _ml46_dairy_batch),
@@ -1416,6 +1464,7 @@ FAKE_FACTORIES: dict[str, tuple[Callable, Callable]] = {
     "ml3-wine-disease-pest-forecast": (_ml3_wine_inline, _ml3_wine_batch),
     "m21-cereal-price-spatial": (_m21_inline, _m21_batch),
     "ml16-meat-raw-material-price-alert": (_ml16_inline, _ml16_batch),
+    "ml15-wine-ipi-price-forecast": (_ml15_inline, _ml15_batch),
 }
 
 TRAIN_FACTORIES: dict[str, Callable] = {
@@ -1432,6 +1481,7 @@ TRAIN_FACTORIES: dict[str, Callable] = {
     "ml3-wine-disease-pest-forecast": _ml3_wine_train,
     "m21-cereal-price-spatial": _m21_train,
     "ml16-meat-raw-material-price-alert": _ml16_train,
+    "ml15-wine-ipi-price-forecast": _ml15_train,
 }
 
 
@@ -1679,6 +1729,17 @@ TEST_REGISTRY: list[ModelEntry] = [
         extra_predict_exceptions=(InsufficientRowsError,),
         train_request_type=Ml16_TrainReq,
         train_response_type=Ml16TrainResp,
+    ),
+    ModelEntry(
+        model_id="ml15-wine-ipi-price-forecast",
+        prefix="/models/ml15-wine-ipi-price-forecast",
+        version="1.0.0",
+        plugin_class=FakePlugin,
+        predict_request_type=Ml15_Request,
+        predict_response_type=Ml15_Response,
+        extra_predict_exceptions=(MissingRequiredFeatureError,),
+        train_request_type=Ml15_TrainReq,
+        train_response_type=Ml15TrainResp,
     ),
 ]
 
