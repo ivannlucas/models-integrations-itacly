@@ -72,4 +72,11 @@ scipy>=1.11.0
 # Also required by ml43 (cereal dryer anomaly/fault detection, CU43+CU44) — same DNSL family,
 # same rationale: the corrective-action catalog is ported inline (see inbox/a43/manifest.yaml
 # known_issues).
+
+# Added for ml41 (meat curing machinery acoustic anomaly detection) — Audio-MAE (ViT) over
+# log-Mel spectrograms. Versions pinned to match the AI team's original delivery
+# (inbox/a41/codigo/requirements_mae.txt) so the shipped checkpoints' preprocessing is
+# reproduced exactly.
+librosa==0.11.0
+soundfile==0.13.1
 shap>=0.51.0

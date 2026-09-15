@@ -16,12 +16,14 @@ from app.domain.services.exceptions import (
     InsufficientSensorWindowError,
     InsufficientTelemetryHistoryError,
     InsufficientWindowHistoryError,
+    InvalidAudioError,
     InvalidImageError,
     InvalidVideoError,
     NoValidSimulationPointError,
     PuConstraintViolationError,
     UnknownDiagnosisSystemError,
     ThermalSafetyViolationError,
+    UnsupportedMachineConfigurationError,
 
 )
 
@@ -70,6 +72,18 @@ from app.plugins.ml7_cereals_grain_pest_detection.plugin import Ml7CerealsGrainP
 from app.plugins.ml7_cereals_grain_pest_detection.predict_dto import (
     PredictRequest as Ml7Grain_Request,
     PredictResponse as Ml7Grain_Response,
+)
+
+from app.plugins.ml41_meat_curing_machinery_acoustic_anomaly.plugin import (
+    Ml41MeatCuringMachineryAcousticAnomalyPlugin,
+)
+from app.plugins.ml41_meat_curing_machinery_acoustic_anomaly.predict_dto import (
+    PredictRequest as Ml41_Request,
+    PredictResponse as Ml41_Response,
+)
+from app.plugins.ml41_meat_curing_machinery_acoustic_anomaly.train_dto import (
+    TrainRequest as Ml41_TrainReq,
+    TrainResponse as Ml41_TrainResp,
 )
 
 from app.plugins.ml30_meat_traceability_detection.plugin import Ml30MeatTraceabilityDetectionPlugin
@@ -494,5 +508,16 @@ REGISTRY: list[ModelEntry] = [
         extra_predict_exceptions=(InsufficientRowsError,),
         train_request_type=Ml16_TrainReq,
         train_response_type=Ml16_TrainResp,
+    ),
+    ModelEntry(
+        model_id="ml41-meat-curing-machinery-acoustic-anomaly",
+        prefix="/models/ml41-meat-curing-machinery-acoustic-anomaly",
+        version="1.0.0",
+        plugin_class=Ml41MeatCuringMachineryAcousticAnomalyPlugin,
+        predict_request_type=Ml41_Request,
+        predict_response_type=Ml41_Response,
+        extra_predict_exceptions=(UnsupportedMachineConfigurationError, InvalidAudioError),
+        train_request_type=Ml41_TrainReq,
+        train_response_type=Ml41_TrainResp,
     ),
 ]
