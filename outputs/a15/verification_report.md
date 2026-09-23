@@ -107,9 +107,60 @@ del fix contra el endpoint HTTP real (ver tabla arriba). **Lección para futuros
 Parte A del checklist de este skill (arranque local + curl real) no es opcional ni sustituible
 por los tests con `FakePlugin` — son cosas distintas y este bug solo lo detecta la primera.
 
+## Corrección post-review: histórico simple de IPI (`ipi_history.csv`)
+
+**Reportado por un revisor humano tras el primer verde**: `data/input/ipi_history.csv` (el
+histórico mensual simple del equipo de IA — columnas `date,year,month,ipi_national_current`,
+sin las 15 features restantes) devolvía error como `data_path` de `/predict` — "parece que no
+se recogen las variables para completar las filas (como con el panel, que sí funciona bien)".
+
+**Causa real, no un bug de wiring**: la primera versión del plugin exigía deliberadamente las 16
+features ya calculadas (decisión de diseño documentada en el manifest, para no depender de
+datos de referencia bundled) — nunca implementaba el modo `--input ipi_history.csv` del
+`predictor.py` original, que reconstruye retardos/exógenas desde un histórico de referencia.
+
+**Corrección aplicada**:
+- Se empaquetan `global_phytosanitary_prices_b2020.csv` y `financial_proxies_monthly.csv` junto
+  al `.pkl` en `artifacts/ml15_wine_ipi_price_forecast/` (vía `ArtifactStore`, igual que el
+  modelo).
+- Nuevo módulo `history.py`: puerto fiel de `build_inference_panel_from_history` /
+  `build_inference_panel_from_user_ipi_history` / `_add_financial_base_2020_indices_for_inference`
+  del `predictor.py` original.
+- `PredictInlineRequest`: los 16 campos de feature pasan a opcionales — `predict_inline` deriva
+  cualquiera que falte desde `date`/`origin_date` + el histórico bundled (y usa
+  `ipi_national_current`, si se aporta, como override en esa fecha).
+- `predict_batch` detecta si el CSV tiene forma de histórico simple (no trae las 16 columnas)
+  y, si es así, fusiona **todas** sus filas en el histórico de referencia antes de derivar cada
+  predicción — para que unas filas sirvan de contexto de retardo a otras, igual que el pipeline
+  original — en vez de derivar cada fila de forma aislada.
+
+**Verificación de la corrección**:
+- Los 3 modos de entrada (panel completo explícito / `date`+`ipi_national_current` / solo
+  `date`) reproducen los 13 `golden_cases` con diferencia `0.0`, vía llamada directa **y** vía
+  el endpoint HTTP real (`POST /predict`, servidor standalone, sin mocks).
+- `data/input/ipi_history.csv` real del equipo de IA (15 filas, incluye 2 meses — 2026-02 y
+  2026-03 — posteriores al propio `global_phytosanitary_prices_b2020.csv` bundled) ejecutado
+  contra `POST /predict` batch real: **15/15 filas, 0 errores**; las 13 que solapan con el
+  golden dataset coinciden exactamente (diff 0.0); las 2 nuevas (fuera del rango bundled)
+  predicen correctamente usando el propio histórico del CSV como override — confirma que la
+  fusión de fechas más allá del snapshot bundled funciona.
+- Nuevos tests: `tests/unit/test_ml15_history.py` (14 tests, lógica pura de `history.py` sobre
+  DataFrames sintéticos, sin depender de los CSV reales de `artifacts/` — no comiteados) +
+  3 tests nuevos en `test_ml15_preprocessing.py` (con `monkeypatch` sobre
+  `history.load_reference_data`). Un test existente se reescribió porque el comportamiento que
+  verificaba (fallar si falta una feature) cambió intencionadamente: ahora esa feature se deriva
+  en vez de fallar, cuando hay `date`. Suite completa: **31/31 tests propios de ml15**, sin
+  regresiones en el resto del repo (333/333 fuera de los 3 ficheros que ya fallaban por falta de
+  `torch`, ajenos a este cambio).
+- `flake8`: 0 errores. `pylint`: 9.12/10 (mejora frente al 8.80/10 anterior).
+
+**Known issue actualizado en el manifest**: el snapshot bundled es estático (hasta
+feb-2026/jun-2026) y solo se refresca si el equipo de IA lo regenera y resube — no se actualiza
+automáticamente. Documentado en `inbox/a15/manifest.yaml::known_issues`.
+
 ## Estado final
 
-**✅ Verificado — listo para `docs-generation` y revisión humana.**
+**✅ Verificado — listo para revisión humana.**
 
 Pendiente de decisión humana (no bloquea el plugin, documentado en
 `inbox/a15/manifest.yaml::known_issues`):
@@ -120,3 +171,6 @@ Pendiente de decisión humana (no bloquea el plugin, documentado en
 - Fijar `scikit-learn==1.8.0` exacto en el entorno de despliegue (el artefacto se serializó con
   esa versión; se probó cargándolo con 1.9.1 sin diferencias numéricas, pero con
   `InconsistentVersionWarning`).
+- Refrescar periódicamente el snapshot bundled (`global_phytosanitary_prices_b2020.csv` /
+  `financial_proxies_monthly.csv`) para que las fechas más recientes no dependan siempre de que
+  el llamante aporte `ipi_national_current` manualmente.

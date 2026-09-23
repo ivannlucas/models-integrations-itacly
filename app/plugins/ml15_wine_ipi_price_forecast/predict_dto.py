@@ -7,26 +7,40 @@ field (Swagger-documented, typed) — PredictModelUseCase.execute() builds the p
 double-wrapped (``{"features": {...}}``) instead of the flat dict plugin.py expects — this is
 the same convention already used by every other plugin in the repo (see e.g.
 ml17_meat_market_price_analysis/predict_dto.py).
+
+All 16 feature fields are Optional: any of them can be omitted and derived automatically from
+'date'/'origin_date' plus the bundled reference history (see history.py) — mirrors the AI
+team's original --input ipi_history.csv mode, which only required date + the current national
+IPI value. See preprocessing.py::build_feature_row for the exact derivation/override rules.
 """
 from typing import Annotated, Any, Literal, Union
 
 from pydantic import BaseModel, ConfigDict, Field
 
 _CALENDAR_NOTE = "Opcional: se deriva de 'date'/'origin_date' si se omite."
+_HISTORY_NOTE = (
+    "Opcional: si se omite, se deriva de 'date'/'origin_date' y el histórico de referencia "
+    "bundled (ver known_issues del manifest)."
+)
 
 
 class PredictBatchRequest(BaseModel):
-    """Batch request: a CSV with one row per prediction, same feature contract as inline."""
+    """Batch request: a CSV with one row per prediction."""
 
     model_config = ConfigDict(protected_namespaces=())
     mode: Literal["batch"] = "batch"
     data_path: str = Field(
         ...,
         description=(
-            "Ruta a un CSV con una fila por predicción: ipi_national_current, "
+            "Ruta a un CSV con una fila por predicción. Dos formatos aceptados: (a) panel "
+            "técnico completo, con las 16 columnas del contrato (ipi_national_current, "
             "ipi_national_lag_1..6, chem_sector_lag_11, copper_lag_14, eur_usd_lag_17, "
-            "oil_brent_lag_12, usa_lag_1 (índice base 2020=100), más 'date' (YYYY-MM-DD) o las 4 "
-            "columnas de calendario ya calculadas (month_sin, month_cos, quarter, is_spring_risk)."
+            "oil_brent_lag_12, usa_lag_1, más 'date' o las 4 columnas de calendario); o (b) "
+            "histórico simple mensual del IPI nacional -- columnas date(/origin_date, o "
+            "year+month) + ipi_national_current (o 'spain'/'ipi'/'value'/'y') -- igual que "
+            "data/input/ipi_history.csv del equipo de IA; el resto de features se derivan "
+            "automáticamente del histórico de referencia bundled, fusionando primero todas "
+            "las filas del CSV para que unas sirvan de contexto de retardo a las otras."
         ),
     )
     mlflow_run_id: str = Field(default="", description="MLflow run ID de un modelo reentrenado por el usuario")
@@ -61,20 +75,26 @@ class PredictInlineRequest(BaseModel):
     )
     origin_date: str | None = Field(default=None, description="Alias de 'date'.")
 
-    ipi_national_current: float = Field(
-        ..., description="Último IPI fitosanitario nacional observado en origin_date (índice base 2020=100)."
+    ipi_national_current: float | None = Field(
+        default=None,
+        description=(
+            "Último IPI fitosanitario nacional observado en origin_date (índice base "
+            "2020=100). " + _HISTORY_NOTE + " Si se aporta junto con 'date', también "
+            "sobrescribe el histórico de referencia en esa fecha (útil para fechas más "
+            "recientes de lo que cubre el snapshot bundled)."
+        ),
     )
-    ipi_national_lag_1: float = Field(..., description="IPI nacional observado 1 mes antes de origin_date.")
-    ipi_national_lag_2: float = Field(..., description="IPI nacional observado 2 meses antes de origin_date.")
-    ipi_national_lag_3: float = Field(..., description="IPI nacional observado 3 meses antes de origin_date.")
-    ipi_national_lag_4: float = Field(..., description="IPI nacional observado 4 meses antes de origin_date.")
-    ipi_national_lag_5: float = Field(..., description="IPI nacional observado 5 meses antes de origin_date.")
-    ipi_national_lag_6: float = Field(..., description="IPI nacional observado 6 meses antes de origin_date.")
-    chem_sector_lag_11: float = Field(..., description="Índice sectorial químico retardado 11 meses (base 2020=100).")
-    copper_lag_14: float = Field(..., description="Precio del cobre retardado 14 meses (base 2020=100).")
-    eur_usd_lag_17: float = Field(..., description="Tipo de cambio EUR/USD retardado 17 meses (base 2020=100).")
-    oil_brent_lag_12: float = Field(..., description="Precio del petróleo Brent retardado 12 meses (base 2020=100).")
-    usa_lag_1: float = Field(..., description="Índice de precios de pesticidas de EE.UU. retardado 1 mes (base 2020=100).")
+    ipi_national_lag_1: float | None = Field(default=None, description="IPI nacional 1 mes antes de origin_date. " + _HISTORY_NOTE)
+    ipi_national_lag_2: float | None = Field(default=None, description="IPI nacional 2 meses antes de origin_date. " + _HISTORY_NOTE)
+    ipi_national_lag_3: float | None = Field(default=None, description="IPI nacional 3 meses antes de origin_date. " + _HISTORY_NOTE)
+    ipi_national_lag_4: float | None = Field(default=None, description="IPI nacional 4 meses antes de origin_date. " + _HISTORY_NOTE)
+    ipi_national_lag_5: float | None = Field(default=None, description="IPI nacional 5 meses antes de origin_date. " + _HISTORY_NOTE)
+    ipi_national_lag_6: float | None = Field(default=None, description="IPI nacional 6 meses antes de origin_date. " + _HISTORY_NOTE)
+    chem_sector_lag_11: float | None = Field(default=None, description="Índice sectorial químico retardado 11 meses. " + _HISTORY_NOTE)
+    copper_lag_14: float | None = Field(default=None, description="Precio del cobre retardado 14 meses. " + _HISTORY_NOTE)
+    eur_usd_lag_17: float | None = Field(default=None, description="Tipo de cambio EUR/USD retardado 17 meses. " + _HISTORY_NOTE)
+    oil_brent_lag_12: float | None = Field(default=None, description="Precio del petróleo Brent retardado 12 meses. " + _HISTORY_NOTE)
+    usa_lag_1: float | None = Field(default=None, description="Índice de pesticidas de EE.UU. retardado 1 mes. " + _HISTORY_NOTE)
 
     month_sin: float | None = Field(default=None, description="sin(2*pi*mes/12). " + _CALENDAR_NOTE)
     month_cos: float | None = Field(default=None, description="cos(2*pi*mes/12). " + _CALENDAR_NOTE)

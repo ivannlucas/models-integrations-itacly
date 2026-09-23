@@ -26,7 +26,7 @@ from app.domain.ports.model_plugin_port import ModelPluginPort
 from app.domain.services.exceptions import MissingRequiredFeatureError, ModelNotLoadedError
 from app.domain.services.mlflow_tracker import BaseMLflowTracker
 from app.infrastructure.artifact_store import local_file_path
-from app.plugins.ml15_wine_ipi_price_forecast import model_loader, preprocessing, training
+from app.plugins.ml15_wine_ipi_price_forecast import history, model_loader, preprocessing, training
 from app.plugins.ml15_wine_ipi_price_forecast.constants import (
     ALPHA,
     CALENDAR_DERIVED_COLUMNS,
@@ -153,30 +153,119 @@ class Ml15WineIpiPriceForecastPlugin(ModelPluginPort):
 
     # ── predict_batch ─────────────────────────────────────────────────────────
 
+    @staticmethod
+    def _resolve_batch_dates(df: pd.DataFrame) -> tuple[list[pd.Timestamp | None], list[dict[str, Any]], dict[int, str]]:
+        """Resolve each row's origin date + collect (date, value) override points.
+
+        Returns (dates, user_points, row_errors) — dates[i] is None where the row's date
+        couldn't be resolved (see row_errors[i] for why).
+        """
+        value_col = history.find_simple_ipi_column(list(df.columns))
+        dates: list[pd.Timestamp | None] = []
+        user_points: list[dict[str, Any]] = []
+        row_errors: dict[int, str] = {}
+
+        for idx, row in enumerate(df.to_dict(orient="records")):
+            try:
+                date = history.resolve_row_date(row)
+            except ValueError as exc:
+                dates.append(None)
+                row_errors[idx] = str(exc)
+                continue
+            dates.append(date)
+            value = row.get(value_col) if value_col else None
+            if value not in (None, "", "nan"):
+                user_points.append({"date": date, "value": float(value)})
+
+        return dates, user_points, row_errors
+
+    def _predict_simple_history_batch(self, payload: dict, df: pd.DataFrame) -> list[dict[str, Any]]:
+        """Batch-predict a simple date(+year/month)+IPI-value history CSV — e.g. the AI
+        team's own data/input/ipi_history.csv (date,year,month,ipi_national_current) — one
+        prediction per row. Merges the WHOLE file into the bundled reference history first
+        (not row-by-row), so every row's national value is available as lag/context for
+        every other row, matching the AI team's original predictor.py semantics for this
+        input mode more closely than deriving each row in isolation would.
+        """
+        dates, user_points, row_errors = self._resolve_batch_dates(df)
+        predictions: list[dict[str, Any] | None] = [None] * len(dates)
+        for idx, err in row_errors.items():
+            predictions[idx] = {"row": idx, "error": err}
+
+        prices_df, financial_df = history.load_reference_data()
+        if user_points:
+            prices_df = history.merge_user_points_into_prices(prices_df, user_points)
+
+        valid_idx = [i for i, d in enumerate(dates) if d is not None]
+        if valid_idx:
+            self._fill_batch_predictions(payload, dates, valid_idx, prices_df, financial_df, predictions)
+        return predictions
+
+    @staticmethod
+    def _fill_batch_predictions(
+        payload: dict, dates: list[pd.Timestamp], valid_idx: list[int],
+        prices_df: pd.DataFrame, financial_df: pd.DataFrame, predictions: list,
+    ) -> None:
+        """Derive features + predict for every valid_idx row, writing into predictions in place."""
+        feature_columns = list(payload["feature_columns"])
+        horizon = int(payload["horizon"])
+        try:
+            derived = history.derive_feature_rows([dates[i] for i in valid_idx], prices_df, financial_df)
+            y_pred = payload["model"].predict(derived[feature_columns])
+        except ValueError as exc:
+            for row_idx in valid_idx:
+                predictions[row_idx] = {"row": row_idx, "error": str(exc)}
+            return
+
+        anchor_column = str(payload["anchor_column"])
+        for pos, row_idx in enumerate(valid_idx):
+            origin_date, target_date = preprocessing.resolve_origin_target_dates(
+                {"date": dates[row_idx].strftime("%Y-%m-%d")}, horizon,
+            )
+            predictions[row_idx] = {
+                "row": row_idx,
+                "origin_date": origin_date,
+                "target_date": target_date,
+                "horizon": horizon,
+                "y_pred": float(y_pred[pos]),
+                "y_anchor": float(derived.iloc[pos][anchor_column]),
+                "model_id": MODEL_ID,
+            }
+
     def predict_batch(self, *, data_path: str, mlflow_run_id: str = "") -> PredictBatchResponse:
-        """Predict the national IPI at t+6 for every row in a CSV (one row = one prediction)."""
+        """Predict the national IPI at t+6 for every row in a CSV (one row = one prediction).
+
+        Accepts either a ready-made feature panel (all feature_columns present — the
+        original/default contract) or a simple date(+year/month)+IPI-value history like the
+        AI team's own data/input/ipi_history.csv — see
+        history.py::is_simple_history_frame / _predict_simple_history_batch.
+        """
         self._require_loaded()
         payload, tmp = self._resolve_payload(mlflow_run_id)
         try:
             with local_file_path(data_path) as local_path:
                 df = pd.read_csv(local_path)
 
-            predictions: list[dict[str, Any]] = []
-            for idx, row in df.iterrows():
-                try:
-                    r = self._predict_row(payload, row.to_dict())
-                    predictions.append({
-                        "row": int(idx),
-                        "origin_date": r["origin_date"],
-                        "target_date": r["target_date"],
-                        "horizon": r["horizon"],
-                        "y_pred": r["y_pred"],
-                        "y_anchor": r["y_anchor"],
-                        "model_id": MODEL_ID,
-                    })
-                except ValueError as exc:
-                    logger.warning("Error en fila %s: %s", idx, exc)
-                    predictions.append({"row": int(idx), "error": str(exc)})
+            feature_columns = list(payload["feature_columns"])
+            if history.is_simple_history_frame(list(df.columns), feature_columns):
+                predictions = self._predict_simple_history_batch(payload, df)
+            else:
+                predictions = []
+                for idx, row in df.iterrows():
+                    try:
+                        r = self._predict_row(payload, row.to_dict())
+                        predictions.append({
+                            "row": int(idx),
+                            "origin_date": r["origin_date"],
+                            "target_date": r["target_date"],
+                            "horizon": r["horizon"],
+                            "y_pred": r["y_pred"],
+                            "y_anchor": r["y_anchor"],
+                            "model_id": MODEL_ID,
+                        })
+                    except ValueError as exc:
+                        logger.warning("Error en fila %s: %s", idx, exc)
+                        predictions.append({"row": int(idx), "error": str(exc)})
 
             self._record_prediction()
             logger.info(

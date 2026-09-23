@@ -9,28 +9,28 @@
   "framework": "scikit-learn (Pipeline: StandardScaler + Ridge, alpha=25.0); pandas / numpy / joblib",
   "artefacto": "horizon_6_ridge.pkl (payload joblib: modelo + contrato de 16 feature_columns + metadatos de entrenamiento)",
   "objetivo": "Anticipar con seis meses de antelación la evolución del IPI fitosanitario nacional (precios de medios de protección fitopatológica en viticultura), para dar soporte a la planificación de compras, la evaluación de riesgos de coste y la toma de decisiones de aprovisionamiento del sector vitivinícola bajo incertidumbre de mercado.",
-  "caso_uso": "Modo predict inline: se aportan las 16 variables del contrato del artefacto (o bien un subconjunto más 'date'/'origin_date', del que se derivan automáticamente las 4 variables de calendario) y se obtiene la predicción del IPI nacional a 6 meses vista. Modo predict batch: mismo contrato de entrada, una fila por predicción, sobre un CSV. Modo train: reentrena desde cero un Pipeline StandardScaler+Ridge(alpha=25.0) — mismos hiperparámetros que el equipo de IA — a partir de un CSV con las 16 features más el target histórico, evaluando sobre un holdout cronológico del propio CSV; el artefacto fijo servido en producción nunca se sobrescribe.",
+  "caso_uso": "Modo predict inline: se aportan las 16 variables del contrato del artefacto, o solo un subconjunto (incluso solo 'date') — el resto se deriva automáticamente desde 'date'/'origin_date' y un histórico de referencia bundled (retardos autorregresivos y exógenos, más las 4 variables de calendario) — y se obtiene la predicción del IPI nacional a 6 meses vista. Modo predict batch: acepta un CSV con el panel completo (una fila = una predicción ya calculada) o un histórico simple mensual (date/year+month + ipi_national_current, igual que data/input/ipi_history.csv del equipo de IA), fusionando todas sus filas en el histórico de referencia para derivar cada predicción. Modo train: reentrena desde cero un Pipeline StandardScaler+Ridge(alpha=25.0) — mismos hiperparámetros que el equipo de IA — a partir de un CSV con las 16 features más el target histórico, evaluando sobre un holdout cronológico del propio CSV; el artefacto fijo servido en producción nunca se sobrescribe.",
   "inputs": [
     {
       "nombre": "ipi_national_current",
       "tipo": "float (índice base 2020=100)",
       "descripcion": "Último IPI fitosanitario nacional observado en el mes de origen — ancla de la predicción",
-      "obligatorio": "Sí",
-      "valor_defecto": "-"
+      "obligatorio": "No — se deriva del histórico de referencia bundled en 'date' si se omite; si se aporta, además sobrescribe ese histórico en esa fecha",
+      "valor_defecto": "derivado del histórico de referencia"
     },
     {
       "nombre": "ipi_national_lag_1 … ipi_national_lag_6",
       "tipo": "float (índice base 2020=100)",
       "descripcion": "IPI nacional observado entre 1 y 6 meses antes del mes de origen (6 retardos autorregresivos)",
-      "obligatorio": "Sí",
-      "valor_defecto": "-"
+      "obligatorio": "No — se derivan del histórico de referencia bundled a partir de 'date' si se omiten",
+      "valor_defecto": "derivados del histórico de referencia"
     },
     {
       "nombre": "chem_sector_lag_11, copper_lag_14, eur_usd_lag_17, oil_brent_lag_12, usa_lag_1",
       "tipo": "float (índice base 2020=100)",
       "descripcion": "Cinco variables exógenas retardadas: indicador sectorial químico, cobre, tipo de cambio EUR/USD, petróleo Brent y precios de pesticidas de EE. UU. — cada una con el retardo (en meses) que mostró mayor correlación anticipatoria en el análisis lead-lag del equipo de IA",
-      "obligatorio": "Sí",
-      "valor_defecto": "-"
+      "obligatorio": "No — se derivan del histórico de referencia bundled a partir de 'date' si se omiten",
+      "valor_defecto": "derivados del histórico de referencia"
     },
     {
       "nombre": "month_sin, month_cos, quarter, is_spring_risk",
@@ -101,6 +101,12 @@
       "valor": "13/13 casos, coincidencia exacta (diferencia 0,0) contra el endpoint HTTP real",
       "descripcion": "Los 13 meses del split de test (data/splits/test/panel_test.csv) re-ejecutados contra /predict del plugin integrado — ver outputs/a15/verification_report.md",
       "interpretacion": "el servicio integrado reproduce exactamente el comportamiento del artefacto entregado; es fidelidad del wiring, no acierto adicional del modelo"
+    },
+    {
+      "nombre": "Verificación histórico simple de IPI (corrección post-review)",
+      "valor": "15/15 filas de data/input/ipi_history.csv, 0 errores, 13/13 coinciden con el golden dataset",
+      "descripcion": "El histórico mensual simple del equipo de IA (solo date+ipi_national_current, sin las 15 features restantes) ejecutado contra /predict batch real tras añadir la derivación automática desde el histórico de referencia bundled",
+      "interpretacion": "confirma que el modo de entrada más simple para el usuario final (solo el valor actual del índice) funciona igual de bien que el panel técnico completo"
     }
   ],
   "limitaciones": [
@@ -109,8 +115,8 @@
       "descripcion": "La carpeta original entregada se llama 'a15-rnn-vitivinicola-...' y el glosario de la memoria incluye LSTM/GRU, pero el modelo productivo desplegado es una regresión Ridge lineal, no una red neuronal recurrente. No se ha podido confirmar si hubo una fase experimental con RNN descartada y no documentada."
     },
     {
-      "tipo": "El servicio no reconstruye retardos desde series brutas",
-      "descripcion": "A diferencia del pipeline original del equipo de IA, que calcula los 16 retardos internamente a partir de históricos de precios acumulados, este servicio espera que el cliente aporte ya las variables retardadas (o el histórico completo vía 'date' solo para las 4 variables de calendario). Esta decisión evita depender de un dataset de referencia interno que se quedaría obsoleto sin actualización periódica, pero traslada la responsabilidad de construir el vector de features al sistema que consume el modelo."
+      "tipo": "Histórico de referencia bundled, no auto-actualizable",
+      "descripcion": "El servicio reconstruye los retardos automáticamente (igual que el pipeline original) a partir de dos CSV de referencia empaquetados junto al modelo (snapshot hasta feb-2026/jun-2026). Para fechas posteriores al snapshot hace falta aportar 'ipi_national_current' explícitamente (o, en modo batch, que el propio CSV de entrada incluya esos meses). El snapshot no se refresca solo — requiere que el equipo de IA regenere y resuba los ficheros de referencia periódicamente."
     },
     {
       "tipo": "Capa regional contextual no incluida",

@@ -344,13 +344,24 @@ known_issues:
      importan en ningún módulo de src/training ni src/predict -- confirmado por grep. No se ha
      podido confirmar contra la memoria si hubo una fase RNN descartada sin documentar, o si el
      nombre de carpeta es simplemente heredado de una plantilla de otro modelo del lote."
-  - "El predictor NO es stateless respecto a un único artefacto .pkl: para los modos origin_date
-     y user_ipi_history necesita, además de horizon_6_ridge.pkl, los CSV procesados
-     data/processed/global_phytosanitary_prices_b2020.csv y
-     data/processed/financial_proxies_monthly.csv como referencia histórica bundled para
-     reconstruir los retardos. Si el plugin solo empaqueta el .pkl, esos dos modos de
-     inferencia (los más simples de cara al usuario final) no funcionarán. Requiere decisión
-     explícita en plugin-integration sobre cómo empaquetar/actualizar estos CSV."
+  - "RESUELTO en plugin-integration (post-revisión): el predictor NO es stateless respecto a
+     un único artefacto .pkl -- para derivar features a partir de solo 'date'/'origin_date'
+     (o de un CSV simple estilo data/input/ipi_history.csv) necesita, además de
+     horizon_6_ridge.pkl, los CSV procesados data/processed/global_phytosanitary_prices_b2020.csv
+     y data/processed/financial_proxies_monthly.csv como referencia histórica. Decisión tomada:
+     se empaquetan ambos junto al .pkl en artifacts/ml15_wine_ipi_price_forecast/ (vía
+     ArtifactStore, igual que el modelo -- ver app/plugins/ml15_wine_ipi_price_forecast/history.py,
+     puerto de build_inference_panel_from_history/build_inference_panel_from_user_ipi_history).
+     predict_inline acepta ahora 'date'+'ipi_national_current' solos (o incluso solo 'date');
+     predict_batch detecta un CSV con forma de histórico simple (date/year+month +
+     ipi_national_current, sin las 16 columnas del contrato) y lo trata como tal, fusionando
+     todas sus filas en el histórico de referencia antes de predecir cada una -- así una fila
+     puede servir de contexto de retardo a otra, igual que el pipeline original. Verificado
+     contra el propio data/input/ipi_history.csv del equipo de IA: 15/15 filas, sin error,
+     coincidencia exacta con los golden_cases en las 13 fechas que también cubre el split de
+     test. Limitación que sigue existiendo: estos dos CSV de referencia son un snapshot estático
+     (hasta feb-2026/jun-2026 respectivamente) que solo se actualiza si el equipo de IA
+     regenera y resube el snapshot -- no se refrescan automáticamente."
   - "El modo regional_layer (capa regional contextual) es un post-proceso pesado y con fuentes
      propias (RECAN anual, IPC autonómico mensual, clima GEE mensual) que NO se han evaluado
      como necesarias para el contrato mínimo predict_inline. Documentado en el manifest por
