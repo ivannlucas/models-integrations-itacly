@@ -31,6 +31,7 @@ from app.plugins.ml41_meat_curing_machinery_acoustic_anomaly.constants import (
     SNRS,
 )
 from app.plugins.ml41_meat_curing_machinery_acoustic_anomaly.inference import load_mahalanobis_stats
+from app.plugins.ml41_meat_curing_machinery_acoustic_anomaly.thresholds import checkpoint_threshold
 
 logger = logging.getLogger(__name__)
 
@@ -94,6 +95,7 @@ class LoadedCombination:
     maha_inv_cov: np.ndarray
     maha_pca: Optional[Tuple[np.ndarray, np.ndarray]]
     device: torch.device
+    threshold: float | None = None
 
 
 def load_checkpoint(machine: str, machine_id: str, snr: str, device: torch.device) -> LoadedCombination:
@@ -118,6 +120,7 @@ def load_checkpoint(machine: str, machine_id: str, snr: str, device: torch.devic
         model=model, norm_mean=norm_mean, norm_std=norm_std,
         maha_mean=maha_mean, maha_inv_cov=maha_inv_cov, maha_pca=maha_pca,
         device=device,
+        threshold=checkpoint_threshold(checkpoint, machine, machine_id, snr),
     )
 
 

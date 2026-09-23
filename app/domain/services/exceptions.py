@@ -87,7 +87,7 @@ class InfeasibleOptimizationError(ValueError):
 
 
 class UnsupportedMachineConfigurationError(ValueError):
-    """Raised when (machine, machine_id, snr) is not one of the 48 trained combinations (ml41)."""
+    """Raised for an unsupported machine combination or missing/invalid calibration (ml41)."""
 
 
 class InvalidAudioError(ValueError):

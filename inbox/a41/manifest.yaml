@@ -1,0 +1,418 @@
+model_id: ml41-meat-curing-machinery-acoustic-anomaly
+sector: carnico
+nombre: "Modelo para la Detección de fallas en maquinaria de curado de embutidos aplicando un modelo predictivo basado en DNN"
+task_type: anomaly_detection_audio
+framework:
+  - torch==2.4.1
+  - torchaudio==2.4.1
+  - librosa==0.11.0
+  - soundfile==0.13.1
+  - numpy==1.24.4
+  - scikit-learn==1.3.2   # solo para roc_curve/threshold en pipeline de entrenamiento y auditoría; no se usa en predict()
+
+# ---------------------------------------------------------------------------
+# NOTA DE ALCANCE (ver known_issues para el detalle completo):
+#
+# inbox/a41/codigo/ contiene en realidad TRES proyectos. El código de nivel
+# superior (éste, MIMII Audio-MAE) es el ÚNICO que se integra. Dentro de
+# bearing_metro_preliminar/ hay dos subproyectos exploratorios descartados
+# por la propia memoria (sección 3.4 "Selección del dataset definitivo"):
+#   - bearing_metro_preliminar/bearings_preliminar  (IMS Bearing Dataset)
+#   - bearing_metro_preliminar/metro_preliminar     (MetroPT-3)
+# No se integran, no se documentan en las fichas, no forman parte de a41.
+#
+# Arquitectura de producción: Audio-MAE ViT-Tiny (decisión humana confirmada
+# 2026-09-15). El Baseline (autoencoder FC clásico) tiene mejor AUC medio
+# global (0.800 vs 0.772) y también está entregado con pesos completos para
+# las 48 combinaciones, pero la memoria declara explícitamente "el modelo
+# Audio-MAE se mantiene como modelo final del sistema" (sección Conclusiones).
+# El plugin NO implementa el Baseline; queda documentado como alternativa no
+# implementada en known_issues.
+# ---------------------------------------------------------------------------
+
+artifacts:
+  folder: models/artifacts/
+  # Estructura real (NO la que declara paths.artifacts en los config_vit_tiny_*.yaml
+  # entregados — ver known_issues): un checkpoint independiente por cada una de las
+  # 48 combinaciones machine × machine_id × snr (4 × 4 × 3).
+  path_pattern: "models/artifacts/vit_tiny_{machine}/{machine}/{machine_id}/{snr}/"
+  files_per_combination:
+    - best.pth          # model_state_dict + norm_mean + norm_std + machine/machine_id/snr/epoch/val_loss/history
+    - maha_stats.npz     # mean, inv_cov, pca_mean, pca_v, has_pca (calibración Mahalanobis, recalibrable sin reentrenar vía `calibrate`)
+  combinations:
+    machine: [fan, pump, slider, valve]
+    machine_id: [id_00, id_02, id_04, id_06]
+    snr: ["-6_dB", "0_dB", "6_dB"]
+    total: 48
+  # Arquitectura AudioMAE — DIFIERE por tipo de máquina (HPO específico por máquina,
+  # ver config/config_vit_tiny_{machine}.yaml). El checkpoint NO se autodescribe
+  # arquitectónicamente (solo guarda machine/machine_id/snr/norm_mean/norm_std), así
+  # que el plugin debe instanciar AudioMAE con estos parámetros ANTES de load_state_dict,
+  # por tipo de máquina, o el load fallará por shape mismatch:
+  architecture_by_machine:
+    common: {img_size: [128, 1024], patch_size: [16, 16], in_chans: 1, embed_dim: 192,
+             decoder_embed_dim: 128, decoder_depth: 4, decoder_num_heads: 4, norm_pix_loss: true}
+    fan:    {depth: 9, num_heads: 6, pca_components: 70}
+    pump:   {depth: 7, num_heads: 4, pca_components: 90}
+    slider: {depth: 4, num_heads: 4, pca_components: 90}
+    valve:  {depth: 5, num_heads: 8, pca_components: 30}
+  source: "inbox/a41/codigo/config/config_vit_tiny_{fan,pump,slider,valve}.yaml (comentario de cabecera: mejor trial de cada estudio Optuna HPO)"
+
+inputs:
+  fixed:
+    - name: audio_wav
+      type: bytes  # WAV, cualquier nº de canales (se reduce a mono con librosa.load(..., mono=True)), se recomienda 16 kHz / ~10 s
+      description: >
+        Grabación de audio de la máquina a inspeccionar. Se convierte a espectrograma
+        log-Mel (128 bandas, 1024 frames ≈ 10.24 s, hop=160, win=400, n_fft=1024,
+        sr=16000) antes de la inferencia. Si la duración real difiere de 1024 frames,
+        el pipeline original recorta o rellena por reflexión (ver preprocess.py:
+        wav_to_logmel, líneas 50-56) — el plugin debe replicar esto exactamente.
+
+  # Estas 3 variables NO son lecturas de sensor: seleccionan qué checkpoint de los 48
+  # disponibles se usa (equivalente al parámetro `model_key` de ModelPluginPort).
+  # "snr" en particular es un artefacto de cómo MIMII construyó el benchmark (mezcla
+  # sintética de audio limpio + ruido a una relación señal/ruido fijada) y no algo que
+  # un operario mida en producción; en un despliegue real habría que fijar de antemano
+  # con qué combinación se calibra cada máquina física (ver sección 7.1 de la memoria:
+  # `calibrate` permite re-ajustar el modelo más cercano a las condiciones reales sin
+  # reentrenar, en vez de tener que "elegir" un SNR).
+  selectors:
+    - name: machine
+      type: str
+      enum: [fan, pump, slider, valve]
+      description: "Tipo de máquina (ventilador, bomba, corredera/slider, válvula del secadero de curado)."
+    - name: machine_id
+      type: str
+      enum: [id_00, id_02, id_04, id_06]
+      description: "Identificador de la unidad física concreta (cada unidad tiene su propio modelo entrenado)."
+    - name: snr
+      type: str
+      enum: ["-6_dB", "0_dB", "6_dB"]
+      description: >
+        Nivel de ruido de fondo de la combinación de entrenamiento MIMII más cercana
+        a las condiciones reales de la instalación. No es una medición en tiempo real.
+
+  derived_if_missing: null  # no aplica: sin selectors completos no hay forma de determinar qué checkpoint cargar
+
+outputs:
+  predict_inline:
+    - name: mse_score
+      type: float
+      description: >
+        Error de reconstrucción (MSE) del Audio-MAE. ADVERTENCIA (ver known_issues):
+        estocástico entre ejecuciones porque run_inference() enmascara aleatoriamente
+        el 75% de los parches sin fijar semilla (~5-6% de variación observada). No usar
+        como señal de decisión ni en comparaciones estrictas.
+    - name: maha_score
+      type: float
+      description: >
+        Distancia de Mahalanobis del embedding CLS (proyectado a PCA) respecto a la
+        distribución de muestras normales de entrenamiento. Determinista (confirmado
+        empíricamente: variación <1e-5 entre ejecuciones repetidas). Es la señal real
+        de decisión del sistema en producción.
+    - name: predicted_label
+      type: int
+      description: "0 = normal, 1 = anómalo. predicted_label = int(maha_score >= threshold)."
+    - name: threshold_used
+      type: float
+      description: >
+        Umbral aplicado, calculado en origen con el método audit_fnr (percentil que
+        garantiza FNR ≤ 10%, criterio de éxito de negocio, memoria sección 5.3). Persistido
+        por combinación en reports/table_auc_por_caso.csv; no se recalcula en inferencia.
+
+  stats:
+    - "métricas por combinación machine/machine_id/snr desde metrics.json empaquetado con cada checkpoint (auc_mse, auc_maha, n_train, n_val, n_abnormal_samples, trained_at, etc.)"
+
+constraints:
+  combinacion_soportada: >
+    (machine, machine_id, snr) debe ser una de las 48 combinaciones con checkpoint
+    entregado. Una combinación fuera de ese conjunto no tiene modelo entrenado ni
+    estadísticos de normalización — el plugin debe rechazarla con una excepción de
+    dominio explícita (p. ej. UnsupportedMachineConfigurationError), nunca hacer
+    fallback silencioso a otra combinación ni a valores de normalización por defecto.
+  formato_audio: >
+    El audio de entrada debe ser compatible con librosa.load (WAV recomendado). No hay
+    validación de duración real; una duración muy distinta a 10.24s se recorta/rellena
+    silenciosamente (ver inputs.fixed.audio_wav) — puede degradar la calidad del score
+    sin error explícito. Documentar como limitación operativa, no bloquear en el plugin
+    (así se comporta el código original).
+
+training:
+  supported: true
+  threshold_persistence: >
+    El plugin guarda threshold en best.pth tanto localmente como en los artefactos
+    enviados a MLflow. predict_inline y predict_batch usan el umbral del checkpoint
+    seleccionado. Un override explícito en inline o batch tiene prioridad. Los checkpoints
+    originales sin esa clave usan la tabla THRESHOLDS por compatibilidad.
+    Si se reentrena sin audios anómalos, threshold se guarda como null: no se reutiliza
+    el umbral anterior; las predicciones requieren un override o reentrenar con ambas clases.
+    Sin uno de ellos, batch devuelve un error explícito por archivo.
+    Los checkpoints reentrenados con versiones anteriores del plugin no contienen
+    threshold y son indistinguibles de los originales a estos efectos; deben regenerarse
+    con esta corrección para conservar su nueva calibración.
+  target_column: null  # no aplica: modelo NO supervisado/tabular. Se entrena exclusivamente
+                        # con audio etiquetado como "normal" (no hay columna objetivo).
+  required_columns: null  # no aplica: el entrenamiento consume un directorio de WAV, no un CSV.
+  data_layout_required:
+    description: >
+      run_training() (src/training/trainer.py) espera .npy preprocesados en
+      data/processed/{train,val}/{machine}_{snr}_{machine_id}_normal.npy, generados por
+      data_processing() a partir de data/raw/MIMII Dataset/{snr}_{machine}/{machine_id}/normal/*.wav.
+      Reentrenar con datos nuevos implica: (1) organizar los WAV normales nuevos en esa
+      estructura de carpetas por machine/snr/machine_id, (2) ejecutar data_processing,
+      (3) ejecutar train. No existe una vía de "subir un CSV" como en modelos tabulares.
+    source: "codigo_entrenamiento (src/main.py: data_processing(), train(); src/training/trainer.py: run_training())"
+  recalibration_only_mode: >
+    Existe además `calibrate()` (src/main.py, no reentrena pesos): recalcula solo
+    (mean, inv_cov, PCA) de Mahalanobis a partir de audios normales nuevos de la máquina
+    concreta, sin tocar el encoder/decoder. Es la vía recomendada por la memoria (sección
+    7.1) para adaptar un modelo ya entrenado a una instalación real sin reentrenamiento
+    completo. Debe exponerse en el plugin como una operación distinta de train() completo
+    si el equipo de plugin-integration decide implementarla (no es parte obligatoria del
+    contrato ModelPluginPort.train()).
+  hyperparams_by_machine:
+    common: {epochs: 100, batch_size: 32, patience: 20, seed: 42, mask_ratio_default: 0.75, weight_decay_default: 0.05, optimizer: AdamW, betas: [0.9, 0.95], scheduler: cosine_warmup}
+    fan:    {warmup_epochs: 7,  weight_decay: 0.0004723501245203774, mask_ratio: 0.5574479341391712, lr: 0.0004502789161109957, batch_size: 32}
+    pump:   {warmup_epochs: 9,  weight_decay: 0.02356540010076827,   mask_ratio: 0.7277871776757026, lr: 0.0003962419971237532, batch_size: 32}
+    slider: {warmup_epochs: 11, weight_decay: 0.000904102556502169,  mask_ratio: 0.5934777228914295, lr: 7.567742603471887e-05, batch_size: 64}
+    valve:  {warmup_epochs: 4,  weight_decay: 0.0013619127359149519, mask_ratio: 0.5544394608434632, lr: 0.0002560271293015735, batch_size: 32}
+  hyperparams_source: "inbox/a41/codigo/config/config_vit_tiny_{fan,pump,slider,valve}.yaml (best trial de HPO Optuna por máquina, ver también memoria sección 5.2 / Tabla 18)"
+  metrics_returned: [best_val_loss, auc_mse, auc_maha, fnr, fpr, recall, threshold, n_train, n_val, n_abnormal_samples, trained_at]
+  source: codigo_entrenamiento
+
+metrics_reported:
+  # Modelo de producción: Audio-MAE ViT-Tiny, 48 combinaciones machine×machine_id×snr.
+  # Fuente primaria: metrics.json empaquetado 1:1 con cada checkpoint entregado
+  # (ver known_issues sobre por qué NO se usa reports/table_auc_por_caso.csv como fuente
+  # principal para el Baseline, aunque para vit_tiny ambas fuentes coinciden).
+  dataset: mimii_test_split_por_combinacion  # entrenamiento solo con normales; evaluación normal+abnormal del split de test de cada combinación
+  n_combinaciones: 48
+  auc_maha_mean: 0.7720
+  fnr_mean: 0.0909
+  fpr_mean: 0.4684
+  pct_cumple_fnr_objetivo: 1.0   # 48/48 combinaciones cumplen FNR <= 10% (criterio de éxito, memoria 5.3)
+  fnr_objetivo_negocio: 0.10
+  auc_maha_range_por_maquina:
+    fan:    [0.68, 0.97]
+    pump:   [0.58, 0.99]
+    slider: [0.58, 0.99]
+    valve:  [0.45, 0.61]   # valve es el caso problemático documentado (ver known_issues)
+  comparacion_baseline_no_implementado:
+    auc_mse_mean: 0.8005106088153237   # recalculado desde metrics.json, coincide con memoria (~0.800)
+    nota: "Mejor AUC global que ViT-Tiny, pero no es el modelo elegido para producción (ver nota de alcance)."
+  source: "metrics.json empaquetado con cada checkpoint vit_tiny_{machine}/.../metrics.json + memoria sección 5.4/6 (Conclusiones)"
+
+# ---------------------------------------------------------------------------
+# GOLDEN CASES
+#
+# Procedencia: NO salen de inbox/a41 (que no trae ni un solo WAV ni .npy — data/raw,
+# data/processed y data/splits están vacíos salvo .gitkeep). Salen de sample_data/
+# en la raíz del repo (22 WAV: sample_data/normal/0000000{0..10}.wav y
+# sample_data/abnormal/0000000{0..10}.wav), aportados por decisión humana del
+# 2026-09-15 al confirmar el enfoque de golden cases.
+#
+# El nombre de fichero de estos 22 WAV es la numeración secuencial estándar de MIMII
+# y NO indica por sí solo a qué machine/machine_id/snr pertenecen. La combinación se
+# determinó empíricamente (no inventada), con triple evidencia concordante:
+#   1. El checkpoint models/artifacts/vit_tiny_fan/fan/id_00/0_dB/best.pth trae
+#      machine='fan', machine_id='id_00', snr='0_dB' embebidos, y es la combinación
+#      cuyo (norm_mean, norm_std) = (-34.2567, 12.5702) es, con diferencia, el más
+#      cercano a la media/std cruda del espectrograma log-Mel calculado sobre estos
+#      22 WAV (-34.27 / 12.11) frente a las otras 47 combinaciones candidatas.
+#   2. Es exactamente el caso que la propia memoria usa como "caso de referencia"
+#      (Figuras 20 y 25, y la mención explícita "fan id_00, 0 dB" en la sección de
+#      Métricas y Resultados).
+#   3. La inferencia real ejecutada con el código ORIGINAL sin modificar (AudioMAE +
+#      run_inference + get_cls_embeddings + mahalanobis_scores de predictor.py, con
+#      la arquitectura de config_vit_tiny_fan.yaml y el threshold=6.6067 de
+#      reports/table_auc_por_caso.csv fila vit_tiny_fan/fan/id_00/0_dB) da un
+#      recall=1.00 y FPR=0.818 sobre estas 22 muestras, coherente con el
+#      recall=0.9017 / FPR=0.6798 reportado para esa combinación (diferencia
+#      esperable: n=11 por clase aquí vs. el conjunto de test completo n=203/407).
+#
+# Cobertura: SOLO fan/id_00/0_dB tiene golden cases ejecutables (input audio real →
+# output real). Las otras 47 combinaciones NO tienen audio de referencia entregado;
+# su única verificación posible es contra el metrics.json empaquetado (agregado, no
+# caso a caso) — ver metrics_reported y known_issues.
+#
+# Tolerancia: NO es una tolerancia porcentual única (a diferencia del template
+# estándar) porque hay 3 señales de distinta naturaleza:
+#   - predicted_label: exacto, sin tolerancia (categórico).
+#   - maha_score: tolerancia estricta, 0.5% relativo (score determinista, confirmado
+#     empíricamente estable a <1e-5 entre ejecuciones repetidas).
+#   - mse_score: informativo únicamente, NO forma parte del criterio de paso/fallo.
+#     Confirmado estocástico por diseño (masking aleatorio sin semilla en
+#     run_inference); en 3 ejecuciones sobre la misma muestra se observó
+#     0.664/0.702/0.677 (~5-6% de variación). Documentar el rango observado, no
+#     usarlo como aserción exacta.
+# ---------------------------------------------------------------------------
+golden_cases:
+  model_key: fan_id_00_0_dB
+  source: sample_data_original_inference
+  tolerance:
+    predicted_label: exact
+    maha_score_pct: 0.5
+    mse_score: informational_only  # ver nota arriba
+  cases:
+    - id: caso_001
+      input: {audio_path: sample_data/abnormal/00000000.wav, machine: fan, machine_id: id_00, snr: "0_dB"}
+      expected: {true_label: 1, maha_score: 15.216082572937012, mse_score_observed_range: [0.63, 0.81], predicted_label: 1}
+    - id: caso_002
+      input: {audio_path: sample_data/abnormal/00000001.wav, machine: fan, machine_id: id_00, snr: "0_dB"}
+      expected: {true_label: 1, maha_score: 12.205583572387695, predicted_label: 1}
+    - id: caso_003
+      input: {audio_path: sample_data/abnormal/00000002.wav, machine: fan, machine_id: id_00, snr: "0_dB"}
+      expected: {true_label: 1, maha_score: 9.35803508758545, predicted_label: 1}
+    - id: caso_004
+      input: {audio_path: sample_data/abnormal/00000003.wav, machine: fan, machine_id: id_00, snr: "0_dB"}
+      expected: {true_label: 1, maha_score: 8.290242195129395, predicted_label: 1}
+    - id: caso_005
+      input: {audio_path: sample_data/abnormal/00000004.wav, machine: fan, machine_id: id_00, snr: "0_dB"}
+      expected: {true_label: 1, maha_score: 16.240764617919922, predicted_label: 1}
+    - id: caso_006
+      input: {audio_path: sample_data/abnormal/00000005.wav, machine: fan, machine_id: id_00, snr: "0_dB"}
+      expected: {true_label: 1, maha_score: 10.30270767211914, predicted_label: 1}
+    - id: caso_007
+      input: {audio_path: sample_data/abnormal/00000006.wav, machine: fan, machine_id: id_00, snr: "0_dB"}
+      expected: {true_label: 1, maha_score: 6.784762382507324, predicted_label: 1}
+    - id: caso_008
+      input: {audio_path: sample_data/abnormal/00000007.wav, machine: fan, machine_id: id_00, snr: "0_dB"}
+      expected: {true_label: 1, maha_score: 9.726583480834961, predicted_label: 1}
+    - id: caso_009
+      input: {audio_path: sample_data/abnormal/00000008.wav, machine: fan, machine_id: id_00, snr: "0_dB"}
+      expected: {true_label: 1, maha_score: 6.891941070556641, predicted_label: 1}
+    - id: caso_010
+      input: {audio_path: sample_data/abnormal/00000009.wav, machine: fan, machine_id: id_00, snr: "0_dB"}
+      expected: {true_label: 1, maha_score: 13.687139511108398, predicted_label: 1}
+    - id: caso_011
+      input: {audio_path: sample_data/abnormal/00000010.wav, machine: fan, machine_id: id_00, snr: "0_dB"}
+      expected: {true_label: 1, maha_score: 13.250008583068848, predicted_label: 1}
+    - id: caso_012
+      input: {audio_path: sample_data/normal/00000000.wav, machine: fan, machine_id: id_00, snr: "0_dB"}
+      expected: {true_label: 0, maha_score: 6.128852844238281, predicted_label: 0}
+    - id: caso_013
+      input: {audio_path: sample_data/normal/00000001.wav, machine: fan, machine_id: id_00, snr: "0_dB"}
+      expected: {true_label: 0, maha_score: 12.849665641784668, predicted_label: 1}
+      note: "Falso positivo esperado — coherente con FPR=0.6798 documentado para esta combinación, no es un bug del plugin."
+    - id: caso_014
+      input: {audio_path: sample_data/normal/00000002.wav, machine: fan, machine_id: id_00, snr: "0_dB"}
+      expected: {true_label: 0, maha_score: 5.972254753112793, predicted_label: 0}
+    - id: caso_015
+      input: {audio_path: sample_data/normal/00000003.wav, machine: fan, machine_id: id_00, snr: "0_dB"}
+      expected: {true_label: 0, maha_score: 12.309003829956055, predicted_label: 1}
+      note: "Falso positivo esperado — ver caso_013."
+    - id: caso_016
+      input: {audio_path: sample_data/normal/00000004.wav, machine: fan, machine_id: id_00, snr: "0_dB"}
+      expected: {true_label: 0, maha_score: 10.719429016113281, predicted_label: 1}
+      note: "Falso positivo esperado — ver caso_013."
+    - id: caso_017
+      input: {audio_path: sample_data/normal/00000005.wav, machine: fan, machine_id: id_00, snr: "0_dB"}
+      expected: {true_label: 0, maha_score: 11.65042495727539, predicted_label: 1}
+      note: "Falso positivo esperado — ver caso_013."
+    - id: caso_018
+      input: {audio_path: sample_data/normal/00000006.wav, machine: fan, machine_id: id_00, snr: "0_dB"}
+      expected: {true_label: 0, maha_score: 8.38780403137207, predicted_label: 1}
+      note: "Falso positivo esperado — ver caso_013."
+    - id: caso_019
+      input: {audio_path: sample_data/normal/00000007.wav, machine: fan, machine_id: id_00, snr: "0_dB"}
+      expected: {true_label: 0, maha_score: 8.50153923034668, predicted_label: 1}
+      note: "Falso positivo esperado — ver caso_013."
+    - id: caso_020
+      input: {audio_path: sample_data/normal/00000008.wav, machine: fan, machine_id: id_00, snr: "0_dB"}
+      expected: {true_label: 0, maha_score: 17.239173889160156, predicted_label: 1}
+      note: "Falso positivo esperado — ver caso_013."
+    - id: caso_021
+      input: {audio_path: sample_data/normal/00000009.wav, machine: fan, machine_id: id_00, snr: "0_dB"}
+      expected: {true_label: 0, maha_score: 11.004780769348145, predicted_label: 1}
+      note: "Falso positivo esperado — ver caso_013."
+    - id: caso_022
+      input: {audio_path: sample_data/normal/00000010.wav, machine: fan, machine_id: id_00, snr: "0_dB"}
+      expected: {true_label: 0, maha_score: 10.049200057983398, predicted_label: 1}
+      note: "Falso positivo esperado — ver caso_013."
+
+known_issues:
+  - "ALCANCE: inbox/a41/codigo/bearing_metro_preliminar/{bearings_preliminar,metro_preliminar}
+     son datasets exploratorios descartados (memoria sección 3.4: 'concluimos este análisis
+     con la elección del Dataset MIMII'). No se integran ni documentan como parte de a41."
+
+  - "ARQUITECTURA DE PRODUCCIÓN elegida por decisión humana (2026-09-15): Audio-MAE
+     ViT-Tiny, no el Baseline (autoencoder FC), pese a que el Baseline tiene mejor AUC
+     medio global (0.800 vs 0.772) y también viene con pesos completos para las 48
+     combinaciones. La memoria lo justifica por escalabilidad y compatibilidad XAI, y
+     recomienda puntualmente el Baseline como alternativa en casos concretos de bajo AUC
+     (p. ej. fan id_00 0dB con Audio-MAE base, AUC=0.45 vs 0.70 del baseline — nota:
+     ESE caso concreto es MAE-Base, no MAE-Tiny; para MAE-Tiny fan/id_00/0dB el AUC-maha
+     real es 0.7585, ver golden_cases). El plugin NO implementa el Baseline; queda como
+     alternativa no desarrollada, a valorar en revisión humana."
+
+  - "SIN DATOS EN LA ENTREGA: inbox/a41/codigo/data/{raw,processed,splits}/ solo tienen
+     .gitkeep — no hay ni un WAV ni un .npy en la entrega original. Los golden_cases de
+     este manifest salen de sample_data/ (raíz del repo, fuera de inbox/a41), aportado
+     aparte. Cobertura de golden cases limitada a UNA sola combinación (fan/id_00/0_dB)
+     de las 48 soportadas; las otras 47 no tienen verificación ejecutable, solo el
+     metrics.json agregado empaquetado con cada checkpoint."
+
+  - "DISCREPANCIA ENTRE FUENTES AUDITADAS (Baseline): reports/table_auc_por_caso.csv y
+     models/metrics/baseline/**/metrics.json difieren en 46 de 48 casos individuales del
+     Baseline (p. ej. fan/id_06/-6_dB: CSV=0.865 vs metrics.json=0.894), aunque las medias
+     globales coinciden casi exactamente con lo narrado en la memoria (~0.800). Hipótesis:
+     table_auc_por_caso.csv procede de una ejecución de entrenamiento distinta a la de los
+     pesos .pth realmente entregados. Se usa metrics.json como fuente canónica en este
+     manifest por estar empaquetado 1:1 con los checkpoints entregados. Para vit_tiny (el
+     modelo de producción) ambas fuentes SÍ coinciden exactamente, caso por caso, en las
+     muestras verificadas — no se ha comprobado exhaustivamente en las 48."
+
+  - "DISCREPANCIA EN LA NARRATIVA DE LA MEMORIA (sección 5.3, Criterios de Éxito): el texto
+     dice 'FNR medio global entre 0.069 (MAE-Tiny) y 0.092 (Baseline)'. Recalculado desde
+     reports/table_auc_por_caso.csv: FNR medio de vit_tiny=0.0909, de baseline=0.0779, y el
+     valor que sí coincide con 0.092 es el de vit_base (MAE-Base)=0.0922 — no el Baseline
+     clásico. Parece una confusión en el texto entre 'Baseline' (autoencoder) y 'MAE-Base'
+     (ViT-Base). No se ha corregido el manifest para 'encajar' con el texto; se reporta la
+     discrepancia para revisión humana. metrics_reported.fnr_mean de este manifest (0.0909)
+     usa el recálculo directo desde datos, no la cifra 0.069 del texto."
+
+  - "INCONSISTENCIA DE RUTA EN CONFIGS ENTREGADOS: config/config_vit_tiny_{fan,pump,slider,
+     valve}.yaml declaran paths.artifacts: models/artifacts/vit_tiny_hpo_<machine>, pero los
+     checkpoints realmente entregados están en models/artifacts/vit_tiny_<machine>/ (sin
+     '_hpo_'). El plugin debe usar la ruta real observada en disco, no confiar literalmente
+     en paths.artifacts de estos YAML."
+
+  - "NO DETERMINISMO DE mse_score: run_inference() en predictor.py aplica un enmascaramiento
+     aleatorio (mask_ratio=0.75) sin fijar semilla — confirmado empíricamente ~5-6% de
+     variación entre ejecuciones sobre la misma muestra. maha_score y predicted_label SÍ son
+     deterministas (variación <1e-5, ruido de punto flotante). No usar mse_score como
+     criterio de paso/fallo en verificación."
+
+  - "ENTORNO DE VERIFICACIÓN EN WINDOWS: en esta máquina, la política de Application Control
+     de Windows bloquea la carga de la DLL de llvmlite (dependencia de numba, requerida por
+     librosa) — mismo tipo de bloqueo que ya afecta a scikit-learn en el Python nativo del
+     sistema. torch y soundfile sí cargan sin problema en Windows nativo; librosa no. En WSL
+     (Ubuntu) todo el stack (torch 2.4.1 cpu + librosa 0.11.0 + soundfile + scikit-learn)
+     instala y funciona sin restricciones. La skill `verification` deberá ejecutar cualquier
+     paso que dependa de librosa/numba (arranque local, predict real, tests que carguen audio)
+     dentro de WSL en esta máquina, no en el Python nativo de Windows."
+
+  - "ARQUITECTURA POR MÁQUINA NO AUTODESCRITA: el checkpoint .pth no guarda depth/num_heads/
+     decoder_dims — solo norm_mean/norm_std/machine/machine_id/snr/epoch/val_loss/history.
+     El plugin debe construir AudioMAE con los hiperparámetros de architecture_by_machine
+     (arriba) ANTES de cargar el state_dict, seleccionando por tipo de máquina, o el
+     load_state_dict fallará por incompatibilidad de shapes entre máquinas."
+
+  - "LIMPIEZA PENDIENTE FUERA DEL REPO: para identificar la combinación de sample_data y
+     ejecutar la inferencia de referencia se instaló un entorno (torch+librosa+numba, ~1.5GB)
+     en /home/zaytuna/a41check dentro del WSL de esta máquina — fuera del repo y fuera del
+     scratchpad de la sesión, porque librosa no cargaba en el Python nativo de Windows. Pendiente
+     confirmar si se debe borrar esa carpeta (no toca nada del repo ni de inbox/a41)."
+
+  - "LIMITACIONES DE DOMINIO YA DOCUMENTADAS EN LA MEMORIA (sección 9, resumidas aquí por
+     relevancia para plugin-integration/verification): (1) MIMII es un entorno de laboratorio
+     controlado, sin garantía de rendimiento en planta real sin recalibración; (2) el
+     entrenamiento asume que TODO el audio de referencia es normal — una contaminación con
+     fallos incipientes en esos datos invierte silenciosamente el sentido de la detección,
+     sin mecanismo de alerta; (3) valve es el caso problemático en todas las variantes
+     (AUC 0.45-0.61, FPR 0.63-0.84 incluso a +6dB) — no se recomienda despliegue autónomo
+     para válvulas sin una segunda validación; (4) el umbral de decisión en producción, sin
+     datos anómalos reales disponibles, debe derivarse de la distribución de scores normales
+     (percentil alto) y requiere validación empírica en campo, no solo el threshold heredado
+     del benchmark MIMII."

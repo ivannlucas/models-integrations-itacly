@@ -10,7 +10,8 @@ class TrainRequest(BaseModel):
             "*.wav (same layout the original raw dataset uses). 'normal' is required per "
             "combination fine-tuned; 'abnormal' is optional — if present, auc/fnr/fpr/recall/"
             "threshold are also computed for that combination, otherwise only training-loss "
-            "metrics are returned (no labeled anomalies to evaluate against)."
+            "metrics are returned. The checkpoint is then saved with threshold=null; "
+            "prediction requires an explicit threshold override or training with both classes."
         ),
     )
     mlflow_run_id: str = ""

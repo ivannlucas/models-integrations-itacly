@@ -19,7 +19,9 @@ import torch
 
 from app.application.dto.stats_dto import InputField, OutputField, RuntimeStats, StatsResponse
 from app.domain.ports.model_plugin_port import ModelPluginPort
-from app.domain.services.exceptions import InvalidAudioError, ModelNotLoadedError
+from app.domain.services.exceptions import (
+    InvalidAudioError, ModelNotLoadedError, UnsupportedMachineConfigurationError,
+)
 from app.domain.services.mlflow_tracker import BaseMLflowTracker
 from app.infrastructure.artifact_store import local_file_path
 from app.plugins.ml41_meat_curing_machinery_acoustic_anomaly.constants import (
@@ -64,7 +66,6 @@ from app.plugins.ml41_meat_curing_machinery_acoustic_anomaly.preprocessing impor
     normalize_logmel,
     wav_to_logmel,
 )
-from app.plugins.ml41_meat_curing_machinery_acoustic_anomaly.thresholds import THRESHOLDS
 from app.plugins.ml41_meat_curing_machinery_acoustic_anomaly.train_dto import (
     CombinationTrainMetrics,
     TrainResponse,
@@ -122,8 +123,21 @@ class Ml41MeatCuringMachineryAcousticAnomalyPlugin(ModelPluginPort):
                 "model": loaded.model, "norm_mean": loaded.norm_mean, "norm_std": loaded.norm_std,
                 "maha_mean": loaded.maha_mean, "maha_inv_cov": loaded.maha_inv_cov,
                 "maha_pca": loaded.maha_pca, "device": loaded.device,
+                "threshold": loaded.threshold,
             }
         return loaded
+
+    def _prediction_threshold(self, loaded, override: float | None = None) -> float:
+        """Use the selected model's calibration, or an explicit inline override."""
+        value = override if override is not None else self._as_dict(loaded)["threshold"]
+        if value is None:
+            raise UnsupportedMachineConfigurationError(
+                "This checkpoint has no calibrated decision threshold. Train with normal "
+                "and abnormal reference audio, or supply an explicit inline threshold."
+            )
+        if not np.isfinite(value) or value < 0:
+            raise UnsupportedMachineConfigurationError("The decision threshold must be finite and non-negative.")
+        return float(value)
 
     def _score_spectrogram(self, loaded, spec_raw: np.ndarray) -> tuple[float, float]:
         """Given a raw (unnormalized) log-Mel spectrogram, return (mse_score, maha_score)."""
@@ -170,9 +184,9 @@ class Ml41MeatCuringMachineryAcousticAnomalyPlugin(ModelPluginPort):
         temp_dir = None
         try:
             loaded, temp_dir = self._resolve_combination(machine, machine_id, snr, mlflow_run_id)
+            threshold_used = self._prediction_threshold(loaded, threshold)
             spec_raw = audio_base64_to_logmel(features["audio_base64"])
             mse_score, maha = self._score_spectrogram(loaded, spec_raw)
-            threshold_used = threshold if threshold is not None else THRESHOLDS[(machine, machine_id, snr)]
 
             self._record()
             return PredictInlineResponse(**build_inline_result(
@@ -185,7 +199,9 @@ class Ml41MeatCuringMachineryAcousticAnomalyPlugin(ModelPluginPort):
 
     # ── predict_batch ────────────────────────────────────────────────────────
 
-    def predict_batch(self, *, data_path: str, mlflow_run_id: str = "") -> PredictBatchResponse:
+    def predict_batch(
+        self, *, data_path: str, mlflow_run_id: str = "", threshold: float | None = None,
+    ) -> PredictBatchResponse:
         predictions: list[dict] = []
         with local_file_path(data_path) as local_zip:
             with tempfile.TemporaryDirectory() as tmp_dir:
@@ -208,9 +224,9 @@ class Ml41MeatCuringMachineryAcousticAnomalyPlugin(ModelPluginPort):
                         if not wav_path.exists():
                             raise InvalidAudioError(f"Referenced WAV not found in ZIP: {filename}")
                         loaded, temp_dir = self._resolve_combination(machine, machine_id, snr, mlflow_run_id)
+                        threshold_used = self._prediction_threshold(loaded, threshold)
                         spec_raw = wav_to_logmel(str(wav_path))
                         mse_score, maha = self._score_spectrogram(loaded, spec_raw)
-                        threshold_used = THRESHOLDS.get((machine, machine_id, snr), float("nan"))
                         result = build_inline_result(
                             model_id=MODEL_ID, machine=machine, machine_id=machine_id, snr=snr,
                             mse_score=mse_score, maha_score=maha, threshold=threshold_used,
@@ -272,7 +288,11 @@ class Ml41MeatCuringMachineryAcousticAnomalyPlugin(ModelPluginPort):
                 if mlflow_upload_dir:
                     shutil.rmtree(mlflow_upload_dir, ignore_errors=True)
 
-        self.load()  # refresh cache/availability after saving new local checkpoints
+        # Invalidate old in-memory models without re-downloading fixed S3 artifacts
+        # over the checkpoints that were just trained and saved locally.
+        self._cache = CheckpointCache()
+        self._device = self._device or _safe_device()
+        self._ready = artifacts_available()
         return TrainResponse(
             detail=f"Entrenamiento completado para {len(per_combination)} combinación(es)",
             per_combination=per_combination,
@@ -395,6 +415,9 @@ class Ml41MeatCuringMachineryAcousticAnomalyPlugin(ModelPluginPort):
             "model_state_dict": model.state_dict(),
             "norm_mean": norm_mean, "norm_std": norm_std,
             "machine": machine, "machine_id": machine_id, "snr": snr,
+            # Explicit None means retrained but uncalibrated. Only legacy checkpoints
+            # without this key may use the original benchmark thresholds.
+            "threshold": metrics_kwargs.get("threshold"),
         }
         torch.save(checkpoint_out, target_dir / CHECKPOINT_FILENAME)
         np.savez(

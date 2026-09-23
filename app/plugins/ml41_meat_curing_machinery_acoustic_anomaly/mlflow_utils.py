@@ -17,6 +17,7 @@ from app.plugins.ml41_meat_curing_machinery_acoustic_anomaly.constants import (
 )
 from app.plugins.ml41_meat_curing_machinery_acoustic_anomaly.inference import load_mahalanobis_stats
 from app.plugins.ml41_meat_curing_machinery_acoustic_anomaly.model_loader import build_model, _safe_device
+from app.plugins.ml41_meat_curing_machinery_acoustic_anomaly.thresholds import checkpoint_threshold
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +71,7 @@ def download_user_model_from_mlflow(run_id: str):
                     "maha_inv_cov": maha_inv_cov,
                     "maha_pca": maha_pca,
                     "device": device,
+                    "threshold": checkpoint_threshold(checkpoint, machine, machine_id, snr),
                 }
 
     if not combinations:

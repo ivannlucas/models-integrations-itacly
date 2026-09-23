@@ -52,6 +52,10 @@ class PredictBatchRequest(BaseModel):
         ),
     )
     mlflow_run_id: str = ""
+    threshold: float | None = Field(
+        default=None,
+        description="Optional decision threshold override for every WAV in this batch",
+    )
 
 
 class PredictBatchResponse(BaseModel):

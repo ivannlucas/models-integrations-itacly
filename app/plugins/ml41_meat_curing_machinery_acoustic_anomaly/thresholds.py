@@ -7,6 +7,19 @@ known_issues). These are NOT recomputed at inference time.
 """
 from __future__ import annotations
 
+
+def checkpoint_threshold(checkpoint: dict, machine: str, machine_id: str, snr: str) -> float | None:
+    """Read model calibration; original delivered checkpoints lack the threshold key.
+
+    An explicit None records training without labeled anomalies. Do not silently
+    replace it with a threshold calibrated for different weights/statistics.
+    """
+    if "threshold" in checkpoint:
+        value = checkpoint["threshold"]
+        return float(value) if value is not None else None
+    return THRESHOLDS[(machine, machine_id, snr)]
+
+
 THRESHOLDS: dict[tuple[str, str, str], float] = {
     ("fan", "id_00", "-6_dB"): 4.419,
     ("fan", "id_00", "0_dB"): 6.6067,
