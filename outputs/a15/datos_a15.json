@@ -1,0 +1,175 @@
+{
+  "model_id": "a15",
+  "model_slug": "wine-ipi-price-forecast",
+  "fecha": "Septiembre 2026",
+  "model_key": "ml15-wine-ipi-price-forecast",
+  "version": "1.0.0",
+  "descripcion": "Modelo de predicción del Índice de Precios Fitosanitarios (IPI) nacional español para el sector vitivinícola, a seis meses vista (t+6), mediante una regresión Ridge (scikit-learn) sobre 16 variables autorregresivas, exógenas internacionales/financieras y estacionales, todas ya retardadas respecto al mes de origen. Es el único horizonte (de los cuatro evaluados: t+1, t+2, t+3, t+6) que supera de forma consistente el baseline de persistencia tanto en validación como en test hold-out.",
+  "task_type": "Regresión de serie temporal, horizonte fijo t+6 (direct multi-step forecasting)",
+  "framework": "scikit-learn (Pipeline: StandardScaler + Ridge, alpha=25.0); pandas / numpy / joblib",
+  "artefacto": "horizon_6_ridge.pkl (payload joblib: modelo + contrato de 16 feature_columns + metadatos de entrenamiento)",
+  "objetivo": "Anticipar con seis meses de antelación la evolución del IPI fitosanitario nacional (precios de medios de protección fitopatológica en viticultura), para dar soporte a la planificación de compras, la evaluación de riesgos de coste y la toma de decisiones de aprovisionamiento del sector vitivinícola bajo incertidumbre de mercado.",
+  "caso_uso": "Modo predict inline: se aportan las 16 variables del contrato del artefacto, o solo un subconjunto (incluso solo 'date') — el resto se deriva automáticamente desde 'date'/'origin_date' y un histórico de referencia bundled (retardos autorregresivos y exógenos, más las 4 variables de calendario) — y se obtiene la predicción del IPI nacional a 6 meses vista. Modo predict batch: acepta un CSV con el panel completo (una fila = una predicción ya calculada) o un histórico simple mensual (date/year+month + ipi_national_current, igual que data/input/ipi_history.csv del equipo de IA), fusionando todas sus filas en el histórico de referencia para derivar cada predicción. Modo train: reentrena desde cero un Pipeline StandardScaler+Ridge(alpha=25.0) — mismos hiperparámetros que el equipo de IA — a partir de un CSV con las 16 features más el target histórico, evaluando sobre un holdout cronológico del propio CSV; el artefacto fijo servido en producción nunca se sobrescribe.",
+  "inputs": [
+    {
+      "nombre": "ipi_national_current",
+      "tipo": "float (índice base 2020=100)",
+      "descripcion": "Último IPI fitosanitario nacional observado en el mes de origen — ancla de la predicción",
+      "obligatorio": "No — se deriva del histórico de referencia bundled en 'date' si se omite; si se aporta, además sobrescribe ese histórico en esa fecha",
+      "valor_defecto": "derivado del histórico de referencia"
+    },
+    {
+      "nombre": "ipi_national_lag_1 … ipi_national_lag_6",
+      "tipo": "float (índice base 2020=100)",
+      "descripcion": "IPI nacional observado entre 1 y 6 meses antes del mes de origen (6 retardos autorregresivos)",
+      "obligatorio": "No — se derivan del histórico de referencia bundled a partir de 'date' si se omiten",
+      "valor_defecto": "derivados del histórico de referencia"
+    },
+    {
+      "nombre": "chem_sector_lag_11, copper_lag_14, eur_usd_lag_17, oil_brent_lag_12, usa_lag_1",
+      "tipo": "float (índice base 2020=100)",
+      "descripcion": "Cinco variables exógenas retardadas: indicador sectorial químico, cobre, tipo de cambio EUR/USD, petróleo Brent y precios de pesticidas de EE. UU. — cada una con el retardo (en meses) que mostró mayor correlación anticipatoria en el análisis lead-lag del equipo de IA",
+      "obligatorio": "No — se derivan del histórico de referencia bundled a partir de 'date' si se omiten",
+      "valor_defecto": "derivados del histórico de referencia"
+    },
+    {
+      "nombre": "month_sin, month_cos, quarter, is_spring_risk",
+      "tipo": "float / float / int / int(0-1)",
+      "descripcion": "Codificación estacional del mes de origen (ciclo anual, trimestre natural, riesgo fúngico primaveral abril-junio)",
+      "obligatorio": "No — se derivan automáticamente si se aporta 'date'/'origin_date'",
+      "valor_defecto": "derivadas de date/origin_date"
+    },
+    {
+      "nombre": "date / origin_date",
+      "tipo": "string (YYYY-MM-DD)",
+      "descripcion": "Fecha de origen de la predicción — necesaria solo para derivar automáticamente las 4 variables de calendario si no se aportan ya calculadas",
+      "obligatorio": "No (si ya se aportan las 4 variables de calendario)",
+      "valor_defecto": "-"
+    }
+  ],
+  "outputs": [
+    {
+      "nombre": "y_pred",
+      "tipo": "float (índice base 2020=100)",
+      "descripcion": "IPI fitosanitario nacional predicho a horizonte t+6",
+      "rango": "continuo, típicamente 80-135 (rango histórico observado del índice)",
+      "interpretacion": "valor esperado del índice nacional dentro de 6 meses"
+    },
+    {
+      "nombre": "y_anchor",
+      "tipo": "float",
+      "descripcion": "ipi_national_current usado como ancla de referencia",
+      "rango": "igual rango que y_pred",
+      "interpretacion": "compárese con y_pred para estimar la variación porcentual esperada"
+    },
+    {
+      "nombre": "origin_date / target_date / horizon",
+      "tipo": "date / date / int",
+      "descripcion": "Mes de origen, mes objetivo (origin_date + 6 meses) y horizonte en meses (siempre 6)",
+      "rango": "-",
+      "interpretacion": "target_date es el mes al que se refiere y_pred, no el mes de los datos de entrada"
+    },
+    {
+      "nombre": "xai_feature_values",
+      "tipo": "dict[str, float]",
+      "descripcion": "Valores de las 16 features efectivamente usadas en la predicción",
+      "rango": "-",
+      "interpretacion": "consumido por el servicio de explicabilidad para justificar la predicción"
+    }
+  ],
+  "metricas": [
+    {
+      "nombre": "Test hold-out (memoria, Tabla 4 — Ridge_alpha_25.0, t+6)",
+      "valor": "RMSE=1,0396; MAE=0,9440; MAPE=0,7377%; R²=0,1751; MDA=100%",
+      "descripcion": "8 observaciones evaluables de enero a agosto 2025 (origin_date), único bloque con y_true ya disponible en la serie IPI nacional",
+      "interpretacion": "el modelo se equivoca de media 0,94 puntos de índice; acierta el 100% de las veces la dirección del cambio respecto al último valor observado"
+    },
+    {
+      "nombre": "Mejora frente a baseline de persistencia (test)",
+      "valor": "RMSE -54,04%; MAPE -54,88% (baseline RMSE=2,2619, MAPE=1,6350%)",
+      "descripcion": "models/metrics/final_evaluation.json — comparación frente a predecir simplemente el último valor observado",
+      "interpretacion": "la mejora es sustancial y se mantiene tanto en validación (-5,90%) como en test, criterio central de selección del horizonte t+6"
+    },
+    {
+      "nombre": "Validación fija (memoria, Tabla 3 — criterio real de selección de modelo)",
+      "valor": "RMSE=1,2584; MAE=1,0595; MAPE=0,8495%; mejora RMSE vs. naive=-5,90%",
+      "descripcion": "12 observaciones, enero-diciembre 2024 — único horizonte (de t+1/t+2/t+3/t+6) donde un modelo aprendido mejora al baseline de persistencia en esta fase",
+      "interpretacion": "el test nunca se usó para elegir la arquitectura; esta es la evidencia que motivó restringir el despliegue a t+6"
+    },
+    {
+      "nombre": "Verificación golden dataset (post-integración)",
+      "valor": "13/13 casos, coincidencia exacta (diferencia 0,0) contra el endpoint HTTP real",
+      "descripcion": "Los 13 meses del split de test (data/splits/test/panel_test.csv) re-ejecutados contra /predict del plugin integrado — ver outputs/a15/verification_report.md",
+      "interpretacion": "el servicio integrado reproduce exactamente el comportamiento del artefacto entregado; es fidelidad del wiring, no acierto adicional del modelo"
+    },
+    {
+      "nombre": "Verificación histórico simple de IPI (corrección post-review)",
+      "valor": "15/15 filas de data/input/ipi_history.csv, 0 errores, 13/13 coinciden con el golden dataset",
+      "descripcion": "El histórico mensual simple del equipo de IA (solo date+ipi_national_current, sin las 15 features restantes) ejecutado contra /predict batch real tras añadir la derivación automática desde el histórico de referencia bundled",
+      "interpretacion": "confirma que el modo de entrada más simple para el usuario final (solo el valor actual del índice) funciona igual de bien que el panel técnico completo"
+    }
+  ],
+  "limitaciones": [
+    {
+      "tipo": "Nombre de directorio potencialmente engañoso",
+      "descripcion": "La carpeta original entregada se llama 'a15-rnn-vitivinicola-...' y el glosario de la memoria incluye LSTM/GRU, pero el modelo productivo desplegado es una regresión Ridge lineal, no una red neuronal recurrente. No se ha podido confirmar si hubo una fase experimental con RNN descartada y no documentada."
+    },
+    {
+      "tipo": "Histórico de referencia bundled, no auto-actualizable",
+      "descripcion": "El servicio reconstruye los retardos automáticamente (igual que el pipeline original) a partir de dos CSV de referencia empaquetados junto al modelo (snapshot hasta feb-2026/jun-2026). Para fechas posteriores al snapshot hace falta aportar 'ipi_national_current' explícitamente (o, en modo batch, que el propio CSV de entrada incluya esos meses). El snapshot no se refresca solo — requiere que el equipo de IA regenere y resuba los ficheros de referencia periódicamente."
+    },
+    {
+      "tipo": "Capa regional contextual no incluida",
+      "descripcion": "La memoria documenta una 'capa regional contextual' por Comunidad Autónoma (cruce con RECAN/IPC/clima) como salida informativa adicional a la predicción nacional. No está implementada en este plugin — solo se sirve la predicción nacional a t+6. Queda como decisión de alcance para una futura iteración."
+    },
+    {
+      "tipo": "Bloque de evaluación reducido",
+      "descripcion": "Solo 8 de los 13 meses del test hold-out tienen valor real observado (los 5 restantes tienen fecha objetivo posterior al último dato disponible en la serie histórica, feb-2026). Las métricas de exactitud se apoyan en esas 8 observaciones — una muestra pequeña, como advierte la propia memoria."
+    },
+    {
+      "tipo": "R² modesto en test",
+      "descripcion": "El R² de test (0,175) es bajo en términos absolutos, aunque coherente con una serie muy persistente donde el baseline de persistencia obtiene R² negativo (-2,91). El MAPE (0,74%) y la mejora relativa frente al baseline son las métricas más informativas para este caso, no el R²."
+    },
+    {
+      "tipo": "Reentrenamiento restringido al esquema fijo de 16 columnas",
+      "descripcion": "El código original del equipo de IA seleccionaba automáticamente cualquier columna numérica no excluida como feature al reentrenar. Este plugin restringe deliberadamente el reentrenamiento a las 16 columnas exactas del artefacto entregado, para evitar que un CSV de reentrenamiento introduzca columnas nuevas sin control."
+    }
+  ],
+  "fichero_nombre": "data/splits/test/panel_test.csv (13 filas, enero 2025 - enero 2026)",
+  "fichero_registros": "13 predicciones — 8 con valor real disponible (ene-ago 2025), 5 sin valor real aún (sep 2025-ene 2026, fecha objetivo posterior al último dato de la serie)",
+  "fichero_resultado": "predict inline sobre las 13 filas reproduce exactamente (diferencia 0,0) los 13 golden_cases del manifest, ejecutado contra el endpoint HTTP real del plugin integrado, no solo contra una llamada directa en Python",
+  "observaciones_tecnicas": "Solo CPU, sin GPU (regresión lineal regularizada sobre 16 features tabulares). Artefacto muy ligero (~3 KB). El artefacto se serializó con scikit-learn==1.8.0; cargarlo con una versión más reciente (verificado con 1.9.1) genera avisos de compatibilidad (InconsistentVersionWarning) sin alterar el resultado numérico — se recomienda fijar scikit-learn==1.8.0 exacto en el entorno de despliegue para evitar deriva silenciosa entre versiones. No requiere conexión a red ni GPU en inferencia.",
+  "que_no_responde": "El modelo no predice precios oficiales por Comunidad Autónoma ni a nivel de explotación individual — solo el índice nacional. Tampoco predice otros horizontes distintos de t+6 (t+1/t+2/t+3 quedaron descartados por no mejorar de forma fiable al baseline de persistencia), ni explica por sí mismo la causa de la subida o bajada prevista.",
+  "entradas_contexto": "Los datos de entrada son índices y precios ya procesados (IPI nacional histórico, cotizaciones internacionales de materias primas y divisa), no mediciones directas de sensor ni formularios del usuario final — provienen de fuentes oficiales (MAPA, DEFRA, FRED, Yahoo Finance) ya agregadas a frecuencia mensual.",
+  "ejemplo_interpretacion": "Si en enero de 2025 el sistema recibe un IPI nacional actual de 123,85 y predice y_pred=125,48 para julio de 2025, se interpreta como una subida esperada de aproximadamente el 1,3% en seis meses — una señal para revisar el calendario de compras de productos fitosanitarios antes de esa fecha, no una cifra de coste definitiva.",
+  "margen_error": "En las 8 predicciones de test con valor real disponible, el modelo se equivoca de media en torno a 0,94 puntos de índice (sobre un rango histórico habitual de 80 a 135), es decir, un error relativo medio del 0,74%, y acierta siempre la dirección del cambio (sube/baja) respecto al último valor conocido. Es una mejora clara sobre asumir simplemente que el precio no cambiará, pero la muestra de comparación es pequeña (8 meses), así que estas cifras deben leerse como una foto orientativa, no como una garantía estadística sólida.",
+  "revisar_manualmente": [
+    "Predicciones emitidas en periodos de shock de mercado, cambio regulatorio o geopolítico repentino en insumos agroquímicos — el modelo aprende de la dinámica histórica y no anticipa rupturas de esa dinámica.",
+    "Cualquier predicción cuyo origin_date esté fuera del rango 2016-2026 usado en el entrenamiento — es una extrapolación no validada.",
+    "Resultados del reentrenamiento (endpoint /train) sobre un histórico muy corto o con huecos — la calidad del modelo reentrenado depende directamente de la cantidad y continuidad de los datos aportados."
+  ],
+  "que_no_hace": [
+    "No sustituye el criterio experto de compras ante episodios de mercado extraordinarios.",
+    "No predice precios oficiales por Comunidad Autónoma ni por explotación — solo el índice nacional.",
+    "No garantiza que el precio real coincida con la predicción; es una estimación con margen de error, no un compromiso.",
+    "No genera automáticamente la capa contextual regional documentada en la memoria original — esa funcionalidad no está incluida en este servicio."
+  ],
+  "puede_equivocarse": "Sí. Sobre las 8 observaciones de test disponibles se equivoca de media unos 0,94 puntos de índice (0,74% de error relativo), una mejora clara frente a asumir que el precio no cambia, pero la muestra es pequeña y la propia memoria advierte de la limitada profundidad histórica del dataset (unos 10 años). Debe usarse como apoyo a la planificación de compras y a la evaluación de riesgo, nunca como sustituto del criterio experto ante cambios bruscos del mercado, shocks regulatorios o fallos en la actualización de las fuentes de datos.",
+  "kpis": [
+    {
+      "kpi": "KPI contractual de exactitud",
+      "valor_umbral": ">= 80% de exactitud (equivalente a MAPE <= 20%)",
+      "descripcion": "Resultado en test: MAPE=0,74% (exactitud del 99,26%) — cumplido con amplísimo margen."
+    },
+    {
+      "kpi": "Mejora frente al baseline de persistencia",
+      "valor_umbral": "El modelo debe mejorar al baseline tanto en validación como en test, sin usar el test para seleccionar la arquitectura",
+      "descripcion": "Cumplido: -5,90% de RMSE en validación y -54,04% en test — único horizonte (de 4 evaluados) que lo consigue de forma consistente."
+    },
+    {
+      "kpi": "Acierto direccional (MDA)",
+      "valor_umbral": "Sin umbral contractual explícito; referencia de calidad complementaria",
+      "descripcion": "100% en las 8 observaciones de test — el modelo acertó siempre si el índice subiría o bajaría respecto al último valor conocido."
+    }
+  ]
+}

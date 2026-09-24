@@ -1,0 +1,401 @@
+model_id: ml15-wine-ipi-price-forecast
+sector: vitivinicola
+nombre: "Modelo espacial para la predicción de precios de productos fitosanitarios en áreas concretas"
+# El título habla de "modelo espacial", pero el sistema entregado NO modela precios a nivel de
+# provincia/CCAA (a diferencia de, p. ej., m21-cereal-price-spatial, que sí usa `provincia` como
+# feature). Aquí la dimensión "espacial" es una CAPA CONTEXTUAL POSTERIOR (modo `regional_layer`)
+# que cruza la predicción nacional con RECAN/IPC/clima por CCAA -- no es una predicción oficial de
+# precio regional y no modifica la variable objetivo. Ver known_issues.
+task_type: regression  # serie temporal univariante, direct multi-step (horizonte fijo t+6)
+framework:
+  # Librerías realmente cargadas por src/training/trainer.py y src/predict/predictor.py
+  # (el pipeline de inferencia/entrenamiento productivo, sin contar EDA/adquisición de datos):
+  - scikit-learn==1.8.0
+  - pandas==3.0.1
+  - numpy==2.4.2
+  - joblib==1.5.3
+  - PyYAML==6.0.3
+  # NO cargadas en train/predict productivos -- solo en notebooks de EDA/benchmarking
+  # (tensorflow, keras) o en adquisición/regeneración de datos brutos (yfinance,
+  # earthengine-api, openpyxl, odfpy). Ver known_issues sobre tensorflow/keras.
+  # experimental_only: [tensorflow==2.21.0, keras==3.13.2, xgboost==3.2.0, catboost==1.2.10]
+  # data_acquisition_only: [yfinance==1.2.0, earthengine-api==1.7.16, openpyxl==3.1.5, odfpy==1.4.1]
+
+artifacts:
+  folder: models/artifacts/     # ruta dentro del código entregado
+  files:
+    - horizon_6_ridge.pkl
+    # ^ payload joblib con: model (sklearn Pipeline: StandardScaler + Ridge(alpha=25.0)),
+    #   feature_columns (16, contrato exacto), target_column, anchor_column, horizon,
+    #   model_name, model_kind, model_params, metadatos de entrenamiento.
+  extra_bundled_data_required_at_inference:
+    # NO son artefactos de modelo pero SIN ELLOS el predictor no puede construir features
+    # cuando la entrada es solo origin_date o un CSV simple de IPI (ver known_issues).
+    - data/processed/global_phytosanitary_prices_b2020.csv   # serie IPI nacional + intl (usa_lag_1)
+    - data/processed/financial_proxies_monthly.csv            # copper/oil_brent/eur_usd/chem_sector
+  extra_bundled_data_required_for_regional_layer_mode:
+    # Solo necesarios si se integra el modo regional_layer (ver outputs.regional_context_batch)
+    - data/processed/recan_structural_variables_annual.csv
+    - data/processed/ipc_general_ccaa_monthly.csv
+    - data/processed/climate_ccaa_GEE_monthly.csv
+
+inputs:
+  # Contrato mínimo operativo real: predict.py permite invocar el modelo aportando solo una
+  # fecha de origen (origin_date); TODAS las demás features se reconstruyen automáticamente
+  # desde las series históricas bundled (ver derived_if_missing). También admite, como
+  # alternativas, (a) un panel técnico ya con las 16 feature_columns, o (b) un CSV simple con
+  # date/year/month + ipi_national_current que sobrescribe el histórico nacional interno.
+  fixed:
+    - name: origin_date
+      type: date (YYYY-MM-01, primer día de mes)
+      description: >
+        Mes de origen desde el que se predice el IPI fitosanitario nacional a t+6.
+        Si se omite y se aporta un histórico simple de IPI, se usa la última fecha del CSV.
+    - name: ipi_national_current
+      type: float
+      required: false
+      description: >
+        Valor actual del IPI fitosanitario nacional (base 2020=100) en origin_date. Opcional:
+        si no se aporta, se toma de la serie histórica interna bundled en esa fecha (modo
+        origin_date puro); si se aporta, sobrescribe el histórico interno para ese mes
+        (modo user_ipi_history, prepare_user_ipi_history en predictor.py).
+
+  control: []   # no hay optimizador/GA; no hay variables de decisión
+
+  # Las 15 features restantes del contrato feature_columns del artefacto .pkl. El sistema las
+  # calcula siempre automáticamente por lookup en las series históricas bundled (no se piden
+  # nunca directamente al usuario final, salvo que este aporte un panel técnico ya preparado
+  # con feature_status=exact per contrato completo).
+  derived_if_missing:
+    ipi_national_lag_1: "lookup en serie nacional (spain, base2020) a origin_date - 1 mes"
+    ipi_national_lag_2: "lookup en serie nacional a origin_date - 2 meses"
+    ipi_national_lag_3: "lookup en serie nacional a origin_date - 3 meses"
+    ipi_national_lag_4: "lookup en serie nacional a origin_date - 4 meses"
+    ipi_national_lag_5: "lookup en serie nacional a origin_date - 5 meses"
+    ipi_national_lag_6: "lookup en serie nacional a origin_date - 6 meses"
+    usa_lag_1: "lookup en índice USA (PPI pesticidas, FRED) a origin_date - 1 mes; permite último valor disponible (feature_status=exogenous_last_available) si no hay dato exacto"
+    chem_sector_lag_11: "lookup en índice sectorial químico (base 2020, reescalado media-2020) a origin_date - 11 meses; mismo fallback de último valor disponible"
+    copper_lag_14: "lookup en cotización cobre (base 2020, reescalada) a origin_date - 14 meses; mismo fallback"
+    eur_usd_lag_17: "lookup en tipo de cambio EUR/USD (base 2020, reescalado) a origin_date - 17 meses; mismo fallback"
+    oil_brent_lag_12: "lookup en cotización Brent (base 2020, reescalada) a origin_date - 12 meses; mismo fallback"
+    month_sin: "sin(2*pi*month/12)"
+    month_cos: "cos(2*pi*month/12)"
+    quarter: "trimestre natural de origin_date (1-4)"
+    is_spring_risk: "1 si month in [4,5,6] (riesgo fúngico primaveral vid), 0 en otro caso"
+
+outputs:
+  predict_inline:
+    - name: y_pred
+      type: float
+      unit: "índice IPI base 2020=100"
+      description: "IPI fitosanitario nacional predicho a horizonte t+6 (target_date = origin_date + 6 meses)"
+    - name: y_anchor
+      type: float
+      description: "ipi_national_current usado como ancla; sirve de referencia para MDA (acierto de dirección del cambio)"
+    - name: target_date
+      type: date
+      description: "origin_date + 6 meses"
+    - name: horizon
+      type: int
+      description: "siempre 6 en la configuración productiva vigente"
+    - name: model_name
+      type: str
+      description: "Ridge"
+    - name: y_true
+      type: float | null
+      description: "valor real observado en target_date si ya existe en la serie histórica bundled; null si target_date es futuro"
+    - name: feature_status
+      type: str
+      description: "'exact' si todas las features se construyeron con dato exacto del mes requerido; 'exogenous_last_available' si alguna exógena usó el último valor disponible por desfase de publicación"
+    - name: feature_notes
+      type: str
+      description: "detalle de qué variable(s) se completaron con último valor disponible y con qué desfase en meses; cadena vacía si feature_status=exact"
+
+  # Modo CLI adicional real (`python -m src.main --mode predict --input <panel_técnico.csv>`):
+  # idéntico contrato de salida que predict_inline, pero sobre un CSV con las 16 feature_columns
+  # ya preparadas por el propio cliente en vez de reconstruidas desde origin_date.
+  batch_external_panel:
+    - "mismos campos que predict_inline; prediction_type=external_panel"
+
+  # Modo CLI adicional real (`python -m src.main --mode regional_layer`), documentado en la
+  # memoria como "capa regional contextual" -- NO es una predicción de precio, es información
+  # derivada/interpretativa por CCAA a partir de la predicción nacional ya generada + RECAN/IPC/
+  # clima. Requiere que predict_inline/batch se haya ejecutado antes (consume latest_predictions).
+  # Incluido aquí por completitud documental del manifest; su integración como modo del plugin es
+  # una decisión a tomar en plugin-integration (ver known_issues), no asumida por este manifest.
+  regional_context_batch:
+    fields:
+      - name: regional_exposure_category
+        type: str
+        description: "baja | media | alta | muy_alta | sin_datos_recan, por CCAA (17 filas por predicción nacional)"
+      - name: regional_exposure_score_0_100
+        type: float
+        description: "percentil ponderado: 0.55 coste RECAN relativo + 0.25 presión IPC relativa + 0.20 riesgo climático histórico"
+      - name: regional_contextual_pressure_pct
+        type: float
+        description: "variación nacional prevista modulada por el multiplicador regional; NO es un precio regional oficial"
+      - name: main_exposure_driver
+        type: str
+        description: "coste_RECAN | presion_IPC | clima | mixto | sin_datos_recan"
+      - name: interpretation
+        type: str
+        description: "texto en lenguaje natural; siempre debe conservar el disclaimer de que no es una predicción oficial de precio autonómico"
+    disclaimer_obligatorio: >
+      "Esta salida contextualiza territorialmente la predicción nacional, pero no constituye una
+      predicción oficial de precio autonómico." (memoria, sección "Generación de la Capa Regional
+      Contextual") -- cualquier integración de este modo debe propagar este disclaimer al cliente.
+
+constraints: {}
+# No se ha encontrado ninguna restricción dura de negocio (tipo "PU >= 13") ni en el código ni en
+# la memoria. La única regla de negocio explícita es de PRESENTACIÓN/INTERPRETACIÓN, no numérica:
+# la capa regional nunca debe presentarse como predicción oficial de precio autonómico (ver
+# outputs.regional_context_batch.disclaimer_obligatorio).
+
+training:
+  supported: true
+  target_column: ipi_national_t_plus_6
+  required_columns:
+    hard_required:
+      - date   # o year+month; _add_origin_date acepta cualquiera de los dos
+      - ipi_national_current
+      - ipi_national_lag_1
+      - ipi_national_lag_2
+      - ipi_national_lag_3
+      - ipi_national_lag_4
+      - ipi_national_lag_5
+      - ipi_national_lag_6
+      - usa_lag_1
+      - chem_sector_lag_11
+      - copper_lag_14
+      - eur_usd_lag_17
+      - oil_brent_lag_12
+      - month_sin
+      - month_cos
+      - quarter
+      - is_spring_risk
+      - ipi_national_t_plus_6   # target; solo se exige en filas dentro de train_end_date
+    note: >
+      trainer.py::_select_feature_columns NO usa una lista fija hardcodeada: selecciona
+      automáticamente todas las columnas numéricas del CSV de entrenamiento salvo
+      feature_policy.non_predictor_columns (year, month, date, origin_date, target_date, split)
+      y las que empiezan por feature_policy.target_prefixes (ipi_national_t_plus_). Si se aporta
+      un CSV de reentrenamiento con columnas extra numéricas no vistas en producción, el modelo
+      las incorporaría automáticamente como features -- ver known_issues.
+  hyperparams:
+    model_kind: ridge   # también soporta lasso (alpha + max_iter=20000) vía el mismo config.yaml
+    alpha: 25.0
+    scaler: StandardScaler   # Pipeline([("scaler", StandardScaler()), ("model", Ridge(alpha=alpha))])
+    random_seed: 42   # global (config.yaml), no consumido directamente por Ridge (determinista) pero sí por el resto del pipeline
+    source: codigo_entrenamiento   # config/config.yaml::production_deployment.models.horizon_6 + src/training/trainer.py::_build_model
+  metrics_returned:
+    - rmse
+    - mae
+    - mape_pct
+    - r2
+    - mda_pct
+    - n_observations
+    # nombres exactos devueltos por src/get_stats/get_stats.py::_regression_metrics
+  source: codigo_entrenamiento
+
+metrics_reported:
+  # Holdout test oficial (models/metrics/final_evaluation.json, horizonte t+6, Ridge alpha=25.0)
+  # -- coincide exactamente con la Tabla 4 de la memoria para t+6, verificado recalculando
+  # manualmente model.predict() sobre data/splits/test/panel_test.csv (ver known_issues).
+  dataset: test_holdout
+  split_dates: {train: "2016-06 a 2023-12 (91 filas)", val: "2024-01 a 2024-12 (12 filas)", test: "2025-01 a 2026-01 (13 filas, 8 evaluables con y_true)"}
+  random_seed: 42
+  n_observations_test_evaluable: 8
+  rmse: 1.0395874222606034
+  mae: 0.9439915488990067
+  mape_pct: 0.7377164503991782
+  r2: 0.17513892031416456
+  mda_pct: 100.0
+  baseline_persistence_test:
+    rmse: 2.26194606478581
+    mae: 2.092500000000003
+    mape_pct: 1.6349733557709603
+    r2: -2.9050200647557833
+  rmse_reduction_vs_baseline_pct: 54.040132147932326
+  mape_reduction_vs_baseline_pct: 54.87899250496879
+  # Referencia adicional -- validación fija (Tabla 3 de la memoria, criterio real de selección
+  # de modelo; el test NUNCA se usó para seleccionar arquitectura):
+  validation_reference:
+    rmse: 1.2584
+    mae: 1.0595
+    mape_pct: 0.8495
+    rmse_vs_naive_persistence_pct: -5.9
+  kpi_contractual: "accuracy = 1 - MAPE >= 80% (MAPE <= 20%)  -->  CUMPLE (MAPE test = 0.74%)"
+  kpi_tecnico_mas_estricto: >
+    La memoria define un umbral técnico más exigente que el KPI contractual (basado en R² de
+    validación y en mantener la mejora frente a persistencia en test), pero los valores numéricos
+    exactos de esos umbrales están embebidos como objetos de ecuación (OMML) en el .docx y no se
+    extrajeron como texto plano -- ver known_issues.
+
+# 13 casos = TODAS las filas de data/splits/test/panel_test.csv (único split de test disponible;
+# no se seleccionó un subconjunto porque el propio dataset ya es pequeño). expected.y_pred es la
+# salida real de model.predict() sobre esas 16 features (payload de models/artifacts/horizon_6_ridge.pkl),
+# recalculada y verificada en este proceso de extracción: reproduce el RMSE/MAE de
+# models/metrics/final_evaluation.json a precisión de máquina sobre las 8 filas con y_true.
+# tolerance_pct=1.0 es margen de reproducibilidad numérica entre entornos/versiones de
+# scikit-learn (Ridge+StandardScaler es determinista y cerrado, no debería requerir más margen).
+golden_cases:
+  - id: caso_001
+    source: dataset_test_split
+    origin_date: "2025-01-01"
+    input: {ipi_national_current: 123.85, ipi_national_lag_1: 123.72, ipi_national_lag_2: 123.87, ipi_national_lag_3: 124.06, ipi_national_lag_4: 124.06, ipi_national_lag_5: 124.45, ipi_national_lag_6: 124.19, chem_sector_lag_11: 153.7234453479238, copper_lag_14: 132.92181735608338, eur_usd_lag_17: 95.6270726013976, oil_brent_lag_12: 183.46434257741848, usa_lag_1: 110.272157564906, month_sin: 0.4999999999999999, month_cos: 0.8660254037844387, quarter: 1, is_spring_risk: 0}
+    expected: {y_pred: 125.48069826420476, y_anchor: 123.85, y_true: 126.55}
+    tolerance_pct: 1.0
+
+  - id: caso_002
+    source: dataset_test_split
+    origin_date: "2025-02-01"
+    input: {ipi_national_current: 124.4, ipi_national_lag_1: 123.85, ipi_national_lag_2: 123.72, ipi_national_lag_3: 123.87, ipi_national_lag_4: 124.06, ipi_national_lag_5: 124.06, ipi_national_lag_6: 124.45, chem_sector_lag_11: 163.91392437463995, copper_lag_14: 137.58023815442036, eur_usd_lag_17: 93.61496485952156, oil_brent_lag_12: 189.08628248335933, usa_lag_1: 110.23762629492262, month_sin: 0.8660254037844386, month_cos: 0.5000000000000001, quarter: 1, is_spring_risk: 0}
+    expected: {y_pred: 126.42019517720777, y_anchor: 124.4, y_true: 127.07}
+    tolerance_pct: 1.0
+
+  - id: caso_003
+    source: dataset_test_split
+    origin_date: "2025-03-01"
+    input: {ipi_national_current: 125.02, ipi_national_lag_1: 124.4, ipi_national_lag_2: 123.85, ipi_national_lag_3: 123.72, ipi_national_lag_4: 123.87, ipi_national_lag_5: 124.06, ipi_national_lag_6: 124.06, chem_sector_lag_11: 165.42563578789407, copper_lag_14: 136.1709184432067, eur_usd_lag_17: 92.558247709711, oil_brent_lag_12: 196.13207722114973, usa_lag_1: 110.25450824913672, month_sin: 1.0, month_cos: 6.123233995736766e-17, quarter: 1, is_spring_risk: 0}
+    expected: {y_pred: 126.32274004023533, y_anchor: 125.02, y_true: 127.69}
+    tolerance_pct: 1.0
+
+  - id: caso_004
+    source: dataset_test_split
+    origin_date: "2025-04-01"
+    input: {ipi_national_current: 125.7, ipi_national_lag_1: 125.02, ipi_national_lag_2: 124.4, ipi_national_lag_3: 123.85, ipi_national_lag_4: 123.72, ipi_national_lag_5: 123.87, ipi_national_lag_6: 124.06, chem_sector_lag_11: 165.70407409579977, copper_lag_14: 135.61915724091637, eur_usd_lag_17: 94.67529977213138, oil_brent_lag_12: 206.1731737303297, usa_lag_1: 109.81711216268066, month_sin: 0.8660254037844387, month_cos: -0.4999999999999998, quarter: 2, is_spring_risk: 1}
+    expected: {y_pred: 126.1130040260697, y_anchor: 125.7, y_true: 125.72}
+    tolerance_pct: 1.0
+
+  - id: caso_005
+    source: dataset_test_split
+    origin_date: "2025-05-01"
+    input: {ipi_national_current: 126.44, ipi_national_lag_1: 125.7, ipi_national_lag_2: 125.02, ipi_national_lag_3: 124.4, ipi_national_lag_4: 123.85, ipi_national_lag_5: 123.72, ipi_national_lag_6: 123.87, chem_sector_lag_11: 162.95020301592456, copper_lag_14: 142.04178938165612, eur_usd_lag_17: 95.62135141297767, oil_brent_lag_12: 192.25490730538567, usa_lag_1: 109.66670929786416, month_sin: 0.4999999999999999, month_cos: -0.8660254037844387, quarter: 2, is_spring_risk: 1}
+    expected: {y_pred: 127.22654687320716, y_anchor: 126.44, y_true: 128.87}
+    tolerance_pct: 1.0
+
+  - id: caso_006
+    source: dataset_test_split
+    origin_date: "2025-06-01"
+    input: {ipi_national_current: 126.46, ipi_national_lag_1: 126.44, ipi_national_lag_2: 125.7, ipi_national_lag_3: 125.02, ipi_national_lag_4: 124.4, ipi_national_lag_5: 123.85, ipi_national_lag_6: 123.72, chem_sector_lag_11: 163.4070079251988, copper_lag_14: 155.7759357747933, eur_usd_lag_17: 95.6525311589976, oil_brent_lag_12: 192.0178212453504, usa_lag_1: 108.91316025067144, month_sin: 1.2246467991473532e-16, month_cos: -1.0, quarter: 2, is_spring_risk: 1}
+    expected: {y_pred: 127.99860145615254, y_anchor: 126.46, y_true: 128.9}
+    tolerance_pct: 1.0
+
+  - id: caso_007
+    source: dataset_test_split
+    origin_date: "2025-07-01"
+    input: {ipi_national_current: 126.55, ipi_national_lag_1: 126.46, ipi_national_lag_2: 126.44, ipi_national_lag_3: 125.7, ipi_national_lag_4: 125.02, ipi_national_lag_5: 124.4, ipi_national_lag_6: 123.85, chem_sector_lag_11: 162.5650823009136, copper_lag_14: 170.5701054077081, eur_usd_lag_17: 94.56597607758604, oil_brent_lag_12: 193.9365131730222, usa_lag_1: 109.78334825425247, month_sin: -0.4999999999999997, month_cos: -0.8660254037844388, quarter: 3, is_spring_risk: 0}
+    expected: {y_pred: 128.48974893074552, y_anchor: 126.55, y_true: 128.82}
+    tolerance_pct: 1.0
+
+  - id: caso_008
+    source: dataset_test_split
+    origin_date: "2025-08-01"
+    input: {ipi_national_current: 127.07, ipi_national_lag_1: 126.55, ipi_national_lag_2: 126.46, ipi_national_lag_3: 126.44, ipi_national_lag_4: 125.7, ipi_national_lag_5: 125.02, ipi_national_lag_6: 124.4, chem_sector_lag_11: 166.29743614737876, copper_lag_14: 161.5706820637718, eur_usd_lag_17: 95.26871631724806, oil_brent_lag_12: 182.71808416522845, usa_lag_1: 109.8861747026474, month_sin: -0.8660254037844385, month_cos: -0.5000000000000004, quarter: 3, is_spring_risk: 0}
+    expected: {y_pred: 129.80745910687543, y_anchor: 127.07, y_true: 128.61}
+    tolerance_pct: 1.0
+
+  # A partir de aquí, target_date supera la última observación disponible en la serie IPI
+  # nacional bundled (feb-2026) -> y_true no existe todavía. No son casos "fallidos": el modelo
+  # sí produce y_pred determinista y verificable; simplemente no hay ground truth con el que
+  # contrastar precisión. Útiles para verificar reproducibilidad numérica del wiring, no exactitud.
+  - id: caso_009
+    source: dataset_test_split
+    origin_date: "2025-09-01"
+    input: {ipi_national_current: 127.69, ipi_national_lag_1: 127.07, ipi_national_lag_2: 126.55, ipi_national_lag_3: 126.46, ipi_national_lag_4: 126.44, ipi_national_lag_5: 125.7, ipi_national_lag_6: 125.02, chem_sector_lag_11: 172.8174828953008, copper_lag_14: 155.4747427500523, eur_usd_lag_17: 94.0128228718846, oil_brent_lag_12: 168.2708998142225, usa_lag_1: 109.88463997953704, month_sin: -1.0, month_cos: -1.8369701987210294e-16, quarter: 3, is_spring_risk: 0}
+    expected: {y_pred: 131.7418608027342, y_anchor: 127.69, y_true: null}
+    tolerance_pct: 1.0
+
+  - id: caso_010
+    source: dataset_test_split
+    origin_date: "2025-10-01"
+    input: {ipi_national_current: 125.72, ipi_national_lag_1: 127.69, ipi_national_lag_2: 127.07, ipi_national_lag_3: 126.55, ipi_national_lag_4: 126.46, ipi_national_lag_5: 126.44, ipi_national_lag_6: 125.7, chem_sector_lag_11: 168.41493818898326, copper_lag_14: 146.29932325662733, eur_usd_lag_17: 94.65571499292788, oil_brent_lag_12: 174.61468082804953, usa_lag_1: 109.72426141450312, month_sin: -0.8660254037844386, month_cos: 0.5000000000000001, quarter: 4, is_spring_risk: 0}
+    expected: {y_pred: 130.38528672382583, y_anchor: 125.72, y_true: null}
+    tolerance_pct: 1.0
+
+  - id: caso_011
+    source: dataset_test_split
+    origin_date: "2025-11-01"
+    input: {ipi_national_current: 128.87, ipi_national_lag_1: 125.72, ipi_national_lag_2: 127.69, ipi_national_lag_3: 127.07, ipi_national_lag_4: 126.55, ipi_national_lag_5: 126.46, ipi_national_lag_6: 126.44, chem_sector_lag_11: 158.66143900806992, copper_lag_14: 151.19975301655518, eur_usd_lag_17: 94.36099457870122, oil_brent_lag_12: 170.05117163679466, usa_lag_1: 109.56695229568996, month_sin: -0.5000000000000004, month_cos: 0.8660254037844384, quarter: 4, is_spring_risk: 0}
+    expected: {y_pred: 130.10210007899934, y_anchor: 128.87, y_true: null}
+    tolerance_pct: 1.0
+
+  - id: caso_012
+    source: dataset_test_split
+    origin_date: "2025-12-01"
+    input: {ipi_national_current: 128.9, ipi_national_lag_1: 128.87, ipi_national_lag_2: 125.72, ipi_national_lag_3: 127.69, ipi_national_lag_4: 127.07, ipi_national_lag_5: 126.55, ipi_national_lag_6: 126.46, chem_sector_lag_11: 155.89902267722852, copper_lag_14: 156.6232866681604, eur_usd_lag_17: 94.9834095180431, oil_brent_lag_12: 169.40617780036888, usa_lag_1: 109.55774395702775, month_sin: -2.4492935982947064e-16, month_cos: 1.0, quarter: 4, is_spring_risk: 0}
+    expected: {y_pred: 130.20420678675205, y_anchor: 128.9, y_true: null}
+    tolerance_pct: 1.0
+
+  - id: caso_013
+    source: dataset_test_split
+    origin_date: "2026-01-01"
+    input: {ipi_national_current: 128.82, ipi_national_lag_1: 128.9, ipi_national_lag_2: 128.87, ipi_national_lag_3: 125.72, ipi_national_lag_4: 127.69, ipi_national_lag_5: 127.07, ipi_national_lag_6: 126.55, chem_sector_lag_11: 160.75285051023127, copper_lag_14: 149.1190061327539, eur_usd_lag_17: 96.50148209140552, oil_brent_lag_12: 181.3011253766456, usa_lag_1: 109.554674510807, month_sin: 0.4999999999999999, month_cos: 0.8660254037844387, quarter: 1, is_spring_risk: 0}
+    expected: {y_pred: 129.98026231564273, y_anchor: 128.82, y_true: null}
+    tolerance_pct: 1.0
+
+known_issues:
+  - "Naming engañoso: la carpeta entregada se llama 'a15-rnn-vitivinicola-...' y el listado de
+     abreviaturas de la memoria incluye LSTM/GRU, pero el modelo PRODUCTIVO es Ridge Regression
+     (scikit-learn, lineal regularizado) -- no hay ninguna red neuronal recurrente en train.py,
+     predictor.py ni en config.yaml::production_deployment. Tampoco aparecen LSTM/GRU en la
+     sección de arquitecturas evaluadas de la memoria (Naive_Persistence, SARIMAX, Ridge, Lasso,
+     ElasticNet, XGBoost, CatBoost). requirements.txt sí incluye tensorflow/keras, pero no se
+     importan en ningún módulo de src/training ni src/predict -- confirmado por grep. No se ha
+     podido confirmar contra la memoria si hubo una fase RNN descartada sin documentar, o si el
+     nombre de carpeta es simplemente heredado de una plantilla de otro modelo del lote."
+  - "RESUELTO en plugin-integration (post-revisión): el predictor NO es stateless respecto a
+     un único artefacto .pkl -- para derivar features a partir de solo 'date'/'origin_date'
+     (o de un CSV simple estilo data/input/ipi_history.csv) necesita, además de
+     horizon_6_ridge.pkl, los CSV procesados data/processed/global_phytosanitary_prices_b2020.csv
+     y data/processed/financial_proxies_monthly.csv como referencia histórica. Decisión tomada:
+     se empaquetan ambos junto al .pkl en artifacts/ml15_wine_ipi_price_forecast/ (vía
+     ArtifactStore, igual que el modelo -- ver app/plugins/ml15_wine_ipi_price_forecast/history.py,
+     puerto de build_inference_panel_from_history/build_inference_panel_from_user_ipi_history).
+     predict_inline acepta ahora 'date'+'ipi_national_current' solos (o incluso solo 'date');
+     predict_batch detecta un CSV con forma de histórico simple (date/year+month +
+     ipi_national_current, sin las 16 columnas del contrato) y lo trata como tal, fusionando
+     todas sus filas en el histórico de referencia antes de predecir cada una -- así una fila
+     puede servir de contexto de retardo a otra, igual que el pipeline original. Verificado
+     contra el propio data/input/ipi_history.csv del equipo de IA: 15/15 filas, sin error,
+     coincidencia exacta con los golden_cases en las 13 fechas que también cubre el split de
+     test. Limitación que sigue existiendo: estos dos CSV de referencia son un snapshot estático
+     (hasta feb-2026/jun-2026 respectivamente) que solo se actualiza si el equipo de IA
+     regenera y resube el snapshot -- no se refrescan automáticamente."
+  - "El modo regional_layer (capa regional contextual) es un post-proceso pesado y con fuentes
+     propias (RECAN anual, IPC autonómico mensual, clima GEE mensual) que NO se han evaluado
+     como necesarias para el contrato mínimo predict_inline. Documentado en el manifest por
+     completitud (outputs.regional_context_batch), pero su integración como modo del plugin es
+     una decisión de alcance a tomar explícitamente en plugin-integration, no asumida aquí."
+  - "trainer.py::_select_feature_columns no usa una lista de columnas hardcodeada: selecciona
+     automáticamente TODAS las columnas numéricas del CSV de entrenamiento salvo
+     non_predictor_columns y las que empiezan por 'ipi_national_t_plus_'. Si el endpoint train()
+     del plugin permite al cliente aportar un CSV con columnas numéricas extra no vistas en
+     producción, el modelo reentrenado las incorporaría como features silenciosamente, rompiendo
+     el contrato feature_columns=16 esperado por verification/golden_cases. plugin-integration
+     debe decidir si valida/restringe el esquema de entrada a train() o replica este
+     comportamiento tal cual (con el riesgo documentado)."
+  - "Solo 8 de las 13 filas del split de test tienen y_true real (ipi_national_t_plus_6 no nulo);
+     las 5 restantes (origin_date 2025-09 a 2026-01) tienen target_date posterior al último dato
+     disponible en la serie IPI nacional bundled (feb-2026). Los golden_cases incluyen las 13
+     filas pero solo 8 permiten verificar contra un valor real; las otras 5 solo verifican
+     reproducibilidad numérica del wiring (y_pred determinista), no exactitud."
+  - "El .pkl fue serializado con scikit-learn==1.8.0 (ver requirements.txt y metadata interna del
+     payload); al cargarlo con scikit-learn==1.9.1 (entorno usado para esta extracción) sklearn
+     emite InconsistentVersionWarning para StandardScaler/Ridge/Pipeline. Las predicciones
+     recalculadas coinciden a precisión de máquina con final_evaluation.json pese al warning,
+     pero plugin-integration debería fijar scikit-learn==1.8.0 exacto (no >=) para evitar drift
+     silencioso de comportamiento entre versiones."
+  - "Los umbrales numéricos exactos del criterio técnico más estricto que el KPI contractual
+     (basado en R² de validación y en mantener mejora vs. baseline en test) están embebidos como
+     objetos de ecuación (OMML) en el .docx de la memoria y no se extrajeron como texto plano por
+     el parser usado (python-docx, sin pandoc disponible en este entorno). El KPI contractual
+     (accuracy=1-MAPE >= 80%) sí se extrajo con claridad y se cumple (MAPE test = 0,74%). Si se
+     necesitan los umbrales técnicos exactos para la ficha técnica, revisar el .docx original
+     abriéndolo con Word/LibreOffice."
+  - "No se ha encontrado ninguna restricción dura de negocio tipo 'PU >= 13' en código ni memoria
+     -- constraints queda vacío. La única regla explícita de negocio es cualitativa: la capa
+     regional nunca debe presentarse como predicción oficial de precio autonómico (disclaimer
+     obligatorio, ver outputs.regional_context_batch)."
+  - "requirements.txt entregado está en ASCII plano (sin BOM, sin UTF-16LE) -- a diferencia de
+     otros modelos del lote, aquí NO hace falta normalizar encoding antes de pip install/pip-audit."
