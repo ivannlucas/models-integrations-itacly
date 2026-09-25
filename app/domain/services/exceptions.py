@@ -84,3 +84,11 @@ class InfeasibleOptimizationError(ValueError):
     together with a narrow ±surface band) yield CBC status != OPTIMAL. The plugin
     translates this to a domain error (HTTP 422) instead of returning an empty plan.
     """
+
+
+class UnsupportedMachineConfigurationError(ValueError):
+    """Raised for an unsupported machine combination or missing/invalid calibration (ml41)."""
+
+
+class InvalidAudioError(ValueError):
+    """Raised when the uploaded audio cannot be decoded as a valid WAV file (ml41)."""

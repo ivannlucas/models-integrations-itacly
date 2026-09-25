@@ -56,6 +56,8 @@ class PredictModelUseCase:
             # (*, data_path, mlflow_run_id) with no **kwargs, so pass it conditionally.
             if "model_key" in inspect.signature(self._plugin.predict_batch).parameters:
                 batch_kwargs["model_key"] = getattr(request, "model_key", None)
+            if "threshold" in inspect.signature(self._plugin.predict_batch).parameters:
+                batch_kwargs["threshold"] = getattr(request, "threshold", None)
             result = self._plugin.predict_batch(**batch_kwargs)
         else:
             logger.info("Executing inline prediction, mlflow_run_id=%s", mlflow_run_id or "(standard)")

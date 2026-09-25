@@ -39,6 +39,7 @@ from app.domain.services.exceptions import (
     InsufficientSensorWindowError,
     InsufficientTelemetryHistoryError,
     InsufficientWindowHistoryError,
+    InvalidAudioError,
     InvalidImageError,
     InvalidVideoError,
     NoValidSimulationPointError,
@@ -46,6 +47,7 @@ from app.domain.services.exceptions import (
     ThermalSafetyViolationError,
     TrainingNotSupportedError,
     UnknownDiagnosisSystemError,
+    UnsupportedMachineConfigurationError,
 )
 from app.domain.services.model_runtime_service import ModelRuntimeService
 from app.infrastructure.http.router_factory import make_model_router
@@ -102,6 +104,16 @@ from app.plugins.ml30_meat_traceability_detection.predict_dto import (
 from app.plugins.ml30_meat_traceability_detection.train_dto import (
     TrainRequest as Ml30Trace_TrainReq,
     TrainResponse as Ml30TraceTrainResp,
+)
+from app.plugins.ml41_meat_curing_machinery_acoustic_anomaly.predict_dto import (
+    PredictBatchResponse as Ml41BatchResp,
+    PredictInlineResponse as Ml41InlineResp,
+    PredictRequest as Ml41_Request,
+    PredictResponse as Ml41_Response,
+)
+from app.plugins.ml41_meat_curing_machinery_acoustic_anomaly.train_dto import (
+    TrainRequest as Ml41_TrainReq,
+    TrainResponse as Ml41TrainResp,
 )
 from app.plugins.ml31_cereals_residue_optimizer.predict_dto import (
     PredictBatchResponse as Ml31ResidueBatchResp,
@@ -624,6 +636,50 @@ def _ml30_trace_train(plugin: FakePlugin, *, data_path: str) -> Ml30TraceTrainRe
     return Ml30TraceTrainResp(
         detail="Training completed", accuracy=0.87, f1=0.6, roc_auc=0.72,
         n_train=800, n_test=200, training_time_s=12.3, upload_warning=None,
+    )
+
+
+def _ml41_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> Ml41InlineResp:
+    """Fake inline prediction response for the ml41 acoustic anomaly model."""
+    return Ml41InlineResp(
+        model_id="ml41-meat-curing-machinery-acoustic-anomaly",
+        machine=features.get("machine", "fan"),
+        machine_id=features.get("machine_id", "id_00"),
+        snr=features.get("snr", "0_dB"),
+        mse_score=0.7368,
+        maha_score=6.1289,
+        predicted_label=0,
+        threshold_used=threshold if threshold is not None else 6.6067,
+    )
+
+
+def _ml41_batch(plugin: FakePlugin, *, data_path: str) -> Ml41BatchResp:
+    """Fake batch prediction response for the ml41 acoustic anomaly model."""
+    return Ml41BatchResp(
+        model_id="ml41-meat-curing-machinery-acoustic-anomaly",
+        predictions=[
+            {
+                "filename": "00000000.wav",
+                "machine": "fan", "machine_id": "id_00", "snr": "0_dB",
+                "mse_score": 0.6699, "maha_score": 15.2161,
+                "predicted_label": 1, "threshold_used": 6.6067,
+            }
+        ],
+        output_path=None,
+    )
+
+
+def _ml41_train(plugin: FakePlugin, *, data_path: str) -> Ml41TrainResp:
+    """Fake training response for the ml41 acoustic anomaly model."""
+    return Ml41TrainResp(
+        detail="Entrenamiento completado para 1 combinación(es)",
+        per_combination=[
+            {
+                "machine": "fan", "machine_id": "id_00", "snr": "0_dB",
+                "best_val_loss": 0.74, "n_train": 40, "n_val": 10,
+            }
+        ],
+        upload_warning=None,
     )
 
 
@@ -1416,6 +1472,7 @@ FAKE_FACTORIES: dict[str, tuple[Callable, Callable]] = {
     "ml3-wine-disease-pest-forecast": (_ml3_wine_inline, _ml3_wine_batch),
     "m21-cereal-price-spatial": (_m21_inline, _m21_batch),
     "ml16-meat-raw-material-price-alert": (_ml16_inline, _ml16_batch),
+    "ml41-meat-curing-machinery-acoustic-anomaly": (_ml41_inline, _ml41_batch),
 }
 
 TRAIN_FACTORIES: dict[str, Callable] = {
@@ -1432,6 +1489,7 @@ TRAIN_FACTORIES: dict[str, Callable] = {
     "ml3-wine-disease-pest-forecast": _ml3_wine_train,
     "m21-cereal-price-spatial": _m21_train,
     "ml16-meat-raw-material-price-alert": _ml16_train,
+    "ml41-meat-curing-machinery-acoustic-anomaly": _ml41_train,
 }
 
 
@@ -1679,6 +1737,17 @@ TEST_REGISTRY: list[ModelEntry] = [
         extra_predict_exceptions=(InsufficientRowsError,),
         train_request_type=Ml16_TrainReq,
         train_response_type=Ml16TrainResp,
+    ),
+    ModelEntry(
+        model_id="ml41-meat-curing-machinery-acoustic-anomaly",
+        prefix="/models/ml41-meat-curing-machinery-acoustic-anomaly",
+        version="1.0.0",
+        plugin_class=FakePlugin,
+        predict_request_type=Ml41_Request,
+        predict_response_type=Ml41_Response,
+        extra_predict_exceptions=(UnsupportedMachineConfigurationError, InvalidAudioError),
+        train_request_type=Ml41_TrainReq,
+        train_response_type=Ml41TrainResp,
     ),
 ]
 
