@@ -1,0 +1,153 @@
+{
+  "model_id": "a14",
+  "model_slug": "wine-phyto-price-forecast",
+  "fecha": "Septiembre 2026",
+  "model_key": "ml14-wine-phyto-price-forecast",
+  "version": "2.0.0",
+  "descripcion": "Modelo de predicción semanal del índice MAPA de precios de protección fitosanitaria (sector vitivinícola, base 2020=100) a 16 semanas vista, mediante una red LSTM (PyTorch, 2 capas, 64 unidades ocultas) que predice un residual sobre un baseline lineal de drift y reconstruye el precio en escala original. Es el artefacto real seleccionado por el protocolo de validación corregido del equipo de IA (sin fuga de datos entre arquitectura/horizonte y test), pero no supera al baseline de Drift en la evaluación final de test — ver metricas y limitaciones.",
+  "task_type": "Regresión de serie temporal, horizonte fijo t+16 semanas (direct forecasting sobre residual de drift)",
+  "framework": "PyTorch (nn.LSTM, 2 capas, hidden_size=64, dropout=0.3) + escalado StandardScaler ya serializado (sin dependencia de scikit-learn en inferencia); pandas / numpy",
+  "artefacto": "lstm_model.pt (state_dict PyTorch, 60.225 parámetros) + preprocessing.json (scalers congelados de entrada/objetivo) + lstm_features.json (contrato de 39 features, orden vinculante)",
+  "objetivo": "Anticipar con 16 semanas de antelación la evolución del índice nacional de precios de protección fitosanitaria, para dar soporte a la planificación de compras y a la evaluación de riesgo de coste del sector vitivinícola. El propio equipo de IA, tras corregir un protocolo de validación con fuga de datos, concluyó que este LSTM no logra superar de forma fiable a un baseline lineal simple (Drift) en la evaluación final — el objetivo de negocio (batir la persistencia/tendencia simple) no se cumple con la evidencia disponible hoy.",
+  "caso_uso": "Modo predict inline y predict batch (idéntico cálculo, solo cambia el transporte del histórico — JSON o CSV): se aporta un histórico semanal continuo (frecuencia domingo, sin huecos ni duplicados) de al menos 24 semanas con 6 variables base (índice de protección fitosanitaria, carburantes, cobre, gas, petróleo Brent, tipo de cambio EUR/USD); el servicio deriva automáticamente las 39 features (estacionalidad, retardos de 4/8/12 semanas, medias móviles de 4/8 semanas, diferencia mensual) y devuelve el precio predicho a 16 semanas, el precio actual y el baseline de drift de referencia. No hay modo de reentrenamiento por usuario (ver limitaciones): el procedimiento de entrenamiento entregado siempre reentrena sobre el mismo histórico bundled del equipo de IA, no acepta datos de cliente.",
+  "inputs": [
+    {
+      "nombre": "rows (histórico semanal, mínimo 24 filas)",
+      "tipo": "list[dict]",
+      "descripcion": "Cada fila: date (YYYY-MM-DD, domingo), PROTECCION_FITO, CARBURANTES, COPPER_EUR_TON, GAS_EUR_MMBTU, COIL_EUR_BARRIL, DEXUSEU — todas índices/precios base 2020=100 o unidad de mercado (EUR/tonelada, EUR/MMBtu, EUR/barril, USD/EUR)",
+      "obligatorio": "Sí — mínimo 24 filas semanales consecutivas sin huecos ni duplicados",
+      "valor_defecto": "-"
+    },
+    {
+      "nombre": "MONTH, MONTH_SIN, MONTH_COS, *_LAG_{4,8,12}, *_MA_{4,8}, *_DIFF_MONTH (39 features totales)",
+      "tipo": "float",
+      "descripcion": "Variables derivadas automáticamente del histórico aportado (estacionalidad, retardos autorregresivos, medias móviles, diferencia mensual) — nunca se piden al cliente",
+      "obligatorio": "No — siempre calculadas por el servicio",
+      "valor_defecto": "derivadas del histórico"
+    }
+  ],
+  "outputs": [
+    {
+      "nombre": "predicted_price",
+      "tipo": "float (índice base 2020=100)",
+      "descripcion": "PROTECCION_FITO predicho a 16 semanas vista",
+      "rango": "continuo, típicamente 80-135 (rango histórico del índice, 2005-2025)",
+      "interpretacion": "valor esperado del índice nacional dentro de 16 semanas; comparar con current_price y drift_baseline"
+    },
+    {
+      "nombre": "current_price",
+      "tipo": "float",
+      "descripcion": "PROTECCION_FITO de la última fila del histórico aportado",
+      "rango": "igual rango que predicted_price",
+      "interpretacion": "ancla de referencia inmediata"
+    },
+    {
+      "nombre": "drift_baseline",
+      "tipo": "float",
+      "descripcion": "Baseline lineal simple (extrapolación de la tendencia mensual reciente) — la referencia frente a la que el LSTM no logra mejorar en test final",
+      "rango": "igual rango que predicted_price",
+      "interpretacion": "si predicted_price no se aleja de forma significativa de drift_baseline, el LSTM no está aportando información adicional relevante en ese caso"
+    },
+    {
+      "nombre": "horizon_weeks / last_observed_date / prediction_date",
+      "tipo": "int / date / date",
+      "descripcion": "Horizonte (siempre 16), última fecha del histórico y fecha objetivo de la predicción (last_observed_date + 16 semanas)",
+      "rango": "-",
+      "interpretacion": "prediction_date es la fecha a la que se refiere predicted_price, no la fecha de ejecución"
+    },
+    {
+      "nombre": "gap_warning",
+      "tipo": "string | null",
+      "descripcion": "Aviso si el histórico aportado está desactualizado respecto a la fecha de ejecución",
+      "rango": "-",
+      "interpretacion": "si no es null, la predicción se basa en datos que ya no reflejan la semana actual"
+    }
+  ],
+  "metricas": [
+    {
+      "nombre": "Test final auditado (docs/MODEL_CARD.md, única evaluación del LSTM seleccionado)",
+      "valor": "RMSE=3,0168; MAE=2,2583; MAPE=1,8608%; R²=0,4969; acierto direccional=69,7%",
+      "descripcion": "211 observaciones, fechas objetivo 2021-10-17 a 2025-10-26. Split cronológico sin solapamiento entre train/validation/test — el test nunca se usó para elegir arquitectura.",
+      "interpretacion": "el modelo se equivoca de media 2,26 puntos de índice en el periodo evaluado; comparar obligatoriamente con la fila de Drift siguiente."
+    },
+    {
+      "nombre": "Drift (baseline lineal, mismo test final)",
+      "valor": "RMSE=2,5406; MAE=1,9403; MAPE=1,5794%; R²=0,6432; acierto direccional=72,0%",
+      "descripcion": "Extrapolar la tendencia mensual reciente, sin ningún modelo aprendido",
+      "interpretacion": "el baseline simple se equivoca MENOS que el LSTM en las 4 métricas evaluadas — el criterio de aceptación del proyecto (RMSE_LSTM < RMSE_Drift) NO se cumple (mejora relativa: -18,75%)."
+    },
+    {
+      "nombre": "Validación (criterio de selección entre LSTM/GRU/XGBoost)",
+      "valor": "RMSE=0,9641 (media de 3 semillas), frente a GRU=1,1117 y XGBoost=1,1802",
+      "descripcion": "211 observaciones, 2017-10-01 a 2021-10-10 — fase en la que SÍ se seleccionó correctamente la mejor arquitectura por RMSE",
+      "interpretacion": "el LSTM fue la mejor opción disponible en validación, pero esa ventaja no se sostiene en el test final (indicio de sobreajuste/cambio de régimen entre periodos, según la propia auditoría del equipo de IA)"
+    },
+    {
+      "nombre": "Verificación golden dataset (post-integración)",
+      "valor": "5/5 casos, coincidencia exacta (diferencia 0,0) contra el endpoint HTTP real",
+      "descripcion": "4 ventanas históricas reales + 1 caso de rechazo controlado, re-ejecutados contra /predict del plugin integrado — ver outputs/a14/verification_report.md",
+      "interpretacion": "el servicio integrado reproduce exactamente el comportamiento del artefacto LSTM entregado; es fidelidad del wiring, no evidencia adicional de acierto del modelo."
+    }
+  ],
+  "limitaciones": [
+    {
+      "tipo": "Modelo NO aceptado frente al baseline de Drift (limitación principal)",
+      "descripcion": "En la única evaluación de test final, correctamente aislada del proceso de selección de arquitectura, el LSTM no bate al baseline lineal de Drift (RMSE 3,0168 frente a 2,5406; mejora relativa -18,75%). El propio equipo de IA documenta este resultado como 'NO ACEPTADO' y advierte explícitamente que el modelo 'no debe promocionarse como modelo aceptado de producción' (docs/MODEL_CARD.md). Se integra igualmente porque es el artefacto real y auditado (no el resultado de una versión anterior retractada por fuga de datos), a la espera de una decisión de negocio explícita antes de exponerlo."
+    },
+    {
+      "tipo": "Discrepancia entre el entregable narrativo y el propio código",
+      "descripcion": "La memoria (.docx) y el README.md del código describen una versión ANTERIOR y retractada (un GRU, con un protocolo de validación con fuga de datos entre test y selección de arquitectura, que sí superaba a Drift). El propio código trae una auditoría posterior que retira expresamente ese resultado. Este plugin usa únicamente las cifras del LSTM auditado, nunca las del GRU retractado."
+    },
+    {
+      "tipo": "Sin reentrenamiento por usuario",
+      "descripcion": "El procedimiento de entrenamiento entregado por el equipo de IA no acepta ningún dato de cliente: siempre reentrena sobre el mismo histórico fijo bundled, solo permite variar hiperparámetros. El endpoint /train de este servicio devuelve explícitamente 'no soportado' (HTTP 501) en vez de simular un reentrenamiento que no incorporaría datos nuevos."
+    },
+    {
+      "tipo": "Varias inconsistencias de trazabilidad en los artefactos entregados",
+      "descripcion": "Se detectaron y documentaron 5 inconsistencias reproducibles entre lo que los documentos de auditoría del equipo de IA declaran (hashes de ficheros, selección de modelo) y lo que realmente contienen/hacen los artefactos y el código — incluido un bug que haría que el propio CLI original sirviera un GRU en vez del LSTM declarado si se ejecuta con su opción por defecto. Ninguna afecta al resultado servido por este plugin (que usa siempre los artefactos y scalers congelados correctos), pero si se retoca el pipeline de entrenamiento original conviene revisar primero inbox/a14/manifest.yaml::known_issues."
+    },
+    {
+      "tipo": "Ventana de test parcialmente observada durante el desarrollo histórico",
+      "descripcion": "El periodo 2021-2025 usado como test final ya había sido observado por experimentos anteriores del propio proyecto (aunque para otro propósito, comparar horizontes/arquitecturas, no para seleccionar el modelo final). No existe un periodo verdaderamente nunca visto sin incorporar datos posteriores a octubre de 2025."
+    }
+  ],
+  "fichero_nombre": "Ventanas de 24 filas extraídas de data/processed/final_dataset_for_modeling.csv (mismo dataset con el que se ajustaron los scalers)",
+  "fichero_registros": "5 casos: 4 ventanas históricas reales (24-30 filas cada una) + 1 caso de rechazo controlado con 23 filas (por debajo del mínimo operativo)",
+  "fichero_resultado": "predict inline sobre los 5 casos reproduce exactamente (diferencia 0,0, o HTTP 422 en el caso de rechazo) los golden_cases del manifest, ejecutado contra el endpoint HTTP real del plugin integrado con el artefacto PyTorch real cargado, no solo contra una llamada directa en Python",
+  "observaciones_tecnicas": "Solo CPU, sin GPU (LSTM pequeño, 60.225 parámetros, ~245 KB el artefacto). No requiere scikit-learn en inferencia (el escalado usa directamente los mean/scale ya serializados en preprocessing.json). requirements.txt fija torch==2.10.0 sin distinguir variante CPU/CUDA — se recomienda fijar explícitamente la rueda CPU en el entorno de despliegue de este servicio para no arrastrar dependencias CUDA innecesarias. No requiere conexión a red en inferencia.",
+  "que_no_responde": "El modelo no garantiza superar a una simple extrapolación de la tendencia reciente (drift_baseline) — en la evaluación más reciente y fiable, de hecho no lo consigue. No predice precios por Comunidad Autónoma ni por explotación individual, solo el índice nacional. No explica por sí mismo la causa de la subida o bajada prevista, ni incorpora eventos futuros conocidos (cambios regulatorios, roturas de stock) que no estén ya reflejados en la tendencia histórica.",
+  "entradas_contexto": "Los datos de entrada son índices y precios ya procesados de fuentes oficiales (MAPA para el índice de protección fitosanitaria y carburantes; FRED/IMF/EIA para cobre, gas, petróleo y tipo de cambio), agregados a frecuencia semanal — no son mediciones directas de sensor ni formularios rellenados por el usuario final.",
+  "ejemplo_interpretacion": "Si el sistema recibe un histórico cuya última semana tiene un índice de 125,0 y predice 120,0 para 16 semanas después, mientras que el baseline de tendencia simple (drift_baseline) ya apuntaba a 117,7, la diferencia entre predicted_price y drift_baseline (2,3 puntos) es la 'aportación' del modelo aprendido sobre limitarse a extrapolar la tendencia — una aportación que, según la evaluación más reciente, no es fiable: en ocasiones acierta mejor, pero en el conjunto de test evaluado, en promedio, acierta peor que quedarse solo con drift_baseline.",
+  "margen_error": "En la evaluación de test más reciente y fiable (211 semanas, 2021-2025), el modelo se equivoca de media unos 2,26 puntos de índice — más que si simplemente se hubiera extrapolado la tendencia reciente sin ningún modelo aprendido (esa alternativa simple se equivoca de media 1,94 puntos). Es decir: en este momento, el modelo aprendido no aporta una mejora de precisión demostrada frente a una regla mucho más simple. Cualquier decisión de compra o planificación no debe apoyarse únicamente en predicted_price sin comparar también con drift_baseline.",
+  "revisar_manualmente": [
+    "Cualquier predicción de este modelo, mientras no exista una decisión de negocio explícita sobre si se despliega pese a no superar al baseline de Drift — ver el aviso de estado al inicio de este documento.",
+    "Predicciones emitidas en periodos de shock de mercado, cambio regulatorio o geopolítico repentino en insumos agroquímicos — el modelo aprende de la dinámica histórica y no anticipa rupturas de esa dinámica.",
+    "Cualquier histórico aportado con gap_warning distinto de null — indica que los datos de entrada ya están desactualizados respecto a la fecha de ejecución.",
+    "Comparar siempre predicted_price contra drift_baseline antes de tomar una decisión — si están muy próximos, el modelo no está aportando información adicional relevante en ese caso concreto."
+  ],
+  "que_no_hace": [
+    "No garantiza mejorar una simple extrapolación de la tendencia reciente — en la evaluación de test más fiable disponible hoy, no lo consigue.",
+    "No sustituye el criterio experto de compras, y menos aún ante episodios de mercado extraordinarios.",
+    "No predice precios oficiales por Comunidad Autónoma ni por explotación — solo el índice nacional.",
+    "No permite reentrenamiento con datos propios del usuario — solo existe el artefacto fijo entregado por el equipo de IA.",
+    "No debe presentarse como un modelo aceptado de producción sin que alguien con criterio de negocio revise y asuma explícitamente esa decisión — así lo advierte la propia auditoría del equipo que lo desarrolló."
+  ],
+  "puede_equivocarse": "Sí, y de forma documentada: en la evaluación de test más reciente y metodológicamente correcta disponible, el modelo se equivoca MÁS, de media, que una simple extrapolación de la tendencia reciente sin ningún modelo aprendido detrás (RMSE 2,26 frente a 1,94 puntos de índice). Esto no es un fallo de la integración técnica de este servicio -- es el resultado que el propio equipo de IA obtuvo y documentó tras corregir un problema de metodología en una versión anterior. El modelo se pone a disposición como el artefacto real y auditado, pero cualquier uso en producción debe partir de esa limitación conocida, no de la expectativa de que 'bate al mercado'.",
+  "kpis": [
+    {
+      "kpi": "Criterio de aceptación del proyecto: RMSE del modelo seleccionado < RMSE del baseline de Drift, en test final",
+      "valor_umbral": "RMSE_LSTM < RMSE_Drift (sin margen mínimo fijado -- cualquier mejora positiva reproducible sería suficiente)",
+      "descripcion": "NO CUMPLE. RMSE LSTM=3,0168 frente a RMSE Drift=2,5406 -- una diferencia del -18,75% (el LSTM es PEOR, no mejor). Resultado documentado por el propio equipo de IA como 'NO ACEPTADO'."
+    },
+    {
+      "kpi": "Selección correcta de arquitectura en validación (sin fuga de datos del test)",
+      "valor_umbral": "El modelo elegido debe tener el menor RMSE medio de validación entre las arquitecturas comparadas (LSTM/GRU/XGBoost), sin usar el test para decidir",
+      "descripcion": "CUMPLE. El LSTM obtuvo el menor RMSE de validación (0,9641 frente a 1,1117 GRU y 1,1802 XGBoost) -- la selección de arquitectura en sí fue metodológicamente correcta; el problema aparece únicamente al evaluar ese LSTM ya elegido contra el baseline en el test final."
+    },
+    {
+      "kpi": "Acierto direccional (sube/baja) en test final",
+      "valor_umbral": "Sin umbral contractual explícito -- referencia de calidad complementaria",
+      "descripcion": "69,7% para el LSTM frente a 72,0% del baseline de Drift -- también por debajo del baseline en esta métrica secundaria."
+    }
+  ]
+}

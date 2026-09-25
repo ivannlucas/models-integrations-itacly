@@ -1,0 +1,502 @@
+model_id: ml14-wine-phyto-price-forecast
+sector: vitivinicola
+nombre: "Desarrollo de un modelo de análisis de precios de mercado de productos fitosanitarios"
+# Título tomado literalmente del entregable: "14 - Desarrollo de un modelo de análisis de precios
+# de mercado de productos fitosanitarios v1.3.docx". La carpeta de código se llama
+# "a14-rnn-vitivinicola-precios-mercado-fitosanitarios" -- el "rnn" del nombre SÍ se corresponde
+# con el modelo productivo aquí (a diferencia de a15, donde el nombre "rnn" era heredado y
+# engañoso). Ver model_status y known_issues sobre CUÁL red recurrente es la seleccionada.
+task_type: regression  # serie temporal univariante, horizonte directo fijo (t+16 semanas), sobre residual de un baseline de drift lineal
+framework:
+  # Cargadas realmente por src/predict/predictor.py para el modelo seleccionado (LSTM):
+  - torch==2.10.0
+  - pandas==3.0.1
+  - numpy==2.4.3
+  - scikit-learn==1.8.0
+  - scipy==1.17.1
+  # Cargada por predictor.py SOLO si --model XGBoost (arquitectura de comparación, no
+  # seleccionada; ver model_status). No se usa para servir el LSTM. No se bundlea el artefacto.
+  # comparison_only: [xgboost==3.2.0]
+  # SOLO usada por scripts/build_dataset.py para leer los .xlsx crudos de MAPA -- no interviene
+  # en absoluto en la ruta de inferencia (raw CSV -> features -> LSTM -> precio).
+  # dataset_build_only: [openpyxl>=3.1]
+
+# ============================================================================
+# ESTADO DE ACEPTACIÓN DEL MODELO -- leer antes de cualquier otra sección.
+# ============================================================================
+# El entregable (memoria v1.3, README.md del código) describe una versión ANTERIOR y ya
+# RETRACTADA del proyecto: un GRU seleccionado por un protocolo de validación con fuga de datos
+# (el propio conjunto de test se usaba para comparar arquitecturas/horizontes), que en esa
+# versión "batía" al baseline de Drift. Esa versión SIGUE siendo el contenido literal de la
+# memoria y del README -- no se han actualizado tras la auditoría.
+#
+# El propio código trae una auditoría interna posterior y más reciente (docs/MODEL_CARD.md,
+# docs/AUDIT_REPORT.md, docs/CHANGELOG.md, docs/AUDIT_CHECKLIST.md, reports/README.md,
+# reports/audit/reproducibility_report.json -- todos fechados 2026-08-03, versión de modelo
+# 2.0.0) que RETIRA explícitamente ese resultado, corrige el protocolo (split cronológico por
+# fecha de target, sin solapamiento train/validation/test) y selecciona un LSTM (no un GRU) por
+# RMSE de validación -- pero ese LSTM, evaluado una única vez en el test final ya correcto, NO
+# supera al baseline de Drift. La propia auditoría lo documenta como observación abierta, no
+# oculta: docs/AUDIT_REPORT.md dice literalmente "Dictamen documental: PARCIALMENTE RESUELTO —
+# observaciones abiertas identificadas y no ocultadas".
+model_status:
+  accepted_for_production: false
+  selected_model: LSTM   # por RMSE medio de validación (3 semillas: 42, 43, 44; artefacto canónico = semilla 42)
+  criterion: "accepted iff RMSE_selected_final_test < RMSE_Drift_final_test"
+  test_final_rmse_lstm: 3.0168249184
+  test_final_rmse_drift: 2.5405822285
+  relative_improvement_pct: -18.7454   # negativo = empeora respecto al baseline, no lo mejora
+  result: "NO ACEPTADO"
+  source:
+    - "docs/MODEL_CARD.md (versión documental 1.0.0, versión de modelo 2.0.0, fecha 2026-08-03)"
+    - docs/AUDIT_REPORT.md
+    - "reports/audit/reproducibility_report.json (comando ejecutable: scripts/train.py; resultado reproducido tal cual en este proceso de extracción -- ver known_issues sobre reproducción)"
+  memoria_y_readme_desactualizados: >
+    La memoria .docx (v1.3) y README.md describen la versión anterior (GRU, split 80/20,
+    "acepta" frente a Drift) como si fuera el estado vigente. docs/CHANGELOG.md y
+    reports/README.md confirman explícitamente que ese resultado se retiró por contaminación
+    del test y se conserva solo como histórico ("legacy_results" /
+    "conservan como históricos contaminados"). No se ha usado ninguna cifra de esa versión
+    retractada en este manifest -- todas las cifras de metrics_reported y golden_cases vienen
+    del LSTM 2.0.0 auditado.
+  decision_de_integracion: >
+    Se integra igualmente el LSTM 2.0.0 (el modelo real y auditado, no el GRU retractado) para
+    dejar el plugin listo en la rama feature/model-14-integration, a petición explícita del
+    responsable del proyecto. La decisión de negocio de exponer este modelo en producción -- o
+    de no hacerlo hasta reentrenar con un resultado que sí bata a Drift -- queda pendiente de
+    revisión humana antes de abrir la PR. Este estado NO se silencia en ningún documento interno
+    (manifest, verification_report): es precisamente la información que permite esa revisión.
+
+artifacts:
+  folder: models/artifacts/
+  files:
+    - lstm_model.pt        # PyTorch state_dict. nn.LSTM(input_size=39, hidden_size=64, num_layers=2,
+                            # dropout=0.3, batch_first=True) + Dropout(0.3) + Linear(64,1) sobre el
+                            # último timestep. 60225 parámetros (confirmado recalculando a mano: coincide
+                            # exacto con artifact_manifest.json). sha256 REAL del fichero (sha256sum
+                            # ejecutado en este proceso de extracción): 4cb0ae009f84f146ad821b870e4414cb33d72e45762af873e19395d136f898e0.
+                            # NO coincide con el sha256 declarado para este mismo fichero (mismo tamaño,
+                            # 245045 bytes) en artifact_manifest.json y docs/MODEL_CARD.md
+                            # (b72fcc645183e0c3b24cc1ca8081782d98f473f2eef96f8fe09c73da78607db4) -- ver
+                            # known_issues, cuarta inconsistencia de hashes encontrada en el código
+                            # entregado. El fichero SÍ es el artefacto real y funcional: es exactamente
+                            # el que se cargó y ejecutó para producir todos los golden_cases de este
+                            # manifest (60225 parámetros, arquitectura y predicciones deterministas
+                            # verificadas) -- el hash mal declarado es un problema de los DOCUMENTOS de
+                            # auditoría, no del artefacto en sí.
+    - preprocessing.json    # scalers (StandardScaler input 39 features + StandardScaler target 1,
+                             # ambos fit_only train, 637 muestras), feature_engineering (lags [4,8,12],
+                             # MA [4,8], diff_period=4, rolling trailing-incluyendo-fila-actual),
+                             # raw_required_columns, target.mode=drift_residual_h. sha256 03f76684c127de47afe81a9e71c3eb406eaac821eabed1b9009048e023246c07
+    - lstm_features.json     # contrato de 39 features en orden binding (order_is_binding=true).
+                              # sha256 4b23baabd7a2f2958b29f0814ed0019d8651d36078a40c45d098480ea36f7c03
+  # NO se bundlean gru_model.pt / xgboost_model.json / gru_features.json / xgboost_features.json:
+  # el plugin sirve únicamente el modelo seleccionado (LSTM). Ver model_status y known_issues
+  # sobre por qué NO se replica la lógica de auto-selección `--model auto` del CLI original.
+  extra_bundled_data_required_at_inference: []
+  # A diferencia de a15 (que necesitaba series históricas bundled para derivar features desde
+  # solo una fecha), aquí el cliente SIEMPRE aporta su propio histórico crudo (mínimo 24 filas
+  # semanales consecutivas) -- no hay dependencia de ningún CSV de referencia interno del
+  # equipo de IA para poder predecir.
+
+inputs:
+  # Contrato real de src/data_processing/feature_engineering.py::build_modeling_features_from_raw,
+  # invocado por predictor.py cuando la entrada es un CSV "raw" (el único modo de entrada
+  # soportado por el plugin -- ver known_issues sobre el modo "processed dataset").
+  history:
+    description: >
+      Serie histórica semanal (frecuencia W-SUN, domingos, consecutiva, sin huecos ni fechas
+      duplicadas) de al menos 24 filas. El cliente aporta SIEMPRE su propio histórico -- el
+      modelo no reconstruye nada desde una fecha sola ni consulta ninguna serie interna.
+    minimum_rows: 24
+    minimum_rows_formula: "feature_lookback + seq_len = max(max(lags)=12, max(ma_windows)-1=7, diff_period=4) + seq_len=12 = 12 + 12 = 24"
+    row_fields:
+      - name: date
+        type: date (YYYY-MM-DD)
+        description: "Fecha semanal, debe caer en domingo (weekday=6) y ser consecutiva (+7 días exactos respecto a la fila anterior)."
+      - name: PROTECCION_FITO
+        type: float
+        unit: index_base_2020_100
+        description: "Índice MAPA de precios de protección fitosanitaria, base 2020=100. Es a la vez la serie objetivo (se predice su valor a t+16 semanas) y un input (sus propios lags/MA/diff alimentan el modelo)."
+      - name: CARBURANTES
+        type: float
+        unit: index_base_2020_100
+        description: "Índice MAPA de precios pagados por carburantes agrarios, base 2020=100."
+      - name: COPPER_EUR_TON
+        type: float
+        unit: EUR_per_metric_ton
+        description: "Precio mundial del cobre (FRED/IMF), convertido de USD a EUR vía DEXUSEU."
+      - name: GAS_EUR_MMBTU
+        type: float
+        unit: EUR_per_MMBtu
+        description: "Precio del gas natural UE (FRED/IMF), convertido de USD a EUR vía DEXUSEU."
+      - name: COIL_EUR_BARRIL
+        type: float
+        unit: EUR_per_barrel
+        description: "Precio Brent Europa (FRED/EIA), convertido de USD a EUR vía DEXUSEU."
+      - name: DEXUSEU
+        type: float
+        unit: USD_per_EUR
+        description: "Tipo de cambio USD/EUR (FRED, Board of Governors)."
+    validation_on_ingest:
+      - "Fechas parseables (YYYY-MM-DD), sin duplicados, ordenadas, weekday==domingo, consecutivas cada 7 días exactos -- cualquier incumplimiento se rechaza con el detalle exacto de las fechas problemáticas."
+      - "Las 6 columnas numéricas no admiten nulos ni valores no finitos (NaN/inf)."
+      - "Si hay menos de 24 filas tras la validación anterior, se rechaza con un mensaje que detalla registros_recibidos vs. registros_minimos_requeridos (ver golden_cases: caso de rechazo controlado)."
+
+  control: []   # no hay optimizador ni variables de decisión
+
+  derived_if_missing:
+    # Las 33 features restantes del contrato de 39 (lstm_features.json) -- SIEMPRE se calculan
+    # automáticamente a partir de las 6 columnas base + fecha; el cliente nunca las aporta.
+    MONTH: "date.month"
+    MONTH_SIN: "sin(2*pi*MONTH/12)"
+    MONTH_COS: "cos(2*pi*MONTH/12)"
+    "{COPPER_EUR_TON,GAS_EUR_MMBTU,DEXUSEU,CARBURANTES,PROTECCION_FITO}_LAG_{4,8,12}": "shift(lag) causal, pandas .shift()"
+    "{COPPER_EUR_TON,GAS_EUR_MMBTU,DEXUSEU,CARBURANTES,PROTECCION_FITO}_MA_{4,8}": "media móvil trailing INCLUYENDO la fila actual, pandas .rolling(window).mean()"
+    "{COPPER_EUR_TON,GAS_EUR_MMBTU,DEXUSEU,CARBURANTES,PROTECCION_FITO}_DIFF_MONTH": "diferencia a 4 semanas, pandas .diff(4)"
+    # Tras generar estas columnas se hace dropna() (las primeras 12 filas del histórico quedan
+    # sin lag_12/ma completos y se descartan) -- por eso el mínimo operativo es 24 filas crudas
+    # para terminar con >= seq_len(12) filas modelables completas.
+
+outputs:
+  predict_inline:
+    - name: predicted_price
+      type: float
+      unit: index_base_2020_100
+      description: "PROTECCION_FITO predicho a horizonte t+16 semanas. Reconstrucción: drift_baseline + inverse_transform(target_scaler, residual_predicho_por_LSTM)."
+    - name: current_price
+      type: float
+      unit: index_base_2020_100
+      description: "PROTECCION_FITO de la última fila del histórico aportado (ancla)."
+    - name: drift_baseline
+      type: float
+      unit: index_base_2020_100
+      description: "Baseline lineal de drift: current_price + PROTECCION_FITO_DIFF_MONTH(última fila) * (horizon_weeks/4.0). Es también el modelo de referencia frente al que el LSTM NO consigue mejorar en test final -- ver model_status."
+    - name: horizon_weeks
+      type: int
+      description: "Siempre 16 en la configuración productiva vigente (config/config.py::DEFAULT_FORECAST_HORIZON_WEEKS)."
+    - name: last_observed_date
+      type: date
+      description: "Fecha de la última fila del histórico aportado."
+    - name: prediction_date
+      type: date
+      description: "last_observed_date + 16 semanas."
+    - name: model_used
+      type: str
+      description: "Siempre 'LSTM' en el plugin (no se replica la selección automática `--model auto` del CLI original -- ver known_issues)."
+    - name: gap_warning
+      type: str | null
+      description: "Aviso textual si la fecha de ejecución está muy por delante de last_observed_date (el histórico aportado por el cliente puede estar desactualizado); null si no aplica."
+
+constraints: {}
+# No hay restricciones duras de negocio (tipo "PU >= 13") ni en el código ni en la memoria. La
+# única condición dura de entrada es estructural (frecuencia semanal, mínimo 24 filas, sin
+# huecos/duplicados/nulos) y ya está cubierta en inputs.history.validation_on_ingest -- debe
+# implementarse como excepción de dominio (rechazo 4xx), no como un resultado más.
+
+training:
+  supported: false
+  # scripts/train.py (== src/training/compare_models.py::main()) NO acepta ningún CSV/ruta de
+  # datos de entrada -- su argparse solo expone hiperparámetros (--horizon, --epochs, --seq_len,
+  # --test_ratio, --hidden_size, --batch_size). Internamente siempre relee la ruta fija
+  # data/processed/final_dataset_for_modeling.csv (preprocessing.json::training_config.dataset).
+  # Es decir: no existe ninguna forma de reentrenar con datos nuevos aportados por un cliente --
+  # solo se puede re-ejecutar la MISMA comparación de arquitecturas (XGBoost/LSTM/GRU, 3 semillas,
+  # hasta 150 épocas) sobre el MISMO histórico ya bundled, con otros hiperparámetros. Exponer esto
+  # como "reentrenamiento por usuario" en un endpoint train() sería engañoso: no incorporaría
+  # ningún dato nuevo del cliente y tardaría varios minutos en ejecutarse (3 arquitecturas x 3
+  # semillas). Por eso training.supported=false, siguiendo la regla del skill de no inventar un
+  # procedimiento de fine-tuning que el equipo de IA no definió. mlflow_utils.py se implementa
+  # igualmente sin excepción (regla del proyecto), como stub sin reentrenamiento real disponible.
+  target_column: null
+  required_columns: null
+  hyperparams: null
+  metrics_returned: null
+  source: codigo_entrenamiento (ausencia de contrato de datos de entrada confirmada leyendo src/training/compare_models.py::main())
+
+# ----------------------------------------------------------------------------------------------
+# Todas las cifras de aquí abajo son del LSTM 2.0.0 AUDITADO (docs/MODEL_CARD.md), no de la
+# memoria/README retractados. TRAINING_AND_EVALUATION.md aclara que tanto validation como test
+# están en escala de precio ORIGINAL (después de invertir el scaler y reconstruir con Drift) --
+# la diferencia grande entre RMSE de validation (0.9641) y de test (3.0168) es un resultado real
+# de sobreajuste/cambio de régimen, no un artefacto de escalas distintas.
+# ----------------------------------------------------------------------------------------------
+metrics_reported:
+  dataset: test_holdout_final
+  split_method: chronological_by_target_date  # train/validation/test sin solapamiento de target_date
+  split_dates:
+    train: {rows: 637, target_date_start: "2005-07-17", target_date_end: "2017-09-24"}
+    validation: {rows: 211, target_date_start: "2017-10-01", target_date_end: "2021-10-10"}
+    test: {rows: 211, target_date_start: "2021-10-17", target_date_end: "2025-10-26"}
+  seeds: [42, 43, 44]
+  canonical_seed: 42
+  validation_used_for_selection:
+    lstm: {rmse: 0.9641, mae: 0.6673, mape_pct: 0.6651, r2: 0.5656, direction_acc_pct: 66.53}
+    gru: {rmse: 1.1117, mae: 0.7670, mape_pct: 0.7652, r2: 0.4246, direction_acc_pct: 51.83}
+    xgboost: {rmse: 1.1802, mae: 0.8749, mape_pct: 0.8720, r2: 0.3521, direction_acc_pct: 27.0}
+  train_canonical_artifact:
+    lstm: {sequences: 626, rmse: 0.4865, mae: 0.3548, mape_pct: 0.3826, r2: 0.9895, direction_acc_pct: 77.0}
+  test_final_single_evaluation:
+    # Única evaluación del modelo ya seleccionado (LSTM) -- el test NUNCA se usó para elegir arquitectura.
+    lstm: {rmse: 3.0168249184, mae: 2.2583, mape_pct: 1.8608, r2: 0.4969, direction_acc_pct: 69.7}
+    drift: {rmse: 2.5405822285, mae: 1.9403, mape_pct: 1.5794, r2: 0.6432, direction_acc_pct: 72.0}
+    naive: {rmse: 3.8856, mae: 2.5053, mape_pct: 2.0770, r2: 0.1654, direction_acc_pct: null}
+  veredicto: "NO ACEPTADO -- ver model_status"
+
+# 4 casos golden + 1 caso de rechazo controlado. Todos ejecutados por mí, en este proceso de
+# extracción, en un venv aislado (torch==2.10.0+cpu, resto de deps == requirements.txt) contra
+# el artefacto REAL entregado (models/artifacts/lstm_model.pt + preprocessing.json +
+# lstm_features.json), invocando `python -m src.main predict --input <csv> --model LSTM`.
+# No se ha inventado ningún input ni output: los históricos de cada caso son ventanas reales de
+# 24 filas consecutivas extraídas de data/processed/final_dataset_for_modeling.csv (mismo
+# dataset con el que se entrenaron los scalers/el modelo -- confirmado que las columnas base
+# coinciden fila a fila con data/raw/prediction_input.csv, que es literalmente la ventana de las
+# últimas 24 filas). Reproducibilidad verificada ejecutando cada caso dos veces: salida idéntica
+# a precisión completa. tolerance_pct=1.0 es margen de reproducibilidad numérica entre entornos/
+# versiones de PyTorch (el modelo es determinista en un mismo entorno, pero no se ha podido
+# verificar bit-a-bit contra el entorno Windows/CPython 3.12.3 original del equipo de IA).
+golden_cases:
+  - id: caso_001_ultima_ventana_minima
+    source: dataset_real (últimas 24 filas de data/processed/final_dataset_for_modeling.csv == data/raw/prediction_input.csv del equipo de IA)
+    input:
+      history:
+        - {date: "2025-05-18", PROTECCION_FITO: 126.4535534055101, CARBURANTES: 130.66186458149525, COPPER_EUR_TON: 8477.69394572746, GAS_EUR_MMBTU: 10.384096814711762, COIL_EUR_BARRIL: 58.70655678968112, DEXUSEU: 1.1164}
+        - {date: "2025-05-25", PROTECCION_FITO: 126.4299767571617, CARBURANTES: 131.00425286780865, COPPER_EUR_TON: 8470.255388694795, GAS_EUR_MMBTU: 10.449066092823164, COIL_EUR_BARRIL: 58.31931284866732, DEXUSEU: 1.1293}
+        - {date: "2025-06-01", PROTECCION_FITO: 126.43925552914058, CARBURANTES: 128.95689074996292, COPPER_EUR_TON: 8599.397583749818, GAS_EUR_MMBTU: 11.03256234094022, COIL_EUR_BARRIL: 57.130250617719724, DEXUSEU: 1.1332}
+        - {date: "2025-06-08", PROTECCION_FITO: 126.4320046511639, CARBURANTES: 129.9983011161904, COPPER_EUR_TON: 8566.087662859713, GAS_EUR_MMBTU: 10.905424534811162, COIL_EUR_BARRIL: 58.86270042933498, DEXUSEU: 1.1413}
+        - {date: "2025-06-15", PROTECCION_FITO: 126.44319593177843, CARBURANTES: 131.2343736947122, COPPER_EUR_TON: 8528.178775283803, GAS_EUR_MMBTU: 10.699813775633611, COIL_EUR_BARRIL: 61.80948238364506, DEXUSEU: 1.1495}
+        - {date: "2025-06-22", PROTECCION_FITO: 126.47119128061452, CARBURANTES: 132.48607257852183, COPPER_EUR_TON: 8489.113910445674, GAS_EUR_MMBTU: 10.459022022164566, COIL_EUR_BARRIL: 67.81350203657163, DEXUSEU: 1.1539}
+        - {date: "2025-06-29", PROTECCION_FITO: 126.51435260730256, CARBURANTES: 133.57436186061258, COPPER_EUR_TON: 8452.33605776891, GAS_EUR_MMBTU: 10.226341233161037, COIL_EUR_BARRIL: 60.097929731122754, DEXUSEU: 1.1641}
+        - {date: "2025-07-06", PROTECCION_FITO: 126.39931343722309, CARBURANTES: 135.90889787186268, COPPER_EUR_TON: 8399.35365581979, GAS_EUR_MMBTU: 9.98059652458562, COIL_EUR_BARRIL: 59.121793782911496, DEXUSEU: 1.1774}
+        - {date: "2025-07-13", PROTECCION_FITO: 126.4772796123841, CARBURANTES: 136.3135776271252, COPPER_EUR_TON: 8375.448159571393, GAS_EUR_MMBTU: 9.852001646533733, COIL_EUR_BARRIL: 61.3104390910644, DEXUSEU: 1.1706}
+        - {date: "2025-07-20", PROTECCION_FITO: 126.58634914871494, CARBURANTES: 136.40059313118516, COPPER_EUR_TON: 8359.532386741645, GAS_EUR_MMBTU: 9.766930719931503, COIL_EUR_BARRIL: 60.74621733149931, DEXUSEU: 1.1632}
+        - {date: "2025-07-27", PROTECCION_FITO: 126.73705780167788, CARBURANTES: 136.21693136982705, COPPER_EUR_TON: 8352.360801834644, GAS_EUR_MMBTU: 9.713798810088718, COIL_EUR_BARRIL: 59.70695970695972, DEXUSEU: 1.1739}
+        - {date: "2025-08-03", PROTECCION_FITO: 126.69856979928308, CARBURANTES: 137.9924911501536, COPPER_EUR_TON: 8233.024936081232, GAS_EUR_MMBTU: 9.450024374473635, COIL_EUR_BARRIL: 62.85590277777778, DEXUSEU: 1.152}
+        - {date: "2025-08-10", PROTECCION_FITO: 126.93778820154525, CARBURANTES: 137.41301065747746, COPPER_EUR_TON: 8247.383551338411, GAS_EUR_MMBTU: 9.42961300535235, COIL_EUR_BARRIL: 58.671142094844654, DEXUSEU: 1.1619}
+        - {date: "2025-08-17", PROTECCION_FITO: 127.15516859445226, CARBURANTES: 136.7529678073156, COPPER_EUR_TON: 8279.788523137038, GAS_EUR_MMBTU: 9.417552162164114, COIL_EUR_BARRIL: 57.56277315965378, DEXUSEU: 1.1669}
+        - {date: "2025-08-24", PROTECCION_FITO: 127.28738039290702, CARBURANTES: 136.0999571498381, COPPER_EUR_TON: 8336.582626375526, GAS_EUR_MMBTU: 9.411166022098962, COIL_EUR_BARRIL: 58.16965434428338, DEXUSEU: 1.1659}
+        - {date: "2025-08-31", PROTECCION_FITO: 127.27109301181234, CARBURANTES: 135.54157323521525, COPPER_EUR_TON: 8424.108635952292, GAS_EUR_MMBTU: 9.407778762346938, COIL_EUR_BARRIL: 58.11679958837149, DEXUSEU: 1.1661}
+        - {date: "2025-09-07", PROTECCION_FITO: 128.39875657180184, CARBURANTES: 134.3811731354674, COPPER_EUR_TON: 8272.784740554514, GAS_EUR_MMBTU: 9.377289525096137, COIL_EUR_BARRIL: 57.21499486477233, DEXUSEU: 1.1684}
+        - {date: "2025-09-14", PROTECCION_FITO: 128.0018965858721, CARBURANTES: 134.14810703798722, COPPER_EUR_TON: 8421.24385927495, GAS_EUR_MMBTU: 9.374469892932805, COIL_EUR_BARRIL: 57.32924021488872, DEXUSEU: 1.1727}
+        - {date: "2025-09-21", PROTECCION_FITO: 127.478549250472, CARBURANTES: 134.02476173937913, COPPER_EUR_TON: 8590.534640792372, GAS_EUR_MMBTU: 9.37161681129452, COIL_EUR_BARRIL: 57.90677966101695, DEXUSEU: 1.18}
+        - {date: "2025-09-28", PROTECCION_FITO: 126.8807975918541, CARBURANTES: 133.9659580871663, COPPER_EUR_TON: 8772.079341602135, GAS_EUR_MMBTU: 9.3687440534945, COIL_EUR_BARRIL: 58.980913428766186, DEXUSEU: 1.1736}
+        - {date: "2025-10-05", PROTECCION_FITO: 126.51217582841328, CARBURANTES: 133.55968380745134, COPPER_EUR_TON: 8970.704691008654, GAS_EUR_MMBTU: 9.365160425446533, COIL_EUR_BARRIL: 57.26590482688044, DEXUSEU: 1.1726}
+        - {date: "2025-10-12", PROTECCION_FITO: 125.92068898347551, CARBURANTES: 133.4946047358483, COPPER_EUR_TON: 9151.29384517894, GAS_EUR_MMBTU: 9.362289851346668, COIL_EUR_BARRIL: 57.29883081155434, DEXUSEU: 1.1632}
+        - {date: "2025-10-19", PROTECCION_FITO: 125.41120988982614, CARBURANTES: 133.35872431518527, COPPER_EUR_TON: 9318.383516529477, GAS_EUR_MMBTU: 9.35944091939559, COIL_EUR_BARRIL: 53.546281985230976, DEXUSEU: 1.1646}
+        - {date: "2025-10-26", PROTECCION_FITO: 125.03592529828504, CARBURANTES: 133.10698714151496, COPPER_EUR_TON: 9463.383125084045, GAS_EUR_MMBTU: 9.356627401869796, COIL_EUR_BARRIL: 54.38747419132828, DEXUSEU: 1.1624}
+    expected:
+      current_price: 125.035925
+      drift_baseline: 117.656436
+      predicted_price: 120.03087
+      last_observed_date: "2025-10-26"
+      prediction_date: "2026-02-15"
+    tolerance_pct: 1.0
+    note: >
+      predicted_price=120.03087 se obtuvo cargando SIEMPRE los scalers congelados y versionados
+      de preprocessing.json (input_scaler/target_scaler, mean/scale ya serializados) -- que es
+      lo que hace este plugin (ver preprocessing.py/model_loader.py). Esto difiere del valor que
+      da hoy `python -m src.main predict --input ... --model LSTM` en el propio código entregado
+      (120.227294): esa diferencia NO es aleatoriedad ni un error de mi puerto -- ver
+      known_issues, quinta inconsistencia (run_prediction() SIEMPRE reajusta feature_scaler/
+      target_scaler desde data/processed/final_dataset_for_modeling.csv en cada ejecución, en
+      vez de cargar los scalers ya congelados de preprocessing.json, y ese CSV no coincide con
+      el dataset sobre el que preprocessing.json declara haberse ajustado -- tercera
+      inconsistencia). Los scalers congelados son la fuente de verdad usada aquí: son
+      deterministas, versionados con su propio sha256 y no dependen de que nadie bundlee
+      correctamente el dataset de entrenamiento completo. Adicionalmente, con --model auto (el
+      flag por defecto del CLI original) este mismo input selecciona GRU, no LSTM -- ver
+      known_issues sobre el bug de _pick_best_model(). El plugin fuerza LSTM siempre.
+
+  - id: caso_002_ventana_extendida_mismo_resultado
+    source: dataset_real (últimas 30 filas del mismo dataset -- mismo tramo final que caso_001 con 6 filas de contexto extra)
+    input:
+      history_rows: 30
+      history_end_date: "2025-10-26"
+      note: "Mismas 24 filas finales que caso_001 más 6 filas anteriores de contexto. Se usa para verificar que las features de la última fila (y por tanto la predicción) no dependen de cuántas filas de historial adicional se aporten por encima del mínimo -- son causales y trailing, no se recalculan hacia atrás con la ventana completa."
+    expected:
+      current_price: 125.035925
+      drift_baseline: 117.656436
+      predicted_price: 120.03087
+      last_observed_date: "2025-10-26"
+    tolerance_pct: 1.0
+    note: "Idéntico a caso_001 a precisión completa (verificado ejecutando el propio plugin, con sus scalers congelados) -- confirma independencia del tamaño de ventana por encima del mínimo."
+
+  - id: caso_003_ventana_historica_2012
+    source: dataset_real (filas 378-401, ventana de 24 filas terminada en 2012-11-25)
+    input:
+      history:
+        - {date: "2012-06-17", PROTECCION_FITO: 94.3696208112986, CARBURANTES: 139.5951159603612, COPPER_EUR_TON: 5955.439503259139, GAS_EUR_MMBTU: 9.92133271716726, COIL_EUR_BARRIL: 77.37185609678446, DEXUSEU: 1.2564}
+        - {date: "2012-06-24", PROTECCION_FITO: 94.30611510834802, CARBURANTES: 141.17074876938634, COPPER_EUR_TON: 6028.468985313364, GAS_EUR_MMBTU: 9.714430827716935, COIL_EUR_BARRIL: 73.25885429046826, DEXUSEU: 1.2621}
+        - {date: "2012-07-01", PROTECCION_FITO: 94.36866256398304, CARBURANTES: 142.4296576885444, COPPER_EUR_TON: 6228.245220934492, GAS_EUR_MMBTU: 9.329593269730992, COIL_EUR_BARRIL: 72.97232442809151, DEXUSEU: 1.2502}
+        - {date: "2012-07-08", PROTECCION_FITO: 94.32428798363914, CARBURANTES: 143.64554891051563, COPPER_EUR_TON: 6224.097214899611, GAS_EUR_MMBTU: 9.25633181215708, COIL_EUR_BARRIL: 79.24286172601862, DEXUSEU: 1.2468}
+        - {date: "2012-07-15", PROTECCION_FITO: 94.3061191304332, CARBURANTES: 144.5986806892276, COPPER_EUR_TON: 6186.466921670906, GAS_EUR_MMBTU: 9.242924796159317, COIL_EUR_BARRIL: 81.56132614731341, DEXUSEU: 1.2246}
+        - {date: "2012-07-22", PROTECCION_FITO: 94.30442321321851, CARBURANTES: 145.39521842226645, COPPER_EUR_TON: 6139.484353811827, GAS_EUR_MMBTU: 9.255203506888698, COIL_EUR_BARRIL: 86.11814690742709, DEXUSEU: 1.2239}
+        - {date: "2012-07-29", PROTECCION_FITO: 94.3094674408484, CARBURANTES: 146.14132750721814, COPPER_EUR_TON: 6107.279523885823, GAS_EUR_MMBTU: 9.258999229496238, COIL_EUR_BARRIL: 85.43546006232573, DEXUSEU: 1.2194}
+        - {date: "2012-08-05", PROTECCION_FITO: 94.27949391379136, CARBURANTES: 147.4223498224077, COPPER_EUR_TON: 5974.83696705397, GAS_EUR_MMBTU: 9.323525318747445, COIL_EUR_BARRIL: 87.34630730396547, DEXUSEU: 1.2281}
+        - {date: "2012-08-12", PROTECCION_FITO: 94.2747970390938, CARBURANTES: 148.24869579027632, COPPER_EUR_TON: 6017.365194210569, GAS_EUR_MMBTU: 9.242875857262574, COIL_EUR_BARRIL: 91.03342235170348, DEXUSEU: 1.2357}
+        - {date: "2012-08-19", PROTECCION_FITO: 94.26289645762844, CARBURANTES: 148.98513896581653, COPPER_EUR_TON: 6079.650021027783, GAS_EUR_MMBTU: 9.142672575931426, COIL_EUR_BARRIL: 93.33874239350914, DEXUSEU: 1.2325}
+        - {date: "2012-08-26", PROTECCION_FITO: 94.2437652386223, CARBURANTES: 149.50983224646615, COPPER_EUR_TON: 6143.630062369352, GAS_EUR_MMBTU: 9.047334437644238, COIL_EUR_BARRIL: 93.02139251662528, DEXUSEU: 1.2481}
+        - {date: "2012-09-02", PROTECCION_FITO: 94.19216799282913, CARBURANTES: 152.1856297628515, COPPER_EUR_TON: 6286.031776962212, GAS_EUR_MMBTU: 8.813840881067168, COIL_EUR_BARRIL: 90.1419684160153, DEXUSEU: 1.2538}
+        - {date: "2012-09-09", PROTECCION_FITO: 94.16491686750604, CARBURANTES: 151.98008171886343, COPPER_EUR_TON: 6305.261338806883, GAS_EUR_MMBTU: 8.792863028865654, COIL_EUR_BARRIL: 90.21979759645794, DEXUSEU: 1.2648}
+        - {date: "2012-09-16", PROTECCION_FITO: 94.15987431642354, CARBURANTES: 151.4784951547123, COPPER_EUR_TON: 6298.0848447891, GAS_EUR_MMBTU: 8.807783871559595, COIL_EUR_BARRIL: 89.3266253869969, DEXUSEU: 1.292}
+        - {date: "2012-09-23", PROTECCION_FITO: 94.20284170706104, CARBURANTES: 150.8114803855595, COPPER_EUR_TON: 6269.690017429635, GAS_EUR_MMBTU: 8.846896007614392, COIL_EUR_BARRIL: 85.78551702976372, DEXUSEU: 1.3036}
+        - {date: "2012-09-30", PROTECCION_FITO: 94.31962040689794, CARBURANTES: 150.10964772656646, COPPER_EUR_TON: 6225.264579249266, GAS_EUR_MMBTU: 8.898492035495446, COIL_EUR_BARRIL: 85.62892837743462, DEXUSEU: 1.2887}
+        - {date: "2012-10-07", PROTECCION_FITO: 93.90065571328712, CARBURANTES: 150.0247167250289, COPPER_EUR_TON: 6294.335905846115, GAS_EUR_MMBTU: 8.860015805452818, COIL_EUR_BARRIL: 85.93798210428879, DEXUSEU: 1.2964}
+        - {date: "2012-10-14", PROTECCION_FITO: 94.18293519721428, CARBURANTES: 149.45724470922772, COPPER_EUR_TON: 6235.449469456206, GAS_EUR_MMBTU: 8.906888108920644, COIL_EUR_BARRIL: 88.98528272656856, DEXUSEU: 1.291}
+        - {date: "2012-10-21", PROTECCION_FITO: 94.50496720708831, CARBURANTES: 148.8883367950557, COPPER_EUR_TON: 6182.378303594104, GAS_EUR_MMBTU: 8.942648302088317, COIL_EUR_BARRIL: 87.04881600122616, DEXUSEU: 1.3049}
+        - {date: "2012-10-28", PROTECCION_FITO: 94.83290478614336, CARBURANTES: 148.2553691332668, COPPER_EUR_TON: 6143.802433931235, GAS_EUR_MMBTU: 8.961790468908957, COIL_EUR_BARRIL: 83.4450867052023, DEXUSEU: 1.2975}
+        - {date: "2012-11-04", PROTECCION_FITO: 95.34359381318824, CARBURANTES: 147.6674021040219, COPPER_EUR_TON: 5985.02023649994, GAS_EUR_MMBTU: 9.12515599926362, COIL_EUR_BARRIL: 84.2101191397184, DEXUSEU: 1.2926}
+        - {date: "2012-11-11", PROTECCION_FITO: 95.59435728138097, CARBURANTES: 146.81450186259616, COPPER_EUR_TON: 5992.417732233881, GAS_EUR_MMBTU: 9.098788966801694, COIL_EUR_BARRIL: 84.44061422751489, DEXUSEU: 1.2764}
+        - {date: "2012-11-18", PROTECCION_FITO: 95.78562027373351, CARBURANTES: 146.00291546086032, COPPER_EUR_TON: 6013.197722155775, GAS_EUR_MMBTU: 9.053212883693668, COIL_EUR_BARRIL: 85.6582149305283, DEXUSEU: 1.2739}
+        - {date: "2012-11-25", PROTECCION_FITO: 95.9089033973351, CARBURANTES: 145.37542094439152, COPPER_EUR_TON: 6037.493226232076, GAS_EUR_MMBTU: 8.992998728880892, COIL_EUR_BARRIL: 85.81212545723403, DEXUSEU: 1.2849}
+    expected:
+      current_price: 95.908903
+      drift_baseline: 100.212898
+      predicted_price: 96.995947
+      last_observed_date: "2012-11-25"
+      prediction_date: "2013-03-17"
+    tolerance_pct: 1.0
+    note: "predicted_price recalculado con los scalers congelados de preprocessing.json -- ver nota de caso_001 sobre la quinta inconsistencia (refit en vivo vs. scalers congelados)."
+
+  - id: caso_004_frontera_inicio_test
+    source: dataset_real (24 filas terminadas en 2021-06-27, justo el último input_date antes de que empiece la partición de test según metrics_reported.split_dates)
+    input:
+      history:
+        - {date: "2021-01-17", PROTECCION_FITO: 99.80702983897216, CARBURANTES: 101.6902200217314, COPPER_EUR_TON: 6525.481276233857, GAS_EUR_MMBTU: 6.032707902364381, COIL_EUR_BARRIL: 45.58024691358025, DEXUSEU: 1.215}
+        - {date: "2021-01-24", PROTECCION_FITO: 99.82726772332404, CARBURANTES: 103.10091603781936, COPPER_EUR_TON: 6638.963817692257, GAS_EUR_MMBTU: 5.741133729603726, COIL_EUR_BARRIL: 45.46053173100666, DEXUSEU: 1.2149}
+        - {date: "2021-01-31", PROTECCION_FITO: 99.86015762451484, CARBURANTES: 104.42891640234365, COPPER_EUR_TON: 6771.329159676022, GAS_EUR_MMBTU: 5.49718331751652, COIL_EUR_BARRIL: 45.494269931568965, DEXUSEU: 1.2129}
+        - {date: "2021-02-07", PROTECCION_FITO: 99.83185091684744, CARBURANTES: 106.62465849575304, COPPER_EUR_TON: 6800.663618369154, GAS_EUR_MMBTU: 5.042938518620116, COIL_EUR_BARRIL: 48.41580041580042, DEXUSEU: 1.2025}
+        - {date: "2021-02-14", PROTECCION_FITO: 99.90518065191416, CARBURANTES: 107.56314850203182, COPPER_EUR_TON: 6948.288951606322, GAS_EUR_MMBTU: 5.0347844054546345, COIL_EUR_BARRIL: 50.49145122656314, DEXUSEU: 1.2107}
+        - {date: "2021-02-21", PROTECCION_FITO: 99.98072320984076, CARBURANTES: 108.25691775215788, COPPER_EUR_TON: 7082.117746268124, GAS_EUR_MMBTU: 5.106124346787575, COIL_EUR_BARRIL: 52.84922669754362, DEXUSEU: 1.2091}
+        - {date: "2021-02-28", PROTECCION_FITO: 100.04409468041533, CARBURANTES: 108.68392807122986, COPPER_EUR_TON: 7185.929849127659, GAS_EUR_MMBTU: 5.227400716569461, COIL_EUR_BARRIL: 54.19684002633311, DEXUSEU: 1.2152}
+        - {date: "2021-03-07", PROTECCION_FITO: 100.12813436116248, CARBURANTES: 111.0952500026302, COPPER_EUR_TON: 7492.372691683044, GAS_EUR_MMBTU: 4.952501783821944, COIL_EUR_BARRIL: 54.79930191972076, DEXUSEU: 1.2033}
+        - {date: "2021-03-14", PROTECCION_FITO: 100.16400468074868, CARBURANTES: 111.03796856583604, COPPER_EUR_TON: 7528.692054131191, GAS_EUR_MMBTU: 5.107256047816219, COIL_EUR_BARRIL: 57.20641316209184, DEXUSEU: 1.1913}
+        - {date: "2021-03-21", PROTECCION_FITO: 100.22169106080116, CARBURANTES: 110.87034721034956, COPPER_EUR_TON: 7563.48831396968, GAS_EUR_MMBTU: 5.289285527151646, COIL_EUR_BARRIL: 55.50797649034425, DEXUSEU: 1.191}
+        - {date: "2021-03-28", PROTECCION_FITO: 100.32835250801394, CARBURANTES: 110.6934384483484, COPPER_EUR_TON: 7622.967780703259, GAS_EUR_MMBTU: 5.505258052737667, COIL_EUR_BARRIL: 52.786691437257225, DEXUSEU: 1.1842}
+        - {date: "2021-04-04", PROTECCION_FITO: 100.16809560125436, CARBURANTES: 110.3129978703178, COPPER_EUR_TON: 7565.507456312977, GAS_EUR_MMBTU: 5.6521796092587735, COIL_EUR_BARRIL: 54.168084382443006, DEXUSEU: 1.1756}
+        - {date: "2021-04-11", PROTECCION_FITO: 100.41478990010238, CARBURANTES: 110.37666660172243, COPPER_EUR_TON: 7718.292478618109, GAS_EUR_MMBTU: 5.9369726571332375, COIL_EUR_BARRIL: 52.08491281273692, DEXUSEU: 1.1871}
+        - {date: "2021-04-18", PROTECCION_FITO: 100.67540051509938, CARBURANTES: 110.60132370670205, COPPER_EUR_TON: 7879.5919385782145, GAS_EUR_MMBTU: 6.234485903546736, COIL_EUR_BARRIL: 54.1203045260604, DEXUSEU: 1.1953}
+        - {date: "2021-04-25", PROTECCION_FITO: 100.89572970705916, CARBURANTES: 110.99528272734128, COPPER_EUR_TON: 8010.25626690023, GAS_EUR_MMBTU: 6.523118557182025, COIL_EUR_BARRIL: 54.28262856193404, DEXUSEU: 1.2037}
+        - {date: "2021-05-02", PROTECCION_FITO: 101.53807977830331, CARBURANTES: 110.01280291187015, COPPER_EUR_TON: 8523.976356089514, GAS_EUR_MMBTU: 6.958075964246345, COIL_EUR_BARRIL: 55.430463576158935, DEXUSEU: 1.208}
+        - {date: "2021-05-09", PROTECCION_FITO: 101.5443004545714, CARBURANTES: 110.74775058710676, COPPER_EUR_TON: 8493.033080441193, GAS_EUR_MMBTU: 7.183049157519118, COIL_EUR_BARRIL: 57.21512688671421, DEXUSEU: 1.2058}
+        - {date: "2021-05-16", PROTECCION_FITO: 101.48084477609216, CARBURANTES: 111.618981913992, COPPER_EUR_TON: 8396.86609786095, GAS_EUR_MMBTU: 7.39470339410189, COIL_EUR_BARRIL: 56.68453608247423, DEXUSEU: 1.2125}
+        - {date: "2021-05-23", PROTECCION_FITO: 101.41069392843296, CARBURANTES: 112.58634803337304, COPPER_EUR_TON: 8273.901352674164, GAS_EUR_MMBTU: 7.625374008524152, COIL_EUR_BARRIL: 55.334153341533415, DEXUSEU: 1.2195}
+        - {date: "2021-05-30", PROTECCION_FITO: 101.3968290971609, CARBURANTES: 113.60970008609706, COPPER_EUR_TON: 8162.56478920621, GAS_EUR_MMBTU: 7.907396335315393, COIL_EUR_BARRIL: 56.54132874580159, DEXUSEU: 1.2207}
+        - {date: "2021-06-06", PROTECCION_FITO: 101.00679385341203, CARBURANTES: 114.4207139407016, COPPER_EUR_TON: 7992.400584312447, GAS_EUR_MMBTU: 7.923420509909683, COIL_EUR_BARRIL: 57.97981455649463, DEXUSEU: 1.2187}
+        - {date: "2021-06-13", PROTECCION_FITO: 101.20913969706342, CARBURANTES: 115.40871346370868, COPPER_EUR_TON: 7976.197157711861, GAS_EUR_MMBTU: 8.336144939809495, COIL_EUR_BARRIL: 58.72781065088756, DEXUSEU: 1.2168}
+        - {date: "2021-06-20", PROTECCION_FITO: 101.47083792644996, CARBURANTES: 116.27763244010872, COPPER_EUR_TON: 7990.506168432194, GAS_EUR_MMBTU: 8.783473463393335, COIL_EUR_BARRIL: 60.773067331670816, DEXUSEU: 1.203}
+        - {date: "2021-06-27", PROTECCION_FITO: 101.74682702856228, CARBURANTES: 116.95546542657088, COPPER_EUR_TON: 8017.987723009636, GAS_EUR_MMBTU: 9.233651359131844, COIL_EUR_BARRIL: 63.22629328414521, DEXUSEU: 1.1927}
+    expected:
+      current_price: 101.746827
+      drift_baseline: 103.146819
+      predicted_price: 104.652653
+      last_observed_date: "2021-06-27"
+      prediction_date: "2021-10-17"
+    tolerance_pct: 1.0
+    note: "predicted_price recalculado con los scalers congelados de preprocessing.json -- ver nota de caso_001 sobre la quinta inconsistencia (refit en vivo vs. scalers congelados)."
+
+  - id: caso_005_rechazo_historial_insuficiente
+    source: dataset_real (últimas 23 filas del mismo dataset -- una fila por debajo del mínimo)
+    input:
+      history_rows: 23
+      history_end_date: "2025-10-26"
+    expected:
+      error: true
+      error_message_contains: "Historial insuficiente para inferencia raw: registros_recibidos=23, registros_minimos_requeridos=24"
+    note: "Rechazo controlado, no una excepción no manejada -- debe mapearse a un 422 de dominio en el plugin, no a un 500."
+
+known_issues:
+  - "ESTADO DE ACEPTACIÓN: ver model_status arriba. La memoria (.docx v1.3) y el README.md
+     entregados describen una versión anterior y RETRACTADA (GRU, split 80/20 con fuga de datos
+     entre arquitectura y test, resultado favorable frente a Drift). El propio código trae una
+     auditoría posterior (2026-08-03, versión de modelo 2.0.0) que retira ese resultado, corrige
+     el protocolo y documenta que el modelo corregido (LSTM) NO supera al baseline de Drift en el
+     test final ya bien construido. Este manifest usa exclusivamente las cifras del LSTM 2.0.0
+     auditado -- ninguna cifra de la memoria/README retractados aparece aquí. La decisión de
+     exponer o no este modelo en producción queda pendiente de revisión humana antes de la PR."
+  - "CUARTA INCONSISTENCIA DE HASHES: el sha256 real de models/artifacts/lstm_model.pt (calculado
+     con sha256sum sobre el fichero tal cual entregado: 4cb0ae009f84f146ad821b870e4414cb33d72e45762af873e19395d136f898e0)
+     no coincide con el que declaran para él, con idéntico tamaño (245045 bytes),
+     models/artifacts/artifact_manifest.json y docs/MODEL_CARD.md
+     (b72fcc645183e0c3b24cc1ca8081782d98f473f2eef96f8fe09c73da78607db4). preprocessing.json y
+     lstm_features.json sí coinciden exactamente con sus hashes declarados. El artefacto en sí
+     es el correcto y funcional -- es el mismo fichero que se cargó y ejecutó en este proceso de
+     extracción para producir, de forma determinista, todos los golden_cases de este manifest
+     (arquitectura, 60225 parámetros y predicciones verificados) -- el problema está en el
+     documento de auditoría (hash mal registrado), no en el artefacto servido. Sumado a las otras
+     tres inconsistencias de hashes ya documentadas (model_comparison.json, dataset procesado),
+     esto confirma un patrón sistemático de hashes de auditoría desactualizados/incorrectos en
+     este entregable -- plugin-integration debe fijar SIEMPRE el hash real (sha256sum del fichero
+     tal cual entregado), nunca el declarado en los documentos, y verification debe recalcularlo
+     de nuevo contra el artefacto que finalmente se sube a S3."
+  - "BUG REPRODUCIDO: src/predict/predictor.py::_pick_best_model() (usado cuando se invoca el CLI
+     con --model auto, que es el valor por defecto) lee models/metrics/model_comparison.json
+     para decidir qué arquitectura servir. Ese fichero, pese a estar fechado/referenciado como el
+     resultado auditado 2.0.0, contiene en realidad las cifras del protocolo histórico
+     contaminado -- su sha256 real (confirmado con sha256sum) no coincide con el sha256 declarado
+     para él en models/artifacts/artifact_manifest.json, y sus valores son idénticos, campo a
+     campo, a los de model_comparison_historical_contaminated.json (marcado explícitamente como
+     'retired_from_final_evaluation' en ese mismo fichero). Efecto reproducido en este proceso de
+     extracción: ejecutando `python -m src.main predict --input <csv> --model auto` con el
+     artefacto real, el CLI selecciona GRU, NO LSTM -- contradiciendo tanto
+     artifact_manifest.json (\"selected_model\": \"LSTM\") como docs/MODEL_CARD.md. El plugin NO
+     replica _pick_best_model(): sirve siempre el LSTM (el artefacto realmente declarado como
+     seleccionado), nunca la lógica de auto-selección del CLI original."
+  - "TERCERA INCONSISTENCIA DE HASHES (distinta de la anterior): el dataset procesado realmente
+     committeado en data/processed/final_dataset_for_modeling.csv tiene sha256
+     f25049996b2a2ed9791f934547c3fba60f35e79161fb31e45652827143276ae7 -- que NO coincide con el
+     sha256 que preprocessing.json y data/metadata/dataset_manifest.json declaran para 'el
+     dataset con el que se entrenaron los scalers/el modelo' (c090de1ba664886df869cc19da47b79a9f59824afee94e930a4683673a4d6f1d).
+     Además, regenerar el dataset desde cero con `scripts/build_dataset.py --write` usando los
+     ficheros crudos (.xlsx MAPA + CSV FRED) tal como se entregaron produce una TERCERA hash
+     distinta (867d4f5759ac1201e63f07ead5e4bd6815cf090e63cd69241e953fc65f684344), confirmado
+     ejecutando `scripts/build_dataset.py --verify` en un venv aislado con las dependencias
+     congeladas de requirements.txt. Esto NO afecta a los golden_cases de este manifest ni a la
+     inferencia de ESTE plugin (que solo usa los scalers ya congelados de preprocessing.json --
+     ver quinta inconsistencia, más abajo, sobre por qué eso es además la decisión correcta).
+     Afecta a la reproducibilidad completa de un reentrenamiento desde cero -- coherente con la
+     decisión de dejar training.supported=false -- y, según se descubrió después (ver quinta
+     inconsistencia), TAMBIÉN afecta en la práctica al propio CLI de inferencia entregado, pese a
+     lo que documenta docs/INFERENCE.md."
+  - "QUINTA INCONSISTENCIA (consecuencia directa de la tercera, y la más grave para la
+     inferencia): docs/INFERENCE.md afirma 'No lee ni ajusta estado desde
+     final_dataset_for_modeling.csv cuando se proporciona --input'. Es FALSO:
+     src/predict/predictor.py::run_prediction() llama SIEMPRE a _build_scalers_and_features(),
+     que reajusta (fit) feature_scaler y target_scaler desde cero leyendo
+     data/processed/final_dataset_for_modeling.csv -- también en modo raw CSV, también con
+     --model LSTM explícito. Como ese CSV en disco no coincide con el dataset sobre el que
+     preprocessing.json declara haberse ajustado (ver tercera inconsistencia), estos scalers
+     reajustados en caliente YA NO son necesariamente los mismos que los scalers congelados y
+     versionados en preprocessing.json -- pese a que reports/audit/reproducibility_report.json
+     afirma 'preprocessing_equivalence: input_scaler_max_abs_difference: 0.0' (cierto en el
+     momento de la auditoría, 2026-08-03; ya no lo es frente al dataset actualmente en disco).
+     Comprobado de forma reproducible en este proceso de extracción para el histórico de
+     caso_001: reconstruir los scalers desde preprocessing.json da predicted_price=120.03087;
+     dejar que el CLI los reajuste en caliente desde el CSV actual da predicted_price=120.227294
+     -- una diferencia real, no ruido de punto flotante. Decisión tomada: el plugin usa SIEMPRE
+     los scalers congelados de preprocessing.json (nunca reajusta desde ningún CSV de
+     entrenamiento) -- es la fuente de verdad autocontenida, versionada con su propio sha256, y
+     es además el comportamiento que la propia auditoría del equipo de IA declaró como
+     equivalente y correcto. Los golden_cases de este manifest reflejan ese valor
+     (120.03087), NO el valor que da hoy el CLI original en vivo (120.227294)."
+  - "training.supported=false: scripts/train.py (compare_models.py::main()) no acepta ningún CSV
+     de entrada de cliente -- reentrena siempre sobre el mismo dataset bundled fijo, solo permite
+     variar hiperparámetros (horizon/epochs/seq_len/ratios/hidden_size/batch_size). No hay
+     ninguna forma de reentrenar con datos nuevos aportados por el cliente. mlflow_utils.py se
+     implementa igualmente en el plugin (regla del proyecto), pero sin una ruta real de
+     fine-tuning por usuario detrás."
+  - "El nombre de carpeta del código ('a14-rnn-...') SÍ se corresponde esta vez con el modelo
+     productivo (LSTM, una red recurrente) -- a diferencia de a15, donde 'rnn' en el nombre era
+     un residuo de plantilla y el modelo productivo real era un Ridge lineal. Aquí no hay
+     discrepancia de naming, solo la discrepancia de estado de aceptación ya documentada arriba."
+  - "requirements.txt fija torch==2.10.0 sin especificar variante CPU/CUDA -- en este proceso de
+     extracción se instaló explícitamente la rueda CPU (--index-url https://download.pytorch.org/whl/cpu)
+     para poder ejecutar predictor.py y generar los golden_cases; plugin-integration debe decidir
+     y fijar la misma variante en el Dockerfile/requirements del servicio para evitar arrastrar
+     dependencias CUDA innecesarias en el contenedor de inferencia."
+  - "El histórico raw_required_columns (7: FECHA + 6 variables) tal como lo valida
+     build_modeling_features_from_raw es más estricto que un CSV genérico: exige frecuencia
+     semanal EXACTA en domingo (weekday==6), sin huecos ni duplicados, o rechaza con el detalle
+     de qué fechas incumplen. No hay ningún modo de entrada tipo 'panel ya derivado con las 39
+     features' en el código entregado (a diferencia de a15, que sí aceptaba un panel técnico ya
+     preparado) -- el plugin solo necesita soportar el modo raw-history."

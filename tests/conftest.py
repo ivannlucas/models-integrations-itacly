@@ -33,6 +33,7 @@ from app.domain.ports.model_plugin_port import ModelPluginPort
 from app.domain.services.exceptions import (
     InfeasibleOptimizationError,
     InsufficientCycleHistoryError,
+    InsufficientDataError,
     InsufficientFramesError,
     InsufficientRowsError,
     InsufficientSequenceHistoryError,
@@ -257,6 +258,12 @@ from app.plugins.ml16_meat_raw_material_price_alert.predict_dto import (
 from app.plugins.ml16_meat_raw_material_price_alert.train_dto import (
     TrainRequest as Ml16_TrainReq,
     TrainResponse as Ml16TrainResp,
+)
+from app.plugins.ml14_wine_phyto_price_forecast.predict_dto import (
+    PredictBatchResponse as Ml14BatchResp,
+    PredictInlineResponse as Ml14InlineResp,
+    PredictRequest as Ml14_Request,
+    PredictResponse as Ml14_Response,
 )
 
 # ── ModelEntry dataclass (local copy — avoids importing app.registry which loads real plugins) ───
@@ -1447,6 +1454,42 @@ def _ml16_train(plugin: FakePlugin, *, data_path: str) -> Ml16TrainResp:
     )
 
 
+def _ml14_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> Ml14InlineResp:
+    """Fake inline response for the ml14 LSTM wine phytosanitary price forecast model."""
+    return Ml14InlineResp(
+        model_id="ml14-wine-phyto-price-forecast",
+        predicted_price=120.227294,
+        current_price=125.035925,
+        drift_baseline=117.656436,
+        horizon_weeks=16,
+        last_observed_date="2025-10-26",
+        prediction_date="2026-02-15",
+        model_used="LSTM",
+        gap_warning=None,
+        n_rows_used=len(features.get("rows", [])),
+        xai_feature_values={"PROTECCION_FITO": 125.035925},
+    )
+
+
+def _ml14_batch(plugin: FakePlugin, *, data_path: str) -> Ml14BatchResp:
+    """Fake batch response for the ml14 LSTM wine phytosanitary price forecast model."""
+    return Ml14BatchResp(
+        model_id="ml14-wine-phyto-price-forecast",
+        predictions=[{
+            "predicted_price": 120.227294,
+            "current_price": 125.035925,
+            "drift_baseline": 117.656436,
+            "horizon_weeks": 16,
+            "last_observed_date": "2025-10-26",
+            "prediction_date": "2026-02-15",
+            "model_id": "ml14-wine-phyto-price-forecast",
+            "model_used": "LSTM",
+        }],
+        n_predictions=1,
+        output_path=None,
+    )
+
+
 FAKE_FACTORIES: dict[str, tuple[Callable, Callable]] = {
     "ml9-cereals-infestation-sequence-classifier": (_ml9_cereals_inline, _ml9_cereals_batch),
     "ml46-dairy-fouling-clog-detection": (_ml46_dairy_inline, _ml46_dairy_batch),
@@ -1473,6 +1516,7 @@ FAKE_FACTORIES: dict[str, tuple[Callable, Callable]] = {
     "m21-cereal-price-spatial": (_m21_inline, _m21_batch),
     "ml16-meat-raw-material-price-alert": (_ml16_inline, _ml16_batch),
     "ml41-meat-curing-machinery-acoustic-anomaly": (_ml41_inline, _ml41_batch),
+    "ml14-wine-phyto-price-forecast": (_ml14_inline, _ml14_batch),
 }
 
 TRAIN_FACTORIES: dict[str, Callable] = {
@@ -1748,6 +1792,15 @@ TEST_REGISTRY: list[ModelEntry] = [
         extra_predict_exceptions=(UnsupportedMachineConfigurationError, InvalidAudioError),
         train_request_type=Ml41_TrainReq,
         train_response_type=Ml41TrainResp,
+    ),
+    ModelEntry(
+        model_id="ml14-wine-phyto-price-forecast",
+        prefix="/models/ml14-wine-phyto-price-forecast",
+        version="1.0.0",
+        plugin_class=FakePlugin,
+        predict_request_type=Ml14_Request,
+        predict_response_type=Ml14_Response,
+        extra_predict_exceptions=(InsufficientDataError,),
     ),
 ]
 
