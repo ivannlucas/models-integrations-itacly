@@ -1,14 +1,11 @@
 """Inference core for ml14 — shared by predict_inline/predict_batch.
 
 Faithful port of src/predict/predictor.py::run_prediction()/_predict_with_rnn() from the
-delivered code, restricted to the LSTM path only (the served, audited model — see
-inbox/a14/manifest.yaml::model_status). Does NOT replicate:
-
-- predictor.py::_pick_best_model() / --model auto: reads the stale/corrupted
-  models/metrics/model_comparison.json (sha256 mismatch with what's declared for it — see
-  manifest known_issues) and would pick GRU today, not LSTM. This plugin always serves LSTM.
-- The "degradation_warning" re-evaluation: it re-derives its baseline RMSE/DA/skill from that
-  same untrustworthy report file. Out of scope here for the same reason.
+delivered (approved) code, restricted to the GRU path only — the model
+predictor.py::_pick_best_model() actually selects by RMSE on the reported test split (see
+inbox/a14/manifest.yaml). Does NOT replicate the "degradation_warning" re-evaluation (a
+re-run of the historical test sequences against training-time baselines) — out of scope for
+this plugin's minimal predict contract; see manifest known_issues.
 """
 from __future__ import annotations
 
@@ -45,7 +42,7 @@ def _build_gap_warning(last_date: pd.Timestamp) -> str | None:
 
 
 def run_inference(bundle: dict, rows: list[dict]) -> dict:
-    """Derive features from a raw weekly history and run the LSTM forecast.
+    """Derive features from a raw weekly history and run the GRU forecast.
 
     Returns a dict with predicted_price, current_price, drift_baseline, horizon_weeks,
     last_observed_date, prediction_date, gap_warning, n_rows_used and xai_feature_values

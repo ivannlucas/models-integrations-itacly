@@ -1,4 +1,4 @@
-"""Raw weekly history -> 39-feature LSTM input, faithful port of
+"""Raw weekly history -> 39-feature model input, faithful port of
 src/data_processing/feature_engineering.py::build_modeling_features_from_raw from the
 delivered a14 code. The client always supplies its own raw weekly history (date + 6 base
 columns) — there is no bundled reference series to fall back on (unlike ml15), see

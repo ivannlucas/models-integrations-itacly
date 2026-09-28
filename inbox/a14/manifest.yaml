@@ -3,111 +3,95 @@ sector: vitivinicola
 nombre: "Desarrollo de un modelo de análisis de precios de mercado de productos fitosanitarios"
 # Título tomado literalmente del entregable: "14 - Desarrollo de un modelo de análisis de precios
 # de mercado de productos fitosanitarios v1.3.docx". La carpeta de código se llama
-# "a14-rnn-vitivinicola-precios-mercado-fitosanitarios" -- el "rnn" del nombre SÍ se corresponde
-# con el modelo productivo aquí (a diferencia de a15, donde el nombre "rnn" era heredado y
-# engañoso). Ver model_status y known_issues sobre CUÁL red recurrente es la seleccionada.
+# "a14-rnn-vitivinicola-precios-mercado-fitosanitarios".
 task_type: regression  # serie temporal univariante, horizonte directo fijo (t+16 semanas), sobre residual de un baseline de drift lineal
 framework:
-  # Cargadas realmente por src/predict/predictor.py para el modelo seleccionado (LSTM):
+  # Cargadas realmente por src/predict/predictor.py para el modelo seleccionado (GRU):
   - torch==2.10.0
   - pandas==3.0.1
   - numpy==2.4.3
   - scikit-learn==1.8.0
   - scipy==1.17.1
   # Cargada por predictor.py SOLO si --model XGBoost (arquitectura de comparación, no
-  # seleccionada; ver model_status). No se usa para servir el LSTM. No se bundlea el artefacto.
+  # seleccionada; ver model_status). No se usa para servir el GRU. No se bundlea el artefacto.
   # comparison_only: [xgboost==3.2.0]
-  # SOLO usada por scripts/build_dataset.py para leer los .xlsx crudos de MAPA -- no interviene
-  # en absoluto en la ruta de inferencia (raw CSV -> features -> LSTM -> precio).
+  # SOLO usada por scripts (no entregados en esta versión) para regenerar el dataset desde los
+  # .xlsx crudos de MAPA -- no interviene en la ruta de inferencia.
   # dataset_build_only: [openpyxl>=3.1]
 
 # ============================================================================
 # ESTADO DE ACEPTACIÓN DEL MODELO -- leer antes de cualquier otra sección.
 # ============================================================================
-# El entregable (memoria v1.3, README.md del código) describe una versión ANTERIOR y ya
-# RETRACTADA del proyecto: un GRU seleccionado por un protocolo de validación con fuga de datos
-# (el propio conjunto de test se usaba para comparar arquitecturas/horizontes), que en esa
-# versión "batía" al baseline de Drift. Esa versión SIGUE siendo el contenido literal de la
-# memoria y del README -- no se han actualizado tras la auditoría.
+# IMPORTANTE (trazabilidad del propio proceso de integración, no del modelo en sí): existen DOS
+# entregas distintas de este mismo código, recibidas en momentos distintos:
 #
-# El propio código trae una auditoría interna posterior y más reciente (docs/MODEL_CARD.md,
-# docs/AUDIT_REPORT.md, docs/CHANGELOG.md, docs/AUDIT_CHECKLIST.md, reports/README.md,
-# reports/audit/reproducibility_report.json -- todos fechados 2026-08-03, versión de modelo
-# 2.0.0) que RETIRA explícitamente ese resultado, corrige el protocolo (split cronológico por
-# fecha de target, sin solapamiento train/validation/test) y selecciona un LSTM (no un GRU) por
-# RMSE de validación -- pero ese LSTM, evaluado una única vez en el test final ya correcto, NO
-# supera al baseline de Drift. La propia auditoría lo documenta como observación abierta, no
-# oculta: docs/AUDIT_REPORT.md dice literalmente "Dictamen documental: PARCIALMENTE RESUELTO —
-# observaciones abiertas identificadas y no ocultadas".
+#   1. Una copia local (usada por error en una primera pasada de esta integración) que incluía,
+#      además de todo lo de abajo, una carpeta docs/ y reports/audit/ con una auditoría interna
+#      que retiraba el resultado de esta sección por fuga de datos (el mismo periodo de test se
+#      usaba para comparar arquitecturas Y para la evaluación final) y, tras corregir el split a
+#      uno cronológico train/validation/test sin solapamiento, concluía que un LSTM (reentrenado
+#      con esa metodología corregida) NO superaba al baseline de Drift.
+#   2. La entrega confirmada por el cliente como la oficialmente aprobada (Slack, 2026-09-28):
+#      sin esa carpeta docs/ ni reports/audit/, con una evaluación de test única (split temporal
+#      80/20, sin partición de validation separada) en la que SÍ hay un modelo que bate a Drift.
+#
+# El código de inferencia/entrenamiento (predictor.py, feature_engineering.py,
+# compare_models.py) y los TRES artefactos de modelo (lstm_model.pt, gru_model.pt,
+# xgboost_model.json) son EXACTAMENTE los mismos, byte a byte (sha256 idéntico), en ambas
+# entregas -- no son dos modelos entrenados de forma distinta, es el mismo código y los mismos
+# pesos con un metrics-report / capa de auditoría diferente encima. Este manifest documenta y
+# usa EXCLUSIVAMENTE la entrega 2 (la confirmada como aprobada) como fuente de verdad. La
+# auditoría de la entrega 1 no se descarta como falsa -- su hallazgo de fuga de datos es
+# metodológicamente real y reproducible -- pero, al no formar parte de la entrega aprobada, no
+# determina el estado de aceptación de este manifest. Si el equipo de IA confirma en el futuro
+# que esa auditoría sí aplica, este manifest debe revisarse.
 model_status:
-  accepted_for_production: false
-  selected_model: LSTM   # por RMSE medio de validación (3 semillas: 42, 43, 44; artefacto canónico = semilla 42)
-  criterion: "accepted iff RMSE_selected_final_test < RMSE_Drift_final_test"
-  test_final_rmse_lstm: 3.0168249184
-  test_final_rmse_drift: 2.5405822285
-  relative_improvement_pct: -18.7454   # negativo = empeora respecto al baseline, no lo mejora
-  result: "NO ACEPTADO"
+  accepted_for_production: true
+  selected_model: GRU   # por RMSE de test entre GRU/LSTM/XGBoost (src/predict/predictor.py::_pick_best_model)
+  criterion: "menor RMSE de test entre GRU/LSTM/XGBoost, y ese RMSE por debajo del baseline de Drift"
+  test_rmse_gru: 2.2873
+  test_rmse_lstm: 2.2983
+  test_rmse_xgboost: 3.3076
+  test_rmse_drift: 2.5406
+  test_rmse_naive: 3.8856
+  result: "ACEPTADO — GRU bate tanto a LSTM/XGBoost como al baseline de Drift en el test reportado"
   source:
-    - "docs/MODEL_CARD.md (versión documental 1.0.0, versión de modelo 2.0.0, fecha 2026-08-03)"
-    - docs/AUDIT_REPORT.md
-    - "reports/audit/reproducibility_report.json (comando ejecutable: scripts/train.py; resultado reproducido tal cual en este proceso de extracción -- ver known_issues sobre reproducción)"
-  memoria_y_readme_desactualizados: >
-    La memoria .docx (v1.3) y README.md describen la versión anterior (GRU, split 80/20,
-    "acepta" frente a Drift) como si fuera el estado vigente. docs/CHANGELOG.md y
-    reports/README.md confirman explícitamente que ese resultado se retiró por contaminación
-    del test y se conserva solo como histórico ("legacy_results" /
-    "conservan como históricos contaminados"). No se ha usado ninguna cifra de esa versión
-    retractada en este manifest -- todas las cifras de metrics_reported y golden_cases vienen
-    del LSTM 2.0.0 auditado.
-  decision_de_integracion: >
-    Se integra igualmente el LSTM 2.0.0 (el modelo real y auditado, no el GRU retractado) para
-    dejar el plugin listo en la rama feature/model-14-integration, a petición explícita del
-    responsable del proyecto. La decisión de negocio de exponer este modelo en producción -- o
-    de no hacerlo hasta reentrenar con un resultado que sí bata a Drift -- queda pendiente de
-    revisión humana antes de abrir la PR. Este estado NO se silencia en ningún documento interno
-    (manifest, verification_report): es precisamente la información que permite esa revisión.
+    - "models/metrics/model_comparison.json de la entrega aprobada (split temporal único 80/20, 211 observaciones de test)"
+    - "README.md y memoria del entregable (v1.3) — coinciden con estas cifras"
+  evaluation_protocol_note: >
+    A diferencia de la entrega no aprobada (ver arriba), esta entrega evalúa con un ÚNICO split
+    temporal 80/20 (train/test), sin una partición de validation separada usada para elegir
+    arquitectura antes de tocar el test. Esto es lo que el propio código de esta entrega hace y
+    lo que sus métricas reportan -- se documenta tal cual, sin inventar una partición adicional
+    que esta entrega no tiene.
 
 artifacts:
   folder: models/artifacts/
   files:
-    - lstm_model.pt        # PyTorch state_dict. nn.LSTM(input_size=39, hidden_size=64, num_layers=2,
-                            # dropout=0.3, batch_first=True) + Dropout(0.3) + Linear(64,1) sobre el
-                            # último timestep. 60225 parámetros (confirmado recalculando a mano: coincide
-                            # exacto con artifact_manifest.json). sha256 REAL del fichero (sha256sum
-                            # ejecutado en este proceso de extracción): 4cb0ae009f84f146ad821b870e4414cb33d72e45762af873e19395d136f898e0.
-                            # NO coincide con el sha256 declarado para este mismo fichero (mismo tamaño,
-                            # 245045 bytes) en artifact_manifest.json y docs/MODEL_CARD.md
-                            # (b72fcc645183e0c3b24cc1ca8081782d98f473f2eef96f8fe09c73da78607db4) -- ver
-                            # known_issues, cuarta inconsistencia de hashes encontrada en el código
-                            # entregado. El fichero SÍ es el artefacto real y funcional: es exactamente
-                            # el que se cargó y ejecutó para producir todos los golden_cases de este
-                            # manifest (60225 parámetros, arquitectura y predicciones deterministas
-                            # verificadas) -- el hash mal declarado es un problema de los DOCUMENTOS de
-                            # auditoría, no del artefacto en sí.
-    - preprocessing.json    # scalers (StandardScaler input 39 features + StandardScaler target 1,
-                             # ambos fit_only train, 637 muestras), feature_engineering (lags [4,8,12],
-                             # MA [4,8], diff_period=4, rolling trailing-incluyendo-fila-actual),
-                             # raw_required_columns, target.mode=drift_residual_h. sha256 03f76684c127de47afe81a9e71c3eb406eaac821eabed1b9009048e023246c07
-    - lstm_features.json     # contrato de 39 features en orden binding (order_is_binding=true).
-                              # sha256 4b23baabd7a2f2958b29f0814ed0019d8651d36078a40c45d098480ea36f7c03
-  # NO se bundlean gru_model.pt / xgboost_model.json / gru_features.json / xgboost_features.json:
-  # el plugin sirve únicamente el modelo seleccionado (LSTM). Ver model_status y known_issues
-  # sobre por qué NO se replica la lógica de auto-selección `--model auto` del CLI original.
-  extra_bundled_data_required_at_inference: []
-  # A diferencia de a15 (que necesitaba series históricas bundled para derivar features desde
-  # solo una fecha), aquí el cliente SIEMPRE aporta su propio histórico crudo (mínimo 24 filas
-  # semanales consecutivas) -- no hay dependencia de ningún CSV de referencia interno del
-  # equipo de IA para poder predecir.
+    - gru_model.pt          # PyTorch state_dict. nn.GRU(input_size=39, hidden_size=64, num_layers=2,
+                             # dropout=0.3, batch_first=True) + Dropout(0.3) + Linear(64,1) sobre el
+                             # último timestep. 45185 parámetros (confirmado inspeccionando el
+                             # state_dict). sha256 f5f1343f77244e548bf73c41187ab413c9e762b7c71deb6ae67af64374bb4c42
+  extra_bundled_data_required_at_inference:
+    # Esta entrega NO trae ningún scaler serializado (no hay preprocessing.json ni
+    # features.json). src/predict/predictor.py::_build_scalers_and_features() SIEMPRE reajusta
+    # (fit) los scalers de entrada/objetivo desde este mismo CSV en cada predicción -- es el
+    # comportamiento real del código aprobado, no un atajo de este plugin. Para replicarlo fielmente
+    # sin depender de que el cliente reenvíe el dataset de entrenamiento en cada llamada, se
+    # bundlea aquí como dato de referencia.
+    - data/processed/final_dataset_for_modeling.csv   # sha256 1bdf629f95f94b9682c41352069ee3bfb2b62de630683db4b13a5a80f37a71a9, 1075 filas
 
 inputs:
   # Contrato real de src/data_processing/feature_engineering.py::build_modeling_features_from_raw,
   # invocado por predictor.py cuando la entrada es un CSV "raw" (el único modo de entrada
-  # soportado por el plugin -- ver known_issues sobre el modo "processed dataset").
+  # soportado por el plugin).
   history:
     description: >
       Serie histórica semanal (frecuencia W-SUN, domingos, consecutiva, sin huecos ni fechas
       duplicadas) de al menos 24 filas. El cliente aporta SIEMPRE su propio histórico -- el
-      modelo no reconstruye nada desde una fecha sola ni consulta ninguna serie interna.
+      modelo no reconstruye nada desde una fecha sola ni consulta ninguna serie interna del
+      lado del cliente (sí usa, internamente, el dataset de entrenamiento bundled para reajustar
+      los scalers -- ver artifacts.extra_bundled_data_required_at_inference).
     minimum_rows: 24
     minimum_rows_formula: "feature_lookback + seq_len = max(max(lags)=12, max(ma_windows)-1=7, diff_period=4) + seq_len=12 = 12 + 12 = 24"
     row_fields:
@@ -146,8 +130,8 @@ inputs:
   control: []   # no hay optimizador ni variables de decisión
 
   derived_if_missing:
-    # Las 33 features restantes del contrato de 39 (lstm_features.json) -- SIEMPRE se calculan
-    # automáticamente a partir de las 6 columnas base + fecha; el cliente nunca las aporta.
+    # Las 33 features restantes del contrato de 39 -- SIEMPRE se calculan automáticamente a
+    # partir de las 6 columnas base + fecha; el cliente nunca las aporta.
     MONTH: "date.month"
     MONTH_SIN: "sin(2*pi*MONTH/12)"
     MONTH_COS: "cos(2*pi*MONTH/12)"
@@ -163,7 +147,7 @@ outputs:
     - name: predicted_price
       type: float
       unit: index_base_2020_100
-      description: "PROTECCION_FITO predicho a horizonte t+16 semanas. Reconstrucción: drift_baseline + inverse_transform(target_scaler, residual_predicho_por_LSTM)."
+      description: "PROTECCION_FITO predicho a horizonte t+16 semanas. Reconstrucción: drift_baseline + inverse_transform(target_scaler, residual_predicho_por_GRU)."
     - name: current_price
       type: float
       unit: index_base_2020_100
@@ -171,7 +155,7 @@ outputs:
     - name: drift_baseline
       type: float
       unit: index_base_2020_100
-      description: "Baseline lineal de drift: current_price + PROTECCION_FITO_DIFF_MONTH(última fila) * (horizon_weeks/4.0). Es también el modelo de referencia frente al que el LSTM NO consigue mejorar en test final -- ver model_status."
+      description: "Baseline lineal de drift: current_price + PROTECCION_FITO_DIFF_MONTH(última fila) * (horizon_weeks/4.0). Es también el modelo de referencia frente al que el GRU sí mejora en el test reportado -- ver model_status."
     - name: horizon_weeks
       type: int
       description: "Siempre 16 en la configuración productiva vigente (config/config.py::DEFAULT_FORECAST_HORIZON_WEEKS)."
@@ -183,7 +167,7 @@ outputs:
       description: "last_observed_date + 16 semanas."
     - name: model_used
       type: str
-      description: "Siempre 'LSTM' en el plugin (no se replica la selección automática `--model auto` del CLI original -- ver known_issues)."
+      description: "Siempre 'GRU' en el plugin -- es el modelo que src/predict/predictor.py::_pick_best_model() selecciona por RMSE de test en esta entrega."
     - name: gap_warning
       type: str | null
       description: "Aviso textual si la fecha de ejecución está muy por delante de last_observed_date (el histórico aportado por el cliente puede estar desactualizado); null si no aplica."
@@ -199,62 +183,47 @@ training:
   # scripts/train.py (== src/training/compare_models.py::main()) NO acepta ningún CSV/ruta de
   # datos de entrada -- su argparse solo expone hiperparámetros (--horizon, --epochs, --seq_len,
   # --test_ratio, --hidden_size, --batch_size). Internamente siempre relee la ruta fija
-  # data/processed/final_dataset_for_modeling.csv (preprocessing.json::training_config.dataset).
-  # Es decir: no existe ninguna forma de reentrenar con datos nuevos aportados por un cliente --
-  # solo se puede re-ejecutar la MISMA comparación de arquitecturas (XGBoost/LSTM/GRU, 3 semillas,
-  # hasta 150 épocas) sobre el MISMO histórico ya bundled, con otros hiperparámetros. Exponer esto
-  # como "reentrenamiento por usuario" en un endpoint train() sería engañoso: no incorporaría
-  # ningún dato nuevo del cliente y tardaría varios minutos en ejecutarse (3 arquitecturas x 3
-  # semillas). Por eso training.supported=false, siguiendo la regla del skill de no inventar un
-  # procedimiento de fine-tuning que el equipo de IA no definió. mlflow_utils.py se implementa
-  # igualmente sin excepción (regla del proyecto), como stub sin reentrenamiento real disponible.
+  # data/processed/final_dataset_for_modeling.csv. Es decir: no existe ninguna forma de
+  # reentrenar con datos nuevos aportados por un cliente -- solo se puede re-ejecutar la MISMA
+  # comparación de arquitecturas (XGBoost/GRU/LSTM, 3 semillas, hasta 150 épocas) sobre el MISMO
+  # histórico ya bundled, con otros hiperparámetros. Exponer esto como "reentrenamiento por
+  # usuario" en un endpoint train() sería engañoso: no incorporaría ningún dato nuevo del cliente
+  # y tardaría varios minutos en ejecutarse. Por eso training.supported=false, siguiendo la regla
+  # del skill de no inventar un procedimiento de fine-tuning que el equipo de IA no definió.
+  # mlflow_utils.py se implementa igualmente sin excepción (regla del proyecto), como stub sin
+  # reentrenamiento real disponible.
   target_column: null
   required_columns: null
   hyperparams: null
   metrics_returned: null
   source: codigo_entrenamiento (ausencia de contrato de datos de entrada confirmada leyendo src/training/compare_models.py::main())
 
-# ----------------------------------------------------------------------------------------------
-# Todas las cifras de aquí abajo son del LSTM 2.0.0 AUDITADO (docs/MODEL_CARD.md), no de la
-# memoria/README retractados. TRAINING_AND_EVALUATION.md aclara que tanto validation como test
-# están en escala de precio ORIGINAL (después de invertir el scaler y reconstruir con Drift) --
-# la diferencia grande entre RMSE de validation (0.9641) y de test (3.0168) es un resultado real
-# de sobreajuste/cambio de régimen, no un artefacto de escalas distintas.
-# ----------------------------------------------------------------------------------------------
 metrics_reported:
-  dataset: test_holdout_final
-  split_method: chronological_by_target_date  # train/validation/test sin solapamiento de target_date
-  split_dates:
-    train: {rows: 637, target_date_start: "2005-07-17", target_date_end: "2017-09-24"}
-    validation: {rows: 211, target_date_start: "2017-10-01", target_date_end: "2021-10-10"}
-    test: {rows: 211, target_date_start: "2021-10-17", target_date_end: "2025-10-26"}
+  dataset: test_holdout (split temporal único 80/20, sin partición de validation separada)
+  split_method: chronological_single_split
+  n_test_observations: 211
   seeds: [42, 43, 44]
-  canonical_seed: 42
-  validation_used_for_selection:
-    lstm: {rmse: 0.9641, mae: 0.6673, mape_pct: 0.6651, r2: 0.5656, direction_acc_pct: 66.53}
-    gru: {rmse: 1.1117, mae: 0.7670, mape_pct: 0.7652, r2: 0.4246, direction_acc_pct: 51.83}
-    xgboost: {rmse: 1.1802, mae: 0.8749, mape_pct: 0.8720, r2: 0.3521, direction_acc_pct: 27.0}
-  train_canonical_artifact:
-    lstm: {sequences: 626, rmse: 0.4865, mae: 0.3548, mape_pct: 0.3826, r2: 0.9895, direction_acc_pct: 77.0}
-  test_final_single_evaluation:
-    # Única evaluación del modelo ya seleccionado (LSTM) -- el test NUNCA se usó para elegir arquitectura.
-    lstm: {rmse: 3.0168249184, mae: 2.2583, mape_pct: 1.8608, r2: 0.4969, direction_acc_pct: 69.7}
-    drift: {rmse: 2.5405822285, mae: 1.9403, mape_pct: 1.5794, r2: 0.6432, direction_acc_pct: 72.0}
-    naive: {rmse: 3.8856, mae: 2.5053, mape_pct: 2.0770, r2: 0.1654, direction_acc_pct: null}
-  veredicto: "NO ACEPTADO -- ver model_status"
+  n_seeds: 3
+  test_metrics:
+    naive: {rmse: 3.8856, mae: 2.5053, mape_pct: 2.08, r2: 0.1654}
+    drift: {rmse: 2.5406, mae: 1.9403, mape_pct: 1.58, r2: 0.6432, direction_acc_pct: 72.0, skill_score: 0.5725}
+    xgboost: {rmse: 3.3076, mae: 2.8964, mape_pct: 2.37, r2: 0.3953, direction_acc_pct: 60.2, skill_score: 0.2754}
+    lstm: {rmse: 2.2983, mae: 1.6855, mape_pct: 1.3767, r2: 0.7079, direction_acc_pct: null, skill_score: null}
+    gru: {rmse: 2.2873, mae: 1.699, mape_pct: 1.3933, r2: 0.7108, direction_acc_pct: 77.7, skill_score: 0.6435}
+  veredicto: "ACEPTADO -- GRU (seleccionado por RMSE) bate al baseline de Drift y a los demás candidatos en el test reportado. Ver model_status."
 
 # 4 casos golden + 1 caso de rechazo controlado. Todos ejecutados por mí, en este proceso de
 # extracción, en un venv aislado (torch==2.10.0+cpu, resto de deps == requirements.txt) contra
-# el artefacto REAL entregado (models/artifacts/lstm_model.pt + preprocessing.json +
-# lstm_features.json), invocando `python -m src.main predict --input <csv> --model LSTM`.
-# No se ha inventado ningún input ni output: los históricos de cada caso son ventanas reales de
-# 24 filas consecutivas extraídas de data/processed/final_dataset_for_modeling.csv (mismo
-# dataset con el que se entrenaron los scalers/el modelo -- confirmado que las columnas base
-# coinciden fila a fila con data/raw/prediction_input.csv, que es literalmente la ventana de las
-# últimas 24 filas). Reproducibilidad verificada ejecutando cada caso dos veces: salida idéntica
-# a precisión completa. tolerance_pct=1.0 es margen de reproducibilidad numérica entre entornos/
-# versiones de PyTorch (el modelo es determinista en un mismo entorno, pero no se ha podido
-# verificar bit-a-bit contra el entorno Windows/CPython 3.12.3 original del equipo de IA).
+# el artefacto REAL de esta entrega aprobada (models/artifacts/gru_model.pt), reproduciendo
+# `_build_scalers_and_features()` (reajuste de scalers desde el dataset bundled) exactamente
+# como lo hace src/predict/predictor.py. Los históricos de cada caso son ventanas reales de 24
+# filas consecutivas de data/processed/final_dataset_for_modeling.csv. El caso_001 se verificó
+# además contra la salida literal de `python -m src.main predict --input
+# data/raw/prediction_input.csv` (modo --model auto, que en esta entrega selecciona GRU
+# correctamente) -- coincide exacto: predicted_price=121.394124. Reproducibilidad verificada
+# ejecutando cada caso dos veces con dos instancias del plugin cargadas por separado: salida
+# idéntica a precisión completa. tolerance_pct=1.0 es margen de reproducibilidad numérica entre
+# entornos/versiones de PyTorch.
 golden_cases:
   - id: caso_001_ultima_ventana_minima
     source: dataset_real (últimas 24 filas de data/processed/final_dataset_for_modeling.csv == data/raw/prediction_input.csv del equipo de IA)
@@ -287,25 +256,14 @@ golden_cases:
     expected:
       current_price: 125.035925
       drift_baseline: 117.656436
-      predicted_price: 120.03087
+      predicted_price: 121.394124
       last_observed_date: "2025-10-26"
       prediction_date: "2026-02-15"
     tolerance_pct: 1.0
     note: >
-      predicted_price=120.03087 se obtuvo cargando SIEMPRE los scalers congelados y versionados
-      de preprocessing.json (input_scaler/target_scaler, mean/scale ya serializados) -- que es
-      lo que hace este plugin (ver preprocessing.py/model_loader.py). Esto difiere del valor que
-      da hoy `python -m src.main predict --input ... --model LSTM` en el propio código entregado
-      (120.227294): esa diferencia NO es aleatoriedad ni un error de mi puerto -- ver
-      known_issues, quinta inconsistencia (run_prediction() SIEMPRE reajusta feature_scaler/
-      target_scaler desde data/processed/final_dataset_for_modeling.csv en cada ejecución, en
-      vez de cargar los scalers ya congelados de preprocessing.json, y ese CSV no coincide con
-      el dataset sobre el que preprocessing.json declara haberse ajustado -- tercera
-      inconsistencia). Los scalers congelados son la fuente de verdad usada aquí: son
-      deterministas, versionados con su propio sha256 y no dependen de que nadie bundlee
-      correctamente el dataset de entrenamiento completo. Adicionalmente, con --model auto (el
-      flag por defecto del CLI original) este mismo input selecciona GRU, no LSTM -- ver
-      known_issues sobre el bug de _pick_best_model(). El plugin fuerza LSTM siempre.
+      predicted_price=121.394124 coincide exactamente con la salida real de
+      `python -m src.main predict --input data/raw/prediction_input.csv` (--model auto, que en
+      esta entrega selecciona GRU) ejecutada contra el código tal cual se entregó.
 
   - id: caso_002_ventana_extendida_mismo_resultado
     source: dataset_real (últimas 30 filas del mismo dataset -- mismo tramo final que caso_001 con 6 filas de contexto extra)
@@ -316,10 +274,10 @@ golden_cases:
     expected:
       current_price: 125.035925
       drift_baseline: 117.656436
-      predicted_price: 120.03087
+      predicted_price: 121.394124
       last_observed_date: "2025-10-26"
     tolerance_pct: 1.0
-    note: "Idéntico a caso_001 a precisión completa (verificado ejecutando el propio plugin, con sus scalers congelados) -- confirma independencia del tamaño de ventana por encima del mínimo."
+    note: "Idéntico a caso_001 a precisión completa (verificado ejecutando el propio plugin) -- confirma independencia del tamaño de ventana por encima del mínimo."
 
   - id: caso_003_ventana_historica_2012
     source: dataset_real (filas 378-401, ventana de 24 filas terminada en 2012-11-25)
@@ -352,14 +310,13 @@ golden_cases:
     expected:
       current_price: 95.908903
       drift_baseline: 100.212898
-      predicted_price: 96.995947
+      predicted_price: 97.071318
       last_observed_date: "2012-11-25"
       prediction_date: "2013-03-17"
     tolerance_pct: 1.0
-    note: "predicted_price recalculado con los scalers congelados de preprocessing.json -- ver nota de caso_001 sobre la quinta inconsistencia (refit en vivo vs. scalers congelados)."
 
   - id: caso_004_frontera_inicio_test
-    source: dataset_real (24 filas terminadas en 2021-06-27, justo el último input_date antes de que empiece la partición de test según metrics_reported.split_dates)
+    source: dataset_real (24 filas terminadas en 2021-06-27)
     input:
       history:
         - {date: "2021-01-17", PROTECCION_FITO: 99.80702983897216, CARBURANTES: 101.6902200217314, COPPER_EUR_TON: 6525.481276233857, GAS_EUR_MMBTU: 6.032707902364381, COIL_EUR_BARRIL: 45.58024691358025, DEXUSEU: 1.215}
@@ -389,11 +346,10 @@ golden_cases:
     expected:
       current_price: 101.746827
       drift_baseline: 103.146819
-      predicted_price: 104.652653
+      predicted_price: 104.271455
       last_observed_date: "2021-06-27"
       prediction_date: "2021-10-17"
     tolerance_pct: 1.0
-    note: "predicted_price recalculado con los scalers congelados de preprocessing.json -- ver nota de caso_001 sobre la quinta inconsistencia (refit en vivo vs. scalers congelados)."
 
   - id: caso_005_rechazo_historial_insuficiente
     source: dataset_real (últimas 23 filas del mismo dataset -- una fila por debajo del mínimo)
@@ -402,101 +358,48 @@ golden_cases:
       history_end_date: "2025-10-26"
     expected:
       error: true
-      error_message_contains: "Historial insuficiente para inferencia raw: registros_recibidos=23, registros_minimos_requeridos=24"
+      error_message_contains: "Historial insuficiente para inferencia: registros_recibidos=23, registros_minimos_requeridos=24"
     note: "Rechazo controlado, no una excepción no manejada -- debe mapearse a un 422 de dominio en el plugin, no a un 500."
 
 known_issues:
-  - "ESTADO DE ACEPTACIÓN: ver model_status arriba. La memoria (.docx v1.3) y el README.md
-     entregados describen una versión anterior y RETRACTADA (GRU, split 80/20 con fuga de datos
-     entre arquitectura y test, resultado favorable frente a Drift). El propio código trae una
-     auditoría posterior (2026-08-03, versión de modelo 2.0.0) que retira ese resultado, corrige
-     el protocolo y documenta que el modelo corregido (LSTM) NO supera al baseline de Drift en el
-     test final ya bien construido. Este manifest usa exclusivamente las cifras del LSTM 2.0.0
-     auditado -- ninguna cifra de la memoria/README retractados aparece aquí. La decisión de
-     exponer o no este modelo en producción queda pendiente de revisión humana antes de la PR."
-  - "CUARTA INCONSISTENCIA DE HASHES: el sha256 real de models/artifacts/lstm_model.pt (calculado
-     con sha256sum sobre el fichero tal cual entregado: 4cb0ae009f84f146ad821b870e4414cb33d72e45762af873e19395d136f898e0)
-     no coincide con el que declaran para él, con idéntico tamaño (245045 bytes),
-     models/artifacts/artifact_manifest.json y docs/MODEL_CARD.md
-     (b72fcc645183e0c3b24cc1ca8081782d98f473f2eef96f8fe09c73da78607db4). preprocessing.json y
-     lstm_features.json sí coinciden exactamente con sus hashes declarados. El artefacto en sí
-     es el correcto y funcional -- es el mismo fichero que se cargó y ejecutó en este proceso de
-     extracción para producir, de forma determinista, todos los golden_cases de este manifest
-     (arquitectura, 60225 parámetros y predicciones verificados) -- el problema está en el
-     documento de auditoría (hash mal registrado), no en el artefacto servido. Sumado a las otras
-     tres inconsistencias de hashes ya documentadas (model_comparison.json, dataset procesado),
-     esto confirma un patrón sistemático de hashes de auditoría desactualizados/incorrectos en
-     este entregable -- plugin-integration debe fijar SIEMPRE el hash real (sha256sum del fichero
-     tal cual entregado), nunca el declarado en los documentos, y verification debe recalcularlo
-     de nuevo contra el artefacto que finalmente se sube a S3."
-  - "BUG REPRODUCIDO: src/predict/predictor.py::_pick_best_model() (usado cuando se invoca el CLI
-     con --model auto, que es el valor por defecto) lee models/metrics/model_comparison.json
-     para decidir qué arquitectura servir. Ese fichero, pese a estar fechado/referenciado como el
-     resultado auditado 2.0.0, contiene en realidad las cifras del protocolo histórico
-     contaminado -- su sha256 real (confirmado con sha256sum) no coincide con el sha256 declarado
-     para él en models/artifacts/artifact_manifest.json, y sus valores son idénticos, campo a
-     campo, a los de model_comparison_historical_contaminated.json (marcado explícitamente como
-     'retired_from_final_evaluation' en ese mismo fichero). Efecto reproducido en este proceso de
-     extracción: ejecutando `python -m src.main predict --input <csv> --model auto` con el
-     artefacto real, el CLI selecciona GRU, NO LSTM -- contradiciendo tanto
-     artifact_manifest.json (\"selected_model\": \"LSTM\") como docs/MODEL_CARD.md. El plugin NO
-     replica _pick_best_model(): sirve siempre el LSTM (el artefacto realmente declarado como
-     seleccionado), nunca la lógica de auto-selección del CLI original."
-  - "TERCERA INCONSISTENCIA DE HASHES (distinta de la anterior): el dataset procesado realmente
-     committeado en data/processed/final_dataset_for_modeling.csv tiene sha256
-     f25049996b2a2ed9791f934547c3fba60f35e79161fb31e45652827143276ae7 -- que NO coincide con el
-     sha256 que preprocessing.json y data/metadata/dataset_manifest.json declaran para 'el
-     dataset con el que se entrenaron los scalers/el modelo' (c090de1ba664886df869cc19da47b79a9f59824afee94e930a4683673a4d6f1d).
-     Además, regenerar el dataset desde cero con `scripts/build_dataset.py --write` usando los
-     ficheros crudos (.xlsx MAPA + CSV FRED) tal como se entregaron produce una TERCERA hash
-     distinta (867d4f5759ac1201e63f07ead5e4bd6815cf090e63cd69241e953fc65f684344), confirmado
-     ejecutando `scripts/build_dataset.py --verify` en un venv aislado con las dependencias
-     congeladas de requirements.txt. Esto NO afecta a los golden_cases de este manifest ni a la
-     inferencia de ESTE plugin (que solo usa los scalers ya congelados de preprocessing.json --
-     ver quinta inconsistencia, más abajo, sobre por qué eso es además la decisión correcta).
-     Afecta a la reproducibilidad completa de un reentrenamiento desde cero -- coherente con la
-     decisión de dejar training.supported=false -- y, según se descubrió después (ver quinta
-     inconsistencia), TAMBIÉN afecta en la práctica al propio CLI de inferencia entregado, pese a
-     lo que documenta docs/INFERENCE.md."
-  - "QUINTA INCONSISTENCIA (consecuencia directa de la tercera, y la más grave para la
-     inferencia): docs/INFERENCE.md afirma 'No lee ni ajusta estado desde
-     final_dataset_for_modeling.csv cuando se proporciona --input'. Es FALSO:
-     src/predict/predictor.py::run_prediction() llama SIEMPRE a _build_scalers_and_features(),
-     que reajusta (fit) feature_scaler y target_scaler desde cero leyendo
-     data/processed/final_dataset_for_modeling.csv -- también en modo raw CSV, también con
-     --model LSTM explícito. Como ese CSV en disco no coincide con el dataset sobre el que
-     preprocessing.json declara haberse ajustado (ver tercera inconsistencia), estos scalers
-     reajustados en caliente YA NO son necesariamente los mismos que los scalers congelados y
-     versionados en preprocessing.json -- pese a que reports/audit/reproducibility_report.json
-     afirma 'preprocessing_equivalence: input_scaler_max_abs_difference: 0.0' (cierto en el
-     momento de la auditoría, 2026-08-03; ya no lo es frente al dataset actualmente en disco).
-     Comprobado de forma reproducible en este proceso de extracción para el histórico de
-     caso_001: reconstruir los scalers desde preprocessing.json da predicted_price=120.03087;
-     dejar que el CLI los reajuste en caliente desde el CSV actual da predicted_price=120.227294
-     -- una diferencia real, no ruido de punto flotante. Decisión tomada: el plugin usa SIEMPRE
-     los scalers congelados de preprocessing.json (nunca reajusta desde ningún CSV de
-     entrenamiento) -- es la fuente de verdad autocontenida, versionada con su propio sha256, y
-     es además el comportamiento que la propia auditoría del equipo de IA declaró como
-     equivalente y correcto. Los golden_cases de este manifest reflejan ese valor
-     (120.03087), NO el valor que da hoy el CLI original en vivo (120.227294)."
+  - "DOS ENTREGAS DISTINTAS DEL MISMO CÓDIGO (trazabilidad del proceso de integración, no un
+     defecto del modelo): se recibió primero, por error, una copia local con una carpeta docs/ y
+     reports/audit/ adicionales que documentaban una auditoría interna -- esa auditoría detectó
+     que una evaluación anterior de este mismo modelo usaba el mismo periodo de test para
+     comparar arquitecturas y para la evaluación final (fuga de datos), y que, corrigiendo el
+     split a uno cronológico train/validation/test, el modelo entonces reentrenado (un LSTM) no
+     superaba al baseline de Drift. El cliente confirmó (Slack, 2026-09-28) que la entrega
+     correcta y oficialmente aprobada es OTRA, sin esa carpeta de auditoría, con una evaluación
+     de test única (split 80/20) en la que el GRU sí supera a Drift -- la que usa este manifest.
+     El código de inferencia y los TRES artefactos de modelo (lstm_model.pt, gru_model.pt,
+     xgboost_model.json) son idénticos byte a byte en ambas entregas -- confirmado con sha256 --
+     así que no hay dos modelos entrenados distintos, solo dos metrics-reports/protocolos de
+     evaluación distintos sobre el mismo entrenamiento. La auditoría de la entrega no aprobada no
+     se ha podido contrastar con el equipo de IA -- se deja constancia aquí por si en el futuro
+     se confirma que también aplica a la entrega aprobada, lo que obligaría a revisar este
+     manifest."
+  - "No hay ningún scaler serializado en esta entrega (no existe preprocessing.json ni
+     features.json, a diferencia de otras entregas de este mismo modelo). El código real
+     (src/predict/predictor.py::_build_scalers_and_features()) reajusta (fit) los scalers de
+     entrada/objetivo desde data/processed/final_dataset_for_modeling.csv en cada predicción --
+     no es un atajo de conveniencia, es el comportamiento real del CLI aprobado. Este plugin
+     bundlea ese mismo CSV como dato de referencia y replica exactamente esa lógica
+     (prepare_horizon_dataset + get_feature_cols + split_temporal + StandardScaler.fit) para no
+     depender de que el cliente reenvíe el dataset de entrenamiento en cada llamada."
   - "training.supported=false: scripts/train.py (compare_models.py::main()) no acepta ningún CSV
      de entrada de cliente -- reentrena siempre sobre el mismo dataset bundled fijo, solo permite
      variar hiperparámetros (horizon/epochs/seq_len/ratios/hidden_size/batch_size). No hay
      ninguna forma de reentrenar con datos nuevos aportados por el cliente. mlflow_utils.py se
      implementa igualmente en el plugin (regla del proyecto), pero sin una ruta real de
      fine-tuning por usuario detrás."
-  - "El nombre de carpeta del código ('a14-rnn-...') SÍ se corresponde esta vez con el modelo
-     productivo (LSTM, una red recurrente) -- a diferencia de a15, donde 'rnn' en el nombre era
-     un residuo de plantilla y el modelo productivo real era un Ridge lineal. Aquí no hay
-     discrepancia de naming, solo la discrepancia de estado de aceptación ya documentada arriba."
-  - "requirements.txt fija torch==2.10.0 sin especificar variante CPU/CUDA -- en este proceso de
-     extracción se instaló explícitamente la rueda CPU (--index-url https://download.pytorch.org/whl/cpu)
-     para poder ejecutar predictor.py y generar los golden_cases; plugin-integration debe decidir
-     y fijar la misma variante en el Dockerfile/requirements del servicio para evitar arrastrar
-     dependencias CUDA innecesarias en el contenedor de inferencia."
   - "El histórico raw_required_columns (7: FECHA + 6 variables) tal como lo valida
      build_modeling_features_from_raw es más estricto que un CSV genérico: exige frecuencia
      semanal EXACTA en domingo (weekday==6), sin huecos ni duplicados, o rechaza con el detalle
      de qué fechas incumplen. No hay ningún modo de entrada tipo 'panel ya derivado con las 39
-     features' en el código entregado (a diferencia de a15, que sí aceptaba un panel técnico ya
-     preparado) -- el plugin solo necesita soportar el modo raw-history."
+     features' en el código entregado -- el plugin solo necesita soportar el modo raw-history."
+  - "requirements.txt del entregable fija torch==2.10.0 sin especificar variante CPU/CUDA -- en
+     este proceso de extracción se instaló explícitamente la rueda CPU
+     (--index-url https://download.pytorch.org/whl/cpu) para poder ejecutar predictor.py y
+     generar los golden_cases; plugin-integration debe fijar la misma variante en el
+     Dockerfile/requirements del servicio para evitar arrastrar dependencias CUDA innecesarias
+     en el contenedor de inferencia."

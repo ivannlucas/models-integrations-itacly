@@ -1,4 +1,4 @@
-"""Endpoint tests for ``ml14-wine-phyto-price-forecast`` (LSTM, wiring only).
+"""Endpoint tests for ``ml14-wine-phyto-price-forecast`` (GRU, wiring only).
 
 Correctness against the real artifact (golden_cases) is validated by the `verification` skill,
 not here — these tests use FakePlugin and only check wiring: request/response schemas, the
@@ -39,7 +39,7 @@ def test_predict_inline(client):
     assert resp.status_code == 200
     body = resp.json()
     assert body["model_id"] == MODEL_ID
-    assert body["model_used"] == "LSTM"
+    assert body["model_used"] == "GRU"
     assert body["horizon_weeks"] == 16
     assert isinstance(body["predicted_price"], float)
     assert isinstance(body["current_price"], float)
@@ -70,7 +70,7 @@ def test_predict_batch(client):
     body = resp.json()
     assert body["model_id"] == MODEL_ID
     assert body["n_predictions"] == len(body["predictions"])
-    assert body["predictions"][0]["model_used"] == "LSTM"
+    assert body["predictions"][0]["model_used"] == "GRU"
 
 
 def test_train_returns_501(client):

@@ -60,17 +60,17 @@ class PredictInlineRequest(BaseModel):
 
 
 class PredictInlineResponse(BaseModel):
-    """Inline response: LSTM price forecast at the 16-week horizon."""
+    """Inline response: GRU price forecast at the 16-week horizon."""
 
     model_config = ConfigDict(protected_namespaces=())
     model_id: str
     predicted_price: float = Field(..., description="PROTECCION_FITO predicho a horizon_weeks vista (índice base 2020=100).")
     current_price: float = Field(..., description="PROTECCION_FITO de la última fila del histórico aportado.")
-    drift_baseline: float = Field(..., description="Baseline lineal de drift — referencia frente a la que el LSTM no consigue mejorar en test final (ver manifest).")
+    drift_baseline: float = Field(..., description="Baseline lineal de drift — referencia frente a la que el GRU compara en el test reportado (ver manifest).")
     horizon_weeks: int
     last_observed_date: str
     prediction_date: str
-    model_used: str = Field(default="LSTM")
+    model_used: str = Field(default="GRU")
     gap_warning: str | None = Field(
         default=None,
         description="Aviso si la última fecha del histórico aportado está muy por detrás de hoy.",

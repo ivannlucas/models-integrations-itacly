@@ -1455,16 +1455,16 @@ def _ml16_train(plugin: FakePlugin, *, data_path: str) -> Ml16TrainResp:
 
 
 def _ml14_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> Ml14InlineResp:
-    """Fake inline response for the ml14 LSTM wine phytosanitary price forecast model."""
+    """Fake inline response for the ml14 GRU wine phytosanitary price forecast model."""
     return Ml14InlineResp(
         model_id="ml14-wine-phyto-price-forecast",
-        predicted_price=120.227294,
+        predicted_price=121.394124,
         current_price=125.035925,
         drift_baseline=117.656436,
         horizon_weeks=16,
         last_observed_date="2025-10-26",
         prediction_date="2026-02-15",
-        model_used="LSTM",
+        model_used="GRU",
         gap_warning=None,
         n_rows_used=len(features.get("rows", [])),
         xai_feature_values={"PROTECCION_FITO": 125.035925},
@@ -1472,18 +1472,18 @@ def _ml14_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) ->
 
 
 def _ml14_batch(plugin: FakePlugin, *, data_path: str) -> Ml14BatchResp:
-    """Fake batch response for the ml14 LSTM wine phytosanitary price forecast model."""
+    """Fake batch response for the ml14 GRU wine phytosanitary price forecast model."""
     return Ml14BatchResp(
         model_id="ml14-wine-phyto-price-forecast",
         predictions=[{
-            "predicted_price": 120.227294,
+            "predicted_price": 121.394124,
             "current_price": 125.035925,
             "drift_baseline": 117.656436,
             "horizon_weeks": 16,
             "last_observed_date": "2025-10-26",
             "prediction_date": "2026-02-15",
             "model_id": "ml14-wine-phyto-price-forecast",
-            "model_used": "LSTM",
+            "model_used": "GRU",
         }],
         n_predictions=1,
         output_path=None,

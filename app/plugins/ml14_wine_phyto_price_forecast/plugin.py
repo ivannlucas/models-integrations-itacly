@@ -1,15 +1,13 @@
-"""Ml14WinePhytoPriceForecastPlugin — LSTM wine phytosanitary price forecast, t+16 weeks.
+"""Ml14WinePhytoPriceForecastPlugin — GRU wine phytosanitary price forecast, t+16 weeks.
 
 Predicts the Spanish national phytosanitary price index (MAPA, sector vitivinícola, base
-2020=100) 16 weeks ahead via an LSTM trained on a drift-residual decomposition (PyTorch,
-input_size=39, hidden_size=64, num_layers=2). See inbox/a14/manifest.yaml for the full
-input/output contract, the golden-dataset verification and known issues.
-
-IMPORTANT — model_status (see manifest): this is the real, audited 2.0.0 LSTM artifact
-(selected by validation RMSE), not the retracted GRU numbers from the memoria/README. It does
-NOT beat the Drift baseline in the final, correctly-audited test (RMSE 3.0168 vs 2.5406) — it
-is served as-is because it is the genuine artifact the AI team's own audit selected, pending a
-human decision on production exposure before the PR opens.
+2020=100) 16 weeks ahead via a GRU trained on a drift-residual decomposition (PyTorch,
+input_size=39, hidden_size=64, num_layers=2) — the architecture predictor.py::_pick_best_model()
+selects by RMSE on the reported test split. See inbox/a14/manifest.yaml for the full
+input/output contract, the golden-dataset verification and known issues (in particular: an
+earlier, unofficial local copy of this code — with an internal audit claiming a different,
+LSTM-based result — was used by mistake before the client confirmed this GRU-based delivery is
+the officially approved one).
 """
 from __future__ import annotations
 
@@ -31,7 +29,6 @@ from app.plugins.ml14_wine_phyto_price_forecast.constants import (
     MIN_HISTORY_ROWS,
     MODEL_ID,
     MODEL_NAME,
-    MODEL_VERSION,
     RAW_VALUE_COLS,
     VERSION,
 )
@@ -44,7 +41,7 @@ logger = logging.getLogger(__name__)
 
 
 class Ml14WinePhytoPriceForecastPlugin(ModelPluginPort):
-    """LSTM plugin for the national phytosanitary price index (t+16 weeks)."""
+    """GRU plugin for the national phytosanitary price index (t+16 weeks)."""
 
     def __init__(self) -> None:
         """Initialize an unloaded plugin with empty runtime counters."""
@@ -55,7 +52,7 @@ class Ml14WinePhytoPriceForecastPlugin(ModelPluginPort):
     # ── lifecycle ─────────────────────────────────────────────────────────────
 
     def load(self) -> None:
-        """Load the fixed LSTM artifact (model + scalers + feature contract) via ArtifactStore."""
+        """Load the fixed GRU artifact and refit its scalers from the bundled reference dataset."""
         self._bundle = model_loader.load_artifact_bundle()
         logger.info("ml14 plugin loaded: %s (model=%s)", MODEL_ID, MODEL_NAME)
 
@@ -166,7 +163,7 @@ class Ml14WinePhytoPriceForecastPlugin(ModelPluginPort):
         outputs = [
             OutputField(name="predicted_price", type="float", description="PROTECCION_FITO predicho a horizon_weeks vista (índice base 2020=100)."),
             OutputField(name="current_price", type="float", description="PROTECCION_FITO de la última fila del histórico aportado."),
-            OutputField(name="drift_baseline", type="float", description="Baseline lineal de drift — referencia frente a la que el LSTM no consigue mejorar en test final."),
+            OutputField(name="drift_baseline", type="float", description="Baseline lineal de drift — referencia frente a la que el GRU compara en el test reportado (ver manifest)."),
             OutputField(name="horizon_weeks", type="int", description=f"Siempre {HORIZON_WEEKS}."),
             OutputField(name="prediction_date", type="date", description="last_observed_date + horizon_weeks."),
         ]
@@ -175,11 +172,11 @@ class Ml14WinePhytoPriceForecastPlugin(ModelPluginPort):
             version=VERSION,
             description=(
                 "Predicción semanal del índice MAPA de precios de protección fitosanitaria "
-                "(sector vitivinícola, base 2020=100) a horizonte de 16 semanas mediante LSTM "
+                "(sector vitivinícola, base 2020=100) a horizonte de 16 semanas mediante GRU "
                 "(PyTorch) sobre un residual respecto a un baseline lineal de drift, con 39 "
-                f"features autorregresivas/exógenas/estacionales. Versión de modelo {MODEL_VERSION}. "
+                "features autorregresivas/exógenas/estacionales. "
                 "Ver inbox/a14/manifest.yaml para el contrato completo y las métricas de test "
-                "final frente al baseline."
+                "frente al baseline."
             ),
             task_type="regression_timeseries",
             framework=FRAMEWORK,
