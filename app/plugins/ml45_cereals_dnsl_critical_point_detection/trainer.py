@@ -14,7 +14,7 @@ import copy
 
 import numpy as np
 import torch
-from sklearn.metrics import accuracy_score, f1_score, roc_auc_score
+from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score, roc_auc_score
 
 from app.plugins.ml45_cereals_dnsl_critical_point_detection._vendor.loss import DNFLoss
 from app.plugins.ml45_cereals_dnsl_critical_point_detection._vendor.model import (
@@ -38,12 +38,21 @@ def fine_tune(
     stats_scaled: np.ndarray,
     y_labels: np.ndarray,
     threshold: float,
+    eval_sequences_scaled: np.ndarray | None = None,
+    eval_stats_scaled: np.ndarray | None = None,
+    eval_y_labels: np.ndarray | None = None,
     epochs: int = FINE_TUNE_EPOCHS,
 ) -> tuple[ParallelDeepNeuroFuzzyModel, dict]:
     """Fine-tune a clone of *model* on (sequences_scaled, stats_scaled, y_labels).
 
     y_labels is the per-window binary anomaly label (0/1) already produced by
     preprocess.create_sequences()'s window-level _anomaly_mask.
+
+    Metrics are computed on (eval_sequences_scaled, eval_stats_scaled, eval_y_labels) when
+    given — a held-out split the caller did NOT fine-tune on (see plugin.py::train(), which
+    splits the incoming CSV's windows before calling this). Falls back to scoring the
+    fine-tuning data itself only when no held-out split is passed in, so existing callers
+    keep working unchanged.
     """
     fine_model = ParallelDeepNeuroFuzzyModel(copy.deepcopy(model_cfg))
     fine_model.load_state_dict(model.state_dict())
@@ -84,16 +93,33 @@ def fine_tune(
         optimizer.step()
 
     fine_model.eval()
+
+    # Evaluate on the held-out split when the caller provided one — never on the same
+    # windows used above for gradient updates (see module-level docstring update).
+    has_eval_split = (
+        eval_sequences_scaled is not None
+        and eval_stats_scaled is not None
+        and eval_y_labels is not None
+    )
+    eval_y_anom = (np.asarray(eval_y_labels) > 0).astype(np.int64) if has_eval_split else y_anom
+    X_eval = torch.tensor(eval_sequences_scaled, dtype=torch.float32) if has_eval_split else X
+    S_eval = torch.tensor(eval_stats_scaled, dtype=torch.float32) if has_eval_split else S
+
     with torch.no_grad():
-        out = fine_model(X, S)
+        out = fine_model(X_eval, S_eval)
         probs = torch.sigmoid(out["anomaly_score"].view(-1)).numpy()
 
     preds = (probs >= threshold).astype(int)
     metrics = {
-        "accuracy": float(accuracy_score(y_anom, preds)),
-        "f1": float(f1_score(y_anom, preds, zero_division=0)),
-        "auc": float(roc_auc_score(y_anom, probs)) if len(np.unique(y_anom)) > 1 else float("nan"),
+        "accuracy": float(accuracy_score(eval_y_anom, preds)),
+        "f1": float(f1_score(eval_y_anom, preds, zero_division=0)),
+        "precision": float(precision_score(eval_y_anom, preds, zero_division=0)),
+        "recall": float(recall_score(eval_y_anom, preds, zero_division=0)),
+        "f1_macro": float(f1_score(eval_y_anom, preds, labels=[0, 1], average="macro", zero_division=0)),
+        "recall_macro": float(recall_score(eval_y_anom, preds, labels=[0, 1], average="macro", zero_division=0)),
+        "auc": float(roc_auc_score(eval_y_anom, probs)) if len(np.unique(eval_y_anom)) > 1 else float("nan"),
         "n_windows": int(len(y_anom)),
+        "n_eval_windows": int(len(eval_y_anom)),
         "n_epochs": int(epochs),
     }
     return fine_model, metrics

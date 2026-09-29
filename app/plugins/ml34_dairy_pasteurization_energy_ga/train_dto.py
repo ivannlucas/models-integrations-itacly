@@ -29,3 +29,6 @@ class TrainResponse(BaseModel):
     r2_T_out_leche: float = Field(..., description="R² de T_out_leche")
     n_samples: int = Field(..., description="Número de muestras usadas en el fine-tuning")
     epochs_executed: int = Field(..., description="Épocas ejecutadas (con early stopping)")
+    upload_warning: str | None = Field(
+        default=None, description="Aviso si el modelo reentrenado no se ha guardado en MLflow"
+    )

@@ -21,6 +21,7 @@ from app.domain.services.exceptions import (
     InvalidVideoError,
     NoValidSimulationPointError,
     PuConstraintViolationError,
+    DataContractError,
     UnknownDiagnosisSystemError,
     ThermalSafetyViolationError,
     UnsupportedMachineConfigurationError,
@@ -212,16 +213,14 @@ from app.plugins.ml28_meat_neuroevolutionary_raw_materials_prediction.predict_dt
     PredictRequest as Ml28Meat_Request,
     PredictResponse as Ml28Meat_Response,
 )
-from app.plugins.ml43_cereals_dnsl_anomaly_fault_detection.plugin import (
-    Ml43CerealsDnslAnomalyFaultDetectionPlugin,
+from app.plugins.modelo43_cereales.plugin import Modelo43CerealesPlugin
+from app.plugins.modelo43_cereales.predict_dto import (
+    PredictRequest as Modelo43_Request,
+    PredictResponse as Modelo43_Response,
 )
-from app.plugins.ml43_cereals_dnsl_anomaly_fault_detection.predict_dto import (
-    PredictRequest as Ml43_Request,
-    PredictResponse as Ml43_Response,
-)
-from app.plugins.ml43_cereals_dnsl_anomaly_fault_detection.train_dto import (
-    TrainRequest as Ml43_TrainReq,
-    TrainResponse as Ml43_TrainResp,
+from app.plugins.modelo43_cereales.train_dto import (
+    TrainRequest as Modelo43_TrainReq,
+    TrainResponse as Modelo43_TrainResp,
 )
 
 from app.plugins.ml3_wine_disease_pest_forecast.plugin import Ml3WineDiseasePestForecastPlugin
@@ -337,6 +336,7 @@ REGISTRY: list[ModelEntry] = [
         predict_response_type=Ml30Trace_Response,
         train_request_type=Ml30Trace_TrainReq,
         train_response_type=Ml30Trace_TrainResp,
+        extra_predict_exceptions=(DataContractError,),
     ),
     ModelEntry(
         model_id="ml31-cereals-residue-optimizer",
@@ -468,15 +468,15 @@ REGISTRY: list[ModelEntry] = [
         extra_predict_exceptions=(),
     ),
     ModelEntry(
-        model_id="ml43-cereals-dnsl-anomaly-fault-detection",
-        prefix="/models/ml43-cereals-dnsl-anomaly-fault-detection",
+        model_id="modelo43-cereales",
+        prefix="/models/modelo43-cereales",
         version="1.0.0",
-        plugin_class=Ml43CerealsDnslAnomalyFaultDetectionPlugin,
-        predict_request_type=Ml43_Request,
-        predict_response_type=Ml43_Response,
+        plugin_class=Modelo43CerealesPlugin,
+        predict_request_type=Modelo43_Request,
+        predict_response_type=Modelo43_Response,
         extra_predict_exceptions=(InsufficientSensorWindowError,),
-        train_request_type=Ml43_TrainReq,
-        train_response_type=Ml43_TrainResp,
+        train_request_type=Modelo43_TrainReq,
+        train_response_type=Modelo43_TrainResp,
     ),
     ModelEntry(
         model_id="ml3-wine-disease-pest-forecast",

@@ -61,10 +61,9 @@ def build_window_tensor(
     window, used to snapshot the last raw row for the XAI service.
     """
     feats = model_features or MODEL_FEATURES
-    series_df = _tail_or_pad(series_df, window_size)
     if date_column in series_df.columns:
         series_df = series_df.sort_values(date_column).reset_index(drop=True)
-        series_df = _tail_or_pad(series_df, window_size)
+    series_df = _tail_or_pad(series_df, window_size)
 
     window_df = apply_feature_engineering(series_df, date_column=date_column)
 

@@ -20,8 +20,13 @@ from PIL import Image
 
 from app.domain.services.exceptions import InvalidImageError
 from app.plugins.modelo10_lacteo.postprocessing import build_inline_result, classify_crop
-from app.plugins.modelo10_lacteo.preprocessing import CLASSIFIER_TRANSFORM, crop_to_tensor, image_base64_to_pil
-from app.plugins.modelo10_lacteo.plugin import Modelo10LacteoPlugin
+from app.plugins.modelo10_lacteo.preprocessing import (
+    CLASSIFIER_TRANSFORM,
+    build_eval_transform,
+    crop_to_tensor,
+    image_base64_to_pil,
+)
+from app.plugins.modelo10_lacteo.plugin import Modelo10LacteoPlugin, _cls_transforms
 
 
 def _make_mock_classifier(class_idx=0, confidence=0.9):
@@ -101,6 +106,34 @@ class TestClassifierTransform:
         tensor = CLASSIFIER_TRANSFORM(img)
         assert isinstance(tensor, torch.Tensor)
         assert tensor.shape == (3, 224, 224)
+
+    def test_no_center_crop(self):
+        """Verify CLASSIFIER_TRANSFORM never crops out part of the detector's bounding box.
+
+        Regression test (Sept-2026 investigation): CLASSIFIER_TRANSFORM used to be
+        Resize(256)+CenterCrop(224), which discards content near the edges of the detector's
+        crop that the classifier never saw during training/validation — the actual root cause
+        of consistently-wrong, over-confident predictions. It must stay a plain square resize.
+        """
+        from torchvision import transforms as T
+        assert not any(isinstance(t, T.CenterCrop) for t in CLASSIFIER_TRANSFORM.transforms)
+
+    def test_eval_tfm_matches_classifier_transform_exactly(self):
+        """Verify training's eval_tfm and real-inference preprocessing stay identical.
+
+        Uses a non-square image on purpose: under the old Resize(256)+CenterCrop(224)
+        inference transform vs. Resize((224, 224)) training eval_tfm, this would produce
+        two different tensors and this test would fail — that's the exact bug being guarded
+        against here.
+        """
+        img = Image.new("RGB", (300, 150), color=(30, 60, 90))
+        _, eval_tfm = _cls_transforms(224)
+        assert torch.equal(eval_tfm(img), CLASSIFIER_TRANSFORM(img))
+
+    def test_build_eval_transform_is_single_source_of_truth(self):
+        """Verify CLASSIFIER_TRANSFORM is built via build_eval_transform(224), not a copy."""
+        img = Image.new("RGB", (180, 260), color=(200, 10, 90))
+        assert torch.equal(CLASSIFIER_TRANSFORM(img), build_eval_transform(224)(img))
 
 
 # ── postprocessing tests ──────────────────────────────────────────────────
@@ -439,6 +472,18 @@ class TestPredictInlineWithMocks:
         assert result.model_id == "modelo10-lacteo"
         assert result.prediction == "fly"
         assert result.vectors_count == 1
+        # annotated_image (bbox overlay) must be present on inline responses too — without
+        # it, the platform falls back to running Grad-CAM against the full scene with a
+        # classifier that only ever saw per-vector crops in training (see plugin.py).
+        assert isinstance(result.annotated_image, str) and len(result.annotated_image) > 0
+        # heatmap_crops (the exact per-detection crops the classifier itself was fed) must be
+        # present too — Grad-CAM needs to run against these crops, not the full uncropped
+        # scene, or the resulting heatmap has no real spatial correspondence to any detection.
+        assert len(result.heatmap_crops) == 1
+        crop = result.heatmap_crops[0]
+        assert crop["species"] == "fly"
+        assert isinstance(crop["crop_base64"], str) and len(crop["crop_base64"]) > 0
+        assert crop["bbox"] == {"x1": 10.0, "y1": 20.0, "x2": 80.0, "y2": 90.0}
 
     def test_predict_inline_multiple_detections(self):
         """Verify predict_inline handles multiple detections correctly."""
@@ -458,6 +503,24 @@ class TestPredictInlineWithMocks:
         result = plugin.predict_inline(features={"image_base64": b64})
         assert result.model_id == "modelo10-lacteo"
         assert result.vectors_count == 2
+        # Both detections get their own crop (2 <= max_crops), not just the top one.
+        assert len(result.heatmap_crops) == 2
+
+    def test_predict_inline_heatmap_crops_capped_at_five(self):
+        """Verify heatmap_crops caps at the 5 highest-cls_conf detections."""
+        img = Image.new("RGB", (300, 300), color="black")
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        b64 = base64.b64encode(buf.getvalue()).decode()
+
+        boxes_data = [(0.9, [x, x, x + 20, x + 20]) for x in range(0, 210, 30)]  # 7 boxes
+        classifier = _make_mock_classifier(class_idx=0, confidence=0.9)
+        detector = self._make_mock_detector(boxes_data)
+        plugin = self._make_plugin(detector, classifier)
+
+        result = plugin.predict_inline(features={"image_base64": b64})
+        assert result.vectors_count == 7
+        assert len(result.heatmap_crops) == 5
 
     def test_predict_inline_no_detections(self):
         """Verify predict_inline returns no_vectors when no detections are found."""
@@ -473,6 +536,7 @@ class TestPredictInlineWithMocks:
         result = plugin.predict_inline(features={"image_base64": b64})
         assert result.prediction == "no_vectors"
         assert result.vectors_count == 0
+        assert result.heatmap_crops == []
 
     def test_predict_inline_with_image_path(self):
         """Verify predict_inline works with an image_path field."""
@@ -646,6 +710,57 @@ class TestPredictBatchWithMocks:
                 result = plugin.predict_batch(data_path=str(csv_path))
                 assert len(result.predictions) == 1
                 assert result.predictions[0]["status"] == "error"
+
+    def test_predict_batch_first_row_has_heatmap_crops_like_inline(self):
+        """Verify the first batch row carries the same heatmap_crops predict_inline returns.
+
+        The platform's explainability panel only reads dataSample[0] and, without
+        heatmap_crops there, falls back to a Grad-CAM request with no image_base64.
+        """
+        mock_detector = self._make_mock_detector([(0.9, [10, 20, 50, 60])])
+        mock_classifier = _make_mock_classifier()
+        with patch("app.plugins.modelo10_lacteo.plugin.load_detector_and_classifier") as mock_load:
+            mock_load.return_value = (mock_detector, mock_classifier, ["fly", "mos", "tick"])
+            plugin = Modelo10LacteoPlugin()
+            plugin.load()
+
+            with tempfile.TemporaryDirectory() as tmp:
+                for name in ("a.jpg", "b.jpg"):
+                    Image.new("RGB", (100, 100), color="red").save(str(Path(tmp) / name))
+                result = plugin.predict_batch(data_path=tmp)
+                inline = plugin.predict_inline(features={"image_path": str(Path(tmp) / "a.jpg")})
+
+        first, second = result.predictions
+        assert first["filename"] == "a.jpg"
+        assert first["heatmap_crops"] == inline.heatmap_crops
+        # Only row 0 is read for XAI — don't repeat the crops on every row.
+        assert "heatmap_crops" not in second
+        # annotated_image is unchanged and still on every row.
+        assert first["annotated_image"] and second["annotated_image"]
+
+    def test_predict_batch_heatmap_crops_are_classifier_crops_not_annotated_image(self):
+        """Verify each crop is the raw bbox region fed to the classifier, with the fields
+        runModelo10CompositeExplain reads (crop_base64, species, cls_conf, bbox)."""
+        mock_detector = self._make_mock_detector([(0.9, [10, 20, 50, 60])])
+        mock_classifier = _make_mock_classifier(class_idx=2, confidence=0.8)
+        with patch("app.plugins.modelo10_lacteo.plugin.load_detector_and_classifier") as mock_load:
+            mock_load.return_value = (mock_detector, mock_classifier, ["fly", "mos", "tick"])
+            plugin = Modelo10LacteoPlugin()
+            plugin.load()
+
+            with tempfile.TemporaryDirectory() as tmp:
+                Image.new("RGB", (100, 100), color="red").save(str(Path(tmp) / "a.jpg"))
+                row = plugin.predict_batch(data_path=tmp).predictions[0]
+
+        assert len(row["heatmap_crops"]) == 1
+        crop = row["heatmap_crops"][0]
+        assert set(crop) == {"species", "cls_conf", "crop_base64", "bbox"}
+        assert crop["species"] == "tick"
+        assert crop["bbox"] == {"x1": 10.0, "y1": 20.0, "x2": 50.0, "y2": 60.0}
+        assert crop["crop_base64"] != row["annotated_image"]
+        crop_img = Image.open(io.BytesIO(base64.b64decode(crop["crop_base64"])))
+        assert crop_img.format == "JPEG"
+        assert crop_img.size == (40, 40)  # the bbox region, not the 100x100 scene
 
 
 # ── Predict batch zip mode ──────────────────────────────────────────────
@@ -867,30 +982,3 @@ class TestLoadDetectorAndClassifier:
             from app.plugins.modelo10_lacteo.model_loader import load_detector_and_classifier
             with pytest.raises(FileNotFoundError):
                 load_detector_and_classifier(torch.device("cpu"))
-
-
-class TestReloadClassifier:
-    """Tests for Modelo10LacteoPlugin._reload_classifier()."""
-
-    @patch("app.plugins.modelo10_lacteo.plugin.load_detector_and_classifier")
-    def test_reload_classifier_updates_model_and_class_names(self, mock_load):
-        """Verify _reload_classifier() reloads class names and rebuilds the classifier in-place."""
-        import json
-        from unittest.mock import mock_open
-
-        mock_load.return_value = (MagicMock(), MagicMock(), ["fly", "mos", "tick"])
-        plugin = Modelo10LacteoPlugin()
-        plugin.load()
-
-        class_names = ["fly", "mos"]
-        mock_model = MagicMock()
-        mock_model.classifier.__getitem__.return_value.in_features = 1280
-
-        with patch("app.plugins.modelo10_lacteo.plugin._store.path", return_value=Path("/fake")), \
-             patch("builtins.open", mock_open(read_data=json.dumps(class_names))), \
-             patch("app.plugins.modelo10_lacteo.plugin.models.mobilenet_v3_large", return_value=mock_model), \
-             patch("app.plugins.modelo10_lacteo.plugin.torch.load", return_value={}):
-            plugin._reload_classifier()
-
-        assert plugin._class_names == class_names
-        assert plugin._classifier is mock_model

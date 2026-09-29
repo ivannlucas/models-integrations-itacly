@@ -44,6 +44,9 @@ class PredictInlineResponse(BaseModel):
     predicted_class_index: int
     probability_healthy: float
     probability_scm: float
+    heatmap_url: str | None = Field(
+        default=None, description="CAM superpuesto en base64 JPEG data URI (misma salida que predict_batch)"
+    )
 
 
 PredictRequest = Annotated[

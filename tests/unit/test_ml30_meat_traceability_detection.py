@@ -16,13 +16,23 @@ def test_stats(client):
     assert client.get(f"{PREFIX}/stats").json()["model_name"] == "ml30-meat-traceability-detection"
 
 
-def test_predict_inline(client):
+def test_predict_inline_rejected(client):
+    """Inline prediction removed for this model (product decision) — the /predict
+    route only accepts PredictBatchRequest now, so "mode": "inline" fails Pydantic
+    validation (422) instead of reaching the plugin. Batch is unaffected."""
     resp = client.post(f"{PREFIX}/predict", json=INLINE_PAYLOAD)
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["model_id"] == "ml30-meat-traceability-detection"
-    assert body["pred_traceability_incident"] in (0, 1)
-    assert 0.0 <= body["pred_score"] <= 1.0
+    assert resp.status_code == 422
+
+
+def test_predict_batch_data_contract_error_maps_to_422(client, fake_plugins):
+    from app.domain.services.exceptions import DataContractError
+
+    fake_plugins["ml30-meat-traceability-detection"].raise_on_batch = DataContractError(
+        "El CSV no sigue el formato del modelo."
+    )
+    resp = client.post(f"{PREFIX}/predict", json={"mode": "batch", "data_path": "/tmp/events.csv"})
+    assert resp.status_code == 422
+    assert "formato del modelo" in resp.json()["detail"]
 
 
 def test_predict_batch(client):
@@ -38,3 +48,5 @@ def test_train(client):
     assert body["detail"] == "Training completed"
     assert isinstance(body["accuracy"], float)
     assert isinstance(body["n_train"], int)
+    # la plataforma lee este campo para reconciliar el run de MLflow
+    assert "mlflow_run_id" in body

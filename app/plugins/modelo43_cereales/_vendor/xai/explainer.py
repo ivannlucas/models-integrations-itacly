@@ -187,20 +187,11 @@ class DNFLExplainer:
             "confirmed_anomaly": "Anomalía confirmada",
         }
 
-        dominant_branch_map = {
-            "both": "Ambas ramas",
-            "temporal": "Rama temporal",
-            "fuzzy": "Rama neuro-difusa",
-            "none": "Ninguna rama dominante",
-        }
-
         prediction = dict(action_report.get("prediction", {}))
         anomaly_prob = float(prediction.get("ensemble", {}).get("probability"))
         threshold = float(prediction.get("decision_threshold"))
-        margin = float(anomaly_prob - threshold)
 
         state_label = str(action_report.get("state_label"))
-        dominant_branch = str(action_report.get("dominant_branch"))
 
         ranked_blocks = action_report.get("ranked_blocks", [])
         top_blocks = [
@@ -233,12 +224,6 @@ class DNFLExplainer:
             "Probabilidad_anomalia": round(float(anomaly_prob), 3),
             "Umbral_decision": round(float(threshold), 2),
         }
-
-        if state_label != "normal":
-            estado_del_sistema["Margen_umbral"] = round(float(margin), 3)
-
-        if state_label == "unconfirmed_alert":
-            estado_del_sistema["Evidencia_dominante"] = dominant_branch_map.get(dominant_branch, dominant_branch)
 
         final_report = {
             "Estado_del_sistema": estado_del_sistema,

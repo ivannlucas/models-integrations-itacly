@@ -197,11 +197,10 @@ class Ml7CerealsGrainPestDetectionPlugin(ModelPluginPort):
                 OutputField(name="prediction", type="str",
                             description=f"Especie dominante: uno de {', '.join(CLASS_NAMES)}"),
                 OutputField(
-                    name="confidence", type="float",
+                    name="confidence", type="List",
                     description=(
-                        "Confianza de la detección más alta entre las cajas de la especie "
-                        "predicha (no el máximo/media/mínimo de todas las especies detectadas "
-                        "en la imagen) [0, 1]"
+                        "Confianza de cada detección individual (caja delimitadora) en la "
+                        "imagen, de todas las especies detectadas — no solo de la ganadora."
                     ),
                 ),
                 OutputField(name="total_detections", type="int",

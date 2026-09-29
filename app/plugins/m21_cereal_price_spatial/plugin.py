@@ -19,6 +19,7 @@ import pandas as pd
 from app.application.dto.stats_dto import InputField, OutputField, RuntimeStats, StatsResponse
 from app.domain.ports.model_plugin_port import ModelPluginPort
 from app.domain.services.exceptions import ModelNotLoadedError
+from app.domain.services.mlflow_tracker import BaseMLflowTracker
 from app.infrastructure.artifact_store import local_file_path
 from app.plugins.m21_cereal_price_spatial.constants import (
     FRAMEWORK,
@@ -438,7 +439,6 @@ class M21CerealPriceSpatialPlugin(ModelPluginPort):
         from sklearn.model_selection import GridSearchCV, TimeSeriesSplit
         from xgboost import XGBRegressor
 
-        from app.domain.services.mlflow_tracker import BaseMLflowTracker
         from app.plugins.m21_cereal_price_spatial.preprocessing import prepare_train_test
 
         t0 = time.perf_counter()
@@ -672,7 +672,7 @@ class M21CerealPriceSpatialPlugin(ModelPluginPort):
                         metrics[f"{h_key}_clf_DA"] = clf_m.get("DA")
                         metrics[f"{h_key}_clf_AUC"] = clf_m.get("AUC")
 
-        return StatsResponse(
+        base = StatsResponse(
             model_name=MODEL_ID,
             version=VERSION,
             description=(
@@ -718,3 +718,37 @@ class M21CerealPriceSpatialPlugin(ModelPluginPort):
                 avg_latency_ms=round(avg, 1) if avg is not None else None,
             ),
         )
+        # modelo 43-44-style audit follow-up: stats(mlflow_run_id=...) accepted the
+        # parameter but never used it — every retrain's /stats always reported this
+        # plugin's own static/served metrics, no matter which trained run was asked
+        # about, even though train() already logs real metrics to MLflow.
+        if mlflow_run_id:
+            try:
+                tracker = BaseMLflowTracker(mlflow_run_id)
+                mlflow_metrics = tracker.get_metrics()
+                base.metrics["mlflow"] = {"params": tracker.get_params(), "metrics": mlflow_metrics}
+                for metric_name, metric_value in mlflow_metrics.items():
+                    if isinstance(metric_value, (int, float)):
+                        base.metrics[metric_name] = metric_value
+
+                # Regression (modelo 43-44-45 audit, Fase 5 follow-up): the loop above
+                # only ADDS train()'s own flat keys (mae_h{h}/pearson_h{h}/da_h{h}/
+                # auc_h{h}) — it never touches the base dict's own H{h}_reg_MAE/
+                # H{h}_reg_Pearson/H{h}_clf_DA/H{h}_clf_AUC keys (built above from
+                # self._metadata), because the two use different naming conventions.
+                # Every retrain's /stats kept showing the served model's fixed
+                # per-horizon numbers regardless of which run was asked about.
+                for h_key, h_num in (("H1", 1), ("H2", 2), ("H3", 3)):
+                    legacy_aliases = {
+                        f"{h_key}_reg_MAE": f"mae_h{h_num}",
+                        f"{h_key}_reg_Pearson": f"pearson_h{h_num}",
+                        f"{h_key}_clf_DA": f"da_h{h_num}",
+                        f"{h_key}_clf_AUC": f"auc_h{h_num}",
+                    }
+                    for legacy_key, real_key in legacy_aliases.items():
+                        real_value = mlflow_metrics.get(real_key)
+                        if isinstance(real_value, (int, float)):
+                            base.metrics[legacy_key] = real_value
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                logger.warning("Could not fetch MLflow stats for run_id=%s: %s", mlflow_run_id, exc)
+        return base

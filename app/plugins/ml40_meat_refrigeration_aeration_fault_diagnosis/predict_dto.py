@@ -19,6 +19,11 @@ class PredictBatchRequest(BaseModel):
             "diagnóstico se emite por ciclo (voto por mayoría sobre run_id)."
         ),
     )
+    system: Optional[Literal["refrigeracion", "aireado"]] = Field(
+        default=None,
+        description="Subsistema elegido; el CSV debe corresponder a él. Si se omite se detecta "
+                    "por las columnas.",
+    )
     mlflow_run_id: str = Field(default="", description="MLflow run ID for a user-retrained model")
 
 

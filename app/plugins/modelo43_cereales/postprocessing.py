@@ -1,4 +1,4 @@
-"""Scaling, inference and response formatting for ml43."""
+"""Scaling, inference and response formatting for modelo43-cereales."""
 from __future__ import annotations
 
 import logging
@@ -7,11 +7,8 @@ from typing import Any
 import numpy as np
 import torch
 
-from app.plugins.ml43_cereals_dnsl_anomaly_fault_detection._vendor.preprocess import (
-    STATS_CREATION,
-    stats_windows,
-)
-from app.plugins.ml43_cereals_dnsl_anomaly_fault_detection.constants import MODEL_ID, SENSOR_COLUMNS
+from app.plugins.modelo43_cereales._vendor.preprocess import STATS_CREATION, stats_windows
+from app.plugins.modelo43_cereales.constants import SENSOR_COLUMNS
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +52,7 @@ def run_xai(
     s_stats: np.ndarray,
     threshold: float,
 ) -> tuple[dict | None, str | None]:
-    """Run the CU44 DNFLExplainer with graceful degradation.
+    """Run the DNFLExplainer with graceful degradation.
 
     Returns (final_report_dict, None) on success or (None, error_message) on failure.
     """
@@ -74,6 +71,11 @@ def run_xai(
         return None, str(exc)
 
 
+def _stringify_timestamp(value: Any) -> str | None:
+    """Convert a raw timestamp scalar (numpy/pandas/str) to a JSON-safe string, or None."""
+    return None if value is None else str(value)
+
+
 def format_batch_predictions(
     X_arr: np.ndarray,
     scores: np.ndarray,
@@ -83,54 +85,44 @@ def format_batch_predictions(
     xai_background,
     X_scaled: np.ndarray,
     stats_scaled: np.ndarray,
+    window_timestamps: list | None = None,
 ) -> list[dict[str, Any]]:
     """Build the per-window prediction records for a batch response, with XAI on anomalies."""
     predictions: list[dict[str, Any]] = []
     for i, score in enumerate(scores):
         is_anomaly = bool(score >= threshold)
+        # Feedback 3 (modelo 43-44, 09/09/2026): label was hardcoded in English —
+        # ml45_cereals_dnsl_critical_point_detection/postprocessing.py already uses the
+        # Spanish "Fallo"/"No Fallo" pair, mirrored here for consistency across models.
         label = "Fallo" if is_anomaly else "No Fallo"
         cycle_id = cycle_ids[i] if cycle_ids else None
+        ts_init, ts_end = (None, None)
+        if window_timestamps is not None and i < len(window_timestamps):
+            ts_init, ts_end = window_timestamps[i]
 
         xai_values = {col: float(np.mean(X_arr[i, :, j])) for j, col in enumerate(SENSOR_COLUMNS)}
 
-        if is_anomaly:
-            corrective_actions, xai_error = run_xai(
-                explainer, xai_background, X_scaled[i], stats_scaled[i], threshold,
-            )
-        else:
-            corrective_actions, xai_error = None, None
+        # Feedback 3 (modelo 43-44 audit): XAI used to run only for anomalous windows
+        # (is_anomaly), leaving every "No Fallo" row's XAI columns empty — not a failure,
+        # run_xai was simply never called for them. _build_final_report already produces
+        # a full, distinct report for every Estado_interpretativo (Normal, Normal con
+        # señales, Alerta no confirmada, Anomalía confirmada), so it must run for every
+        # window, not just the ones over the binary decision threshold.
+        xai_result, xai_error = run_xai(
+            explainer, xai_background, X_scaled[i], stats_scaled[i], threshold,
+        )
 
         predictions.append({
+            # 1-indexed (window 1..N), not the raw 0-based loop counter.
             "window_index": i + 1,
             "cycle_id": str(cycle_id) if cycle_id is not None else None,
-            "predicted_anomaly_class": int(is_anomaly),
+            "timestamp_init": _stringify_timestamp(ts_init),
+            "timestamp_end": _stringify_timestamp(ts_end),
             "predicted_anomaly_label": label,
             "anomaly_probability": round(float(score), 6),
             "decision_threshold": threshold,
             "xai_feature_values": xai_values,
-            "corrective_actions": corrective_actions,
+            "xai_result": xai_result,
             "xai_error": xai_error,
         })
     return predictions
-
-
-def format_inline_response(
-    score: float,
-    threshold: float,
-    features: dict,
-    corrective_actions: dict | None,
-    xai_error: str | None,
-) -> dict:
-    """Build the PredictInlineResponse payload dict for a single sensor snapshot."""
-    label = "Fallo" if score >= threshold else "No Fallo"
-    return {
-        "model_id": MODEL_ID,
-        "predicted_anomaly_class": int(score >= threshold),
-        "predicted_anomaly_label": label,
-        "anomaly_probability": round(float(score), 6),
-        "decision_threshold": threshold,
-        "xai_feature_values": {col: float(features[col]) for col in SENSOR_COLUMNS},
-        "corrective_actions": corrective_actions,
-        "xai_error": xai_error,
-        "model_name": MODEL_ID,
-    }

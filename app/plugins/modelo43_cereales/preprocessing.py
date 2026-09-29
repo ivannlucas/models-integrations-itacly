@@ -1,4 +1,4 @@
-"""Input validation, null imputation and sequence building for ml43."""
+"""Input validation, null imputation and sequence building for modelo43-cereales."""
 from __future__ import annotations
 
 import logging
@@ -7,8 +7,8 @@ import numpy as np
 import pandas as pd
 
 from app.domain.services.exceptions import InsufficientSensorWindowError
-from app.plugins.ml43_cereals_dnsl_anomaly_fault_detection._vendor.preprocess import create_sequences
-from app.plugins.ml43_cereals_dnsl_anomaly_fault_detection.constants import (
+from app.plugins.modelo43_cereales._vendor.preprocess import create_sequences
+from app.plugins.modelo43_cereales.constants import (
     ID_COLUMN,
     NORMAL_TOKENS,
     PARTIAL_NULL_MAX_RATIO,
@@ -25,16 +25,16 @@ logger = logging.getLogger(__name__)
 def validate_sensor_data(df: pd.DataFrame) -> dict[str, dict[str, float]]:
     """Validate required sensor columns and detect partial nulls.
 
-    Adapted from inbox/a43/codigo/src/predict/predictor.py (validate_input_data),
-    simplified to this plugin's fixed sensor columns.
+    Adapted from a43-44-neurofuzzy-anomalias-fallas/src/predict/predictor.py
+    (validate_input_data), simplified to this plugin's fixed sensor columns.
 
     Returns:
-        {sensor: {"null_count", "null_ratio"}} for columns with partial nulls within
-        the allowed threshold (PARTIAL_NULL_MAX_RATIO).
+        {sensor: {"null_count", "null_ratio"}} for columns with partial nulls
+        within the allowed threshold (PARTIAL_NULL_MAX_RATIO).
 
     Raises:
-        InsufficientSensorWindowError: if sensor columns are missing, a column is
-            empty/non-numeric, or nulls exceed the allowed ratio.
+        InsufficientSensorWindowError: if sensor columns are missing, a column
+            is empty/non-numeric, or nulls exceed the allowed ratio.
     """
     missing = [c for c in SENSOR_COLUMNS if c not in df.columns]
     if missing:
@@ -78,7 +78,8 @@ def temporal_impute_partial_nulls(
 ) -> pd.DataFrame:
     """Impute allowed partial nulls with temporal criteria (interpolation + carry).
 
-    Adapted from inbox/a43/codigo/src/predict/predictor.py (_temporal_impute_partial_nulls).
+    Adapted from a43-44-neurofuzzy-anomalias-fallas/src/predict/predictor.py
+    (_temporal_impute_partial_nulls).
     """
     columns_to_impute = [c for c in partial_null_stats if c in df.columns]
     if not columns_to_impute:
@@ -116,10 +117,13 @@ def temporal_impute_partial_nulls(
     return df
 
 
-def prepare_batch_sequences(df: pd.DataFrame) -> tuple[np.ndarray, np.ndarray | None, list | None]:
+def prepare_batch_sequences(
+    df: pd.DataFrame,
+) -> tuple[np.ndarray, np.ndarray | None, list | None, list | None]:
     """Validate, impute and window a raw sensor CSV into model-ready sequences.
 
-    Returns (X_arr [N,180,13], y_arr [N] or None, cycle_ids or None).
+    Returns (X_arr [N,180,13], y_arr [N] or None, cycle_ids or None,
+    window_timestamps [(timestamp_init, timestamp_end), ...] or None).
     """
     df = df.copy()
     df.columns = df.columns.str.lower()
@@ -138,20 +142,3 @@ def prepare_batch_sequences(df: pd.DataFrame) -> tuple[np.ndarray, np.ndarray | 
         target_column=TARGET_COLUMN if has_target else None,
         normal_tokens=NORMAL_TOKENS,
     )
-
-
-def build_inline_window(features: dict) -> np.ndarray:
-    """Build a steady-state synthetic window [1, SEQ_LENGTH, 13] from a sensor snapshot.
-
-    Each of the 13 sensor values is repeated SEQ_LENGTH times to simulate a cycle where
-    the sensors hold the provided readings — approximates the model's response to a
-    constant operating point. Same pattern as the DNSL family precedents in this repo
-    (m47_dnsl_fallas_maquinaria_pasteurizado, ml45) — see manifest known_issues.
-    """
-    sensor_values = []
-    for col in SENSOR_COLUMNS:
-        v = features.get(col)
-        if v is None:
-            raise InsufficientSensorWindowError(f"Campo de sensor requerido no encontrado: '{col}'")
-        sensor_values.append(float(v))
-    return np.array([[sensor_values] * SEQ_LENGTH], dtype=np.float32)
