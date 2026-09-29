@@ -115,6 +115,18 @@ from app.plugins.ml41_meat_curing_machinery_acoustic_anomaly.train_dto import (
     TrainRequest as Ml41_TrainReq,
     TrainResponse as Ml41TrainResp,
 )
+from app.plugins.ml26_wine_sulfite_gru_pso_forecast.exceptions import InvalidWineryInputError
+from app.plugins.ml26_wine_sulfite_gru_pso_forecast.predict_dto import (
+    LotPrediction as Ml26LotPrediction,
+    PredictBatchResponse as Ml26BatchResp,
+    PredictInlineResponse as Ml26InlineResp,
+    PredictRequest as Ml26_Request,
+    PredictResponse as Ml26_Response,
+)
+from app.plugins.ml26_wine_sulfite_gru_pso_forecast.train_dto import (
+    TrainRequest as Ml26_TrainReq,
+    TrainResponse as Ml26TrainResp,
+)
 from app.plugins.ml31_cereals_residue_optimizer.predict_dto import (
     PredictBatchResponse as Ml31ResidueBatchResp,
     PredictOptimizeResponse as Ml31ResidueOptimizeResp,
@@ -679,6 +691,51 @@ def _ml41_train(plugin: FakePlugin, *, data_path: str) -> Ml41TrainResp:
                 "best_val_loss": 0.74, "n_train": 40, "n_val": 10,
             }
         ],
+        upload_warning=None,
+    )
+
+
+def _ml26_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> Ml26InlineResp:
+    """Fake inline response for the ml26 wine sulfite GRU-PSO 72 h forecast (values of golden caso_001)."""
+    readings = features.get("readings") or []
+    lot = features.get("lot") or {}
+    return Ml26InlineResp(
+        model_id="ml26-wine-sulfite-gru-pso-forecast",
+        model_name="ml26-wine-sulfite-gru-pso-forecast",
+        model_source="fixed",
+        lot_id=lot.get("lot_id"),
+        timestamp=readings[-1].get("timestamp") if readings else None,
+        timestamp_index=len(readings) - 1 if readings else None,
+        future_free_sulfite_72h=34.195343,
+        underprotection_risk_72h=0.327868,
+        risk_band="bajo",
+        xai_feature_values={"stage_progress": 0.28},
+    )
+
+
+def _ml26_batch(plugin: FakePlugin, *, data_path: str) -> Ml26BatchResp:
+    """Fake batch response for the ml26 wine sulfite GRU-PSO 72 h forecast."""
+    return Ml26BatchResp(
+        model_id="ml26-wine-sulfite-gru-pso-forecast",
+        model_source="fixed",
+        n_lots=1,
+        predictions=[Ml26LotPrediction(
+            lot_id="LOT-00013", timestamp="2025-01-21 10:00:00+00:00", timestamp_index=89,
+            future_free_sulfite_72h=34.195343, underprotection_risk_72h=0.327868, risk_band="bajo",
+        )],
+    )
+
+
+def _ml26_train(plugin: FakePlugin, *, data_path: str) -> Ml26TrainResp:
+    """Fake fine-tuning response for the ml26 wine sulfite GRU-PSO 72 h forecast."""
+    return Ml26TrainResp(
+        detail="Fine-tuning completado a partir de gru_pso (sin nueva búsqueda PSO — ver manifest KI-04).",
+        n_lots_train=420, n_lots_val=90, n_lots_test=90,
+        n_windows_train=14108, n_windows_val=2971, epochs_run=10, best_epoch=2,
+        val_rmse_future_free_sulfite_72h=2.21, val_mae_future_free_sulfite_72h=1.61,
+        val_rmse_underprotection_risk_72h=0.069, val_mae_underprotection_risk_72h=0.046,
+        val_overall_rmse=1.56, val_overall_mae=0.83,
+        local_artifact_dir="artifacts/ml26_wine_sulfite_gru_pso_forecast/user_trained/run",
         upload_warning=None,
     )
 
@@ -1473,6 +1530,7 @@ FAKE_FACTORIES: dict[str, tuple[Callable, Callable]] = {
     "m21-cereal-price-spatial": (_m21_inline, _m21_batch),
     "ml16-meat-raw-material-price-alert": (_ml16_inline, _ml16_batch),
     "ml41-meat-curing-machinery-acoustic-anomaly": (_ml41_inline, _ml41_batch),
+    "ml26-wine-sulfite-gru-pso-forecast": (_ml26_inline, _ml26_batch),
 }
 
 TRAIN_FACTORIES: dict[str, Callable] = {
@@ -1490,6 +1548,7 @@ TRAIN_FACTORIES: dict[str, Callable] = {
     "m21-cereal-price-spatial": _m21_train,
     "ml16-meat-raw-material-price-alert": _ml16_train,
     "ml41-meat-curing-machinery-acoustic-anomaly": _ml41_train,
+    "ml26-wine-sulfite-gru-pso-forecast": _ml26_train,
 }
 
 
@@ -1748,6 +1807,17 @@ TEST_REGISTRY: list[ModelEntry] = [
         extra_predict_exceptions=(UnsupportedMachineConfigurationError, InvalidAudioError),
         train_request_type=Ml41_TrainReq,
         train_response_type=Ml41TrainResp,
+    ),
+    ModelEntry(
+        model_id="ml26-wine-sulfite-gru-pso-forecast",
+        prefix="/models/ml26-wine-sulfite-gru-pso-forecast",
+        version="1.0.0",
+        plugin_class=FakePlugin,
+        predict_request_type=Ml26_Request,
+        predict_response_type=Ml26_Response,
+        extra_predict_exceptions=(InsufficientSequenceHistoryError, InvalidWineryInputError),
+        train_request_type=Ml26_TrainReq,
+        train_response_type=Ml26TrainResp,
     ),
 ]
 
