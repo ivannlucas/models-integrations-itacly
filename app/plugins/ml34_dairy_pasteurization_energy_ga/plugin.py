@@ -60,7 +60,6 @@ from app.plugins.ml34_dairy_pasteurization_energy_ga.mlflow_utils import (
     download_user_model_from_mlflow,
 )
 from app.plugins.ml34_dairy_pasteurization_energy_ga.model_loader import (
-    _store,
     build_model_from_config,
     load_artifacts,
 )
@@ -417,9 +416,11 @@ class Ml34DairyPasteurizationEnergyGaPlugin(ModelPluginPort):
             metrics[f"mae_{target}"] = mae
             metrics[f"r2_{target}"] = r2
 
-        _store.local_dir.mkdir(parents=True, exist_ok=True)
-        torch.save(fine_model.state_dict(), _store.local_dir / MODEL_FILENAME)
-
+        # The retrained model lives only in its own MLflow run (predict with that
+        # mlflow_run_id); the served base model and its local artifacts are never replaced.
+        upload_warning = None
+        if not tracker:
+            upload_warning = "Sin run de MLflow: el modelo reentrenado no se ha guardado."
         if tracker:
             tracker.log_metrics({**metrics, "n_samples": len(df)})
             try:
@@ -433,8 +434,8 @@ class Ml34DairyPasteurizationEnergyGaPlugin(ModelPluginPort):
                 shutil.rmtree(mlflow_tmp, ignore_errors=True)
             except Exception as exc:  # pylint: disable=broad-exception-caught
                 logger.error("MLflow artifact upload failed: %s", exc)
+                upload_warning = f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}"
 
-        self.load()
         logger.info(
             "train() done — mae_E=%.2f r2_E=%.4f n=%d epochs=%d mlflow=%s",
             metrics["mae_E_consumo"], metrics["r2_E_consumo"], len(df),
@@ -450,6 +451,7 @@ class Ml34DairyPasteurizationEnergyGaPlugin(ModelPluginPort):
             r2_T_out_leche=round(metrics["r2_T_out_leche"], 4),
             n_samples=int(len(df)),
             epochs_executed=int(epochs_executed),
+            upload_warning=upload_warning,
         )
 
     # ── stats ─────────────────────────────────────────────────────────────────

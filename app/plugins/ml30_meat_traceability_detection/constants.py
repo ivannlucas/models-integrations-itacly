@@ -11,6 +11,22 @@ FRAMEWORK = "pytorch/sklearn"
 VERSION = "1.0.0"
 DEFAULT_THRESHOLD = 0.5
 
+# Retraining hyperparameters: the winning genome of the original neuroevolution search
+# (a30 repo, models/artifacts/neuroevolution_mlp/metadata.json -> best_genome) and the
+# config seed, so a retrain reproduces the original training and is deterministic.
+TRAIN_LEARNING_RATE = 0.0556514207154333
+TRAIN_WEIGHT_DECAY = 0.0001236243687952708
+TRAIN_EPOCHS = 147
+TRAIN_BATCH_SIZE = 128
+TRAIN_SEED = 42
+TRAIN_TEST_SPLIT = 0.2
+
+# Data-contract checks against the fitted preprocessor (median |z| per numeric column).
+# On the original events_features.csv no column exceeds ~0.9; a ratio column sent as a
+# percentage (e.g. yield_pct_from_parent = 87.4 instead of 0.874) lands in the hundreds.
+CONTRACT_SCALE_ERROR_Z = 10.0
+CONTRACT_SCALE_WARNING_Z = 3.0
+
 NUMERIC_FEATURES = [
     "has_prev_event", "cold_start_lot", "stage_order_obs",
     "time_since_prev_lot_hours", "lot_stage_order_delta", "events_seen_before",

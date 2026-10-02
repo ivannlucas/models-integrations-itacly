@@ -32,6 +32,31 @@ from app.plugins.ml23_lactic_market_price_forecast.rnn_models import GRUModel
 logger = logging.getLogger(__name__)
 
 
+def _describe_feature(column: str) -> str:
+    """Classify a feature_cols entry by role, mirroring a23's own
+    src/get_stats/column_info.py::_describe_column() (the reference repo's
+    authoritative column-role classification, never reproduced here before —
+    stats() used to just name the CSV and truncate the first 4 columns).
+    'current_price' is the one addition: it never appears in that repo's own
+    dataset_forecast_ready.csv (column_info.py is run against that file), so
+    the original classifier never had to describe it — it's only assembled at
+    train/inference time from target_precio_medio (see compare_models.py and
+    predictor.py::_prepare_input_df(), mirrored in predict_batch() above)."""
+    if column == "current_price":
+        return "Precio actual observado en t — ancla junto al resto de features para el pronóstico a horizonte"
+    if column.startswith("precio_lag_"):
+        return "Retardo del precio objetivo (autoregressive)"
+    if column.startswith("media_movil_"):
+        return "Media móvil histórica basada en valores pasados (trend)"
+    if column == "variacion_mensual":
+        return "Cambio porcentual mensual desplazado un periodo (trend)"
+    if column in {"year", "mes", "trimestre", "es_verano", "es_navidad"}:
+        return "Variable de calendario derivada de la fecha (calendar)"
+    if column.endswith("_lag1"):
+        return "Variable exógena desplazada un periodo para evitar leakage (exogenous)"
+    return "Columna auxiliar"
+
+
 def _xai_values_from_row(row, feature_cols: list[str]) -> dict[str, float]:
     """Build xai_feature_values from a features dict (inline) or DataFrame row (batch)."""
     xai: dict[str, float] = {}
@@ -240,14 +265,8 @@ class Ml23LacticMarketPriceForecastPlugin(ModelPluginPort):
             task_type="time_series_regression",
             framework=FRAMEWORK,
             inputs=[
-                InputField(
-                    name="data_path",
-                    type="str",
-                    description=(
-                        f"CSV con {len(feature_cols)} features del dataset lácteo "
-                        f"(columnas: {', '.join(feature_cols[:4])}…)"
-                    ),
-                ),
+                InputField(name=col, type="float", description=_describe_feature(col))
+                for col in feature_cols
             ],
             outputs=[
                 OutputField(

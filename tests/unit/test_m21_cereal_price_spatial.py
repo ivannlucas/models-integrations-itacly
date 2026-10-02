@@ -62,3 +62,50 @@ def test_train_returns_metrics(client):
     assert "da_h1" in body
     assert "auc_h1" in body
     assert body["mae_h1"] is not None
+
+
+def test_stats_fetches_mlflow_metrics_when_run_id_given():
+    """Regression: stats(mlflow_run_id=...) accepted the parameter but never used it —
+    every retrain's /stats always reported this plugin's own static/served metrics, no
+    matter which trained run was asked about, same class of bug found and fixed in
+    modelo43_cereales/ml3_wine_disease_pest_forecast (see plugin.py::stats)."""
+    from unittest.mock import patch
+
+    from app.plugins.m21_cereal_price_spatial.plugin import M21CerealPriceSpatialPlugin
+
+    plugin = M21CerealPriceSpatialPlugin()
+    with patch(
+        "app.plugins.m21_cereal_price_spatial.plugin.BaseMLflowTracker"
+    ) as mock_tracker_cls:
+        mock_tracker_cls.return_value.get_metrics.return_value = {"H1_reg_MAE": 12.5}
+        mock_tracker_cls.return_value.get_params.return_value = {}
+        resp = plugin.stats(mlflow_run_id="some-run-id")
+
+    assert resp.metrics["H1_reg_MAE"] == 12.5
+    assert resp.metrics["mlflow"]["metrics"]["H1_reg_MAE"] == 12.5
+
+
+def test_stats_overwrites_legacy_per_horizon_keys_with_the_real_run_values():
+    """Regression: train() actually logs mae_h{h}/pearson_h{h}/da_h{h}/auc_h{h} — not
+    the legacy H{h}_reg_MAE/H{h}_reg_Pearson/H{h}_clf_DA/H{h}_clf_AUC keys the test
+    above mocked. The flattening loop only ADDS the real flat keys; it never touches
+    the legacy ones (built from self._metadata), so every retrain's /stats kept
+    showing the served model's fixed per-horizon numbers under those exact tiles."""
+    from unittest.mock import patch
+
+    from app.plugins.m21_cereal_price_spatial.plugin import M21CerealPriceSpatialPlugin
+
+    plugin = M21CerealPriceSpatialPlugin()
+    with patch(
+        "app.plugins.m21_cereal_price_spatial.plugin.BaseMLflowTracker"
+    ) as mock_tracker_cls:
+        mock_tracker_cls.return_value.get_metrics.return_value = {
+            "mae_h1": 11.2, "pearson_h1": 0.62, "da_h1": 0.58, "auc_h1": 0.71,
+        }
+        mock_tracker_cls.return_value.get_params.return_value = {}
+        resp = plugin.stats(mlflow_run_id="some-run-id")
+
+    assert resp.metrics["H1_reg_MAE"] == 11.2
+    assert resp.metrics["H1_reg_Pearson"] == 0.62
+    assert resp.metrics["H1_clf_DA"] == 0.58
+    assert resp.metrics["H1_clf_AUC"] == 0.71

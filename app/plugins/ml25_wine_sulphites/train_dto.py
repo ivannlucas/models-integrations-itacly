@@ -28,3 +28,11 @@ class TrainResponse(BaseModel):
     upload_warning: str | None = Field(
         default=None, description="Set if artifacts were saved locally but S3 upload failed"
     )
+    mlflow_run_id: str = Field(
+        default="",
+        description=(
+            "Run de MLflow al que se subieron los artefactos. La plataforma lo toma como "
+            "autoritativo frente al run que pre-creó ella: si aquel falló, este es el que "
+            "de verdad tiene el modelo entrenado (train-task-manager.ts, confirmedRunId)."
+        ),
+    )

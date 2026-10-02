@@ -1,4 +1,4 @@
-"""Loads ml43 (cereal dryer Deep Neuro-Fuzzy anomaly/fault detector) artifacts via ArtifactStore."""
+"""Loads modelo43-cereales (Deep Neuro-Fuzzy cereal oven anomaly detector) artifacts."""
 from __future__ import annotations
 
 import logging
@@ -8,15 +8,10 @@ import numpy as np
 import torch
 
 from app.infrastructure.artifact_store import ArtifactStore
-from app.plugins.ml43_cereals_dnsl_anomaly_fault_detection._vendor.model_arch import (
-    ParallelDeepNeuroFuzzyModel,
-)
-from app.plugins.ml43_cereals_dnsl_anomaly_fault_detection._vendor.preprocess import (
-    SENSOR_COLUMNS,
-    STATS_CREATION,
-)
-from app.plugins.ml43_cereals_dnsl_anomaly_fault_detection._vendor.xai.explainer import DNFLExplainer
-from app.plugins.ml43_cereals_dnsl_anomaly_fault_detection.constants import (
+from app.plugins.modelo43_cereales._vendor.model_arch import ParallelDeepNeuroFuzzyModel
+from app.plugins.modelo43_cereales._vendor.preprocess import SENSOR_COLUMNS, STATS_CREATION
+from app.plugins.modelo43_cereales._vendor.xai.explainer import DNFLExplainer
+from app.plugins.modelo43_cereales.constants import (
     ARTIFACT_FOLDER_NAME,
     DEFAULT_MODEL_CFG,
     MODEL_FILENAME,
@@ -37,7 +32,7 @@ def build_model(model_cfg: dict) -> ParallelDeepNeuroFuzzyModel:
 
 
 def build_explainer(model: ParallelDeepNeuroFuzzyModel, model_cfg: dict) -> DNFLExplainer:
-    """Instantiate the CU44 XAI orchestrator (fuzzy + SHAP + corrective actions) for a loaded model."""
+    """Instantiate the XAI orchestrator for a loaded model."""
     return DNFLExplainer(
         model=model,
         feature_names_stats=STATS_FEATURE_NAMES,
@@ -52,8 +47,8 @@ def load_artifacts():
 
     Returns (model, model_cfg, scaler_x, scaler_num, xai_background, explainer).
 
-    Raises FileNotFoundError if the model checkpoint or scaler is missing locally and
-    STORAGE_BUCKET is not configured to download them.
+    Raises FileNotFoundError if the model checkpoint or scaler is missing locally
+    and STORAGE_BUCKET is not configured to download them.
     """
     checkpoint = torch.load(str(_store.path(MODEL_FILENAME)), map_location="cpu", weights_only=False)
     model_cfg = checkpoint.get("model_cfg", DEFAULT_MODEL_CFG)
@@ -76,7 +71,7 @@ def load_artifacts():
     explainer = build_explainer(model, model_cfg)
 
     logger.info(
-        "ml43 artifacts loaded (n_rules=%d, hidden=%d, bidir=%s)",
-        model_cfg["fuzzy"]["n_rules"], model_cfg["lstm"]["hidden_size"], model_cfg["lstm"]["bidirectional"],
+        "modelo43-cereales artifacts loaded (n_rules=%d, hidden=%d)",
+        model_cfg["fuzzy"]["n_rules"], model_cfg["lstm"]["hidden_size"],
     )
     return model, model_cfg, scaler_x, scaler_num, xai_background, explainer

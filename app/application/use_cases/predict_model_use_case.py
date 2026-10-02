@@ -54,8 +54,14 @@ class PredictModelUseCase:
             # Only ml34's predict_batch declares model_key (GA-vs-MLP dispatch, mirrors
             # predict_inline below) — every other plugin's predict_batch is
             # (*, data_path, mlflow_run_id) with no **kwargs, so pass it conditionally.
-            if "model_key" in inspect.signature(self._plugin.predict_batch).parameters:
+            batch_params = inspect.signature(self._plugin.predict_batch).parameters
+            if "model_key" in batch_params:
                 batch_kwargs["model_key"] = getattr(request, "model_key", None)
+            if "threshold" in batch_params:
+                batch_kwargs["threshold"] = getattr(request, "threshold", None)
+            # Only ml40's predict_batch declares system (refrigeracion/aireado chosen by the user).
+            if "system" in batch_params:
+                batch_kwargs["system"] = getattr(request, "system", None)
             result = self._plugin.predict_batch(**batch_kwargs)
         else:
             logger.info("Executing inline prediction, mlflow_run_id=%s", mlflow_run_id or "(standard)")

@@ -147,7 +147,9 @@ class Ml40MeatRefrigerationAerationFaultDiagnosisPlugin(ModelPluginPort):
 
     # ── predict_batch ─────────────────────────────────────────────────────────
 
-    def predict_batch(self, *, data_path: str, mlflow_run_id: str = "") -> PredictBatchResponse:
+    def predict_batch(
+        self, *, data_path: str, mlflow_run_id: str = "", system: str | None = None
+    ) -> PredictBatchResponse:
         """Diagnose every cycle in a CSV (raw sensor rows or engineered splits-style)."""
         self._require_loaded()
         user_tmp = None
@@ -159,7 +161,7 @@ class Ml40MeatRefrigerationAerationFaultDiagnosisPlugin(ModelPluginPort):
         try:
             with local_file_path(data_path) as local_path:
                 raw_df = pd.read_csv(local_path)
-            runs_df, system = self._diagnose(raw_df, None, bundle_override)
+            runs_df, system = self._diagnose(raw_df, system, bundle_override)
             avg_conf = float(runs_df["confidence"].mean())
             health = postprocessing.health_status(avg_conf)
             self._record_prediction()
@@ -237,7 +239,7 @@ class Ml40MeatRefrigerationAerationFaultDiagnosisPlugin(ModelPluginPort):
 
     # ── train (retraining with the original procedure) ───────────────────────
 
-    def train(self, *, data_path: str, mlflow_run_id: str = "") -> TrainResponse:
+    def train(self, *, data_path: str, mlflow_run_id: str = "", system: str | None = None) -> TrainResponse:
         """Retrain one subsystem's RandomForest from a labeled raw CSV.
 
         Follows the AI team's original trainers exactly (hyperparams, split, weights,
@@ -249,7 +251,7 @@ class Ml40MeatRefrigerationAerationFaultDiagnosisPlugin(ModelPluginPort):
         self._require_loaded()
         with local_file_path(data_path) as local_path:
             raw_df = pd.read_csv(local_path)
-        system = preprocessing.detect_system(raw_df.columns)
+        system = preprocessing.detect_system(raw_df.columns, system)
 
         required = CYCLE_COLUMNS + [TARGET_COLUMN] + RAW_INPUT_COLUMNS[system]
         missing = [c for c in required if c not in raw_df.columns]

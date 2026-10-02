@@ -45,6 +45,138 @@ def _anomaly_mask(
     return (~normal_mask).to_numpy()
 
 
+def _failure_rate(
+    values: Sequence[Any],
+    normal_tokens: Optional[Sequence[str]] = None,
+) -> float:
+    """Calcula el porcentaje de anomalías en un vector de etiquetas."""
+    anomaly_mask = _anomaly_mask(values, normal_tokens=normal_tokens)
+    return float(anomaly_mask.mean() * 100.0)
+
+
+def split_train_val_test_by_id(
+    df: pd.DataFrame,
+    id_col: str,
+    target_column: str,
+    val_size: float = 0.1,
+    test_size: float = 0.2,
+    normal_tokens: Optional[Sequence[str]] = None,
+) -> tuple[dict[str, pd.DataFrame], Optional[np.ndarray]]:
+    """Divide el dataset en train/val/test priorizando split por entidad (cycle_id).
+
+    Copied verbatim from a43-44-neurofuzzy-anomalias-fallas/src/data_processing/
+    preprocess.py — the "ruta 2" (external dataset) split used by
+    scripts/split_external_data.py, which the product docs mark as the one the
+    platform must implement for retraining. Splitting whole cycles (not raw rows or
+    windows) into train/val/test keeps every window's SEQ_LENGTH-row context inside a
+    single split — a window is never assembled from rows that straddle two splits.
+    """
+    if target_column not in df.columns:
+        raise ValueError(
+            f"La columna objetivo '{target_column}' no existe en el DataFrame."
+        )
+
+    if not (0 < val_size < 1):
+        raise ValueError("val_size debe estar entre 0 y 1 (exclusivo).")
+    if not (0 < test_size < 1):
+        raise ValueError("test_size debe estar entre 0 y 1 (exclusivo).")
+    if val_size + test_size >= 1:
+        raise ValueError("La suma de val_size y test_size debe ser menor que 1.")
+
+    unique_ids = None
+    df_train = df_val = df_test = None
+
+    if id_col in df.columns:
+        unique_ids = df[id_col].unique()
+        n_machines = len(unique_ids)
+
+        if n_machines >= 3:
+            train_end = max(1, int(n_machines * (1 - test_size - val_size)))
+            val_end = max(train_end + 1, int(n_machines * (1 - test_size)))
+            val_end = min(val_end, n_machines - 1)
+
+            train_machines = unique_ids[:train_end]
+            val_machines = unique_ids[train_end:val_end]
+            test_machines = unique_ids[val_end:]
+
+            df_train = df[df[id_col].isin(train_machines)]
+            df_val = df[df[id_col].isin(val_machines)]
+            df_test = df[df[id_col].isin(test_machines)]
+
+            if len(df_train) > 0 and len(df_val) > 0 and len(df_test) > 0:
+                logger.info("[Split por IDs]")
+                logger.info(
+                    "  Train IDs: %s - %s | samples=%d",
+                    train_machines[0], train_machines[-1], len(df_train),
+                )
+                logger.info(
+                    "  Val IDs:   %s - %s | samples=%d",
+                    val_machines[0], val_machines[-1], len(df_val),
+                )
+                logger.info(
+                    "  Test IDs:  %s - %s | samples=%d",
+                    test_machines[0], test_machines[-1], len(df_test),
+                )
+            else:
+                logger.warning(
+                    "Split por IDs produjo subconjuntos vacíos. "
+                    "Se recomienda usar split temporal."
+                )
+                df_train = df_val = df_test = None
+        else:
+            logger.warning(
+                "Solo se detectaron %d IDs. Se recomienda usar split temporal.",
+                n_machines,
+            )
+
+    if id_col not in df.columns or df_train is None or df_val is None or df_test is None:
+        n_total = len(df)
+        if n_total < 3:
+            raise ValueError("No hay suficientes muestras para crear train/val/test.")
+
+        train_end = max(1, int(n_total * (1 - test_size - val_size)))
+        val_end = max(train_end + 1, int(n_total * (1 - test_size)))
+        val_end = min(val_end, n_total - 1)
+
+        df_train = df.iloc[:train_end]
+        df_val = df.iloc[train_end:val_end]
+        df_test = df.iloc[val_end:]
+
+        if len(df_train) == 0 or len(df_val) == 0 or len(df_test) == 0:
+            raise ValueError("Split temporal vacío detectado. Verifica tamaño del dataset.")
+
+        logger.info(
+            "[Split temporal %.1f/%.1f/%.1f]",
+            1 - test_size - val_size, val_size, test_size,
+        )
+        logger.info(
+            "  Train samples: %d | fallas=%.2f%%",
+            len(df_train), _failure_rate(df_train[target_column], normal_tokens=normal_tokens),
+        )
+        logger.info(
+            "  Val samples:   %d | fallas=%.2f%%",
+            len(df_val), _failure_rate(df_val[target_column], normal_tokens=normal_tokens),
+        )
+        logger.info(
+            "  Test samples:  %d | fallas=%.2f%%",
+            len(df_test), _failure_rate(df_test[target_column], normal_tokens=normal_tokens),
+        )
+    else:
+        logger.info(
+            "  Fallas train/val/test: %.2f%% / %.2f%% / %.2f%%",
+            _failure_rate(df_train[target_column], normal_tokens=normal_tokens),
+            _failure_rate(df_val[target_column], normal_tokens=normal_tokens),
+            _failure_rate(df_test[target_column], normal_tokens=normal_tokens),
+        )
+
+    split_data = {
+        "train": df_train,
+        "val": df_val,
+        "test": df_test,
+    }
+    return split_data, unique_ids
+
+
 def create_sequences(
     df: pd.DataFrame,
     feature_cols: list[str],
@@ -54,7 +186,7 @@ def create_sequences(
     timestamp_column: str = "timestamp",
     target_column: Optional[str] = None,
     normal_tokens: Optional[Sequence[str]] = None,
-) -> tuple[np.ndarray, Optional[np.ndarray], Optional[list]]:
+) -> tuple[np.ndarray, Optional[np.ndarray], Optional[list], Optional[list]]:
     """Crea secuencias temporales [N, T, F] y etiquetas binarias [N].
 
     Una ventana se etiqueta como anómala si al menos el 50% de sus filas
@@ -62,13 +194,16 @@ def create_sequences(
     a43-44-neurofuzzy-anomalias-fallas/src/data_processing/preprocess.py.
 
     Returns:
-        Tupla con (X_seq [N,T,F], y_seq [N] or None, cycle_ids list or None).
+        Tupla con (X_seq [N,T,F], y_seq [N] or None, cycle_ids list or None,
+        window_timestamps list of (timestamp_init, timestamp_end) per window,
+        or None if no timestamp_column is available).
     """
     # Sort by id + timestamp if available
     sort_cols = []
     if id_column and id_column in df.columns:
         sort_cols.append(id_column)
-    if timestamp_column and timestamp_column in df.columns:
+    has_ts = bool(timestamp_column and timestamp_column in df.columns)
+    if has_ts:
         sort_cols.append(timestamp_column)
     if sort_cols:
         df = df.sort_values(sort_cols).reset_index(drop=True)
@@ -79,6 +214,7 @@ def create_sequences(
     X_seq: list[np.ndarray] = []
     y_seq: list = []
     cycle_ids: list = []
+    window_timestamps: list = []
 
     def _window_label(window_labels: np.ndarray) -> int:
         anomaly_mask = _anomaly_mask(window_labels, normal_tokens=normal_tokens)
@@ -93,9 +229,12 @@ def create_sequences(
                 continue
             X_vals = g[feature_cols].to_numpy(dtype=np.float32)
             y_vals = g[target_column].to_numpy() if target_column else None
+            ts_vals = g[timestamp_column].to_numpy() if has_ts else None
             for i in range(0, len(g) - seq_length + 1, step):
                 X_seq.append(X_vals[i:i + seq_length])
                 cycle_ids.append(str(gid))
+                if ts_vals is not None:
+                    window_timestamps.append((ts_vals[i], ts_vals[i + seq_length - 1]))
                 if y_vals is not None:
                     y_seq.append(_window_label(y_vals[i:i + seq_length]))
     else:
@@ -105,12 +244,16 @@ def create_sequences(
                 np.empty((0, seq_length, n_feat), dtype=np.float32),
                 None,
                 [],
+                [] if has_ts else None,
             )
         X_vals = df[feature_cols].to_numpy(dtype=np.float32)
         y_vals = df[target_column].to_numpy() if target_column else None
+        ts_vals = df[timestamp_column].to_numpy() if has_ts else None
         for i in range(0, len(df) - seq_length + 1, step):
             X_seq.append(X_vals[i:i + seq_length])
             cycle_ids.append(None)
+            if ts_vals is not None:
+                window_timestamps.append((ts_vals[i], ts_vals[i + seq_length - 1]))
             if y_vals is not None:
                 y_seq.append(_window_label(y_vals[i:i + seq_length]))
 
@@ -120,11 +263,12 @@ def create_sequences(
             np.empty((0, seq_length, n_feat), dtype=np.float32),
             None,
             [],
+            [] if has_ts else None,
         )
 
     X_arr = np.asarray(X_seq, dtype=np.float32)
     y_arr = np.asarray(y_seq, dtype=np.int64) if y_seq else None
-    return X_arr, y_arr, cycle_ids
+    return X_arr, y_arr, cycle_ids, (window_timestamps if has_ts else None)
 
 
 def stats_windows(

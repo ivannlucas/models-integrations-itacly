@@ -44,6 +44,8 @@ class PredictInlineResponse(BaseModel):
     vectors_count: int
     detections: List[Dict[str, Any]]
     species_summary: Dict[str, int]
+    annotated_image: str    # imagen con bboxes dibujadas, base64 JPEG
+    heatmap_crops: List[Dict[str, Any]] = Field(default_factory=list)    # ver build_heatmap_crops
 
 
 PredictRequest = Annotated[

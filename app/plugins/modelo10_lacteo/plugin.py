@@ -28,6 +28,7 @@ from app.domain.services.mlflow_tracker import BaseMLflowTracker
 from app.infrastructure.artifact_store import ArtifactStore
 from app.plugins.modelo10_lacteo.model_loader import load_detector_and_classifier, safe_device
 from app.plugins.modelo10_lacteo.postprocessing import (
+    build_heatmap_crops,
     build_inline_result,
     classify_crop,
     render_annotated_image,
@@ -37,6 +38,7 @@ from app.plugins.modelo10_lacteo.predict_dto import (
     PredictInlineResponse,
 )
 from app.plugins.modelo10_lacteo.preprocessing import (
+    build_eval_transform,
     crop_to_tensor,
     image_base64_to_pil,
     image_path_to_pil,
@@ -64,7 +66,12 @@ _store = ArtifactStore(ARTIFACT_FOLDER_NAME)
 
 
 def _cls_transforms(imgsz: int = 224):
-    """Build train/eval transforms for the MobileNetV3 classifier."""
+    """Build train/eval transforms for the MobileNetV3 classifier.
+
+    eval_tfm delegates to build_eval_transform() (preprocessing.py) — the exact transform
+    applied to real detector crops at inference — so validation accuracy measured during
+    training reflects production preprocessing and the two paths cannot silently diverge again.
+    """
     train_tfm = transforms.Compose([
         transforms.Resize((imgsz, imgsz)),
         transforms.RandomHorizontalFlip(),
@@ -72,11 +79,7 @@ def _cls_transforms(imgsz: int = 224):
         transforms.ToTensor(),
         transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
     ])
-    eval_tfm = transforms.Compose([
-        transforms.Resize((imgsz, imgsz)),
-        transforms.ToTensor(),
-        transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
-    ])
+    eval_tfm = build_eval_transform(imgsz)
     return train_tfm, eval_tfm
 
 
@@ -156,7 +159,6 @@ class Modelo10LacteoPlugin(ModelPluginPort):
         self._predict_count: int = 0
         self._total_latency_ms: float = 0.0
         self._last_predict_at: str | None = None
-        self._model_metrics: dict = {}
 
     def load(self) -> None:
         """Carga los modelos desde artifacts/ y los prepara para inferencia."""
@@ -217,7 +219,18 @@ class Modelo10LacteoPlugin(ModelPluginPort):
 
         self._update_stats(latency_ms=(time.perf_counter() - t0) * 1000)
 
-        return PredictInlineResponse(**build_inline_result(self.MODEL_ID, detections))
+        result = build_inline_result(self.MODEL_ID, detections)
+        # Same annotated (bbox) image predict_batch already renders per row.
+        result["annotated_image"] = render_annotated_image(image_pil, detections)
+        # Per-detection crops (top 5 by cls_conf) — same crop the classifier itself was fed
+        # for each one (see preprocessing.crop_to_tensor). The platform's explainability panel
+        # runs Grad-CAM against each crop and composites the results onto annotated_image,
+        # instead of running a single Grad-CAM against the full uncropped scene (that
+        # classifier only ever saw tight per-vector crops in training, so Grad-CAM against the
+        # full scene produced a heatmap with no real spatial correspondence to any detection)
+        # or only explaining the single highest-confidence detection.
+        result["heatmap_crops"] = build_heatmap_crops(image_pil, detections, max_crops=5)
+        return PredictInlineResponse(**result)
 
     # ── predict_batch ─────────────────────────────────────────────────────────
 
@@ -292,6 +305,13 @@ class Modelo10LacteoPlugin(ModelPluginPort):
                     row = build_inline_result(self.MODEL_ID, detections)
                     row.pop("model_id", None)
                     row["annotated_image"] = render_annotated_image(image_pil, detections)
+                    # Same per-detection crops predict_inline returns, but only on the first row:
+                    # the platform's explainability panel only ever reads dataSample[0] (see
+                    # runXaiExplain in ws-sources.js), so repeating up to 5 JPEG crops on every
+                    # row would only bloat the batch response. Without it the panel falls back to
+                    # a full-scene Grad-CAM request that carries no image_base64 at all.
+                    if not predictions:
+                        row["heatmap_crops"] = build_heatmap_crops(image_pil, detections, max_crops=5)
                     predictions.append({"filename": img_path.name, **row})
                 except Exception as exc:
                     logger.warning("Error procesando %s: %s", img_path.name, exc)
@@ -524,13 +544,11 @@ class Modelo10LacteoPlugin(ModelPluginPort):
             if best_state:
                 model.load_state_dict(best_state)
 
-            # Save artifacts locally
-            torch.save(model.state_dict(), _store.local_dir / CLASSIFIER_FILENAME)
-            with open(_store.path(CLASS_NAMES_FILENAME), "w") as fh:
-                json.dump(class_names, fh)
-            logger.info("Clasificador guardado. Clases: %s", class_names)
-
-            # ── Upload to MLflow ────────────────────────────────────────────
+            # The retrained classifier lives only in its own MLflow run (predict with that
+            # mlflow_run_id); the served base classifier and its local artifacts are never replaced.
+            upload_warning = None
+            if not mlflow_run_id:
+                upload_warning = "Sin run de MLflow: el modelo reentrenado no se ha guardado."
             if mlflow_run_id:
                 try:
                     # Save to a temporary dir for MLflow upload (matching artifact_path="classifier")
@@ -542,8 +560,7 @@ class Modelo10LacteoPlugin(ModelPluginPort):
                     shutil.rmtree(mlflow_tmp, ignore_errors=True)
                 except Exception as exc:
                     logger.error("MLflow artifact upload failed: %s", exc)
-
-            self._reload_classifier()
+                    upload_warning = f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}"
 
             # ── Log final metrics to MLflow ─────────────────────────────────
             if mlflow_run_id:
@@ -552,7 +569,7 @@ class Modelo10LacteoPlugin(ModelPluginPort):
                     "training_time_min": round(elapsed / 60, 1),
                 })
 
-            self._model_metrics = {
+            train_metrics = {
                 "train_samples": len(train_ds),
                 "val_samples": len(val_ds),
                 "classes": class_names,
@@ -563,29 +580,15 @@ class Modelo10LacteoPlugin(ModelPluginPort):
 
             return TrainResponse(
                 detail="Entrenamiento del clasificador completado",
-                metrics=self._model_metrics
+                metrics=train_metrics,
+                mlflow_run_id=mlflow_run_id,
+                upload_warning=upload_warning,
             )
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
             if _tmp_zip and os.path.exists(_tmp_zip):
                 os.unlink(_tmp_zip)
             gc.collect()
-
-    def _reload_classifier(self) -> None:
-        """Reload only the MobileNetV3 classifier from artifacts (preserves detector)."""
-        with open(_store.path(CLASS_NAMES_FILENAME)) as fh:
-            self._class_names = json.load(fh)
-        model = models.mobilenet_v3_large(weights=None)
-        in_features = model.classifier[-1].in_features
-        model.classifier[-1] = nn.Linear(in_features, len(self._class_names))
-        state_dict = torch.load(
-            _store.path(CLASSIFIER_FILENAME), map_location=self._device, weights_only=False
-        )
-        model.load_state_dict(state_dict)
-        model.eval()
-        model.to(self._device)
-        self._classifier = model
-        logger.info("Clasificador recargado. Clases: %s", self._class_names)
 
     def _assert_loaded(self) -> None:
         """Lanza un error si el modelo no está cargado."""

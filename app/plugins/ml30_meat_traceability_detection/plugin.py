@@ -20,8 +20,15 @@ from app.plugins.ml30_meat_traceability_detection.constants import (
     FRAMEWORK,
     MODEL_ID,
     NUMERIC_FEATURES,
+    TRAIN_BATCH_SIZE,
+    TRAIN_EPOCHS,
+    TRAIN_LEARNING_RATE,
+    TRAIN_SEED,
+    TRAIN_TEST_SPLIT,
+    TRAIN_WEIGHT_DECAY,
     VERSION,
 )
+from app.plugins.ml30_meat_traceability_detection.contract import enforce_data_contract
 from app.plugins.ml30_meat_traceability_detection.model_loader import load_artifacts
 from app.plugins.ml30_meat_traceability_detection.postprocessing import run_inference
 from app.plugins.ml30_meat_traceability_detection.predict_dto import (
@@ -108,6 +115,8 @@ class Ml30MeatTraceabilityDetectionPlugin(ModelPluginPort):
         try:
             self._require_loaded()
             df = build_dataframe_from_features(features)
+            present = [k for k, v in features.items() if v is not None]
+            enforce_data_contract(df, self._preprocessor, present, logger)
             _, y_score = run_inference(self._preprocessor, self._mlp, df[self._feature_columns])
 
             score = float(y_score[0])
@@ -143,7 +152,9 @@ class Ml30MeatTraceabilityDetectionPlugin(ModelPluginPort):
         try:
             self._require_loaded()
             with local_file_path(data_path) as local_path:
+                raw_columns = pd.read_csv(local_path, nrows=0).columns
                 df = build_dataframe_from_csv(local_path)
+            warnings = enforce_data_contract(df, self._preprocessor, raw_columns, logger)
             id_cols = [c for c in _ID_COLUMNS if c in df.columns]
             y_pred, y_score = run_inference(self._preprocessor, self._mlp, df[self._feature_columns])
 
@@ -158,7 +169,9 @@ class Ml30MeatTraceabilityDetectionPlugin(ModelPluginPort):
                 predictions.append(row)
 
             self._record()
-            return PredictBatchResponse(model_id=MODEL_ID, predictions=predictions, output_path=None)
+            return PredictBatchResponse(
+                model_id=MODEL_ID, predictions=predictions, output_path=None, warnings=warnings,
+            )
         finally:
             if user_temp_dir:
                 shutil.rmtree(user_temp_dir, ignore_errors=True)
@@ -166,7 +179,8 @@ class Ml30MeatTraceabilityDetectionPlugin(ModelPluginPort):
                 self._mlp = saved_mlp
 
     def train(self, *, data_path: str, mlflow_run_id: str = "") -> TrainResponse:  # pylint: disable=too-many-locals
-        """Fine-tune the MLP on a CSV (reusing the fitted preprocessor) and persist artifacts."""
+        """Retrain the MLP from scratch with the original best-genome hyperparameters (reusing
+        the fitted preprocessor) and persist artifacts."""
         import pickle  # pylint: disable=import-outside-toplevel
         import tempfile  # pylint: disable=import-outside-toplevel
         import torch  # pylint: disable=import-outside-toplevel
@@ -179,20 +193,21 @@ class Ml30MeatTraceabilityDetectionPlugin(ModelPluginPort):
             MODEL_FILENAME, PREPROCESSOR_FILENAME,
         )
         from app.plugins.ml30_meat_traceability_detection.model_loader import (  # pylint: disable=import-outside-toplevel
-            _store, build_torch_mlp, load_payload,
+            build_torch_mlp, load_payload,
         )
 
         if mlflow_run_id:
             logger.info("Training with MLflow tracking, run_id=%s", mlflow_run_id)
             tracker = BaseMLflowTracker(mlflow_run_id)
             tracker.log_params({
-                "learning_rate": 0.01,
-                "weight_decay": 1e-4,
-                "batch_size": 128,
-                "epochs": 80,
+                "learning_rate": TRAIN_LEARNING_RATE,
+                "weight_decay": TRAIN_WEIGHT_DECAY,
+                "batch_size": TRAIN_BATCH_SIZE,
+                "epochs": TRAIN_EPOCHS,
+                "seed": TRAIN_SEED,
                 "optimizer": "Adam",
                 "loss": "BCEWithLogitsLoss",
-                "test_split": 0.2,
+                "test_split": TRAIN_TEST_SPLIT,
             })
         else:
             tracker = None
@@ -200,18 +215,25 @@ class Ml30MeatTraceabilityDetectionPlugin(ModelPluginPort):
         self._require_loaded()
         t0 = time.perf_counter()
         with local_file_path(data_path) as local_path:
+            raw_columns = pd.read_csv(local_path, nrows=0).columns
             df = build_dataframe_from_csv(local_path)
         target = "target_traceability_incident"
         if target not in df.columns:
             raise ValueError(f"CSV must contain '{target}' column for training")
+        enforce_data_contract(df, self._preprocessor, raw_columns, logger)
 
         x_raw = df[FEATURE_COLUMNS]
         y = df[target].astype(int).to_numpy()
-        split = int(len(x_raw) * 0.8)
+        split = int(len(x_raw) * (1 - TRAIN_TEST_SPLIT))
         x_train = self._preprocessor.transform(x_raw.iloc[:split])
         x_test = self._preprocessor.transform(x_raw.iloc[split:])
         y_train, y_test = y[:split], y[split:]
 
+        # Seeded like the original TorchMLPClassifier.fit (torch + DataLoader generator), so
+        # retraining on the same CSV yields the same model.
+        torch.manual_seed(TRAIN_SEED)
+        generator = torch.Generator()
+        generator.manual_seed(TRAIN_SEED)
         mlp = build_torch_mlp(load_payload())
         mlp.train()
         loader = torch.utils.data.DataLoader(
@@ -219,11 +241,11 @@ class Ml30MeatTraceabilityDetectionPlugin(ModelPluginPort):
                 torch.tensor(x_train, dtype=torch.float32),
                 torch.tensor(y_train, dtype=torch.float32).reshape(-1, 1),
             ),
-            batch_size=128, shuffle=True,
+            batch_size=TRAIN_BATCH_SIZE, shuffle=True, generator=generator,
         )
         criterion = nn.BCEWithLogitsLoss()
-        optimizer = torch.optim.Adam(mlp.parameters(), lr=0.01, weight_decay=1e-4)
-        for _ in range(80):
+        optimizer = torch.optim.Adam(mlp.parameters(), lr=TRAIN_LEARNING_RATE, weight_decay=TRAIN_WEIGHT_DECAY)
+        for _ in range(TRAIN_EPOCHS):
             for xb, yb in loader:
                 optimizer.zero_grad()
                 criterion(mlp(xb), yb).backward()
@@ -239,7 +261,11 @@ class Ml30MeatTraceabilityDetectionPlugin(ModelPluginPort):
         f1 = float(f1_score(y_test, y_pred, zero_division=0))
         auc = float(roc_auc_score(y_test, y_score)) if len(set(y_test)) > 1 else 0.0
 
-        # ── MLflow: log metrics and upload artifacts ────────────────────────
+        # The retrained model lives only in its own MLflow run (predict with that
+        # mlflow_run_id); the served base model and its local artifacts are never replaced.
+        upload_warning = None
+        if not tracker:
+            upload_warning = "Sin run de MLflow: el modelo reentrenado no se ha guardado."
         if tracker:
             tracker.log_metrics({
                 "test_accuracy": acc,
@@ -257,11 +283,8 @@ class Ml30MeatTraceabilityDetectionPlugin(ModelPluginPort):
                 shutil.rmtree(mlflow_tmp, ignore_errors=True)
             except Exception as exc:  # pylint: disable=broad-exception-caught
                 logger.error("MLflow artifact upload failed: %s", exc)
+                upload_warning = f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}"
 
-        _store.local_dir.mkdir(parents=True, exist_ok=True)
-        torch.save(mlp.state_dict(), _store.local_dir / MODEL_FILENAME)
-
-        self.load()
         elapsed = time.perf_counter() - t0
         logger.info("train() done — acc=%.4f f1=%.4f auc=%.4f mlflow=%s",
                     acc, f1, auc, bool(mlflow_run_id))
@@ -273,6 +296,8 @@ class Ml30MeatTraceabilityDetectionPlugin(ModelPluginPort):
             n_train=int(len(x_train)),
             n_test=int(len(x_test)),
             training_time_s=round(elapsed, 1),
+            upload_warning=upload_warning,
+            mlflow_run_id=mlflow_run_id,
         )
 
     def stats(self, mlflow_run_id: str = "") -> StatsResponse:
