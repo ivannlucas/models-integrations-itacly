@@ -1,0 +1,130 @@
+{
+  "model_id": "a18",
+  "model_slug": "meat-spatial-price-forecast",
+  "fecha": "Octubre 2026",
+  "model_key": "ml18-meat-spatial-price-forecast",
+  "version": "1.0.0",
+  "descripcion": "Modelo de predicción espacio-temporal del precio medio por kg de productos cárnicos en España, a un mes vista, por combinación Comunidad Autónoma (CCAA) - Producto, mediante una red GRU (Keras/TensorFlow) que incorpora lags espaciales de las CCAA vecinas además de variables socioeconómicas (población, renta) y de consumo (MAPA/INE).",
+  "task_type": "Regresión de serie temporal espacial (panel CCAA x Producto), horizonte fijo t+1 mes",
+  "framework": "TensorFlow/Keras (GRU, 96 unidades, Dropout 0.2, Dense 32 + Dense 1); scikit-learn (StandardScaler, serializado como JSON); pandas / numpy",
+  "artefacto": "model.joblib (bundle {model_json, weights} de un modelo Keras Sequential) + x_scaler.json + y_scaler.json",
+  "objetivo": "Anticipar con un mes de antelación la evolución del precio medio por kg de productos cárnicos en cada Comunidad Autónoma, incorporando la influencia de los mercados de regiones vecinas, para dar soporte a la planificación de compras y a la evaluación de riesgo de coste en la cadena de suministro cárnica. El caso de uso de negocio (CU06) define el objetivo central y validado como la predicción espacio-temporal del precio -- la lectura adicional de 'modas y gustos' del título original se ofrece como interpretación exploratoria, no como resultado cuantificado de forma independiente.",
+  "caso_uso": "Modo predict inline y predict batch (idéntico cálculo, solo cambia el transporte del panel -- JSON o CSV): se aporta un panel mensual de al menos 12 meses consecutivos por cada combinación CCAA-Producto que se quiera predecir (Fecha, CCAA, Producto, Poblacion, RentaHogar, CONSUMO X CAPITA, PENETRACION (%), PRECIO MEDIO KG). Opcionalmente se puede aportar también el histórico de las CCAA vecinas para que el lag espacial use su valor real; si no se aporta, el servicio usa el propio valor de la CCAA como alternativa razonable (mismo comportamiento que el código original, documentado explícitamente en la memoria). El servicio genera automáticamente la fila del mes siguiente a predecir -- no hace falta aportarla. No hay modo de reentrenamiento por usuario (ver limitaciones): el procedimiento de entrenamiento entregado siempre reentrena sobre el mismo histórico bundled del equipo de IA.",
+  "inputs": [
+    {
+      "nombre": "rows (panel mensual, mínimo 12 filas por combinación CCAA-Producto)",
+      "tipo": "list[dict]",
+      "descripcion": "Cada fila: Fecha (YYYY-MM-01), CCAA, Producto, Poblacion, RentaHogar, CONSUMO X CAPITA, PENETRACION (%), PRECIO MEDIO KG (opcional solo en la última fila conocida)",
+      "obligatorio": "Sí -- mínimo 12 meses consecutivos por cada combinación CCAA-Producto a predecir",
+      "valor_defecto": "-"
+    },
+    {
+      "nombre": "month_sin, month_cos, PRECIO_MEDIO_KG_PROPIO, LAG_CONSUMO_VECINOS, LAG_PRECIO_VECINOS",
+      "tipo": "float",
+      "descripcion": "Variables derivadas automáticamente (estacionalidad, precio propio rezagado, lags espaciales de CCAA vecinas) -- nunca se piden al cliente",
+      "obligatorio": "No -- siempre calculadas por el servicio",
+      "valor_defecto": "derivadas del histórico"
+    }
+  ],
+  "outputs": [
+    {
+      "nombre": "predictions[].predicted_price",
+      "tipo": "float (€/kg)",
+      "descripcion": "Precio medio por kg predicho para el mes siguiente al histórico aportado",
+      "rango": "continuo, positivo, típicamente 2-15 €/kg según producto",
+      "interpretacion": "valor esperado del precio dentro de un mes para esa combinación CCAA-Producto"
+    },
+    {
+      "nombre": "predictions[].CCAA / Producto / Fecha",
+      "tipo": "str / str / date",
+      "descripcion": "Identificación de la combinación predicha y el mes al que se refiere la predicción",
+      "rango": "-",
+      "interpretacion": "una entrada por cada combinación CCAA-Producto del payload con histórico suficiente"
+    }
+  ],
+  "metricas": [
+    {
+      "nombre": "Test holdout (split cronológico 70/15/15, 11.600 observaciones)",
+      "valor": "MAE=1,0041; RMSE=2,2113; MAPE=9,93%; R²=0,811",
+      "descripcion": "models/metrics/inference_metrics.json y models/artifacts/best_gru_df_2008_con_renta/metrics.json -- ambos reproducidos de forma independiente en este proceso de extracción",
+      "interpretacion": "el modelo se equivoca de media un 9,93% en precio, muy por debajo del umbral de aceptación del 20% definido en la memoria"
+    },
+    {
+      "nombre": "Baselines de comparación (mismo test)",
+      "valor": "Naive estacional (lag-12): MAPE=14,12%, R²=0,673; Media histórica: MAPE=20,29%, R²=0,616",
+      "descripcion": "Referencias mínimas evaluadas antes de consolidar el GRU",
+      "interpretacion": "el GRU mejora sustancialmente sobre ambos baselines, confirmando que el modelo aprendido aporta valor real"
+    },
+    {
+      "nombre": "Estudio de ablación (impacto del precio propio y los lags espaciales)",
+      "valor": "Sin ninguna señal de precio: MAPE=31,03%; con precio propio y vecino (configuración final): MAPE=9,93%",
+      "descripcion": "4 variantes comparadas: sin propio/con vecino (12,15%), con propio/sin vecino (10,12%), con propio y vecino (9,93%, final), sin ninguno (31,03%)",
+      "interpretacion": "alguna señal de precio (propio o espacial) es indispensable; las variables de demanda/renta por sí solas no bastan"
+    },
+    {
+      "nombre": "Verificación golden dataset (post-integración)",
+      "valor": "5/5 casos, coincidencia exacta o sub-0,001% (diferencia de float32) contra el endpoint HTTP real",
+      "descripcion": "4 combinaciones CCAA-Producto reales + 1 caso de rechazo controlado, re-ejecutados contra /predict del plugin integrado, cruzados además contra la salida literal del CLI original (--forecast y --backtest) -- ver outputs/a18/verification_report.md",
+      "interpretacion": "el servicio integrado reproduce exactamente el comportamiento del artefacto GRU entregado, incluido el caso de una CCAA insular sin vecinas (Baleares)"
+    }
+  ],
+  "limitaciones": [
+    {
+      "tipo": "Frecuencia mensual",
+      "descripcion": "El modelo opera con granularidad mensual. Aunque esto aporta estabilidad y reduce el ruido, no captura fluctuaciones de precio intramensuales que podrían ser relevantes para decisiones de inventario de muy corto plazo en productos perecederos (advertencia explícita de la memoria)."
+    },
+    {
+      "tipo": "Deriva de datos entre validación y test",
+      "descripcion": "La memoria documenta un descenso del R² de 0,843 en validación a 0,811 en test, y recomienda una alerta operativa si el MAPE de inferencia supera el 15% durante 3 ejecuciones consecutivas, o un reentrenamiento programado trimestral."
+    },
+    {
+      "tipo": "Fallback a valor propio en CCAA sin vecindad geográfica (Baleares, Canarias)",
+      "descripcion": "El lag espacial de estas dos comunidades insulares usa su propio valor como aproximación (no hay CCAA vecina definida en la matriz de vecindad). Es un comportamiento documentado y verificado (ver golden_cases caso Baleares), no un error -- pero implica que la señal espacial no aporta información adicional para estas dos regiones."
+    },
+    {
+      "tipo": "Sin reentrenamiento por usuario",
+      "descripcion": "El procedimiento de entrenamiento entregado por el equipo de IA no acepta ningún dato de cliente: siempre reentrena sobre el mismo histórico fijo bundled, solo permite variar hiperparámetros editando config.yaml. El endpoint /train de este servicio devuelve explícitamente 'no soportado' (HTTP 501)."
+    },
+    {
+      "tipo": "Dependencia de fuentes de datos externas (MAPA/INE)",
+      "descripcion": "El dataset depende de la publicación anual del panel de consumo MAPA y de los indicadores de población/renta del INE (este último con hasta 12 meses de retraso). Si una fuente no se actualiza, el modelo en producción sigue siendo válido para el periodo anterior, pero no debe reentrenarse hasta restablecer los datos (protocolo explícito en el README)."
+    }
+  ],
+  "fichero_nombre": "Ventanas reales de 12 meses (+ histórico de CCAA vecinas cuando existen) extraídas de data/processed/model_ready/dataset_modelado_desde_2008.csv",
+  "fichero_registros": "5 casos: 4 combinaciones CCAA-Producto reales (incluida una CCAA insular sin vecinas) + 1 caso de rechazo controlado con 11 filas (por debajo del mínimo de 12)",
+  "fichero_resultado": "predict inline sobre los 5 casos reproduce exactamente (o con diferencia de float32 irrelevante) los golden_cases del manifest, ejecutado contra el endpoint HTTP real del plugin integrado con el artefacto TensorFlow/Keras real cargado, cruzado además contra la salida literal del CLI original del equipo de IA en modo --forecast y --backtest",
+  "observaciones_tecnicas": "Solo CPU, sin GPU (GRU pequeño, arquitectura 96 unidades). El modelo se serializa como bundle joblib {model_json, weights}, no en formato nativo .keras/.h5 -- la reconstrucción usa tf.keras.models.model_from_json + set_weights, igual que el código original. requirements.txt del entregable fija tensorflow==2.20.0; el repo ya tiene tensorflow>=2.15.0 como dependencia para otro plugin (ml3), sin conflicto de versión.",
+  "que_no_responde": "El modelo no explica por sí mismo la causa de la subida o bajada de precio prevista. No incorpora eventos futuros conocidos (cambios regulatorios, crisis sanitarias, roturas de stock) que no estén ya reflejados en la tendencia histórica. La interpretación de 'modas y gustos de consumo' es exploratoria, no una medida validada de forma independiente -- el resultado cuantificado y aceptado es la predicción de precio.",
+  "entradas_contexto": "Los datos de entrada son indicadores ya procesados de fuentes oficiales (MAPA para consumo/precio/penetración por CCAA y producto cárnico; INE para población y renta por hogar), agregados a frecuencia mensual -- no son mediciones directas de sensor ni formularios rellenados por el usuario final.",
+  "ejemplo_interpretacion": "Si el sistema recibe el histórico de los últimos 12 meses de CARNE POLLO en ANDALUCIA (incluyendo, si está disponible, el de sus CCAA vecinas EXTREMADURA, CASTILLA LA MANCHA y MURCIA) y predice un precio de 4,54 €/kg para el mes siguiente, esa cifra puede compararse con el precio del último mes conocido para estimar la variación esperada -- útil para anticipar el presupuesto de compra del mes próximo.",
+  "margen_error": "En la evaluación de test (11.600 observaciones, 2021-2023), el modelo se equivoca de media un 9,93% del precio real (MAPE), muy por debajo del umbral de aceptación del 20% definido en la memoria -- equivalente a ±1,37 €/kg de desviación sobre el precio medio del dataset (6,84 €/kg). Es una mejora clara frente a los baselines simples evaluados (14,12% y 20,29% de error).",
+  "revisar_manualmente": [
+    "Predicciones en periodos de shock de mercado, crisis sanitaria animal o cambio regulatorio repentino -- el modelo aprende de la dinámica histórica y no anticipa rupturas de esa dinámica.",
+    "Predicciones para Baleares o Canarias -- al no tener CCAA vecina definida, el componente espacial del modelo no aporta señal adicional para estas dos regiones.",
+    "Si el MAPE operativo observado supera el 15% durante 3 ejecuciones consecutivas, o aumenta 2 puntos porcentuales frente al baseline de producción -- la propia memoria recomienda reentrenamiento en ese caso."
+  ],
+  "que_no_hace": [
+    "No sustituye el criterio experto de compras ante episodios de mercado extraordinarios.",
+    "No predice precios a nivel de explotación individual -- solo el promedio por CCAA y producto.",
+    "No permite reentrenamiento con datos propios del usuario -- solo existe el artefacto fijo entregado por el equipo de IA.",
+    "No cuantifica ni valida de forma independiente la interpretación de 'modas y gustos de consumo' -- solo el precio medio predicho."
+  ],
+  "puede_equivocarse": "Sí. En la evaluación de test se equivoca de media un 9,93% del precio real -- una mejora clara frente a los baselines simples (14-20% de error), pero no una garantía exacta. Debe usarse como apoyo a la planificación de compras y a la evaluación de riesgo, nunca como sustituto del criterio experto ante cambios bruscos del mercado o fallos en la actualización de las fuentes de datos oficiales (MAPA/INE).",
+  "kpis": [
+    {
+      "kpi": "Criterio de aceptación del proyecto: MAPE de test",
+      "valor_umbral": "MAPE <= 20% (memoria, sección 'Validación temporal y calibración de umbrales')",
+      "descripcion": "CUMPLE con amplio margen: MAPE test = 9,93% (exactitud del 90,07%)."
+    },
+    {
+      "kpi": "Consistencia validación -> test (ausencia de sobreajuste)",
+      "valor_umbral": "El MAPE de test no debe degradarse sustancialmente frente al de validación",
+      "descripcion": "CUMPLE: val_MAPE=9,97% frente a test_MAPE=9,93% -- de hecho mejora ligeramente."
+    },
+    {
+      "kpi": "Aportación de los lags espaciales",
+      "valor_umbral": "El modelo con lags espaciales debe mejorar frente al mismo modelo sin ellos",
+      "descripcion": "CUMPLE (memoria, impacto de la matriz de vecindad): val_MAPE pasa de 27,26% (sin vecindad) a 10,76% (con vecindad) en la fase de ablación específica de este componente."
+    }
+  ]
+}

@@ -1,0 +1,306 @@
+model_id: ml18-meat-spatial-price-forecast
+sector: carnico
+nombre: "Modelo espacial de predicción de precios en relación a modas y gustos en áreas concretas"
+# Título tomado literalmente del entregable v4.2. El caso de uso oficial es CU06 (la memoria lo
+# aclara explícitamente, sección "Objetivos"): el objetivo validado y cuantificable es la
+# predicción espacio-temporal del PRECIO MEDIO KG por CCAA-Producto -- la lectura "modas y
+# gustos" es el marco narrativo original del caso de uso, ofrecida como interpretación
+# exploratoria, no como objetivo medido de forma independiente. La Ficha de Valoración del
+# Estado Técnico (21/09/2026) la referencia como "CU18" -- probablemente el identificador interno
+# del lote de integración, no del caso de uso de negocio (CU06); no se ha podido aclarar esta
+# discrepancia de etiquetado con el equipo, se deja constancia.
+task_type: regression  # serie temporal panel (16 CCAA x 25 productos), horizonte directo t+1 mes, con lags espaciales entre CCAA vecinas
+framework:
+  - tensorflow==2.20.0   # Keras Sequential: GRU -> Dropout -> Dense -> Dense
+  - scikit-learn==1.6.1  # StandardScaler (features y target), serializados como JSON (mean/scale/var)
+  - pandas==2.3.3
+  - numpy==2.0.2
+  - joblib==1.5.3        # envoltorio del bundle {model_json, weights}, no un modelo sklearn
+
+# ============================================================================
+# ESTADO DE ACEPTACIÓN DEL MODELO
+# ============================================================================
+# A diferencia de a14 (donde encontramos dos entregas divergentes y tuvimos que aclarar con el
+# cliente cuál era la aprobada), aquí el propio entregable incluye ya la "Ficha de Valoración del
+# Estado Técnico del Modelo" (v2.1, 21/09/2026) rellena por el equipo de IA, con dictamen
+# explícito: OPCIÓN A -- "Considero que el desarrollo técnico del modelo cumple el alcance
+# previsto [...] Cumple con los requisitos KPI de la memoria del modelo y se han corregido
+# pequeñas inconsistencias del entregable respecto al código." No hay ninguna observación
+# técnica abierta -- la única observación registrada en esa ficha ("Cambios en los valores de la
+# tabla 10. Tabla 10 con la comparativa de varios modelos, pero no la mejor configuración del
+# modelo final") es de categoría "Documentación", no "Técnica": la Tabla 10 de la memoria
+# compara arquitecturas previas (baseline/LR/RF/XGBoost/LightGBM), no el GRU final -- los
+# resultados del GRU v4.0 están en la Tabla 5.3 / README / models/artifacts/.../metrics.json,
+# que SÍ se han verificado contra una ejecución real (ver metrics_reported y golden_cases).
+model_status:
+  accepted_for_production: true
+  selected_model: GRU
+  criterion: "MAPE de test <= 20% (umbral definido en la memoria, sección 'Validación temporal y calibración de umbrales')"
+  test_mapes_pct: 9.93
+  result: "ACEPTADO -- Ficha de Valoración del Estado Técnico, Opción A (21/09/2026). KPI MAPE<=20% cumplido con amplio margen (9.93%)."
+  source:
+    - "inbox/a18/entregable/PLANTILLA 18-Ficha de Valoración del Estado Técnico del Modelo_V2.docx"
+    - "README.md del código entregado (tabla 'Resultados del Modelo Final')"
+    - "models/artifacts/best_gru_df_2008_con_renta/metrics.json y models/metrics/inference_metrics.json -- ambos reproducidos de forma independiente en este proceso de extracción, coinciden a precisión de máquina"
+
+artifacts:
+  folder: models/artifacts/best_gru_df_2008_con_renta/
+  files:
+    - model.joblib        # joblib.dump({'model_json': model.to_json(), 'weights': model.get_weights()})
+                           # Keras Sequential: Input(12,7) -> GRU(96, return_sequences=False) -> Dropout(0.2)
+                           # -> Dense(32, relu) -> Dense(1). Compilado Adam(lr=0.001), loss=mse.
+                           # Reconstrucción: tf.keras.models.model_from_json(bundle['model_json']) +
+                           # model.set_weights(bundle['weights']) -- exactamente como hace
+                           # src/predict/predictor.py::load_model_artifacts del código entregado.
+    - x_scaler.json        # StandardScaler de las 7 input_features, serializado {mean, scale, var} -- JSON
+                           # plano, reconstrucción directa (no requiere scikit-learn en inferencia salvo
+                           # para instanciar StandardScaler; se puede hacer también a mano con numpy).
+    - y_scaler.json        # StandardScaler de PRECIO MEDIO KG (1 columna), mismo formato.
+  extra_bundled_data_required_at_inference: []
+  # A diferencia de a14 (donde el código no traía ningún scaler serializado y había que
+  # reajustarlo desde el dataset de entrenamiento), aquí SÍ hay scalers congelados y
+  # versionados -- no hace falta bundlear ningún dataset de referencia.
+
+inputs:
+  # Contrato real de src/data_processing/preprocess.py + src/main.py::predict(), modo "forecast"
+  # (el único que expone este plugin -- ver outputs y known_issues sobre el modo "backtest").
+  history:
+    description: >
+      Panel de filas mensuales (una fila = una combinación CCAA-Producto-Fecha) con al menos 12
+      meses CONSECUTIVOS de histórico real por cada combinación CCAA-Producto que se quiera
+      predecir. El cliente puede aportar, opcionalmente, también el histórico de las CCAA vecinas
+      (mismo Producto, mismas fechas) para que el lag espacial (ver derived_if_missing) use el
+      valor real de la vecindad en vez de su fallback. El servicio SIEMPRE genera automáticamente
+      la fila del mes siguiente a predecir por cada combinación CCAA-Producto con histórico
+      suficiente (no hace falta aportarla) -- modo "forecast" del código original.
+    minimum_rows_per_group: 12   # lookback fijo (config.yaml::training.lookback)
+    row_fields:
+      - name: Fecha
+        type: date (YYYY-MM-DD, día 1 de cada mes)
+        description: "Mes de la observación. Debe ser mensual y consecutivo dentro de cada combinación CCAA-Producto (sin huecos)."
+      - name: CCAA
+        type: str
+        description: "Una de las 16 Comunidades Autónomas peninsulares + Baleares + Canarias (ver derived_if_missing::VECINOS_CCAA para el listado exacto y en qué formato de texto -- MAYÚSCULAS, sin tildes, p. ej. 'CASTILLA Y LEON', 'PAIS VASCO')."
+      - name: Producto
+        type: str
+        description: "Uno de los 25 productos cárnicos del panel MAPA (p. ej. 'CARNE POLLO', 'CARNE VACUNO', 'POLLO ENTERO'...). Debe coincidir en formato con el entrenamiento -- el servicio no normaliza texto libre."
+      - name: Poblacion
+        type: float
+        description: "Población total residente en la CCAA (INE, t=2915)."
+      - name: RentaHogar
+        type: float
+        description: "Renta neta media por hogar en la CCAA (INE, t=9949)."
+      - name: "CONSUMO X CAPITA"
+        type: float
+        description: "Consumo per cápita del producto en esa CCAA y mes (MAPA, panel de consumo alimentario)."
+      - name: "PENETRACION (%)"
+        type: float
+        description: "Porcentaje de penetración del producto (MAPA)."
+      - name: "PRECIO MEDIO KG"
+        type: float
+        required: false
+        description: "Precio medio por kg observado ese mes. Obligatorio en el histórico pasado (es la base de PRECIO_MEDIO_KG_PROPIO y del lag espacial de precio); nunca se aporta para el mes a predecir -- el servicio lo genera en NaN automáticamente."
+    validation_on_ingest:
+      - "Cada combinación CCAA-Producto con menos de 12 filas mensuales consecutivas no genera predicción; si NINGUNA combinación del payload alcanza el mínimo, se rechaza con 422 (ver golden_cases: caso de rechazo)."
+      - "Los huecos dentro de una misma combinación CCAA-Producto se imputan por forward-fill (fill_numeric: ffill por CCAA, después mediana global) -- no se rechazan, a diferencia de a14/a15."
+
+  control: []
+
+  derived_if_missing:
+    month: "Fecha.month"
+    month_sin: "sin(2*pi*month/12)"
+    month_cos: "cos(2*pi*month/12)"
+    PRECIO_MEDIO_KG_PROPIO: "= PRECIO MEDIO KG de la misma fila (alias usado como feature de entrada en vez de como target -- ver known_issues sobre por qué no es fuga de datos)"
+    LAG_CONSUMO_VECINOS: "media de CONSUMO X CAPITA de las CCAA vecinas (VECINOS_CCAA, ver tabla abajo) en LA MISMA fecha; si la CCAA no tiene vecinas (Baleares, Canarias) o falta el dato, usa el propio valor de CONSUMO X CAPITA como fallback"
+    LAG_PRECIO_VECINOS: "media de PRECIO MEDIO KG de las CCAA vecinas en LA MISMA fecha; mismo fallback al propio valor si no hay vecinas/dato"
+    VECINOS_CCAA: >
+      {ANDALUCIA: [EXTREMADURA, CASTILLA LA MANCHA, MURCIA], ARAGON: [CATALUNA, CASTILLA LA
+      MANCHA, CASTILLA Y LEON, LA RIOJA, NAVARRA, COMUNIDAD VALENCIANA], ASTURIAS: [CANTABRIA,
+      CASTILLA Y LEON, GALICIA], BALEARES: [], CANARIAS: [], CANTABRIA: [ASTURIAS, CASTILLA Y
+      LEON, PAIS VASCO], CASTILLA LA MANCHA: [ANDALUCIA, ARAGON, CASTILLA Y LEON, EXTREMADURA,
+      MADRID, MURCIA, COMUNIDAD VALENCIANA], CASTILLA Y LEON: [ASTURIAS, CANTABRIA, PAIS VASCO,
+      LA RIOJA, ARAGON, CASTILLA LA MANCHA, MADRID, EXTREMADURA, GALICIA], CATALUNA: [ARAGON,
+      COMUNIDAD VALENCIANA], COMUNIDAD VALENCIANA: [CATALUNA, ARAGON, CASTILLA LA MANCHA,
+      MURCIA], EXTREMADURA: [ANDALUCIA, CASTILLA LA MANCHA, CASTILLA Y LEON], GALICIA: [ASTURIAS,
+      CASTILLA Y LEON], LA RIOJA: [CASTILLA Y LEON, ARAGON, NAVARRA, PAIS VASCO], MADRID:
+      [CASTILLA Y LEON, CASTILLA LA MANCHA], MURCIA: [ANDALUCIA, CASTILLA LA MANCHA, COMUNIDAD
+      VALENCIANA], NAVARRA: [ARAGON, LA RIOJA, PAIS VASCO], PAIS VASCO: [CANTABRIA, CASTILLA Y
+      LEON, LA RIOJA, NAVARRA]} -- fuente: src/main.py::VECINOS_CCAA, literal, no se ha alterado.
+
+outputs:
+  predict_inline:
+    - name: predictions
+      type: "list[dict]"
+      description: >
+        Una entrada por cada combinación CCAA-Producto del payload con >= 12 meses de histórico
+        consecutivo. Cada entrada: {CCAA, Producto, Fecha (mes predicho = último mes del histórico
+        + 1), predicted_price (PRECIO MEDIO KG predicho, €/kg)}.
+  predict_batch:
+    - "mismo contrato que predict_inline, vía CSV (data_path) en vez de JSON inline"
+
+constraints: {}
+# No hay restricciones duras de negocio. El umbral MAPE<=20% es un KPI de aceptación del
+# modelo (ver model_status), no una restricción de dominio que el plugin deba hacer cumplir en
+# tiempo de inferencia.
+
+training:
+  supported: false
+  # scripts/train.py / src.main train() SOLO acepta --config config/config.yaml -- no hay forma
+  # de pasarle un CSV de datos de cliente; config['data']['dataset_path'] es una ruta fija al
+  # dataset bundled del equipo de IA. Igual que en a14: reentrenar expondría únicamente la
+  # posibilidad de variar hiperparámetros sobre el MISMO histórico fijo, nunca incorporar datos
+  # nuevos del cliente -- por eso training.supported=false. mlflow_utils.py se implementa
+  # igualmente (regla del proyecto), como stub sin fine-tuning real disponible.
+  target_column: null
+  required_columns: null
+  hyperparams: null
+  metrics_returned: null
+  source: codigo_entrenamiento (ausencia de contrato de datos de entrada confirmada leyendo src/main.py::train())
+
+metrics_reported:
+  dataset: test_holdout (split cronológico 70/15/15 por fecha única, sin solapamiento)
+  split_dates:
+    train: {rows: 48768, target_date_start: "2008-01-01", target_date_end: "2019-02-01"}
+    validation: {rows: 11568, target_date_start: "2019-03-01", target_date_end: "2021-07-01"}
+    test: {rows: 11600, target_date_start: "2021-08-01", target_date_end: "2023-12-01"}
+  test_metrics_gru: {mae: 1.0041, rmse: 2.2113, mape_pct: 9.9323, r2: 0.8114}
+  validation_metrics_gru: {mae: 0.8487, rmse: 1.7815, mape_pct: 9.9685, r2: 0.8430}
+  train_metrics_gru: {mae: 0.7490, rmse: 1.5227, mape_pct: 9.7449, r2: 0.8492}
+  baselines_test:
+    naive_estacional_lag12: {mape_pct: 14.1242, r2: 0.6725}
+    media_historica_ccaa_producto: {mape_pct: 20.2947, r2: 0.6155}
+  ablation_impacto_precio_propio:
+    sin_propio_con_vecino_baseline: {test_mape_pct: 12.15, test_r2: 0.772}
+    con_propio_sin_vecino: {test_mape_pct: 10.12, test_r2: 0.812}
+    con_propio_y_vecino_final: {test_mape_pct: 9.93, test_r2: 0.811}
+    sin_ninguno: {test_mape_pct: 31.03, test_r2: 0.351, nota: "sin ninguna señal de precio el modelo colapsa"}
+  kpi_contractual: "MAPE test <= 20% (memoria, sección Validación temporal y calibración de umbrales) -- CUMPLE (9.93%)"
+  veredicto: "ACEPTADO -- ver model_status"
+
+# 4 casos golden + 1 caso de rechazo. Todos ejecutados por mí, en este proceso de extracción, en
+# un venv aislado (tensorflow==2.20.0, resto de deps == requirements.txt) contra el artefacto
+# REAL entregado (models/artifacts/best_gru_df_2008_con_renta/), invocando
+# `python -m src.main predict --model <dir> --data <csv> --forecast` -- el modo real que sirve
+# este plugin. Los históricos de cada caso son ventanas reales de
+# data/processed/model_ready/dataset_modelado_desde_2008.csv (mismo dataset con el que se
+# entrenaron los scalers/el modelo), incluyendo el histórico real de las CCAA vecinas cuando
+# existen. Verificado además que estos mismos valores coinciden EXACTAMENTE con una ejecución
+# en modo --backtest sobre el dataset completo (data/predictions/predictions.csv), confirmando
+# que el modo forecast sobre una ventana reducida no altera la predicción frente a tener todo el
+# histórico cargado. tolerance_pct=1.0 es margen de reproducibilidad numérica entre
+# entornos/versiones de TensorFlow.
+golden_cases:
+  - id: caso_001_andalucia_carne_pollo
+    source: dataset_real (12 meses propios ene-dic 2021 + histórico de las 3 CCAA vecinas de ANDALUCIA -- EXTREMADURA, CASTILLA LA MANCHA, MURCIA -- mismo producto y meses)
+    input:
+      ccaa: ANDALUCIA
+      producto: "CARNE POLLO"
+      history_end_date: "2021-12-01"
+      note: "Histórico completo (48 filas: 12 propias + 36 de las 3 CCAA vecinas) disponible en el manifest de verificación; omitido aquí por extensión -- ver outputs/a18/verification_report.md para el payload completo."
+    expected:
+      ccaa: ANDALUCIA
+      producto: "CARNE POLLO"
+      fecha: "2022-01-01"
+      predicted_price: 4.542946
+    tolerance_pct: 1.0
+
+  - id: caso_002_madrid_carne_vacuno
+    source: dataset_real (12 meses propios jun 2021-mayo 2022 + histórico de las 2 CCAA vecinas de MADRID -- CASTILLA Y LEON, CASTILLA LA MANCHA)
+    input:
+      ccaa: MADRID
+      producto: "CARNE VACUNO"
+      history_end_date: "2022-05-01"
+    expected:
+      ccaa: MADRID
+      producto: "CARNE VACUNO"
+      fecha: "2022-06-01"
+      predicted_price: 10.615247
+    tolerance_pct: 1.0
+
+  - id: caso_003_castilla_y_leon_carne_cerdo_frontera_test
+    source: dataset_real (12 meses propios ago 2020-jul 2021 + histórico de las 9 CCAA vecinas de CASTILLA Y LEON -- la región con más vecinas del mapa). Fecha objetivo 2021-08-01 es el primer mes de la partición de test.
+    input:
+      ccaa: "CASTILLA Y LEON"
+      producto: "CARNE CERDO"
+      history_end_date: "2021-07-01"
+    expected:
+      ccaa: "CASTILLA Y LEON"
+      producto: "CARNE CERDO"
+      fecha: "2021-08-01"
+      predicted_price: 6.440175
+    tolerance_pct: 1.0
+
+  - id: caso_004_baleares_pollo_entero_sin_vecinas
+    source: dataset_real (12 meses propios mar 2021-feb 2022). BALEARES no tiene CCAA vecinas en VECINOS_CCAA (región insular) -- caso real que ejercita el fallback documentado en la memoria (sección 5, párrafo sobre "valor local como fallback en los lags espaciales de comunidades sin vecindad geográfica directa").
+    input:
+      ccaa: BALEARES
+      producto: "POLLO ENTERO"
+      history_end_date: "2022-02-01"
+    expected:
+      ccaa: BALEARES
+      producto: "POLLO ENTERO"
+      fecha: "2022-03-01"
+      predicted_price: 3.680698
+    tolerance_pct: 1.0
+    note: "Confirma que el fallback a valor propio (sin vecinas) es determinista y reproducible, no un caso degradado o de error."
+
+  - id: caso_005_rechazo_historial_insuficiente
+    source: dataset_real (mismo histórico de caso_004, recortado a 11 filas -- una por debajo del mínimo de 12)
+    input:
+      ccaa: BALEARES
+      producto: "POLLO ENTERO"
+      history_rows: 11
+    expected:
+      error: true
+      error_message_contains: "al menos 12 meses de histórico real consecutivos"
+    note: "Rechazo controlado (ValueError convertido a excepción de dominio -> 422 en el plugin), no una excepción no manejada ni un 500."
+
+known_issues:
+  - "Imprecisión README vs. código en el lag espacial: docs/README.md documenta la regla como
+     LAG_X_VECINOS(ccaa, t) = media de X(ccaa_vecina, t-1) -- un retardo de un mes adicional.
+     El código real (src/data_processing/preprocess.py::add_spatial_lags) empareja por
+     LA MISMA Fecha (merge on=['Fecha','Producto','VECINA']), es decir, usa el valor
+     CONTEMPORÁNEO de la vecina en ese mismo mes, no el de un mes antes. Esto NO constituye fuga
+     de datos hacia el precio que finalmente se predice: la fila completa donde vive ese lag
+     (incluida su versión 'vecina') siempre pertenece a una posición anterior dentro de la
+     ventana de lookback (nunca al mes objetivo que se predice), así que el efecto práctico es
+     solo una etiqueta de nombre desalineada con el README, no un error de entrenamiento ni de
+     inferencia -- confirmado leyendo preprocess.py línea a línea y reproduciendo las
+     predicciones exactas del artefacto real."
+  - "PRECIO_MEDIO_KG_PROPIO (add_own_price_feature) asigna directamente el valor de PRECIO MEDIO
+     KG de la MISMA fila como nueva feature -- a primera vista parecería fuga de datos (usar el
+     target como su propia feature), pero build_sequences nunca incluye en la ventana de entrada
+     (X) la fila del mes que se está prediciendo: la ventana cubre los lookback=12 meses
+     ANTERIORES, y PRECIO_MEDIO_KG_PROPIO en esas filas es simplemente el precio ya observado en
+     esos meses pasados (equivalente a lags autorregresivos AR, técnica estándar y legítima en
+     series temporales). Confirmado leyendo build_sequences y mediante la ablación del propio
+     README (incluir este feature MEJORA el test_MAPE de 12.15% a 9.93%, coherente con una señal
+     autorregresiva real, no con una fuga)."
+  - "El plugin solo implementa el modo 'forecast' del CLI original (predicción genuina del mes
+     siguiente al histórico aportado). El modo 'backtest' (evaluar meses ya conocidos del propio
+     dataset de entrada) no se expone como endpoint -- no aporta valor al contrato predict_inline/
+     predict_batch de la plataforma (el cliente nunca tiene ya el precio real del mes que quiere
+     que se le prediga) y añadir un tercer modo de entrada no estaba en el alcance de esta
+     integración. Verificado que ambos modos son numéricamente equivalentes para un mes ya
+     conocido (misma ventana de features, el backtest solo añade el cálculo de métricas) -- ver
+     golden_cases, verificados cruzando --forecast con --backtest sobre el dataset completo."
+  - "training.supported=false: scripts/train.py (src.main::train()) no acepta ningún CSV de
+     entrada de cliente -- reentrena siempre sobre el mismo dataset bundled fijo
+     (config['data']['dataset_path']), solo permite variar hiperparámetros editando config.yaml.
+     No hay ninguna forma de reentrenar con datos nuevos aportados por el cliente."
+  - "Discrepancia menor de etiquetado de caso de uso: la Ficha de Valoración del Estado Técnico
+     referencia este modelo como 'CU18', mientras que la memoria v4.2 indica explícitamente 'Este
+     proyecto responde al caso de uso CU06'. No se ha podido contrastar con el equipo cuál es el
+     identificador de caso de uso de negocio correcto -- probablemente 'CU18' en la ficha se
+     refiere al número de lote/modelo de integración (modelo 18), no al CU de negocio. No afecta
+     a ninguna decisión técnica de este manifest."
+  - "La observación 'Documentación' abierta en la Ficha de Valoración (Tabla 10 de la memoria
+     compara arquitecturas previas al GRU final, no la configuración consolidada) es, según la
+     propia ficha, de categoría Documentación, no Técnica, y no bloquea la aceptación del modelo
+     (Opción A). Los resultados del GRU v4.0 final SÍ están documentados correctamente en otra
+     sección de la memoria (5.3) y en el README/métricas del código, que son las fuentes usadas
+     en este manifest."
+  - "Dependencia de fuentes de datos externas (MAPA/INE) documentada explícitamente en el
+     README, con protocolo de actuación ante indisponibilidad (posponer reentrenamiento si MAPA
+     no publica, forward-fill si INE no actualiza) -- no aplica a la inferencia de este plugin
+     (que no reentrena), se deja constancia por si es relevante para la operación del servicio."
