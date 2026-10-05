@@ -172,6 +172,15 @@ from app.plugins.m47_dnsl_fallas_maquinaria_pasteurizado.predict_dto import (
     PredictRequest as M47_Request,
     PredictResponse as M47_Response,
 )
+from app.plugins.m48_dnsl_fallas_maquinaria_pasteurizado.plugin import M48DnsFallMaquinariaPasteurizadoPlugin
+from app.plugins.m48_dnsl_fallas_maquinaria_pasteurizado.predict_dto import (
+    PredictRequest as M48_Request,
+    PredictResponse as M48_Response,
+)
+from app.plugins.m48_dnsl_fallas_maquinaria_pasteurizado.train_dto import (
+    TrainRequest as M48_TrainReq,
+    TrainResponse as M48_TrainResp,
+)
 from app.plugins.ml45_cereals_dnsl_critical_point_detection.plugin import (
     Ml45CerealsDnslCriticalPointDetectionPlugin,
 )
@@ -437,6 +446,17 @@ REGISTRY: list[ModelEntry] = [
         extra_predict_exceptions=(),
     ),
     ModelEntry(
+        model_id="m48-dnsl-fallas-maquinaria-pasteurizado",
+        prefix="/models/m48-dnsl-fallas-maquinaria-pasteurizado",
+        version="1.0.0",
+        plugin_class=M48DnsFallMaquinariaPasteurizadoPlugin,
+        predict_request_type=M48_Request,
+        predict_response_type=M48_Response,
+        train_request_type=M48_TrainReq,
+        train_response_type=M48_TrainResp,
+        extra_predict_exceptions=(),
+    ),
+    ModelEntry(
         model_id="ml9-cereals-infestation-sequence-classifier",
         prefix="/models/ml9-cereals-infestation-sequence-classifier",
         version="1.0.0",
@@ -520,7 +540,6 @@ REGISTRY: list[ModelEntry] = [
         train_request_type=Ml16_TrainReq,
         train_response_type=Ml16_TrainResp,
     ),
-        ),
     ModelEntry(
         model_id="ml15-wine-ipi-price-forecast",
         prefix="/models/ml15-wine-ipi-price-forecast",
@@ -546,5 +565,4 @@ REGISTRY: list[ModelEntry] = [
         train_request_type=Ml41_TrainReq,
         train_response_type=Ml41_TrainResp,
     ),
-]
 ]

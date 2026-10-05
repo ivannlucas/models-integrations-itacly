@@ -1,0 +1,52 @@
+Fouling:
+  Sano:
+    accion: "Sin acción requerida"
+    urgencia: "Ninguna"
+    intervalo_ciclos:
+  Warning:
+    accion: "Programar limpieza CIP en próximo turno"
+    urgencia: "Media"
+    intervalo_ciclos: 50
+  Crítico:
+    accion: "Detener producción y ejecutar limpieza CIP inmediata"
+    urgencia: "Alta"
+    intervalo_ciclos: 0
+Válvula:
+  Sano:
+    accion: "Sin acción requerida"
+    urgencia: "Ninguna"
+    intervalo_ciclos:
+  Warning:
+    accion: "Verificar posición y respuesta del actuador de válvulas"
+    urgencia: "Media"
+    intervalo_ciclos: 30
+  Crítico:
+    accion: "Reemplazo o reparación urgente de válvula de control"
+    urgencia: "Alta"
+    intervalo_ciclos: 0
+Bomba:
+  Sano:
+    accion: "Sin acción requerida"
+    urgencia: "Ninguna"
+    intervalo_ciclos:
+  Warning:
+    accion: "Inspección de cavitación y verificar presión diferencial"
+    urgencia: "Media"
+    intervalo_ciclos: 40
+  Crítico:
+    accion: "Reemplazo de bomba programado urgente — riesgo de fuga"
+    urgencia: "Alta"
+    intervalo_ciclos: 0
+Acumulador:
+  Sano:
+    accion: "Sin acción requerida"
+    urgencia: "Ninguna"
+    intervalo_ciclos:
+  Warning:
+    accion: "Recargar presión del acumulador hidráulico"
+    urgencia: "Media"
+    intervalo_ciclos: 60
+  Crítico:
+    accion: "Reemplazo de acumulador — presión fuera de rango operativo"
+    urgencia: "Alta"
+    intervalo_ciclos: 0
