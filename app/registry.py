@@ -158,6 +158,18 @@ from app.plugins.ml34_dairy_pasteurization_energy_ga.train_dto import (
     TrainResponse as Ml34Dairy_TrainResp,
 )
 
+from app.plugins.ml36_dairy_dnl_co2_emissions_optimizer.plugin import (
+    Ml36DairyDnlCo2EmissionsOptimizerPlugin,
+)
+from app.plugins.ml36_dairy_dnl_co2_emissions_optimizer.predict_dto import (
+    PredictRequest as Ml36Dairy_Request,
+    PredictResponse as Ml36Dairy_Response,
+)
+from app.plugins.ml36_dairy_dnl_co2_emissions_optimizer.train_dto import (
+    TrainRequest as Ml36Dairy_TrainReq,
+    TrainResponse as Ml36Dairy_TrainResp,
+)
+
 from app.plugins.ml46_dairy_fouling_clog_detection.plugin import Ml46DairyFoulingClogDetectionPlugin
 from app.plugins.ml46_dairy_fouling_clog_detection.predict_dto import (
     PredictRequest as Ml46Dairy_Request,
@@ -417,6 +429,17 @@ REGISTRY: list[ModelEntry] = [
         train_response_type=Ml34Dairy_TrainResp,
     ),
     ModelEntry(
+        model_id="ml36-dairy-dnl-co2-emissions-optimizer",
+        prefix="/models/ml36-dairy-dnl-co2-emissions-optimizer",
+        version="1.0.0",
+        plugin_class=Ml36DairyDnlCo2EmissionsOptimizerPlugin,
+        predict_request_type=Ml36Dairy_Request,
+        predict_response_type=Ml36Dairy_Response,
+        extra_predict_exceptions=(ThermalSafetyViolationError,),
+        train_request_type=Ml36Dairy_TrainReq,
+        train_response_type=Ml36Dairy_TrainResp,
+    ),
+    ModelEntry(
         model_id="ml46-dairy-fouling-clog-detection",
         prefix="/models/ml46-dairy-fouling-clog-detection",
         version="1.0.0",
@@ -520,7 +543,6 @@ REGISTRY: list[ModelEntry] = [
         train_request_type=Ml16_TrainReq,
         train_response_type=Ml16_TrainResp,
     ),
-        ),
     ModelEntry(
         model_id="ml15-wine-ipi-price-forecast",
         prefix="/models/ml15-wine-ipi-price-forecast",
@@ -546,5 +568,4 @@ REGISTRY: list[ModelEntry] = [
         train_request_type=Ml41_TrainReq,
         train_response_type=Ml41_TrainResp,
     ),
-]
 ]

@@ -59,7 +59,10 @@ class DataContractError(ValueError):
 
 
 class ThermalSafetyViolationError(ValueError):
-    """Raised when the GA cannot find a feasible solution meeting T_out >= 72.3 °C (ml34)."""
+    """Raised when the GA cannot find a feasible solution meeting the T_out food-safety threshold.
+
+    ml34: T_out >= 72.3 °C; ml36: T_out >= 72.5 °C.
+    """
 
 
 class InsufficientSequenceHistoryError(ValueError):
