@@ -1550,6 +1550,7 @@ def _ml41_train(plugin: FakePlugin, *, data_path: str) -> Ml41TrainResp:
         upload_warning=None,
     )
 
+
 FAKE_FACTORIES: dict[str, tuple[Callable, Callable]] = {
     "ml46-dairy-fouling-clog-detection": (_ml46_dairy_inline, _ml46_dairy_batch),
     "ml40-meat-refrigeration-aeration-fault-diagnosis": (_ml40_meat_inline, _ml40_meat_batch),

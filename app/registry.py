@@ -526,7 +526,6 @@ REGISTRY: list[ModelEntry] = [
         train_request_type=Ml16_TrainReq,
         train_response_type=Ml16_TrainResp,
     ),
-        ),
     ModelEntry(
         model_id="ml15-wine-ipi-price-forecast",
         prefix="/models/ml15-wine-ipi-price-forecast",
@@ -552,5 +551,4 @@ REGISTRY: list[ModelEntry] = [
         train_request_type=Ml41_TrainReq,
         train_response_type=Ml41_TrainResp,
     ),
-]
 ]
