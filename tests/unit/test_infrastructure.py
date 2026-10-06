@@ -138,7 +138,7 @@ class TestRouterFactoryEdgeCases:
     def test_extra_predict_exceptions_maps_to_422(self, app, client):
         """Verify extra_predict_exceptions map to HTTP 422."""
         resp = client.post(
-            "/models/wine-sulphite/predict",
+            "/models/ml25-wine-sulphites/predict",
             json={"mode": "inline", "fixed_acidity": 1},
         )
         assert resp.status_code == 422
@@ -341,7 +341,7 @@ class TestModelo10ModelLoader:
 
     def test_build_mobilenetv3_classifier(self):
         """Verify _build_mobilenetv3_classifier returns a model with the correct output size."""
-        from app.plugins.modelo10_lacteo.model_loader import _build_mobilenetv3_classifier
+        from app.plugins.ml10_dairy_disease_vector_detection.model_loader import _build_mobilenetv3_classifier
         import torch.nn as nn
         model = _build_mobilenetv3_classifier(num_classes=3)
         assert isinstance(model.classifier[-1], nn.Linear)
@@ -349,6 +349,6 @@ class TestModelo10ModelLoader:
 
     def test_build_mobilenetv3_classifier_different_classes(self):
         """Verify the classifier head supports different numbers of classes."""
-        from app.plugins.modelo10_lacteo.model_loader import _build_mobilenetv3_classifier
+        from app.plugins.ml10_dairy_disease_vector_detection.model_loader import _build_mobilenetv3_classifier
         model = _build_mobilenetv3_classifier(num_classes=5)
         assert model.classifier[-1].out_features == 5

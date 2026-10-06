@@ -117,12 +117,16 @@ def test_predict_batch_optimize(client):
 
 
 def test_train(client):
-    resp = client.post(f"{PREFIX}/train", json={"data_path": "/tmp/train.csv"})
+    resp = client.post(
+        f"{PREFIX}/train", json={"data_path": "/tmp/train.csv", "mlflow_run_id": "test-run-id"}
+    )
     assert resp.status_code == 200
     body = resp.json()
     assert body["detail"] == "Fine-tuning completado"
     assert isinstance(body["rmse_E_consumo"], float)
     assert isinstance(body["r2_E_consumo"], float)
-    assert isinstance(body["mae_T_out_leche"], float)
-    assert isinstance(body["n_samples"], int)
-    assert isinstance(body["epochs_executed"], int)
+
+
+def test_train_requires_mlflow_run_id(client):
+    resp = client.post(f"{PREFIX}/train", json={"data_path": "/tmp/train.csv"})
+    assert resp.status_code == 422

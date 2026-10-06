@@ -15,7 +15,7 @@ class TrainRequest(BaseModel):
             "para que la ingeniería de características no dependa de valores por defecto."
         ),
     )
-    mlflow_run_id: str = ""
+    mlflow_run_id: str
 
 
 class TrainResponse(BaseModel):

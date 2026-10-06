@@ -1,8 +1,8 @@
 {
   "model_id": "a10",
-  "model_slug": "cattle-disease-vector-detection",
+  "model_slug": "dairy-disease-vector-detection",
   "fecha": "Julio 2026",
-  "model_key": "modelo10-lacteo",
+  "model_key": "ml10-dairy-disease-vector-detection",
   "version": "1.0.0",
 
   "descripcion": "Pipeline de visión artificial de dos etapas para la detección y clasificación de vectores de enfermedades (mosca, mosquito y garrapata) en imágenes de ganado vacuno lechero. La primera etapa localiza cualquier organismo anómalo mediante un detector YOLOv8n (anchor-free, una sola pasada); la segunda recorta cada detección y la clasifica por especie con una red MobileNetV3-Large ajustada por transfer learning. Cada detección solo se acepta si supera de forma independiente los umbrales de confianza de detección y de clasificación.",

@@ -51,6 +51,21 @@ def prepare_slowfast_tensor(
     return [slow, fast]
 
 
+def batched_slowfast_pathways(frames: torch.Tensor, alpha: int = ALPHA) -> list[torch.Tensor]:
+    """Split an already-batched ``(B, C, T, H, W)`` tensor into SlowFast ``[slow, fast]``.
+
+    Same slow/fast pathway construction as :func:`prepare_slowfast_tensor` (single clip,
+    unbatched), but for a batch straight out of a ``DataLoader`` — used by
+    ``training.py``'s training loop. ``frames`` is expected to already be on the target
+    device.
+    """
+    num_frames = frames.shape[2]
+    slow_indices = torch.arange(0, num_frames, alpha, device=frames.device)
+    slow = frames[:, :, slow_indices, :, :]
+    fast = frames
+    return [slow, fast]
+
+
 def extract_cow_roi(frame_bgr: np.ndarray, bbox: list[float]) -> np.ndarray:
     """Crop a cow ROI from a BGR frame and return a ``(CROP_SIZE, CROP_SIZE, 3)`` RGB image."""
     x1, y1, x2, y2 = map(int, bbox)

@@ -1,10 +1,16 @@
 model_id: ml33_cereals_reuse_strategy_optimizer
 sector: cerealista
-# No hay memoria .docx entregada para este modelo (ver known_issues) — título tomado
-# literalmente del README.md del código entregado, único documento de negocio disponible.
-nombre: "DATAGIA - CO2 Reuse-Strategy Optimization: optimización exacta (MILP) de la
-  estrategia de reutilización de subproductos cerealistas por lote, bajo restricciones
-  de capacidad de planta, para minimizar emisiones de CO2 simuladas"
+# [ACTUALIZADO 2026-10-06] Ya hay memoria entregada: inbox/a33/entregable/"33 - Implementación
+# del modelo neuroevolutivo para la reducción del impacto ambiental de los residuos
+# cerealísticos - v2.0.docx" (versión 2.0, 21/07/2026). El nombre y el acrónimo salen ahora de
+# ella. El nombre original del manifest, tomado del README cuando no había memoria, era:
+# "DATAGIA - CO2 Reuse-Strategy Optimization: optimización exacta (MILP) de la estrategia de
+# reutilización de subproductos cerealistas por lote, bajo restricciones de capacidad de planta,
+# para minimizar emisiones de CO2 simuladas".
+nombre: "Implementación del modelo neuroevolutivo para la reducción del impacto ambiental de
+  los residuos cerealísticos"
+acronimo: "MILPCO2 — MILP para la mitigación de CO2 en cereales"
+version_modelo: "2.0"  # memoria v2.0 (21/07/2026): el motor desplegado pasa a ser MILP exacto; NEAT queda como benchmark
 task_type: optimization  # asignación combinatoria exacta (MILP); no hay red predictiva desplegada
 framework:
   - scipy==1.15.3     # scipy.optimize.milp (HiGHS) — motor desplegado
@@ -144,6 +150,14 @@ training:
     El repo SÍ trae código de entrenamiento NEAT (src/training/evolution.py,
     scripts/run_optimization.py) y un genoma serializado (models/artifacts/winner_genome.pkl),
     pero son del benchmark retenido, no del modelo desplegado — ver known_issues.
+    [RE-VERIFICADO 2026-10-02] Releído README.md completo: confirma literalmente "The deployed
+    decision engine is an exact optimizer... Neuroevolution (NEAT) is retained as a
+    learned-policy benchmark". Conclusión sin cambios.
+    [CONFIRMADO POR LA MEMORIA v2.0, 2026-10-06] §10.3: "El modelo desplegado (optimizador
+    exacto) no se reentrena: recalcula el óptimo en cada ejecución. Lo que requiere
+    mantenimiento son sus dos entradas de conocimiento —la calibración del simulador de
+    emisiones y los valores de capacidad/horizonte operativo—; el reentrenamiento, en su caso,
+    solo afecta al benchmark NEAT." También §5.1 y §8.2 (no requiere artefacto entrenado).
 
 metrics_reported:
   # models/metrics/inference_evaluation_report.json — comparación motor desplegado (exact) vs
@@ -153,6 +167,7 @@ metrics_reported:
   ai_estimated_total_emissions_kg: 30893908.4
   baseline_total_emissions_kg: 42691705.58
   total_emissions_reduction_pct: 27.63
+  reduction_vs_observed_baseline_pct: 27.39  # métrica diagnóstica frente a co2_emissions_kg del dataset (memoria §7.2; baseline observado 42 548 061,7 kg)
   distribution_ai_pct_normalized:
     composting: 37.18
     animal_feed: 27.27
@@ -278,15 +293,28 @@ golden_cases:
     tolerance_pct: 0.5  # agregado sobre 10000 filas; pequeño margen de redondeo por acumulación
 
 known_issues:
-  - "SIN MEMORIA .DOCX: a diferencia de otros modelos de este repo, no se entregó memoria/entregable
-     en inbox/a33-.../entregable/. El README.md de este delivery es exhaustivo y de código real
-     (fórmulas exactas, defaults reproducibles, reportes JSON auditados), así que este manifest se
-     construyó enteramente desde código + README + JSON de métricas, sin ningún dato de la memoria.
-     Revisión humana recomendada antes de docs-generation por si existe una memoria oficial fuera
-     de este repo que deba prevalecer sobre el README como fuente de la ficha funcional."
+  - "[RESUELTO 2026-10-06] SIN MEMORIA .DOCX: cuando se extrajo este manifest no se había
+     entregado memoria/entregable, y se construyó enteramente desde código + README + JSON de
+     métricas. La memoria v2.0 (21/07/2026) se ha añadido después en inbox/a33/entregable/ y se ha
+     contrastado punto por punto con este manifest. Todas las cifras y parámetros coinciden
+     exactamente: reducción 27.63 % (§7.2), Monte Carlo p05/p50/p95 27.27/27.66/28.04 % (§7.2),
+     comparativa de políticas 27.63/12.19/11.31/9.64/-12.78 % (§7.3.1, Tabla 9), distribución
+     37.2/27.3/17.9/17.7 % (§7.4), capacidades 90/140/45/10000 y lots_per_day=15 (§5.1, §6.4),
+     columnas de entrada (§8.3) y de traza ai_assignment_source/ai_is_fallback (§8.4). Ninguna
+     discrepancia con el plugin ni con los golden cases. Ver también el known_issue sobre restos
+     de redacción v1.x en la propia memoria."
+  - "RESTOS DE REDACCIÓN v1.x EN LA MEMORIA v2.0 (no afecta al plugin): algunos párrafos no se
+     actualizaron al cambio de motor de la v2.0 y siguen describiendo la política NEAT como si
+     fuera la desplegada. Por ejemplo, §7.2 ('el efecto conjunto de la política neuroevolutiva'),
+     §7.6 ('confirma que el fitness diseñado durante el entrenamiento funciona como criterio de
+     optimización') y §8.4 ('estrategia final seleccionada [...] tras combinar la preferencia de la
+     red NEAT'). La propia memoria lo contradice en §2.2, §5, §5.1, §8.2 y §10.2-10.3, que son
+     inequívocos: el motor desplegado es el MILP exacto. Prevalecen esas secciones y el código
+     real (src/predict/exact_optimizer.py). Señalado para que el equipo de IA lo corrija en una
+     próxima versión de la memoria."
   - "LINAJE DEL PROYECTO: el nombre de carpeta tal como se entregó
      ('a33-cnp-cereals-neuroevolutivo-reduccion-ambiental-residuos', renombrada a inbox/a33 por
-     convención del repo — ver README.md original conservado en inbox/a33/README.md)
+     convención del repo — ver README.md original, hoy en inbox/a33/codigo/README.md)
      y el dominio de negocio (cereales, reducción de residuos, técnicas neuroevolutivas) coinciden
      con el linaje de a31 (hoy app/plugins/ml31_cereals_residue_optimizer), cuyo propio manifest
      documenta que YA es una v2.0 que sustituyó una v1.x ANN+GA bajo el mismo nombre de carpeta.

@@ -214,7 +214,7 @@ class Ml3WineDiseasePestForecastPlugin(ModelPluginPort):
 
     # ── train (full retraining with the delivered procedure) ─────────────────
 
-    def train(self, *, data_path: str, mlflow_run_id: str = "") -> TrainResponse:
+    def train(self, *, data_path: str, mlflow_run_id: str) -> TrainResponse:
         """Retrain the full Deep Ensemble from a labeled raw CSV with the delivered procedure.
 
         Trains into fresh objects — the served fixed S3 artifacts are never mutated. User

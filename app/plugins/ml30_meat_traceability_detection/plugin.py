@@ -178,7 +178,7 @@ class Ml30MeatTraceabilityDetectionPlugin(ModelPluginPort):
                 self._preprocessor = saved_preprocessor
                 self._mlp = saved_mlp
 
-    def train(self, *, data_path: str, mlflow_run_id: str = "") -> TrainResponse:  # pylint: disable=too-many-locals
+    def train(self, *, data_path: str, mlflow_run_id: str) -> TrainResponse:  # pylint: disable=too-many-locals
         """Retrain the MLP from scratch with the original best-genome hyperparameters (reusing
         the fitted preprocessor) and persist artifacts."""
         import pickle  # pylint: disable=import-outside-toplevel

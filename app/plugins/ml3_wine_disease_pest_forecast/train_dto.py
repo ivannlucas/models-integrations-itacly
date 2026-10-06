@@ -17,7 +17,7 @@ class TrainRequest(BaseModel):
             "BiGRU) desde cero y devuelve las métricas de test hold-out."
         ),
     )
-    mlflow_run_id: str = ""
+    mlflow_run_id: str
 
 
 class TrainResponse(BaseModel):

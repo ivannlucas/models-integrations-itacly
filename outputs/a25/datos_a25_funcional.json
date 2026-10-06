@@ -1,0 +1,47 @@
+{
+  "model_id": "a25",
+  "model_slug": "wine-sulphites",
+  "fecha": "Octubre 2026",
+
+  "descripcion": "Herramienta de apoyo a la decisión que, a partir del análisis de laboratorio de un vino blanco, recomienda la dosis de sulfito (SO2) más adecuada a añadir durante su elaboración. Simula distintas dosis posibles, estima cómo afectaría cada una a la calidad y al equilibrio químico del vino, y propone la opción que maximiza la calidad esperada sin incumplir los límites de seguridad y normativos.",
+  "objetivo": "Ayudar al enólogo a decidir cuánto sulfito añadir a un vino para cuidar su calidad final, evitando tanto la falta de protección (riesgo de oxidación y crecimiento microbiano) como el exceso (defectos de sabor e incumplimiento legal). Importante: el modelo se ha entrenado y medido sobre un dataset académico de vino blanco portugués (Vinho Verde); sus recomendaciones deben confirmarse con el criterio profesional del enólogo, sobre todo en vinos de calidad muy alta o muy baja o de otras regiones.",
+  "caso_uso": "Antes de añadir sulfito en una fase de elaboración, trasiego o embotellado, introduces la analítica actual del vino (acidez, azúcar, pH, alcohol, niveles de SO2, etc.). La herramienta simula un rango de dosis posibles y te devuelve la dosis recomendada, la calidad esperada con y sin esa dosis, y la trayectoria completa simulada para que puedas valorar el comportamiento del vino ante distintas cantidades antes de decidir.",
+  "que_no_responde": "No dice si el vino está listo para la venta ni evalúa su calidad aromática completa: solo estima, a partir del equilibrio químico medido en laboratorio, qué dosis de sulfito maximizaría la puntuación de calidad esperada dentro de los límites de seguridad y legales. No sustituye la cata ni el criterio del enólogo.",
+  "entradas_contexto": "La herramienta trabaja con los datos que ya proporciona el análisis fisicoquímico de laboratorio de la muestra de vino (acidez, azúcar, pH, sulfatos, alcohol, niveles actuales de SO2 libre y total).",
+  "inputs": [
+    {"nombre": "Analítica fisicoquímica del vino", "descripcion": "Los 11 valores que entrega el análisis de laboratorio de la muestra: acidez, azúcar residual, cloruros, densidad, pH, sulfatos, grado alcohólico y los niveles actuales de SO2 libre y total."},
+    {"nombre": "Márgenes de seguridad (opcionales)", "descripcion": "Puedes ajustar el mínimo de SO2 de protección microbiológica, el máximo legal de SO2 total, y cuánto quieres que la herramienta explore por encima de la dosis actual. Si no los indicas, se usan los valores de seguridad habituales."}
+  ],
+  "outputs": [
+    {"nombre": "Dosis de sulfito recomendada", "descripcion": "La cantidad de SO2 libre que la herramienta sugiere añadir.", "interpretacion": "Es el punto que, dentro de lo permitido por la normativa y la seguridad microbiológica, maximiza la calidad esperada del vino."},
+    {"nombre": "Calidad esperada con y sin la dosis recomendada", "descripcion": "Una puntuación de 0 a 10 que compara cómo quedaría el vino si se aplica la dosis recomendada frente a dejarlo como está.", "interpretacion": "Si la diferencia es pequeña, la herramienta no recomendará intervenir: solo sugiere cambiar la dosis cuando la mejora esperada es claramente significativa."},
+    {"nombre": "Trayectoria de simulación", "descripcion": "El comportamiento esperado del vino (calidad y SO2 total) a lo largo de todo el rango de dosis explorado, no solo en el punto recomendado.", "interpretacion": "Permite ver, de un vistazo, qué pasaría con dosis distintas a la recomendada antes de decidir."}
+  ],
+  "ejemplo_interpretacion": "Si para un vino con calidad actual estimada en 6.0 la herramienta recomienda subir el SO2 libre en 15 mg/L y señala una calidad esperada de 6.4 tras la intervención, se interpreta como una mejora de 0.4 puntos que supera el margen de error del modelo (0.43 puntos): la intervención merece la pena. Si en otro vino la mejora esperada fuera de solo 0.1 puntos, la herramienta recomendaría mantener la dosis actual o la mínima necesaria por seguridad, porque el cambio no sería significativo.",
+  "margen_error": "En la predicción de calidad, el modelo se equivoca en promedio menos de medio punto sobre la escala de 0 a 10. En la estimación del SO2 ligado se equivoca en promedio unos 14-15 mg/L. Por eso la herramienta solo recomienda cambiar la dosis cuando la mejora esperada es mayor que ese margen de error: así se evita recomendar intervenciones basadas en diferencias que podrían no ser reales.",
+  "revisar_manualmente": [
+    "Vinos de calidad muy alta (8-9) o muy baja (3-4): el modelo tiene pocos ejemplos de estos casos y tiende a ser conservador, por lo que conviene confirmar la recomendación con cata profesional.",
+    "Vinos de regiones con un perfil químico muy distinto al vino blanco portugués de entrenamiento (p. ej. zonas mediterráneas): la recomendación puede perder precisión.",
+    "Cuando la herramienta indica que no merece la pena intervenir: siempre revisa igualmente si el SO2 actual cumple los mínimos de seguridad.",
+    "Cualquier recomendación antes de aplicarla físicamente: es una ayuda cuantitativa, no sustituye el criterio sensorial del enólogo."
+  ],
+  "que_no_hace": [
+    "No decide por sí sola la dosis final ni sustituye la cata ni el criterio profesional del enólogo.",
+    "No evalúa el perfil aromático del vino: solo su equilibrio macroquímico medido en laboratorio.",
+    "No ha sido validada sobre vinos de otras regiones ni sobre vino tinto — solo sobre vino blanco de un dataset académico portugués.",
+    "No recomienda intervenir si la mejora de calidad esperada es pequeña: en esos casos, propone mantener la dosis mínima segura."
+  ],
+  "puede_equivocarse": "Sí. En vinos de calidad media (la mayoría de los casos reales) el modelo es bastante preciso, pero en vinos excepcionales o muy defectuosos tiende a ser conservador, porque tiene muy pocos ejemplos de esos extremos en los datos con los que aprendió. Además, todo su aprendizaje procede de un dataset académico de vino blanco portugués, por lo que sus recomendaciones deben confirmarse con el criterio del enólogo, especialmente en vinos de características muy distintas a las de ese dataset. Debe usarse como ayuda para decidir, nunca como sustituto de la valoración profesional.",
+  "kpis": [
+    {"kpi": "Precisión en la predicción de calidad", "valor_umbral": "Error medio inferior a 0.5 puntos sobre 10 (obtenido 0.427)", "descripcion": "El modelo se equivoca, en promedio, menos de medio punto en la escala de cata, una mejora de más del 36% sobre una predicción ingenua de referencia."},
+    {"kpi": "Precisión en la estimación de SO2 ligado", "valor_umbral": "Mejora relevante sobre una estimación ingenua (obtenido: mejora del 47.7%)", "descripcion": "El modelo estima con bastante exactitud cuánto sulfito se combinará químicamente tras una dosis candidata."},
+    {"kpi": "Estabilidad del modelo", "valor_umbral": "Variación entre particiones de validación por debajo del 10%", "descripcion": "Las métricas no dependen de qué muestras concretas se usaron para validar — el comportamiento es consistente."}
+  ],
+  "limitaciones": [
+    {"tipo": "Menos preciso en vinos excepcionales o muy defectuosos", "descripcion": "La mayoría de los vinos con los que aprendió son de calidad media; con vinos muy buenos o muy malos, el modelo es más conservador y puede infravalorar unos y sobrevalorar otros."},
+    {"tipo": "No capta matices aromáticos", "descripcion": "Solo se basa en el equilibrio químico de laboratorio, no en el perfil de aromas del vino, que también influye en la calidad sensorial real."},
+    {"tipo": "Dataset de una región concreta", "descripcion": "Aprendió de vino blanco portugués (Vinho Verde); en regiones con equilibrios de acidez y alcohol muy distintos la recomendación puede perder fiabilidad."},
+    {"tipo": "Solo vino blanco", "descripcion": "No es aplicable a vino tinto, cuya química de sulfitos es distinta."},
+    {"tipo": "Es una ayuda, no una decisión", "descripcion": "La recomendación siempre debe confirmarse con el criterio sensorial y profesional del enólogo antes de aplicarla."}
+  ]
+}

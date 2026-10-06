@@ -1,0 +1,257 @@
+model_id: ml2-fungal-cnn-disease-detection
+sector: vitivinicola
+nombre: "Modelo de CNN para la detección de enfermedades fúngicas en la vid"
+task_type: classification  # clasificación de imagen multiclase (5 clases), arquitectura CNN propia (LeafCNN)
+framework:
+  - torch>=2.5.0
+  - torchvision>=0.20.0
+  - pillow>=11.0.0
+  - opencv-python>=4.10.0
+  - scikit-learn>=1.7.0
+  - grad-cam>=1.5.0
+
+# Fuente: inbox/a02/codigo/.../config/config.py, src/training/model.py, src/predict/predict.py,
+# src/training/train.py, src/training/evaluate.py y la memoria (entregable/*.docx).
+
+artifacts:
+  folder: models/artifacts/
+  files:
+    - leafcnn_best.pth   # state_dict de LeafCNN (3 bloques conv + BN + ReLU + MaxPool, GAP, Linear(128->5))
+
+inputs:
+  fixed:
+    - name: image
+      type: file
+      format: [jpg, jpeg, png, bmp]
+      description: >
+        Imagen RGB de una hoja de vid. Inline: base64 de un único fichero. Batch: ZIP con
+        varias imágenes (recorrido recursivo, filtrado por extensión).
+  control: null   # no es un modelo prescriptivo/optimizador — clasificador puro
+  derived_if_missing: null
+
+outputs:
+  predict_inline:
+    - name: prediction
+      type: str
+      description: "Clase predicha (una de las 5 CLASS_NAMES, ver training.target_column más abajo)"
+    - name: confidence
+      type: float
+      description: "Probabilidad softmax de la clase ganadora [0,1]"
+    - name: probabilities
+      type: dict
+      description: "Probabilidad softmax por cada una de las 5 clases"
+  predict_batch:
+    - name: predictions
+      type: list[dict]
+      description: >
+        Una entrada por imagen del ZIP: filename, prediction, confidence, probabilities,
+        heatmap_url (CAM superpuesto en base64 JPEG data URI) o error si la imagen no es
+        decodificable.
+
+training:
+  supported: true
+  # Razonamiento (contradice el estado actual del plugin, que marca TrainingNotSupportedError):
+  # inbox/a02/codigo/.../src/training/train.py (run_training) + src/training/model.py
+  # (create_model/get_optimizer_scheduler) + config/config.py contienen un procedimiento de
+  # entrenamiento real, completo y reproducible (semilla de splits fija = 42, según memoria
+  # P93) que el equipo de IA ejecutó para producir leafcnn_best.pth. La memoria (P102) solo
+  # dice que NO es necesario reentrenar para usar el sistema porque ya se entrega el artefacto
+  # entrenado — no dice que el reentrenamiento no esté soportado. De hecho P303 recomienda
+  # explícitamente reentrenar con imágenes propias del viñedo/cliente para un despliegue
+  # fiable. Por tanto training.supported=true y se implementa train() real en el plugin.
+  target_column: label  # columna del CSV/estructura de carpetas (VineDataset espera columnas ['path','label'])
+  required_columns:
+    - path   # ruta de la imagen (en el ZIP de /train, estructura de carpetas <clase>/*.jpg, no CSV)
+    - label  # una de: black_rot, downy_mildew, healthy, powdery_mildew, trunk_disease
+  # Nota de formato: el código original (src/training/dataset.py: VineDataset) consume un
+  # DataFrame con columnas ['path','label'], pero el pipeline de datos real
+  # (src/data_processing/load_data.py: organize_images_by_label) organiza las imágenes en
+  # carpetas por clase (data/processed/Images_256/<label>/*.jpg) antes de generar ese CSV.
+  # El endpoint /train de este plugin reutiliza esa misma convención de carpetas-por-clase
+  # (ZIP con subcarpetas = nombre de clase) en vez de exigir un CSV, siguiendo el mismo
+  # patrón ya usado por otros plugins de imagen de este repo con train() real
+  # (modelo10_lacteo, ml8_cereals_img_anomaly_detector) — no se inventa un formato nuevo.
+  hyperparams:
+    optimizer: AdamW
+    lr: 0.001065
+    weight_decay: 0.000001
+    scheduler: "ReduceLROnPlateau(mode=min, factor=0.3, patience=3)"
+    loss: CrossEntropyLoss
+    batch_size: 16
+    max_epochs: 100
+    early_stopping_patience: 10
+    image_size: 224
+    train_augmentation: "RandomHorizontalFlip + RandomRotation(30) + ColorJitter(0.4,0.4,0.4)"
+    normalize_mean_std: [0.5, 0.5, 0.5]
+    source: codigo_entrenamiento  # config/config.py + src/training/model.py get_optimizer_scheduler()
+  metrics_returned:
+    - accuracy
+    - precision   # weighted, igual que src/training/evaluate.py (precision_score average=weighted)
+    - recall      # weighted
+    - f1           # weighted
+  source: codigo_entrenamiento
+
+constraints: null  # no hay restricciones de negocio documentadas (no es un modelo prescriptivo)
+
+metrics_reported:
+  # De la memoria (Sección 6.3 y 7, no verificable 1:1 porque no se entregaron imágenes ni
+  # el CSV con los splits reales — ver known_issues). Solo referencia para tolerancia.
+  accuracy_test: 0.98          # P198: "alcanzando un valor aproximado de 0,98 en el conjunto de test"
+  mean_val_accuracy_cv: 0.992003  # P170: media de 5-fold CV con los mejores hiperparámetros
+  kpi_target_accuracy: 0.95    # P40/P184: KPI de negocio IEIF > 95% == accuracy > 0.95
+  source: memoria_secciones_6.3_7
+
+golden_cases:
+  # ACTUALIZACIÓN (2026-10-05): el equipo de IA ha añadido ahora los datasets reales a
+  # inbox/a02/codigo/ (data/raw/datasets/{NGLD,Grape Plant from Plant Village Dataset}/,
+  # data/processed/Images_256/<clase>/*.jpg y, sobre todo, data/splits/{train,val,test}.csv
+  # ya generados por el pipeline original). Esto sustituye la limitación documentada
+  # anteriormente (ver abajo en known_issues, no se borra el historial).
+  #
+  # Fuente PREFERIDA según el skill (Paso 2): split de test real ya generado por el código
+  # entregado — data/splits/test.csv (528 filas, columnas path,label, 5 clases:
+  # black_rot=118, downy_mildew=97, healthy=135, powdery_mildew=40, trunk_disease=138).
+  # Se seleccionaron 18 imágenes variadas, estratificadas por clase (proporcional al tamaño
+  # de cada clase en el test set, mínimo 3 por clase), con random.seed(42) sobre
+  # data/splits/test.csv ya barajado por clase. Las 18 rutas de imagen se verificaron
+  # existentes en disco antes de usarse.
+  #
+  # `expected` se obtuvo EJECUTANDO el checkpoint real servido (artifacts/ml2_fungal_cnn_disease_detection/leafcnn_best.pth,
+  # cargado vía app.plugins.ml2_fungal_cnn_disease_detection.model_loader.load_model_bundle())
+  # directamente en proceso con el mismo preprocesado que usa el plugin
+  # (preprocessing.image_path_to_tensor + postprocessing.build_inline_response) — nunca a mano.
+  # `ground_truth_label` es la etiqueta real del dataset (columna `label` de test.csv), distinta
+  # de `expected` (igual que el patrón ya usado en inbox/a30/manifest.yaml con
+  # `ground_truth_target_traceability_incident` separado de `expected`): el objetivo de
+  # `expected` es detectar regresiones de *serving* (preprocesado/pesos/postprocesado), no medir
+  # accuracy contra el dataset — eso se reporta aparte en el informe de verificación.
+  # Ejecutado con CUDA real (RTX 2070 SUPER) tras corregir el bug de `_safe_device()` descrito
+  # en known_issues — ver outputs/a02/verification_report.md.
+  - id: caso_001_black_rot
+    input: {image_path: "inbox/a02/codigo/data/processed/Images_256/black_rot/image (567).JPG"}
+    expected: {prediction: black_rot, confidence: 0.999735, probabilities: {black_rot: 0.999735, downy_mildew: 0.0, healthy: 0.0, powdery_mildew: 0.0, trunk_disease: 0.000265}}
+    ground_truth_label: black_rot
+    source: dataset_test_split
+  - id: caso_002_black_rot
+    input: {image_path: "inbox/a02/codigo/data/processed/Images_256/black_rot/image (888).JPG"}
+    expected: {prediction: black_rot, confidence: 0.999979, probabilities: {black_rot: 0.999979, downy_mildew: 0.0, healthy: 0.0, powdery_mildew: 0.0, trunk_disease: 0.000021}}
+    ground_truth_label: black_rot
+    source: dataset_test_split
+  - id: caso_003_black_rot
+    input: {image_path: "inbox/a02/codigo/data/processed/Images_256/black_rot/image (457).JPG"}
+    expected: {prediction: black_rot, confidence: 0.999964, probabilities: {black_rot: 0.999964, downy_mildew: 0.0, healthy: 0.0, powdery_mildew: 0.0, trunk_disease: 0.000036}}
+    ground_truth_label: black_rot
+    source: dataset_test_split
+  - id: caso_004_black_rot
+    input: {image_path: "inbox/a02/codigo/data/processed/Images_256/black_rot/image (406).JPG"}
+    expected: {prediction: black_rot, confidence: 0.969956, probabilities: {black_rot: 0.969956, downy_mildew: 0.0, healthy: 0.000122, powdery_mildew: 0.0, trunk_disease: 0.029922}}
+    ground_truth_label: black_rot
+    source: dataset_test_split
+  - id: caso_005_downy_mildew
+    input: {image_path: "inbox/a02/codigo/data/processed/Images_256/downy_mildew/Downy Mildew_89.jpg"}
+    expected: {prediction: downy_mildew, confidence: 0.989935, probabilities: {black_rot: 0.000001, downy_mildew: 0.989935, healthy: 0.000016, powdery_mildew: 0.010046, trunk_disease: 0.000003}}
+    ground_truth_label: downy_mildew
+    source: dataset_test_split
+  - id: caso_006_downy_mildew
+    input: {image_path: "inbox/a02/codigo/data/processed/Images_256/downy_mildew/Downy Mildew_480.jpg"}
+    expected: {prediction: downy_mildew, confidence: 0.999940, probabilities: {black_rot: 0.000001, downy_mildew: 0.999940, healthy: 0.0, powdery_mildew: 0.000058, trunk_disease: 0.0}}
+    ground_truth_label: downy_mildew
+    source: dataset_test_split
+  - id: caso_007_downy_mildew
+    input: {image_path: "inbox/a02/codigo/data/processed/Images_256/downy_mildew/Downy Mildew_701.jpg"}
+    expected: {prediction: downy_mildew, confidence: 0.999888, probabilities: {black_rot: 0.0, downy_mildew: 0.999888, healthy: 0.0, powdery_mildew: 0.000112, trunk_disease: 0.0}}
+    ground_truth_label: downy_mildew
+    source: dataset_test_split
+  - id: caso_008_healthy
+    input: {image_path: "inbox/a02/codigo/data/processed/Images_256/healthy/image (250).JPG"}
+    expected: {prediction: healthy, confidence: 0.999701, probabilities: {black_rot: 0.000247, downy_mildew: 0.000002, healthy: 0.999701, powdery_mildew: 0.000022, trunk_disease: 0.000027}}
+    ground_truth_label: healthy
+    source: dataset_test_split
+  - id: caso_009_healthy
+    input: {image_path: "inbox/a02/codigo/data/processed/Images_256/healthy/Healthy Leaves_959.jpg"}
+    expected: {prediction: healthy, confidence: 0.999681, probabilities: {black_rot: 0.0, downy_mildew: 0.000242, healthy: 0.999681, powdery_mildew: 0.000077, trunk_disease: 0.0}}
+    ground_truth_label: healthy
+    source: dataset_test_split
+  - id: caso_010_healthy
+    input: {image_path: "inbox/a02/codigo/data/processed/Images_256/healthy/Healthy Leaves_1239.jpg"}
+    expected: {prediction: healthy, confidence: 0.999975, probabilities: {black_rot: 0.0, downy_mildew: 0.000013, healthy: 0.999975, powdery_mildew: 0.000011, trunk_disease: 0.0}}
+    ground_truth_label: healthy
+    source: dataset_test_split
+  - id: caso_011_healthy
+    input: {image_path: "inbox/a02/codigo/data/processed/Images_256/healthy/image (124).JPG"}
+    expected: {prediction: healthy, confidence: 0.999244, probabilities: {black_rot: 0.000697, downy_mildew: 0.0, healthy: 0.999244, powdery_mildew: 0.000002, trunk_disease: 0.000057}}
+    ground_truth_label: healthy
+    source: dataset_test_split
+  - id: caso_012_powdery_mildew
+    input: {image_path: "inbox/a02/codigo/data/processed/Images_256/powdery_mildew/Powdery Mildew_272.jpg"}
+    expected: {prediction: powdery_mildew, confidence: 0.998776, probabilities: {black_rot: 0.0, downy_mildew: 0.001213, healthy: 0.000010, powdery_mildew: 0.998776, trunk_disease: 0.0}}
+    ground_truth_label: powdery_mildew
+    source: dataset_test_split
+  - id: caso_013_powdery_mildew
+    input: {image_path: "inbox/a02/codigo/data/processed/Images_256/powdery_mildew/Powdery Mildew_152.jpg"}
+    expected: {prediction: powdery_mildew, confidence: 0.961269, probabilities: {black_rot: 0.0, downy_mildew: 0.000532, healthy: 0.038199, powdery_mildew: 0.961269, trunk_disease: 0.0}}
+    ground_truth_label: powdery_mildew
+    source: dataset_test_split
+  - id: caso_014_powdery_mildew
+    input: {image_path: "inbox/a02/codigo/data/processed/Images_256/powdery_mildew/Powdery Mildew_300.jpg"}
+    expected: {prediction: powdery_mildew, confidence: 0.999012, probabilities: {black_rot: 0.000001, downy_mildew: 0.000984, healthy: 0.000003, powdery_mildew: 0.999012, trunk_disease: 0.0}}
+    ground_truth_label: powdery_mildew
+    source: dataset_test_split
+  - id: caso_015_trunk_disease
+    input: {image_path: "inbox/a02/codigo/data/processed/Images_256/trunk_disease/image (365).JPG"}
+    expected: {prediction: trunk_disease, confidence: 0.999995, probabilities: {black_rot: 0.000005, downy_mildew: 0.0, healthy: 0.0, powdery_mildew: 0.0, trunk_disease: 0.999995}}
+    ground_truth_label: trunk_disease
+    source: dataset_test_split
+  - id: caso_016_trunk_disease
+    input: {image_path: "inbox/a02/codigo/data/processed/Images_256/trunk_disease/image (862).JPG"}
+    expected: {prediction: trunk_disease, confidence: 0.984186, probabilities: {black_rot: 0.013286, downy_mildew: 0.002374, healthy: 0.0, powdery_mildew: 0.000155, trunk_disease: 0.984186}}
+    ground_truth_label: trunk_disease
+    source: dataset_test_split
+  - id: caso_017_trunk_disease
+    input: {image_path: "inbox/a02/codigo/data/processed/Images_256/trunk_disease/image (281).JPG"}
+    expected: {prediction: trunk_disease, confidence: 0.999808, probabilities: {black_rot: 0.000192, downy_mildew: 0.0, healthy: 0.0, powdery_mildew: 0.0, trunk_disease: 0.999808}}
+    ground_truth_label: trunk_disease
+    source: dataset_test_split
+  - id: caso_018_trunk_disease
+    input: {image_path: "inbox/a02/codigo/data/processed/Images_256/trunk_disease/image (1174).JPG"}
+    expected: {prediction: trunk_disease, confidence: 0.999289, probabilities: {black_rot: 0.000711, downy_mildew: 0.0, healthy: 0.0, powdery_mildew: 0.0, trunk_disease: 0.999289}}
+    ground_truth_label: trunk_disease
+    source: dataset_test_split
+
+known_issues:
+  - "HISTÓRICO (ya resuelto el 2026-10-05): en la extracción inicial del manifest,
+    inbox/a02/codigo/.../data/ solo contenía un README.md con instrucciones para descargar
+    Kaggle Plant Village + NGLD externamente — no había imágenes reales ni CSV de splits, por
+    lo que golden_cases quedó vacío. El equipo de IA ha añadido ahora los datasets reales
+    (data/raw/datasets/, data/processed/Images_256/, data/splits/{train,val,test}.csv) y
+    golden_cases se ha rellenado con 18 casos reales de data/splits/test.csv (ver arriba) —
+    esta limitación ya NO aplica, se deja documentada solo por trazabilidad histórica."
+  - "Bug nuevo encontrado y corregido en esta sesión (solo detectable con CUDA real
+    funcional, antes el sandbox tenía una GTX 1060 que ya forzaba CPU por otras razones):
+    model_loader.py:_safe_device() probaba torch.nn.Conv2d(1,1,1)(torch.zeros(1,1,4,4).cuda())
+    — el Conv2d de prueba se queda en CPU (nunca se mueve con .cuda()/.to(device)) y se
+    llama con un tensor de entrada en CUDA, lo que SIEMPRE lanza
+    RuntimeError: Input type (torch.cuda.FloatTensor) and weight type (torch.FloatTensor)
+    should be the same — el try/except lo interpretaba como 'CUDA no funcional' y forzaba
+    CPU incondicionalmente, incluso con una GPU real y funcional. Corregido moviendo también
+    el módulo de prueba a CUDA (torch.nn.Conv2d(1, 1, 1).cuda()) antes de invocarlo.
+    Verificado end-to-end tras el fix: bundle['device']==cuda, model en cuda:0, logits
+    resultantes en cuda — ver outputs/a02/verification_report.md. Mismo patrón de
+    _safe_device() (mismo bug, no corregido aquí, fuera de alcance de esta sesión) presente
+    en ml4_lactic_cnn_thermal_early_disease_detection, ml5_meat_cow_behaviour,
+    ml8_cereals_img_anomaly_detector y ml41_meat_curing_machinery_acoustic_anomaly — se señala
+    para que lo revise quien verifique esos modelos (ml4/ml8 ya están siendo reverificados en
+    paralelo por otros agentes en esta misma sesión)."
+  - "Tablas 3, 4 y 5 de la memoria (resultados comparativos, hiperparámetros, resultados por
+    fold de CV) están embebidas como imágenes/capturas dentro del .docx, no como tablas de
+    texto — no se pudieron extraer sus valores exactos por OCR; se usaron en su lugar los
+    hiperparámetros y métricas que SÍ aparecen como texto plano (P170, P198) y, para
+    hiperparámetros, el código fuente (config/config.py), que es la fuente preferida."
+  - "El plugin ya integrado (app/plugins/ml2_fungal_cnn_disease_detection/) marcaba
+    train() como TrainingNotSupportedError (501) sin que el manifest lo respaldara —
+    bug de clase 3 (ver tarea): training.supported=true aquí, así que train() se
+    reimplementa con un procedimiento real (ver training.hyperparams)."
+  - "El endpoint /train espera un ZIP con subcarpetas por clase (black_rot/, downy_mildew/,
+    healthy/, powdery_mildew/, trunk_disease/) en vez de un CSV, porque las imágenes no se
+    pueden referenciar por ruta de fichero en una petición JSON/CSV igual que un dataset
+    tabular — mismo patrón que modelo10_lacteo y ml8_cereals_img_anomaly_detector."

@@ -308,7 +308,7 @@ class Ml34DairyPasteurizationEnergyGaPlugin(ModelPluginPort):
 
     # ── train ─────────────────────────────────────────────────────────────────
 
-    def train(self, *, data_path: str, mlflow_run_id: str = "") -> TrainResponse:  # noqa: C901  # pylint: disable=too-many-locals,too-many-statements,too-many-branches
+    def train(self, *, data_path: str, mlflow_run_id: str) -> TrainResponse:  # noqa: C901  # pylint: disable=too-many-locals,too-many-statements,too-many-branches
         """Fine-tune the MLP on user data (5 features + 2 targets required).
 
         Follows the original training recipe (src/main.py::train): Adam

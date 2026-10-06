@@ -54,20 +54,20 @@ from app.domain.services.exceptions import (
 from app.domain.services.model_runtime_service import ModelRuntimeService
 from app.infrastructure.http.router_factory import make_model_router
 from app.plugins.ml25_wine_sulphites.predict_dto import (
-    PredictBatchResponse as WineSO2BatchResp,
-    PredictInlineResponse as WineSO2InlineResp,
-    PredictRequest as WineSO2_Request,
-    PredictResponse as WineSO2_Response,
+    PredictBatchResponse as Ml25WineBatchResp,
+    PredictInlineResponse as Ml25WineInlineResp,
+    PredictRequest as Ml25Wine_Request,
+    PredictResponse as Ml25Wine_Response,
 )
 from app.plugins.ml25_wine_sulphites.train_dto import (
-    TrainRequest as WineSO2_TrainReq,
-    TrainResponse as WineSO2_TrainResp,
+    TrainRequest as Ml25Wine_TrainReq,
+    TrainResponse as Ml25Wine_TrainResp,
 )
-from app.plugins.modelo10_lacteo.predict_dto import (
-    PredictBatchResponse as LacteoBatchResp,
-    PredictInlineResponse as LacteoInlineResp,
-    PredictRequest as Lacteo10_Request,
-    PredictResponse as Lacteo10_Response,
+from app.plugins.ml10_dairy_disease_vector_detection.predict_dto import (
+    PredictBatchResponse as Ml10DairyBatchResp,
+    PredictInlineResponse as Ml10DairyInlineResp,
+    PredictRequest as Ml10Dairy_Request,
+    PredictResponse as Ml10Dairy_Response,
 )
 from app.plugins.ml8_cereals_img_anomaly_detector.predict_dto import (
     PredictBatchResponse as Ml8CerealsBatchResp,
@@ -85,17 +85,26 @@ from app.plugins.ml2_fungal_cnn_disease_detection.predict_dto import (
     PredictRequest as Ml2Fungal_Request,
     PredictResponse as Ml2Fungal_Response,
 )
+from app.plugins.ml2_fungal_cnn_disease_detection.train_dto import (
+    TrainRequest as Ml2Fungal_TrainReq,
+    TrainResponse as Ml2FungalTrainResp,
+)
 from app.plugins.ml5_meat_cow_behaviour.predict_dto import (
     PredictBatchResponse as Ml5CowBatchResp,
     PredictInlineResponse as Ml5CowInlineResp,
     PredictRequest as Ml5Cow_Request,
     PredictResponse as Ml5Cow_Response,
 )
+from app.plugins.ml5_meat_cow_behaviour.train_dto import TrainRequest as Ml5Cow_TrainReq
 from app.plugins.ml7_cereals_grain_pest_detection.predict_dto import (
     PredictBatchResponse as Ml7GrainBatchResp,
     PredictInlineResponse as Ml7GrainInlineResp,
     PredictRequest as Ml7Grain_Request,
     PredictResponse as Ml7Grain_Response,
+)
+from app.plugins.ml7_cereals_grain_pest_detection.train_dto import (
+    TrainRequest as Ml7Grain_TrainReq,
+    TrainResponse as Ml7GrainTrainResp,
 )
 from app.plugins.ml30_meat_traceability_detection.predict_dto import (
     PredictBatchResponse as Ml30TraceBatchResp,
@@ -125,17 +134,29 @@ from app.plugins.ml4_lactic_cnn_thermal_early_disease_detection.predict_dto impo
     PredictRequest as Ml4Thermal_Request,
     PredictResponse as Ml4Thermal_Response,
 )
+from app.plugins.ml4_lactic_cnn_thermal_early_disease_detection.train_dto import (
+    TrainRequest as Ml4Thermal_TrainReq,
+    TrainResponse as Ml4ThermalTrainResp,
+)
 from app.plugins.ml23_lactic_market_price_forecast.predict_dto import (
     PredictBatchResponse as Ml23BatchResp,
     PredictInlineResponse as Ml23InlineResp,
     PredictRequest as Ml23_Request,
     PredictResponse as Ml23_Response,
 )
+from app.plugins.ml23_lactic_market_price_forecast.train_dto import (
+    TrainRequest as Ml23_TrainReq,
+    TrainResponse as Ml23TrainResp,
+)
 from app.plugins.ml17_meat_market_price_analysis.predict_dto import (
     PredictBatchResponse as Ml17BatchResp,
     PredictInlineResponse as Ml17InlineResp,
     PredictRequest as Ml17_Request,
     PredictResponse as Ml17_Response,
+)
+from app.plugins.ml17_meat_market_price_analysis.train_dto import (
+    TrainRequest as Ml17_TrainReq,
+    TrainResponse as Ml17TrainResp,
 )
 from app.plugins.ml35_dairy_ann_cleaning_cost.predict_dto import (
     PredictBatchResponse as Ml35DairyBatchResp,
@@ -178,11 +199,11 @@ from app.plugins.ml41_meat_curing_machinery_acoustic_anomaly.train_dto import (
     TrainRequest as Ml41_TrainReq,
     TrainResponse as Ml41TrainResp,
 )
-from app.plugins.m47_dnsl_fallas_maquinaria_pasteurizado.predict_dto import (
-    PredictBatchResponse as M47BatchResp,
-    PredictInlineResponse as M47InlineResp,
-    PredictRequest as M47_Request,
-    PredictResponse as M47_Response,
+from app.plugins.ml47_dairy_dnsl_pasteurization_fault_detection.predict_dto import (
+    PredictBatchResponse as Ml47DairyBatchResp,
+    PredictInlineResponse as Ml47DairyInlineResp,
+    PredictRequest as Ml47Dairy_Request,
+    PredictResponse as Ml47Dairy_Response,
 )
 from app.plugins.ml40_meat_refrigeration_aeration_fault_diagnosis.predict_dto import (
     PredictBatchResponse as Ml40MeatBatchResp,
@@ -220,14 +241,14 @@ from app.plugins.ml3_wine_disease_pest_forecast.train_dto import (
     TrainRequest as Ml3Wine_TrainReq,
     TrainResponse as Ml3WineTrainResp,
 )
-from app.plugins.modelo43_cereales.predict_dto import (
-    PredictBatchResponse as Modelo43BatchResp,
-    PredictRequest as Modelo43_Request,
-    PredictResponse as Modelo43_Response,
+from app.plugins.ml43_cereals_dnsl_anomaly_fault_detection.predict_dto import (
+    PredictBatchResponse as Ml43CerealsBatchResp,
+    PredictRequest as Ml43Cereals_Request,
+    PredictResponse as Ml43Cereals_Response,
 )
-from app.plugins.modelo43_cereales.train_dto import (
-    TrainRequest as Modelo43_TrainReq,
-    TrainResponse as Modelo43TrainResp,
+from app.plugins.ml43_cereals_dnsl_anomaly_fault_detection.train_dto import (
+    TrainRequest as Ml43Cereals_TrainReq,
+    TrainResponse as Ml43CerealsTrainResp,
 )
 from app.plugins.ml9_cereals_infestation_sequence_classifier.predict_dto import (
     PredictBatchResponse as Ml9CerealsBatchResp,
@@ -393,10 +414,10 @@ class FakePlugin(ModelPluginPort):
 
 # ── Fake response factories per model ──────────────────────────────────────
 
-def _wine_so2_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> WineSO2InlineResp:
+def _ml25_wine_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> Ml25WineInlineResp:
     """Return a fake inline prediction response for the wine sulphite intervention model."""
-    return WineSO2InlineResp(
-        model_id="wine-sulphite",
+    return Ml25WineInlineResp(
+        model_id="ml25-wine-sulphites",
         threshold=threshold,
         prediction=True,
         confidence=6.2,
@@ -418,10 +439,10 @@ def _wine_so2_inline(plugin: FakePlugin, *, features: dict, model_key, threshold
     )
 
 
-def _wine_so2_batch(plugin: FakePlugin, *, data_path: str) -> WineSO2BatchResp:
+def _ml25_wine_batch(plugin: FakePlugin, *, data_path: str) -> Ml25WineBatchResp:
     """Return a fake batch prediction response for the wine sulphite intervention model."""
-    return WineSO2BatchResp(
-        model_id="wine-sulphite",
+    return Ml25WineBatchResp(
+        model_id="ml25-wine-sulphites",
         predictions=[
             {
                 "row": 0,
@@ -435,10 +456,10 @@ def _wine_so2_batch(plugin: FakePlugin, *, data_path: str) -> WineSO2BatchResp:
     )
 
 
-def _lacteo_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> LacteoInlineResp:
-    """Return a fake inline prediction response for the Modelo10Lacteo plugin."""
-    return LacteoInlineResp(
-        model_id="modelo10-lacteo",
+def _ml10_dairy_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> Ml10DairyInlineResp:
+    """Return a fake inline prediction response for the Ml10DairyDiseaseVectorDetection plugin."""
+    return Ml10DairyInlineResp(
+        model_id="ml10-dairy-disease-vector-detection",
         prediction="fly",
         confidence=0.91,
         vectors_count=1,
@@ -453,10 +474,10 @@ def _lacteo_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) 
     )
 
 
-def _lacteo_batch(plugin: FakePlugin, *, data_path: str) -> LacteoBatchResp:
-    """Return a fake batch prediction response for the Modelo10Lacteo plugin."""
-    return LacteoBatchResp(
-        model_id="modelo10-lacteo",
+def _ml10_dairy_batch(plugin: FakePlugin, *, data_path: str) -> Ml10DairyBatchResp:
+    """Return a fake batch prediction response for the Ml10DairyDiseaseVectorDetection plugin."""
+    return Ml10DairyBatchResp(
+        model_id="ml10-dairy-disease-vector-detection",
         predictions=[
             {
                 "filename": "test_cow.jpg",
@@ -474,8 +495,8 @@ def _lacteo_batch(plugin: FakePlugin, *, data_path: str) -> LacteoBatchResp:
     )
 
 
-def _lacteo_train(plugin: FakePlugin, *, data_path: str) -> BaseTrainResponse:
-    """Return a fake training response for the Modelo10Lacteo plugin."""
+def _ml10_dairy_train(plugin: FakePlugin, *, data_path: str) -> BaseTrainResponse:
+    """Return a fake training response for the Ml10DairyDiseaseVectorDetection plugin."""
     return BaseTrainResponse(
         detail="Training completed successfully",
         metrics={
@@ -575,6 +596,19 @@ def _ml5_cow_batch(plugin: FakePlugin, *, data_path: str) -> Ml5CowBatchResp:
     )
 
 
+def _ml5_cow_train(plugin: FakePlugin, *, data_path: str) -> BaseTrainResponse:
+    """Return a fake training response for the ml5 cow-behaviour classifier."""
+    return BaseTrainResponse(
+        detail="Entrenamiento del clasificador SlowFast completado.",
+        metrics={
+            "train_clips": 12,
+            "val_clips": 3,
+            "epochs_run": 2,
+            "best_val_acc": 41.7,
+        },
+    )
+
+
 def _ml2_fungal_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> Ml2FungalInlineResp:
     """Fake inline response for the ml2 fungal CNN model."""
     return Ml2FungalInlineResp(
@@ -595,6 +629,23 @@ def _ml2_fungal_batch(plugin: FakePlugin, *, data_path: str) -> Ml2FungalBatchRe
                       "probabilities": {"black_rot": 0.03, "downy_mildew": 0.04, "healthy": 0.03,
                                         "powdery_mildew": 0.88, "trunk_disease": 0.02}}],
         output_path=None,
+    )
+
+
+def _ml2_fungal_train(plugin: FakePlugin, *, data_path: str) -> Ml2FungalTrainResp:
+    """Fake training response for the ml2 fungal CNN model."""
+    return Ml2FungalTrainResp(
+        detail="Entrenamiento completado",
+        accuracy=0.97,
+        precision=0.97,
+        recall=0.96,
+        f1=0.965,
+        n_train=320,
+        n_val=80,
+        classes=["black_rot", "downy_mildew", "healthy", "powdery_mildew", "trunk_disease"],
+        epochs_run=23,
+        upload_warning=None,
+        mlflow_run_id="test-run-id",
     )
 
 
@@ -621,6 +672,14 @@ def _ml7_grain_batch(plugin: FakePlugin, *, data_path: str) -> Ml7GrainBatchResp
         predictions=[{"filename": "img_001.jpg", "prediction": "sz", "confidence": 0.81,
                       "total_detections": 2, "species_counts": {"sz": 2}}],
         output_path=None,
+    )
+
+
+def _ml7_grain_train(plugin: FakePlugin, *, data_path: str) -> Ml7GrainTrainResp:
+    """Fake training response for the ml7 grain pest detector."""
+    return Ml7GrainTrainResp(
+        detail="Fine-tuning completado", map50=0.87, map50_95=0.62,
+        precision=0.84, recall=0.81, n_images=120, upload_warning=None,
     )
 
 
@@ -760,6 +819,15 @@ def _ml4_thermal_batch(plugin: FakePlugin, *, data_path: str) -> Ml4ThermalBatch
     )
 
 
+def _ml4_thermal_train(plugin: FakePlugin, *, data_path: str) -> Ml4ThermalTrainResp:
+    """Fake training response for the ml4 thermal mastitis model."""
+    return Ml4ThermalTrainResp(
+        detail="Reentrenamiento completado", accuracy=0.62, precision=0.60, recall=0.64,
+        f1=0.62, auc=0.61, n_train=33, n_val=9, training_time_s=4.2,
+        mlflow_run_id="test-run-id", upload_warning=None,
+    )
+
+
 def _ml23_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> Ml23InlineResp:
     """Fake inline response for the ml23 GRU dairy price forecast model."""
     return Ml23InlineResp(
@@ -783,6 +851,15 @@ def _ml23_batch(plugin: FakePlugin, *, data_path: str) -> Ml23BatchResp:
              "horizon": 6},
         ],
         output_path=None,
+    )
+
+
+def _ml23_train(plugin: FakePlugin, *, data_path: str) -> Ml23TrainResp:
+    """Fake training response for the ml23 GRU dairy price forecast model."""
+    return Ml23TrainResp(
+        detail="Reentrenamiento completado",
+        mae=0.0135, rmse=0.017, mape_pct=1.33, r2=0.899, direction_acc_pct=90.6,
+        n_train=1200, n_test=16, training_time_s=42.3, upload_warning=None,
     )
 
 
@@ -818,6 +895,21 @@ def _ml17_batch(plugin: FakePlugin, *, data_path: str) -> Ml17BatchResp:
              "model_id": "ml17-meat-market-price-analysis", "line": "official_v1_4"},
         ],
         output_path=None,
+    )
+
+
+def _ml17_train(plugin: FakePlugin, *, data_path: str) -> Ml17TrainResp:
+    """Fake training response for the ml17 Ridge pork price forecast model."""
+    return Ml17TrainResp(
+        detail="Reentrenamiento completado — modelo persistido en MLflow run fake-run-id "
+               "(el artefacto fijo S3 no se ha modificado).",
+        mae=5.3,
+        rmse=7.2,
+        mase=0.76,
+        r2_train=0.94,
+        directional_accuracy=0.78,
+        n_samples=120,
+        upload_warning=None,
     )
 
 
@@ -962,10 +1054,10 @@ def _ml46_dairy_train(plugin: FakePlugin, *, data_path: str) -> Ml46DairyTrainRe
     )
 
 
-def _m47_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> M47InlineResp:
+def _ml47_dairy_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> Ml47DairyInlineResp:
     """Fake inline response for the m47 DNSL model."""
-    return M47InlineResp(
-        model_id="m47-dnsl-fallas-maquinaria-pasteurizado",
+    return Ml47DairyInlineResp(
+        model_id="ml47-dairy-dnsl-pasteurization-fault-detection",
         Enfriador_Fouling=0,
         Valvula_Switch=0,
         Bomba_Leakage=0,
@@ -974,14 +1066,14 @@ def _m47_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> 
         Confianza_Valvula=0.98,
         Confianza_Bomba=0.97,
         Confianza_Acumulador=0.96,
-        model_name="m47-dnsl-fallas-maquinaria-pasteurizado",
+        model_name="ml47-dairy-dnsl-pasteurization-fault-detection",
     )
 
 
-def _m47_batch(plugin: FakePlugin, *, data_path: str) -> M47BatchResp:
+def _ml47_dairy_batch(plugin: FakePlugin, *, data_path: str) -> Ml47DairyBatchResp:
     """Fake batch response for the m47 DNSL model."""
-    return M47BatchResp(
-        model_id="m47-dnsl-fallas-maquinaria-pasteurizado",
+    return Ml47DairyBatchResp(
+        model_id="ml47-dairy-dnsl-pasteurization-fault-detection",
         predictions=[{
             "Cycle_ID": 1,
             "Enfriador_Fouling": 0,
@@ -996,7 +1088,7 @@ def _m47_batch(plugin: FakePlugin, *, data_path: str) -> M47BatchResp:
             "Confianza_Valvula": 0.98,
             "Confianza_Bomba": 0.97,
             "Confianza_Acumulador": 0.96,
-            "model_name": "m47-dnsl-fallas-maquinaria-pasteurizado",
+            "model_name": "ml47-dairy-dnsl-pasteurization-fault-detection",
         }],
         output_path=None,
     )
@@ -1212,8 +1304,8 @@ def _ml3_wine_train(plugin: FakePlugin, *, data_path: str) -> Ml3WineTrainResp:
     )
 
 
-def _modelo43_inline(plugin: FakePlugin, *, features: dict, model_key, threshold):
-    """modelo43-cereales has no inline mode — mirrors the real plugin's rejection.
+def _ml43_cereals_inline(plugin: FakePlugin, *, features: dict, model_key, threshold):
+    """ml43-cereals-dnsl-anomaly-fault-detection has no inline mode — mirrors the real plugin's rejection.
 
     Unreachable in practice: PredictRequest only accepts mode="batch", so a real
     request with mode="inline" is rejected by Pydantic before FakePlugin.predict_inline
@@ -1221,19 +1313,19 @@ def _modelo43_inline(plugin: FakePlugin, *, features: dict, model_key, threshold
     (inline_factory, batch_factory) tuple like every other model.
     """
     raise InsufficientSensorWindowError(
-        "modelo43-cereales no soporta predicción inline (una sola lectura). "
+        "ml43-cereals-dnsl-anomaly-fault-detection no soporta predicción inline (una sola lectura). "
         "Usa el modo batch con un CSV de al menos 180 registros consecutivos."
     )
 
 
-def _modelo43_batch(plugin: FakePlugin, *, data_path: str) -> Modelo43BatchResp:
-    """Fake batch prediction response for the modelo43-cereales anomaly detector plugin.
+def _ml43_cereals_batch(plugin: FakePlugin, *, data_path: str) -> Ml43CerealsBatchResp:
+    """Fake batch prediction response for the ml43-cereals-dnsl-anomaly-fault-detection anomaly detector plugin.
 
     predicted_anomaly_label/xai_result reflect the real post-Feedback-3 backend shape:
     Spanish label ("No Fallo", not "No Failure") and a populated XAI report even for a
     non-anomalous window (XAI now runs for every window, not only Failure ones)."""
-    return Modelo43BatchResp(
-        model_id="modelo43-cereales",
+    return Ml43CerealsBatchResp(
+        model_id="ml43-cereals-dnsl-anomaly-fault-detection",
         predictions=[{
             "window_index": 1,
             "cycle_id": "cycle_001",
@@ -1254,9 +1346,9 @@ def _modelo43_batch(plugin: FakePlugin, *, data_path: str) -> Modelo43BatchResp:
     )
 
 
-def _modelo43_train(plugin: FakePlugin, *, data_path: str) -> Modelo43TrainResp:
-    """Fake training response for the modelo43-cereales anomaly detector plugin."""
-    return Modelo43TrainResp(
+def _ml43_cereals_train(plugin: FakePlugin, *, data_path: str) -> Ml43CerealsTrainResp:
+    """Fake training response for the ml43-cereals-dnsl-anomaly-fault-detection anomaly detector plugin."""
+    return Ml43CerealsTrainResp(
         detail="Entrenamiento completado",
         accuracy=0.92,
         fallo_auc=0.95,
@@ -1564,15 +1656,15 @@ FAKE_FACTORIES: dict[str, tuple[Callable, Callable]] = {
     "ml30-meat-traceability-detection": (_ml30_trace_inline, _ml30_trace_batch),
     "ml7-cereals-grain-pest-detection": (_ml7_grain_inline, _ml7_grain_batch),
     "ml2-fungal-cnn-disease-detection": (_ml2_fungal_inline, _ml2_fungal_batch),
-    "wine-sulphite": (_wine_so2_inline, _wine_so2_batch),
-    "modelo10-lacteo": (_lacteo_inline, _lacteo_batch),
+    "ml25-wine-sulphites": (_ml25_wine_inline, _ml25_wine_batch),
+    "ml10-dairy-disease-vector-detection": (_ml10_dairy_inline, _ml10_dairy_batch),
     "ml8-cereals-img-anomaly-detector": (_ml8_cereals_inline, _ml8_cereals_batch),
     "ml5-meat-cow-behaviour": (_ml5_cow_inline, _ml5_cow_batch),
-    "m47-dnsl-fallas-maquinaria-pasteurizado": (_m47_inline, _m47_batch),
+    "ml47-dairy-dnsl-pasteurization-fault-detection": (_ml47_dairy_inline, _ml47_dairy_batch),
     "ml45-cereals-dnsl-critical-point-detection": (_ml45_inline, _ml45_batch),
     "ml28-meat-neuroevolutionary-raw-materials-prediction": (_ml28_meat_inline, _ml28_meat_batch),
     "ml3-wine-disease-pest-forecast": (_ml3_wine_inline, _ml3_wine_batch),
-    "modelo43-cereales": (_modelo43_inline, _modelo43_batch),
+    "ml43-cereals-dnsl-anomaly-fault-detection": (_ml43_cereals_inline, _ml43_cereals_batch),
     "ml41-meat-curing-machinery-acoustic-anomaly": (_ml41_inline, _ml41_batch),
     "ml9-cereals-infestation-sequence-classifier": (_ml9_cereals_inline, _ml9_cereals_batch),
     "ml21-cereals-price-spatial": (_ml21_inline, _ml21_batch),
@@ -1581,21 +1673,27 @@ FAKE_FACTORIES: dict[str, tuple[Callable, Callable]] = {
 }
 
 TRAIN_FACTORIES: dict[str, Callable] = {
+    "ml5-meat-cow-behaviour": _ml5_cow_train,
     "ml46-dairy-fouling-clog-detection": _ml46_dairy_train,
     "ml40-meat-refrigeration-aeration-fault-diagnosis": _ml40_meat_train,
     "ml35-dairy-ann-cleaning-cost": _ml35_dairy_train,
     "ml34-dairy-pasteurization-energy-ga": _ml34_dairy_train,
-    "modelo10-lacteo": _lacteo_train,
+    "ml10-dairy-disease-vector-detection": _ml10_dairy_train,
     "ml8-cereals-img-anomaly-detector": _ml8_cereals_train,
     "ml30-meat-traceability-detection": _ml30_trace_train,
+    "ml7-cereals-grain-pest-detection": _ml7_grain_train,
     "ml45-cereals-dnsl-critical-point-detection": _ml45_train,
     "ml3-wine-disease-pest-forecast": _ml3_wine_train,
-    "modelo43-cereales": _modelo43_train,
+    "ml43-cereals-dnsl-anomaly-fault-detection": _ml43_cereals_train,
     "ml41-meat-curing-machinery-acoustic-anomaly": _ml41_train,
     "ml9-cereals-infestation-sequence-classifier": _ml9_cereals_train,
     "ml21-cereals-price-spatial": _ml21_train,
     "ml16-meat-raw-material-price-alert": _ml16_train,
     "ml15-wine-ipi-price-forecast": _ml15_train,
+    "ml17-meat-market-price-analysis": _ml17_train,
+    "ml23-lactic-market-price-forecast": _ml23_train,
+    "ml2-fungal-cnn-disease-detection": _ml2_fungal_train,
+    "ml4-lactic-cnn-thermal-early-disease-detection": _ml4_thermal_train,
 }
 
 
@@ -1603,15 +1701,15 @@ TRAIN_FACTORIES: dict[str, Callable] = {
 
 TEST_REGISTRY: list[ModelEntry] = [
     ModelEntry(
-        model_id="wine-sulphite",
-        prefix="/models/wine-sulphite",
+        model_id="ml25-wine-sulphites",
+        prefix="/models/ml25-wine-sulphites",
         version="1.2.0",
         plugin_class=FakePlugin,
-        predict_request_type=WineSO2_Request,
-        predict_response_type=WineSO2_Response,
+        predict_request_type=Ml25Wine_Request,
+        predict_response_type=Ml25Wine_Response,
         extra_predict_exceptions=(NoValidSimulationPointError,),
-        train_request_type=WineSO2_TrainReq,
-        train_response_type=WineSO2_TrainResp,
+        train_request_type=Ml25Wine_TrainReq,
+        train_response_type=Ml25Wine_TrainResp,
     ),
     ModelEntry(
         model_id="ml3-wine-disease-pest-forecast",
@@ -1625,12 +1723,12 @@ TEST_REGISTRY: list[ModelEntry] = [
         train_response_type=Ml3WineTrainResp,
     ),
     ModelEntry(
-        model_id="modelo10-lacteo",
-        prefix="/models/modelo10-lacteo",
+        model_id="ml10-dairy-disease-vector-detection",
+        prefix="/models/ml10-dairy-disease-vector-detection",
         version="1.0.0",
         plugin_class=FakePlugin,
-        predict_request_type=Lacteo10_Request,
-        predict_response_type=Lacteo10_Response,
+        predict_request_type=Ml10Dairy_Request,
+        predict_response_type=Ml10Dairy_Response,
         extra_predict_exceptions=(),
     ),
     ModelEntry(
@@ -1652,6 +1750,8 @@ TEST_REGISTRY: list[ModelEntry] = [
         predict_request_type=Ml5Cow_Request,
         predict_response_type=Ml5Cow_Response,
         extra_predict_exceptions=(InvalidVideoError, InvalidImageError, InsufficientFramesError),
+        train_request_type=Ml5Cow_TrainReq,
+        train_response_type=BaseTrainResponse,
     ),
     ModelEntry(
         model_id="ml2-fungal-cnn-disease-detection",
@@ -1660,6 +1760,8 @@ TEST_REGISTRY: list[ModelEntry] = [
         plugin_class=FakePlugin,
         predict_request_type=Ml2Fungal_Request,
         predict_response_type=Ml2Fungal_Response,
+        train_request_type=Ml2Fungal_TrainReq,
+        train_response_type=Ml2FungalTrainResp,
         extra_predict_exceptions=(InvalidImageError,),
     ),
     ModelEntry(
@@ -1670,6 +1772,8 @@ TEST_REGISTRY: list[ModelEntry] = [
         predict_request_type=Ml7Grain_Request,
         predict_response_type=Ml7Grain_Response,
         extra_predict_exceptions=(InvalidImageError,),
+        train_request_type=Ml7Grain_TrainReq,
+        train_response_type=Ml7GrainTrainResp,
     ),
     ModelEntry(
         model_id="ml30-meat-traceability-detection",
@@ -1708,6 +1812,8 @@ TEST_REGISTRY: list[ModelEntry] = [
         predict_request_type=Ml4Thermal_Request,
         predict_response_type=Ml4Thermal_Response,
         extra_predict_exceptions=(InvalidImageError,),
+        train_request_type=Ml4Thermal_TrainReq,
+        train_response_type=Ml4ThermalTrainResp,
     ),
     ModelEntry(
         model_id="ml23-lactic-market-price-forecast",
@@ -1717,6 +1823,8 @@ TEST_REGISTRY: list[ModelEntry] = [
         predict_request_type=Ml23_Request,
         predict_response_type=Ml23_Response,
         extra_predict_exceptions=(),
+        train_request_type=Ml23_TrainReq,
+        train_response_type=Ml23TrainResp,
     ),
     ModelEntry(
         model_id="ml17-meat-market-price-analysis",
@@ -1726,6 +1834,8 @@ TEST_REGISTRY: list[ModelEntry] = [
         predict_request_type=Ml17_Request,
         predict_response_type=Ml17_Response,
         extra_predict_exceptions=(),
+        train_request_type=Ml17_TrainReq,
+        train_response_type=Ml17TrainResp,
     ),
     ModelEntry(
         model_id="ml35-dairy-ann-cleaning-cost",
@@ -1761,12 +1871,12 @@ TEST_REGISTRY: list[ModelEntry] = [
         train_response_type=Ml46DairyTrainResp,
     ),
     ModelEntry(
-        model_id="m47-dnsl-fallas-maquinaria-pasteurizado",
-        prefix="/models/m47-dnsl-fallas-maquinaria-pasteurizado",
+        model_id="ml47-dairy-dnsl-pasteurization-fault-detection",
+        prefix="/models/ml47-dairy-dnsl-pasteurization-fault-detection",
         version="1.0.0",
         plugin_class=FakePlugin,
-        predict_request_type=M47_Request,
-        predict_response_type=M47_Response,
+        predict_request_type=Ml47Dairy_Request,
+        predict_response_type=Ml47Dairy_Response,
         extra_predict_exceptions=(),
     ),
     ModelEntry(
@@ -1801,15 +1911,15 @@ TEST_REGISTRY: list[ModelEntry] = [
         extra_predict_exceptions=(),
     ),
     ModelEntry(
-        model_id="modelo43-cereales",
-        prefix="/models/modelo43-cereales",
+        model_id="ml43-cereals-dnsl-anomaly-fault-detection",
+        prefix="/models/ml43-cereals-dnsl-anomaly-fault-detection",
         version="1.0.0",
         plugin_class=FakePlugin,
-        predict_request_type=Modelo43_Request,
-        predict_response_type=Modelo43_Response,
+        predict_request_type=Ml43Cereals_Request,
+        predict_response_type=Ml43Cereals_Response,
         extra_predict_exceptions=(InsufficientSensorWindowError,),
-        train_request_type=Modelo43_TrainReq,
-        train_response_type=Modelo43TrainResp,
+        train_request_type=Ml43Cereals_TrainReq,
+        train_response_type=Ml43CerealsTrainResp,
     ),
     ModelEntry(
         model_id="ml41-meat-curing-machinery-acoustic-anomaly",
@@ -1964,5 +2074,5 @@ def wine_so2_inline_payload() -> dict:
 
 @pytest.fixture
 def lacteo_inline_payload() -> dict:
-    """Return a sample inline payload for the Modelo10Lacteo plugin."""
+    """Return a sample inline payload for the Ml10DairyDiseaseVectorDetection plugin."""
     return {"mode": "inline", "image_base64": "dGVzdC1pbWFnZQ=="}

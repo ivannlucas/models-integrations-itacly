@@ -1,0 +1,349 @@
+# [RENOMBRADO 2026-10-06] Nomenclatura alineada con el estándar mlNN_<sector>_<desc>:
+#   (carpeta de artefactos) modelo8_cereales  ->  ml8_cereals_img_anomaly_detector (model_id sin cambios: ml8-cereals-img-anomaly-detector)
+#   Artefactos (local y S3): artifacts/modelo8_cereales/ -> artifacts/ml8_cereals_img_anomaly_detector/
+#   Las menciones al nombre antiguo en comentarios/known_issues son históricas.
+model_id: ml8_cereals_img_anomaly_detector
+sector: cerealista
+nombre: "Diseño y entrenamiento de un modelo de análisis de imágenes para detección y clasificación de objetos anómalos en granos"
+task_type: classification  # multi-tarea: 2 cabezas de clasificación (categoria sanitaria + tipo de cereal) sobre el mismo backbone
+framework:
+  - torch==2.5.1
+  - torchvision==0.20.1
+  - Pillow==12.2.0
+  - numpy==2.4.4
+  - pandas==3.0.2
+  - scikit-learn==1.8.0
+
+artifacts:
+  folder: models/                         # ruta dentro del código entregado (= ARTIFACT_FOLDER_NAME "ml8_cereals_img_anomaly_detector" en el plugin)
+  files:
+    - mobilenet_v3_large_cereales_multitask.pth   # modelo de producción (seleccionado en memoria 5.3)
+    - efficientnet_b0_cereales_multitask.pth      # alternativa evaluada, no servida por defecto
+    - resnet18_cereales_multitask.pth             # alternativa evaluada, no servida por defecto
+
+inputs:
+  fixed:
+    - name: image
+      type: file
+      format: [jpg, jpeg, png, bmp, tif, tiff]
+      description: >
+        Imagen RGB de un grano/lote de cereal. inline recibe base64 (image_base64);
+        batch recibe un ZIP de imágenes dentro del contenedor.
+      preprocessing:
+        resize: [224, 224]
+        normalize_mean: [0.485, 0.456, 0.406]
+        normalize_std: [0.229, 0.224, 0.225]
+        color_space: RGB
+      source: memoria_seccion_4.2 + src/predict/inference.py (transform Compose)
+  control: null       # no hay variables de control/decisión — es un clasificador puro de imagen
+  derived_if_missing: null
+
+outputs:
+  predict_inline:
+    - name: categoria
+      type: str
+      description: "Categoría sanitaria predicha (sano | hongos | insectos | otros)"
+    - name: cereal
+      type: str
+      description: "Tipo de cereal predicho (trigo | maiz | arroz | sorgo)"
+    - name: confianza_categoria
+      type: float
+      description: "Softmax de la clase ganadora de categoría, [0,1]"
+    - name: confianza_cereal
+      type: float
+      description: "Softmax de la clase ganadora de cereal, [0,1]"
+    - name: probabilidades_categoria
+      type: dict
+      description: "Softmax completo por categoría"
+    - name: probabilidades_cereal
+      type: dict
+      description: "Softmax completo por cereal"
+  predict_batch:
+    - name: predictions
+      type: list
+      description: "Lista de resultados por imagen del ZIP (mismos campos que inline + filename/annotated_image, o error)"
+
+# El orden alfabético de class_to_idx/cereal_to_idx (ImageFolder-style) coincide con el
+# checkpoint real: {0: hongos, 1: insectos, 2: otros, 3: sano} / {0: arroz, 1: maiz, 2: sorgo, 3: trigo}
+# (verificado leyendo artifacts/ml8_cereals_img_anomaly_detector/mobilenet_v3_large_cereales_multitask.pth)
+class_mapping:
+  categoria: [hongos, insectos, otros, sano]
+  cereal: [arroz, maiz, sorgo, trigo]
+
+constraints: null   # no hay restricción de negocio explícita (no es un caso tipo PU>=13 de a35)
+
+training:
+  supported: true
+  target_column: null   # no aplica (clasificación de imagen por estructura de carpetas, no CSV con target_column)
+  required_columns: null
+  # El dataset de entrenamiento se entrega como ZIP con estructura:
+  #   {cereal}/{train|validation}/{categoria}/*.{jpg,jpeg,png,bmp,tif,tiff}
+  # donde {cereal} in [trigo, maiz, arroz, sorgo] y {categoria} in [sano, hongos, insectos, otros]
+  required_structure: "{cereal}/{split}/{categoria}/*.ext"
+  hyperparams:
+    # Bloque "mobilenet_v3" de config/config.yaml — modelo de producción (memoria 6.2 "Hiperparámetros Clave")
+    model_name: mobilenet_v3_large
+    backbone_weights: IMAGENET1K_V1    # confirmado en src/training/model.py:_load_backbone y notebook 04 celda 13 — NO IMAGENET1K_V2
+    batch_size: 16
+    learning_rate_fase1: 0.001
+    learning_rate_fase2: 0.00001
+    num_epochs_fase1: 10
+    num_epochs_fase2: 5
+    patience: 3
+    image_size: 224
+    optimizer: Adam
+    accumulation_steps: 2              # gradient accumulation — src/training/train.py:train_one_epoch
+    seed: 42
+    augmentation_train: {horizontal_flip: true, rotation: 10}
+    augmentation_val: {horizontal_flip: false, rotation: 0}
+    # Esquema de balanceo de clases — memoria 6.2: "todos los modelos compartieron el mismo
+    # esquema de balanceo en entrenamiento" (no es opcional, es parte del procedimiento real):
+    max_samples_hongos: null           # null = recorte automático de 'hongos' al promedio de las demás categorías (src/training/dataset.py:balance_hongos)
+    class_weights: "inverse_frequency, normalizado a num_classes"   # CrossEntropyLoss(weight=...) por categoría
+    cereal_weights: "inverse_frequency, normalizado a num_cereales" # CrossEntropyLoss(weight=...) por cereal
+    sampler: WeightedRandomSampler     # sample_weights = 1/class_counts[label], sobre train_loader únicamente
+    freeze_schedule: "Fase 1: solo neck (Linear 960->1280 + Hardswish + Dropout) + 2 cabezas, features congeladas. Fase 2: todo descongelado (fine-tuning)."
+  metrics_returned: [train_samples, val_samples, fase1_epochs, fase2_epochs, best_val_acc_cat, best_val_acc_cer]
+  source: "codigo_entrenamiento: src/main.py:run_training + src/training/{dataset,model,train,evaluate,utils}.py + config/config.yaml + notebooks/evaluacion/04_MobileNetV3.ipynb"
+
+metrics_reported:
+  dataset: test_hold_out
+  split: "70/15/15 (train/val/test), random_seed=42"
+  modelo: mobilenet_v3_large   # ganador, seleccionado en memoria 5.3
+  n_samples_test_aprox: 7890
+  accuracy_categoria_pct: 92.58
+  accuracy_cereal_pct: 98.98
+  accuracy_combinada_pct: 91.82
+  macro_f1: 0.87
+  weighted_f1: 0.93
+  f1_por_categoria:
+    hongos: {precision: 1.00, recall: 0.90, f1: 0.94}
+    insectos: {precision: 0.62, recall: 0.98, f1: 0.76}
+    sano: {precision: 0.92, recall: 0.99, f1: 0.96}
+    otros: {precision: 0.68, recall: 0.97, f1: 0.80}
+  latencia_ms_por_imagen_cpu: 34.5
+  latencia_ms_por_imagen_gpu_l40: 8.0
+  kpi_objetivo: "Acc. categoria >= 90% | Acc. cereal >= 95% | Acc. combinada >= 85%"
+  kpi_veredicto: APTO
+  source: memoria_tabla_8 + memoria_tabla_9 + memoria_tabla_10 + memoria_tabla_12 (secciones 5.1 y 7.3)
+
+# ACTUALIZACIÓN (2026-10-05): el equipo de IA ha añadido ahora los datasets reales a
+# inbox/a08/codigo/data/raw/ (Wheat_Coccinellid/, archive/, "archive (1)".."archive (5)"/
+# — ~177k imágenes, 7 datasets públicos distintos de Kaggle/similares mapeados a las 4
+# categorías sanitarias vía config.yaml:classification_keywords) y, sobre todo,
+# data/processed/<cereal>/{train,validation,test}/<categoria>/*.ext ya generado por el
+# pipeline original (src/data_processing/preprocess.py:procesar_dataset — train_test_split
+# estratificado, seed=42, ratios 0.7/0.15/0.15 de config.yaml:data.splits). Esto sustituye
+# la limitación documentada antes (ver primer known_issues, no se borra el historial).
+#
+# Fuente PREFERIDA según el skill (Paso 2): el split de test real ya generado por el código
+# entregado (data/processed/<cereal>/test/<categoria>/), el mismo que consume
+# src/training/dataset.py:cargar_todos_los_datos(processed_dir, cereales, categorias, 'test')
+# en la evaluación original — no se ha inventado ni reconstruido ningún split propio.
+# No todas las 16 combinaciones cereal×categoría tienen imágenes de test (p. ej. sorgo solo
+# tiene 'hongos'; maíz no tiene 'otros' — así es el dataset real, no es un error de carga).
+# Se seleccionaron 19 imágenes estratificadas sobre las 12 combinaciones SÍ presentes en el
+# test set (2 por combinación de 'hongos' en cada cereal con esa clase, 2 por 'insectos' en
+# arroz/maíz/trigo — categoría con peor f1 reportado, 0.76 — y 1 por 'sano'/'otros' donde
+# aplica), con random.Random(42).sample() sobre la lista de ficheros ordenada de cada
+# carpeta test/<cereal>/<categoria>/.
+#
+# `expected` se obtuvo EJECUTANDO el checkpoint real servido
+# (artifacts/ml8_cereals_img_anomaly_detector/mobilenet_v3_large_cereales_multitask.pth, cargado vía
+# app.plugins.ml8_cereals_img_anomaly_detector.model_loader.load_model_bundle()) directamente
+# en proceso, con el mismo preprocesado que usa el plugin
+# (preprocessing.image_path_to_tensor + postprocessing.build_inline_response) — nunca a mano.
+# `ground_truth_categoria`/`ground_truth_cereal` son la etiqueta real del dataset (carpeta
+# <categoria>/<cereal> del split de test), distinta de `expected`: el objetivo de `expected`
+# es detectar regresiones de *serving* (preprocesado/pesos/postprocesado/device), no medir
+# accuracy contra el dataset — eso se reporta aparte en outputs/a08/verification_report.md
+# (16/19 aciertan la categoría ground truth, 19/19 el cereal — coherente con el ~92%/~99%
+# de metrics_reported).
+# Ejecutado con CUDA real (RTX 2070 SUPER) tras corregir el bug de `_safe_device()` descrito
+# en known_issues — ver outputs/a08/verification_report.md.
+golden_cases:
+  - id: caso_001_arroz_hongos
+    input: {image_path: "inbox/a08/codigo/data/processed/arroz/test/hongos/archive_(3)_Train_Rice_Blast_BLAST2_049.JPG"}
+    expected: {categoria: hongos, cereal: arroz, confianza_categoria: 0.967283, confianza_cereal: 0.999862, probabilidades_categoria: {hongos: 0.967283, insectos: 0.026226, otros: 0.006163, sano: 0.000329}, probabilidades_cereal: {arroz: 0.999862, maiz: 1.4e-05, sorgo: 7e-06, trigo: 0.000117}}
+    ground_truth_categoria: hongos
+    ground_truth_cereal: arroz
+    source: dataset_test_split
+
+  - id: caso_002_arroz_hongos
+    input: {image_path: "inbox/a08/codigo/data/processed/arroz/test/hongos/archive_(2)_Rice_Leaf_AUG_Brown_Spot_IMG_20231018_142951.jpg"}
+    expected: {categoria: sano, cereal: arroz, confianza_categoria: 0.61798, confianza_cereal: 1.0, probabilidades_categoria: {hongos: 0.375608, insectos: 2.7e-05, otros: 0.006385, sano: 0.61798}, probabilidades_cereal: {arroz: 1.0, maiz: 0.0, sorgo: 0.0, trigo: 0.0}}
+    ground_truth_categoria: hongos
+    ground_truth_cereal: arroz
+    source: dataset_test_split
+
+  - id: caso_003_maiz_hongos
+    input: {image_path: "inbox/a08/codigo/data/processed/maiz/test/hongos/archive_(4)_New_Plant_Diseases_Dataset(Augmented)_train_Corn_(maize)___Cercospora_leaf_spot_Gray_leaf_spot_d20981e7-70ec-495a-9921-c48de5793822___RS_GLSp 4339.JPG"}
+    expected: {categoria: hongos, cereal: maiz, confianza_categoria: 1.0, confianza_cereal: 1.0, probabilidades_categoria: {hongos: 1.0, insectos: 0.0, otros: 0.0, sano: 0.0}, probabilidades_cereal: {arroz: 0.0, maiz: 1.0, sorgo: 0.0, trigo: 0.0}}
+    ground_truth_categoria: hongos
+    ground_truth_cereal: maiz
+    source: dataset_test_split
+
+  - id: caso_004_maiz_hongos
+    input: {image_path: "inbox/a08/codigo/data/processed/maiz/test/hongos/archive_(4)_New_Plant_Diseases_Dataset(Augmented)_train_Corn_(maize)___Cercospora_leaf_spot_Gray_leaf_spot_29f064ba-c8cd-47f7-add1-24fe1263f2db___RS_GLSp 9319_new30degFlipLR.JPG"}
+    expected: {categoria: hongos, cereal: maiz, confianza_categoria: 1.0, confianza_cereal: 1.0, probabilidades_categoria: {hongos: 1.0, insectos: 0.0, otros: 0.0, sano: 0.0}, probabilidades_cereal: {arroz: 0.0, maiz: 1.0, sorgo: 0.0, trigo: 0.0}}
+    ground_truth_categoria: hongos
+    ground_truth_cereal: maiz
+    source: dataset_test_split
+
+  - id: caso_005_sorgo_hongos
+    input: {image_path: "inbox/a08/codigo/data/processed/sorgo/test/hongos/archive_Sorghum_Disease_Image_Dataset_Cereal_Grain_molds_Cereal Grain molds (White Fungi)t399.jpg"}
+    expected: {categoria: hongos, cereal: sorgo, confianza_categoria: 0.999997, confianza_cereal: 1.0, probabilidades_categoria: {hongos: 0.999997, insectos: 1e-06, otros: 0.0, sano: 2e-06}, probabilidades_cereal: {arroz: 0.0, maiz: 0.0, sorgo: 1.0, trigo: 0.0}}
+    ground_truth_categoria: hongos
+    ground_truth_cereal: sorgo
+    source: dataset_test_split
+
+  - id: caso_006_sorgo_hongos
+    input: {image_path: "inbox/a08/codigo/data/processed/sorgo/test/hongos/archive_Sorghum_Disease_Image_Dataset_Anthracnose_and_Red_Rot_AnthracnoseRed Rot422.jpg"}
+    expected: {categoria: hongos, cereal: sorgo, confianza_categoria: 0.995163, confianza_cereal: 0.999999, probabilidades_categoria: {hongos: 0.995163, insectos: 2.7e-05, otros: 6.3e-05, sano: 0.004746}, probabilidades_cereal: {arroz: 1e-06, maiz: 0.0, sorgo: 0.999999, trigo: 0.0}}
+    ground_truth_categoria: hongos
+    ground_truth_cereal: sorgo
+    source: dataset_test_split
+
+  - id: caso_007_trigo_hongos
+    input: {image_path: "inbox/a08/codigo/data/processed/trigo/test/hongos/archive_(5)_data_train_Smut_smut_22.png"}
+    expected: {categoria: insectos, cereal: trigo, confianza_categoria: 0.999249, confianza_cereal: 0.999991, probabilidades_categoria: {hongos: 0.000751, insectos: 0.999249, otros: 0.0, sano: 0.0}, probabilidades_cereal: {arroz: 1e-06, maiz: 8e-06, sorgo: 0.0, trigo: 0.999991}}
+    ground_truth_categoria: hongos
+    ground_truth_cereal: trigo
+    source: dataset_test_split
+    # NOTA: discrepa de ground_truth_categoria (modelo predice 'insectos', carpeta real
+    # dice 'hongos' — error real del modelo, no del plugin; ver verification_report.md).
+
+  - id: caso_008_trigo_hongos
+    input: {image_path: "inbox/a08/codigo/data/processed/trigo/test/hongos/archive_(5)_data_train_Black_Rust_black_rust_137.png"}
+    expected: {categoria: insectos, cereal: trigo, confianza_categoria: 0.591315, confianza_cereal: 0.999246, probabilidades_categoria: {hongos: 0.381895, insectos: 0.591315, otros: 0.025504, sano: 0.001286}, probabilidades_cereal: {arroz: 0.000537, maiz: 0.000101, sorgo: 0.000116, trigo: 0.999246}}
+    ground_truth_categoria: hongos
+    ground_truth_cereal: trigo
+    source: dataset_test_split
+    # NOTA: igual que caso_007 — error real del modelo (confianza baja, 0.59), no del plugin.
+
+  - id: caso_009_arroz_sano
+    input: {image_path: "inbox/a08/codigo/data/processed/arroz/test/sano/archive_(2)_Rice_Leaf_AUG_Healthy_Rice_Leaf_aug_0_8796.jpg"}
+    expected: {categoria: sano, cereal: arroz, confianza_categoria: 0.99736, confianza_cereal: 1.0, probabilidades_categoria: {hongos: 0.002576, insectos: 1.7e-05, otros: 4.8e-05, sano: 0.99736}, probabilidades_cereal: {arroz: 1.0, maiz: 0.0, sorgo: 0.0, trigo: 0.0}}
+    ground_truth_categoria: sano
+    ground_truth_cereal: arroz
+    source: dataset_test_split
+
+  - id: caso_010_maiz_sano
+    input: {image_path: "inbox/a08/codigo/data/processed/maiz/test/sano/archive_(3)_Train_Healthy_Maize_Corn_Health (66).jpg"}
+    expected: {categoria: sano, cereal: maiz, confianza_categoria: 1.0, confianza_cereal: 1.0, probabilidades_categoria: {hongos: 0.0, insectos: 0.0, otros: 0.0, sano: 1.0}, probabilidades_cereal: {arroz: 0.0, maiz: 1.0, sorgo: 0.0, trigo: 0.0}}
+    ground_truth_categoria: sano
+    ground_truth_cereal: maiz
+    source: dataset_test_split
+
+  - id: caso_011_trigo_sano
+    input: {image_path: "inbox/a08/codigo/data/processed/trigo/test/sano/archive_(5)_data_train_Healthy_healthy_860.png"}
+    expected: {categoria: sano, cereal: trigo, confianza_categoria: 0.998658, confianza_cereal: 0.999884, probabilidades_categoria: {hongos: 0.00134, insectos: 2e-06, otros: 0.0, sano: 0.998658}, probabilidades_cereal: {arroz: 0.000113, maiz: 2e-06, sorgo: 2e-06, trigo: 0.999884}}
+    ground_truth_categoria: sano
+    ground_truth_cereal: trigo
+    source: dataset_test_split
+
+  - id: caso_012_arroz_insectos
+    input: {image_path: "inbox/a08/codigo/data/processed/arroz/test/insectos/archive_(1)_dataset_Rice_stem_borer_0041.JPG"}
+    expected: {categoria: insectos, cereal: arroz, confianza_categoria: 0.992411, confianza_cereal: 0.997624, probabilidades_categoria: {hongos: 0.007061, insectos: 0.992411, otros: 0.000351, sano: 0.000178}, probabilidades_cereal: {arroz: 0.997624, maiz: 0.001927, sorgo: 1.2e-05, trigo: 0.000436}}
+    ground_truth_categoria: insectos
+    ground_truth_cereal: arroz
+    source: dataset_test_split
+
+  - id: caso_013_arroz_insectos
+    input: {image_path: "inbox/a08/codigo/data/processed/arroz/test/insectos/archive_(1)_dataset_Rice_stem_borer_0012.JPG"}
+    expected: {categoria: insectos, cereal: arroz, confianza_categoria: 0.999995, confianza_cereal: 0.999252, probabilidades_categoria: {hongos: 4e-06, insectos: 0.999995, otros: 0.0, sano: 1e-06}, probabilidades_cereal: {arroz: 0.999252, maiz: 0.000553, sorgo: 0.0, trigo: 0.000195}}
+    ground_truth_categoria: insectos
+    ground_truth_cereal: arroz
+    source: dataset_test_split
+
+  - id: caso_014_maiz_insectos
+    input: {image_path: "inbox/a08/codigo/data/processed/maiz/test/insectos/archive_(3)_Validation_maize_fall_armyworm_00000053.jpeg"}
+    expected: {categoria: insectos, cereal: maiz, confianza_categoria: 0.994342, confianza_cereal: 0.987999, probabilidades_categoria: {hongos: 0.005484, insectos: 0.994342, otros: 0.000125, sano: 4.9e-05}, probabilidades_cereal: {arroz: 0.000119, maiz: 0.987999, sorgo: 0.000472, trigo: 0.011411}}
+    ground_truth_categoria: insectos
+    ground_truth_cereal: maiz
+    source: dataset_test_split
+
+  - id: caso_015_maiz_insectos
+    input: {image_path: "inbox/a08/codigo/data/processed/maiz/test/insectos/archive_(3)_Train_maize_fall_armyworm_00000047.jpg"}
+    expected: {categoria: insectos, cereal: maiz, confianza_categoria: 0.999951, confianza_cereal: 0.999908, probabilidades_categoria: {hongos: 4e-05, insectos: 0.999951, otros: 9e-06, sano: 1e-06}, probabilidades_cereal: {arroz: 1e-06, maiz: 0.999908, sorgo: 4.9e-05, trigo: 4.1e-05}}
+    ground_truth_categoria: insectos
+    ground_truth_cereal: maiz
+    source: dataset_test_split
+
+  - id: caso_016_trigo_insectos
+    input: {image_path: "inbox/a08/codigo/data/processed/trigo/test/insectos/archive_(5)_data_train_Mite_mite_523.png"}
+    expected: {categoria: insectos, cereal: trigo, confianza_categoria: 0.89073, confianza_cereal: 0.993968, probabilidades_categoria: {hongos: 0.095242, insectos: 0.89073, otros: 0.013794, sano: 0.000234}, probabilidades_cereal: {arroz: 0.00577, maiz: 0.000261, sorgo: 1e-06, trigo: 0.993968}}
+    ground_truth_categoria: insectos
+    ground_truth_cereal: trigo
+    source: dataset_test_split
+
+  - id: caso_017_trigo_insectos
+    input: {image_path: "inbox/a08/codigo/data/processed/trigo/test/insectos/archive_(3)_Train_Wheat_mite_24644.jpg"}
+    expected: {categoria: insectos, cereal: trigo, confianza_categoria: 1.0, confianza_cereal: 0.999999, probabilidades_categoria: {hongos: 0.0, insectos: 1.0, otros: 0.0, sano: 0.0}, probabilidades_cereal: {arroz: 1e-06, maiz: 0.0, sorgo: 0.0, trigo: 0.999999}}
+    ground_truth_categoria: insectos
+    ground_truth_cereal: trigo
+    source: dataset_test_split
+
+  - id: caso_018_arroz_otros
+    input: {image_path: "inbox/a08/codigo/data/processed/arroz/test/otros/archive_(2)_Rice_Leaf_AUG_Leaf_scald_aug_0_6091.jpg"}
+    expected: {categoria: otros, cereal: arroz, confianza_categoria: 0.985036, confianza_cereal: 1.0, probabilidades_categoria: {hongos: 0.014951, insectos: 0.0, otros: 0.985036, sano: 1.3e-05}, probabilidades_cereal: {arroz: 1.0, maiz: 0.0, sorgo: 0.0, trigo: 0.0}}
+    ground_truth_categoria: otros
+    ground_truth_cereal: arroz
+    source: dataset_test_split
+
+  - id: caso_019_trigo_otros
+    input: {image_path: "inbox/a08/codigo/data/processed/trigo/test/otros/archive_(3)_Train_Wheat_scab_00002800.jpg"}
+    expected: {categoria: otros, cereal: trigo, confianza_categoria: 0.998761, confianza_cereal: 0.997917, probabilidades_categoria: {hongos: 0.001237, insectos: 3e-06, otros: 0.998761, sano: 0.0}, probabilidades_cereal: {arroz: 0.002065, maiz: 1.7e-05, sorgo: 0.0, trigo: 0.997917}}
+    ground_truth_categoria: otros
+    ground_truth_cereal: trigo
+    source: dataset_test_split
+
+known_issues:
+  - "[HISTÓRICO — superado el 2026-10-05, ver arriba] En la extracción inicial del manifest,
+     inbox/a08/codigo no incluía imágenes de test ni datasets (data/raw, data/processed) —
+     solo los 3 checkpoints .pth ya entrenados y notebooks con salidas agregadas (curvas,
+     matrices de confusión). Por eso golden_cases quedó vacío en esa primera pasada. El
+     equipo de IA ha añadido desde entonces los datasets raw completos y el data/processed/
+     ya generado por el pipeline original, lo que permitió construir los 19 golden_cases
+     reales de arriba sin inventar nada — el campo ya NO está vacío."
+  - "CUDA real (RTX 2070 SUPER, antes GTX 1060 incompatible) reveló un bug en
+     model_loader.py:_safe_device(): el self-test de 'CUDA funcional' creaba
+     torch.nn.Conv2d(1,1,1) SIN moverlo a .cuda() y lo invocaba con un tensor de entrada
+     .cuda() — RuntimeError ('Input type (torch.cuda.FloatTensor) and weight type
+     (torch.FloatTensor) should be the same'), capturado por el except genérico, que hacía
+     caer a CPU SIEMPRE, incluso con una GPU real y compatible (confirmado reproduciendo el
+     fallo exacto: torch.cuda.is_available()=True, pero _safe_device() devolvía 'cpu' con el
+     log 'CUDA detectada pero no funcional'). No era una limitación real de hardware, era un
+     bug del propio self-test. Mismo bug ya corregido en paralelo en
+     app/plugins/ml2_fungal_cnn_disease_detection/model_loader.py (otro agente, mismo patrón
+     compartido entre varios plugins de visión) — se aplicó el mismo fix aquí:
+     'torch.nn.Conv2d(1, 1, 1).cuda()' seguido de la llamada, en vez de dejar el módulo en
+     CPU. Verificado tras el fix: load_model_bundle()['device']=='cuda', servidor real
+     (MODEL=ml8-cereals-img-anomaly-detector) loguea 'device=cuda' al arrancar, y los 19
+     golden_cases + predict_batch + plugin.train() (balance_hongos, class_weights,
+     WeightedRandomSampler, accumulation_steps=2) corren end-to-end sobre CUDA real sin
+     errores de device/dtype. NOTA: app/plugins/{ml10_dairy_disease_vector_detection,ml41_meat_curing_machinery_acoustic_anomaly,
+     ml5_meat_cow_behaviour,ml7_cereals_grain_pest_detection,ml4_lactic_cnn_thermal_early_disease_detection}
+     tienen el mismo bug sin corregir — fuera de alcance de esta tarea (solo ml8), señalado
+     para que se corrija en sus propios ciclos de verificación."
+  - "El test_accuracy embebido en el checkpoint de producción (mobilenet_v3_large_cereales_multitask.pth:
+     cat=92.15%, cer=98.88%, both=91.33%) difiere ligeramente (~0.4-0.5 pp) de los valores de
+     memoria_tabla_12 (cat=92.58%, cer=98.98%, both=91.82%). Probablemente corresponden a runs
+     distintos (incluso con seed=42 fijo, cambios de versión de librerías o del dataset entre
+     el run final documentado y el que generó el artefacto entregado pueden producir esta
+     diferencia). Ambos superan los umbrales KPI (90/95/85), no es bloqueante, pero se deja
+     documentado para trazabilidad — no se ha re-entrenado el artefacto de producción."
+  - "El plugin ya integrado (app/plugins/ml8_cereals_img_anomaly_detector/plugin.py) tenía un
+     train() que NO replicaba fielmente el procedimiento real documentado en memoria 6.2 y en
+     src/main.py:run_training: (1) usaba backbone weights IMAGENET1K_V2 en vez de IMAGENET1K_V1,
+     (2) no aplicaba balance_hongos, (3) no usaba class_weights/cereal_weights en el CrossEntropyLoss,
+     (4) no usaba WeightedRandomSampler, (5) no implementaba accumulation_steps=2 (gradient
+     accumulation), (6) no fijaba seed. Corregido en el ciclo plugin-integration de esta sesión —
+     ver verification_report.md."
+  - "constants.py del plugin incluye '.webp' en IMAGE_EXTENSIONS, que no está en
+     data.valid_image_extensions de config.yaml (.jpg/.jpeg/.png/.bmp/.tif/.tiff). Es un
+     superset inofensivo (acepta más formatos de los que el equipo de IA validó), se deja
+     como está pero se señala por si la plataforma envía webp y el pipeline original nunca
+     lo probó."
+  - "requirements.txt viene en UTF-8 estándar (sin el problema de encoding UTF-16LE visto en
+     otros modelos del lote) — no requiere normalización."

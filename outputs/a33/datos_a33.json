@@ -3,7 +3,7 @@
  "model_slug": "cereals-reuse-strategy-optimizer",
  "fecha": "Agosto 2026",
  "model_key": "ml33-cereals-reuse-strategy-optimizer",
- "version": "1.0",
+ "version": "2.0",
  "descripcion": "Optimizador determinista de asignación (Programación Lineal Entera Mixta, scipy.optimize.milp, backend HiGHS) que decide a qué estrategia de reutilización enviar cada lote de subproducto cerealista generado — Animal feed, Composting, Biochar o Biomass combustion — minimizando la emisión de CO2 simulada, bajo capacidades diarias de planta que se resetean cada 'lots_per_day' lotes. No es un modelo con pesos entrenados: resuelve un problema de asignación exacta por bloque a partir de una función de emisión determinista. La neuroevolución (NEAT) que trae el delivery original se mantiene por el equipo de IA únicamente como referencia comparativa (benchmark), no como motor desplegado.",
  "task_type": "optimization (asignación exacta MILP)",
  "framework": "scipy.optimize.milp (HiGHS)==1.11+, numpy, pandas, pydantic",
@@ -120,6 +120,12 @@
    "interpretacion": "el motor exacto reduce en más de una cuarta parte la emisión simulada frente al reparto de referencia"
   },
   {
+   "nombre": "Robustez Monte Carlo (memoria §7.2)",
+   "valor": "media 27.66 % · p05 27.27 % · p95 28.04 %",
+   "descripcion": "200 ejecuciones (semilla 42) muestreando la temperatura de proceso por estrategia desde distribuciones normales. Métrica diagnóstica adicional frente a la línea base observada del dataset: 27.39 %",
+   "interpretacion": "incluso el escenario desfavorable (p05) mantiene una reducción superior al 27 %, muy por encima del umbral conservador del 10 % que fija la memoria"
+  },
+  {
    "nombre": "Reducción vs ladder de comparación (declarada)",
    "valor": "exacto 27.63 % / codicioso 12.19 % / NEAT 11.31 %",
    "descripcion": "models/metrics/baseline_comparison.json: el MILP exacto (desplegado) domina al heurístico codicioso por lote y al benchmark neuroevolutivo por resolver todo el bloque a la vez, no lote a lote",
@@ -156,6 +162,18 @@
   {
    "tipo": "NEAT no expuesto",
    "descripcion": "El delivery original incluye una política neuroevolutiva (NEAT) y su artefacto (winner_genome.pkl) como benchmark de referencia; este plugin implementa únicamente el motor MILP exacto, que la propia comparación del equipo de IA identifica como superior (27.63% vs 11.31% de NEAT)."
+  },
+  {
+   "tipo": "Optimiza solo emisiones, no costes",
+   "descripcion": "La función objetivo minimiza exclusivamente la huella de CO2 simulada. No incluye costes de procesamiento ni de transporte por tonelada, así que una asignación óptima en emisiones puede ser económicamente inviable para la explotación (memoria §10.2). La propia memoria propone una función multiobjetivo coste-emisiones como evolución natural."
+  },
+  {
+   "tipo": "Semilla sintética que refuerza los supuestos de partida",
+   "descripcion": "El generador CTGAN se entrenó con solo 1.500 registros semilla construidos a partir de reglas termodinámicas y penalizaciones impuestas por los desarrolladores. No descubre patrones del mundo real, amplifica esos supuestos, y el óptimo calculado hereda cualquier sesgo del simulador de emisiones (memoria §10.1)."
+  },
+  {
+   "tipo": "Escalabilidad del solver",
+   "descripcion": "Cada bloque de 15 lotes se resuelve en milisegundos, pero el problema de asignación generalizada es NP-duro en general. Bloques mucho mayores (lots_per_day alto) exigirían resolver por sub-bloques o fijar un límite de tiempo al solver (memoria §10.2)."
   }
  ],
  "fichero_nombre": "Golden dataset del manifest (inbox/a33/manifest.yaml): 2 bloques de 15 lotes consecutivos de data/split/dataset_optimization_cereal_co2_test_raw.csv + data/predictions/inference_with_constraints.csv, y el split de test completo (10 000 filas) como verificación exhaustiva adicional.",

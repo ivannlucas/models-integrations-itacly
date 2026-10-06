@@ -30,6 +30,27 @@ def _build_transform(image_size: int = IMAGE_SIZE) -> transforms.Compose:
 _DEFAULT_TRANSFORM = _build_transform(IMAGE_SIZE)
 
 
+def build_eval_transform(image_size: int = IMAGE_SIZE) -> transforms.Compose:
+    """Public alias of :func:`_build_transform` — the same resize/ToTensor/Normalize
+    pipeline used at inference time, reused by ``train()`` to evaluate the validation
+    split without any augmentation."""
+    return _build_transform(image_size)
+
+
+def build_train_transform(image_size: int = IMAGE_SIZE) -> transforms.Compose:
+    """Return the training-time augmentation pipeline, mirroring the delivered
+    ``config/config.py:TRAIN_TRANSFORMS`` exactly (resize, random flip/rotation,
+    color jitter, then the same tensor+normalize steps as inference)."""
+    return transforms.Compose([
+        transforms.Resize((image_size, image_size)),
+        transforms.RandomHorizontalFlip(),
+        transforms.RandomRotation(30),
+        transforms.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.4),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=_NORM_MEAN, std=_NORM_STD),
+    ])
+
+
 def image_base64_to_tensor(
     image_base64: str,
     image_size: int = IMAGE_SIZE,

@@ -288,7 +288,7 @@ class Ml46DairyFoulingClogDetectionPlugin(ModelPluginPort):
 
     # ── train (fine-tuning) ──────────────────────────────────────────────────
 
-    def train(self, *, data_path: str, mlflow_run_id: str = "") -> TrainResponse:  # pylint: disable=too-many-locals
+    def train(self, *, data_path: str, mlflow_run_id: str) -> TrainResponse:  # pylint: disable=too-many-locals
         """Fine-tune the served no_clock checkpoint on the caller's own labeled CSV.
 
         Reuses the loaded feature_artifacts (medians/IQR/baselines/class-weights) as-is — it

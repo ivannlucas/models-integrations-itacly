@@ -72,7 +72,7 @@ class PredictModelUseCase:
                 "threshold": getattr(request, "threshold", None),
                 "mlflow_run_id": mlflow_run_id,
             }
-            # Only m47_dnsl_fallas_maquinaria_pasteurizado's predict_inline declares data_path —
+            # Only ml47_dairy_dnsl_pasteurization_fault_detection's predict_inline declares data_path —
             # every other plugin's signature is (*, features, model_key, threshold, mlflow_run_id)
             # with no **kwargs, so passing data_path unconditionally raised TypeError for them.
             if "data_path" in inspect.signature(self._plugin.predict_inline).parameters:

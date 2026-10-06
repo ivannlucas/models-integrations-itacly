@@ -1,5 +1,5 @@
 MODEL_ID = "ml8-cereals-img-anomaly-detector"
-ARTIFACT_FOLDER_NAME = "modelo8_cereales"
+ARTIFACT_FOLDER_NAME = "ml8_cereals_img_anomaly_detector"
 MODEL_FILENAME = "mobilenet_v3_large_cereales_multitask.pth"
 
 IMAGE_SIZE = 224

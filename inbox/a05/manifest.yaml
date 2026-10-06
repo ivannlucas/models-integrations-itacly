@@ -1,0 +1,410 @@
+# Manifest — ml5-meat-cow-behaviour
+#
+# ============================================================================
+# Ciclo 2 (2026-10-06, ESTE CICLO): re-auditoría tras la llegada del dataset real completo
+#   a inbox/a05/codigo/data/ (antes solo placeholders en data/images/README.md y
+#   data/annotations/README.md — el Ciclo 1, ver outputs/a05/verification_report.md
+#   histórico, NO tuvo acceso a ningún frame/vídeo real y su veredicto "LISTO PARA PR,
+#   sin bugs" queda SUPERADO por este ciclo, no borrado).
+#
+#   BUG CRÍTICO CONFIRMADO Y CORREGIDO: la inconsistencia de orden de clases entre
+#   configs/slowfast_cow_behavior.py:BEHAVIOR_TO_IDX y utils/data_utils.py:
+#   BehaviorClassificationDataset.behavior_to_idx (documentada en el Ciclo 1 como "no
+#   afecta a la inferencia") SÍ afecta a la inferencia servida — de forma crítica. El
+#   checkpoint embebe el dict de configs/ (vía train_classifier.py), pero el modelo
+#   aprendió con las labels enteras del dict de data_utils.py (usado en
+#   BehaviorClassificationDataset.__getitem__). Ambos dicts solo coinciden en los índices
+#   0 (grazing) y 6 (ruminating-standing) — el resto estaba mal decodificado.
+#   Verificado ejecutando el checkpoint real sobre 1.500 clips reales del split de test:
+#     - decodificando con el dict embebido en el checkpoint (orden configs/): accuracy=0.44, macro F1=0.17
+#     - decodificando con el orden de data_utils.py (el que el modelo realmente aprendió): accuracy=0.91, macro F1=0.87
+#   (ambas cifras comparten el mismo leakage de frame-level split de format.py — ver
+#   known_issues — por lo que son una A/B válida de las dos decodificaciones, no una
+#   medida limpia de generalización.)
+#   FIX aplicado en app/plugins/ml5_meat_cow_behaviour/constants.py
+#   (TRAINING_BEHAVIOR_TO_IDX) + model_loader.py:_load_classifier (ignora
+#   checkpoint["behavior_to_idx"] para decodificar, usa siempre TRAINING_BEHAVIOR_TO_IDX).
+#   Re-verificado contra servidor real: 24/25 golden cases reales (ver golden_cases abajo,
+#   ahora extraídos de inbox/a05/codigo/data/annotations_test.json + data/test/, no de
+#   results.json) coinciden tras el fix.
+#
+#   Otros hallazgos de este ciclo (ver known_issues): el detector (Faster R-CNN R101) NO
+#   alcanza el AP reportado en la memoria (AP real=0.705 sobre 1.000 imágenes de test vs.
+#   0.882 reportado / 0.85 objetivo — AP50 sí coincide: 0.948 vs 0.953), y 4 bugs en el
+#   código de ENTRENAMIENTO entregado (scheduler de LR, leakage de split por frame en
+#   format.py, track_ids no únicos entre vídeos, ColorJitter aplicado también en
+#   validación) que NO afectan a la inferencia servida hoy pero sí invalidarían un futuro
+#   reentrenamiento tal cual está el código — documentados, NO corregidos (fuera de
+#   alcance: no se reentrena en este ciclo, ver outputs/a05/verification_report.md).
+# ============================================================================
+#
+# Fuentes:
+#   - inbox/a05/codigo/luce_back_front-retech-lote2-dl-vision-carnico-anomaly-detection-6c4170ce8219/
+#     (main.py, configs/detectron2_config.py, configs/slowfast_cow_behavior.py,
+#      trackers/byte_tracker.py, utils/data_utils.py, scripts/training/train_classifier.py,
+#      scripts/training/train_detector.py, metrics_config.py, requirements.txt, results.json,
+#      outputs/benchmark_model_selection/*)
+#   - inbox/a05/entregable/5 - Modelo de análisis de imágenes para detección de sintomatología
+#     visible y comportamientos anómalos v1.5 (1).docx (extraído a /tmp/a05_memoria.txt vía
+#     parseo directo de word/document.xml — pandoc no disponible en el entorno)
+model_id: ml5-meat-cow-behaviour
+sector: carnico
+nombre: "Modelo de análisis de imágenes para detección de sintomatología visible y comportamientos anómalos (VACA: Visión Artificial para Comportamiento Animal)"
+task_type: video_behavior_recognition   # pipeline de 3 etapas: detección (Faster R-CNN) + tracking (ByteTrack, no entrenable) + clasificación de comportamiento (SlowFast) + anomalía por umbral de confianza
+framework: [torch, detectron2, pytorchvideo, opencv-python]
+
+# El código entregado NO trae pesos (.pth) vendorizados en el ZIP — solo el código fuente y los
+# scripts de entrenamiento. Los artefactos ya están colocados en artifacts/ml5_meat_cow_behaviour/
+# (detector_model.pth 460MB, classifier_model.pth 387MB) desde la integración previa a este ciclo
+# de auditoría. Rutas de origen según main.py/README (nombres por defecto del pipeline original):
+artifacts:
+  folder: outputs/   # outputs/detectron2_optimized/model_final.pth, outputs/slowfast_optimized/best_model.pth (nombres originales)
+  files:
+    - detectron2_optimized/model_final.pth    # Faster R-CNN R-101-FPN, 1 clase ("cow") — renombrado a detector_model.pth en el plugin
+    - slowfast_optimized/best_model.pth        # SlowFast-R50, 12 clases de comportamiento — renombrado a classifier_model.pth en el plugin
+  known_issue: >
+    El checkpoint del clasificador incluye su propio dict `behavior_to_idx` (guardado en
+    scripts/training/train_classifier.py al hacer torch.save) — main.py y el plugin reconstruyen
+    idx_to_behavior SIEMPRE desde ese dict embebido en el checkpoint, nunca desde los diccionarios
+    hardcodeados en configs/slowfast_cow_behavior.py o utils/data_utils.py (ver known_issues más abajo
+    sobre la inconsistencia entre esos dos ficheros).
+
+inputs:
+  fixed:
+    # predict_inline: clip de UNA vaca ya recortada por el cliente (bypassa detector+tracker,
+    # igual que el patrón de otros plugins de vídeo/visión de este repo — permite servir el
+    # clasificador de forma aislada, útil para XAI).
+    - name: frames_base64
+      type: array[str(base64 jpg|jpeg|png)]
+      min_length: 32   # = CLIP_LENGTH (configs/slowfast_cow_behavior.py: SLOWFAST_CONFIG['clip_length'])
+      description: >
+        Secuencia de frames (ROI de una sola vaca, recomendado 224x224) en base64. SlowFast
+        muestrea alpha=4 → 8 frames "slow" + 32 "fast" (configs/slowfast_cow_behavior.py:
+        prepare_slowfast_input).
+    - name: threshold
+      type: float
+      default: 0.5   # main.py: parser.add_argument("--anomaly-threshold", type=float, default=0.5); configs no lo sobreescriben
+      description: "Override del umbral de anomalía (confidence < threshold ⇒ is_anomaly=True)."
+    # predict_batch: vídeo completo, pipeline end-to-end (detector + tracker + clasificador)
+    - name: data_path
+      type: file(path|s3://)
+      description: "Ruta a un vídeo (MP4/AVI/MOV/MKV) procesado frame a frame por el pipeline completo."
+  control: null   # no hay optimizador/GA en este modelo
+  derived_if_missing: {}  # ninguno — threshold tiene default fijo 0.5, no se deriva de otros campos
+
+outputs:
+  predict_inline:
+    - name: prediction
+      type: str
+      description: "Comportamiento predicho — uno de los 12 valores de BEHAVIOR_TO_IDX (ver constraints.behavior_classes)."
+    - name: confidence
+      type: float
+      description: "Probabilidad softmax del comportamiento predicho [0,1] (main.py: torch.softmax + torch.max)."
+    - name: is_anomaly
+      type: bool
+      description: "True si confidence < threshold (main.py: is_anomaly = confidence.item() < self.anomaly_threshold)."
+    - name: behavior_idx
+      type: int
+    - name: xai_feature_values
+      type: dict[str,float]
+      description: "Probabilidad softmax de las 12 clases — usado por el servicio XAI."
+  predict_batch:
+    - name: predictions
+      type: list[{frame:int, detections:list[{track_id:int, bbox:[float;4], score:float, behavior:str, behavior_confidence:float, is_anomaly:bool}]}]
+      description: "Estructura idéntica a la del results.json original de main.py (sección 'Salida del Pipeline' del README y memoria §8.2)."
+    - name: output_path
+      type: str|null
+      description: >
+        Siempre null en el plugin integrado — el vídeo anotado (visualize_detections/add_info_panel
+        de utils/visualization.py) queda fuera del contrato JSON de /predict; decisión de alcance,
+        no un bug (el contrato de este repo es JSON, no generación de vídeo).
+
+training:
+  supported: true   # [CORREGIDO Ciclo 3, 2026-10-06] — SOLO el clasificador SlowFast; ver scope abajo
+  target_column: behavior   # attributes.behavior por frame (mayoría por clip, ver training.procedure)
+  required_columns: null   # no aplica — el contrato /train es un ZIP CVAT/COCO, no un CSV (ver train_dto.py)
+  hyperparams:
+    optimizer: AdamW
+    lr: 0.0005
+    weight_decay: 0.0001
+    batch_size: 16
+    epochs: 30
+    warmup_epochs: 2
+    scheduler: "warmup(2 epochs)+cosine, stepped PER-BATCH (ver bug #1 corregido abajo)"
+    loss: "FocalLoss(alpha=0.5, gamma=1.5)"
+    sampler: WeightedRandomSampler
+    seed: 42
+  metrics_returned: [train_clips, val_clips, epochs_run, best_val_acc, lr_history, time_min]
+  source: codigo_entrenamiento (scripts/training/train_classifier.py + utils/data_utils.py + scripts/data/format.py, con los 4 bugs corregidos — ver known_issues)
+  reason: >
+    [ORIGINAL, Ciclo 1 — ver corrección abajo] El código SÍ trae procedimiento de entrenamiento
+    real y reproducible para ambos componentes (scripts/training/train_detector.py:
+    Detectron2/SGD, max_iter=80000, batch=16, lr=0.005, warmup 1000 iters;
+    scripts/training/train_classifier.py: AdamW lr=0.0005, wd=1e-4, batch=16, epochs=30,
+    FocalLoss(alpha=0.5, gamma=1.5), WeightedRandomSampler, warmup+cosine decay, seed=42 —
+    memoria §6.2/§6.4 confirma estos mismos hiperparámetros). Pero NINGUNO de los dos es
+    exponible razonablemente a través del contrato /train (data_path = CSV o ZIP) de este repo
+    sin inventar un procedimiento que el equipo de IA no definió:
+      1. Detector (Faster R-CNN): requiere anotaciones COCO de bounding boxes — mismo motivo de
+         exclusión ya usado en modelo10_lacteo/ml-equivalentes de este repo (fuera de alcance de
+         /train). [SIGUE VIGENTE, pero la razón original aquí ("bbox no encaja en un ZIP") quedó
+         imprecisa tras el Ciclo 3: el clasificador SÍ acabó aceptando bbox (vía el mismo export
+         CVAT, usado para recortar el ROI). La razón real de excluir el detector es otra: (a)
+         Detectron2 espera un ÚNICO JSON COCO fusionado sobre todo el dataset
+         (utils/data_utils.py::register_coco_instances_detectron2 -> load_coco_json), no
+         fragmentos por clip como los que ya usa el clasificador — fusionar y renumerar IDs de
+         500+ exports CVAT por clip en un COCO único es un paso de preprocesado no escrito; (b)
+         el split train/val viene pre-hecho en dos datasets ya registrados
+         (configs/detectron2_config.py: cfg.DATASETS.TRAIN=("cows_train",),
+         cfg.DATASETS.TEST=("cows_val",)), no se deriva on-the-fly como ahora hace el
+         clasificador (split_clips); (c) corre sobre Detectron2 (DefaultTrainer, COCOEvaluator,
+         detectron2.engine.launch multi-GPU, config propio) — framework distinto al bucle
+         PyTorch nativo que sí se portó al plugin en training.py, y que nadie ha portado ni
+         probado dentro de este plugin. No es que sea imposible — es trabajo de integración
+         aparte, no corregido ni intentado en este ciclo.]
+      2. Clasificador (SlowFast): a diferencia de un clasificador de IMÁGENES por carpetas
+         (p.ej. modelo10's MobileNetV3, ZIP ImageFolder {clase}/*.jpg — mapeo natural y de baja
+         invención), este entrena sobre CLIPS DE VÍDEO derivados de anotaciones COCO con
+         `attributes.track_id` + `attributes.behavior` POR FRAME dentro de una secuencia completa
+         (utils/data_utils.py: BehaviorClassificationDataset agrupa por track_id y trocea en
+         clips de 32 frames con solape clip_length//2). No existe en el entregable ninguna
+         estructura "ZIP de clips por clase" equivalente — inventar esa estructura violaría la
+         regla de "nunca inventar un procedimiento de fine-tuning que el equipo de IA no definió"
+         (manifest-extraction/SKILL.md).
+      3. Además, el ZIP entregado NO incluye ningún dato crudo: data/images/README.md y
+         data/annotations/README.md son placeholders ("Ruta para dataset de imágenes/anotaciones")
+         — el CSIRO Cow Behavior Dataset (15GB, 224k imágenes) debe descargarse aparte y NO forma
+         parte de este entregable, así que ni siquiera hay con qué validar un procedimiento
+         inventado.
+    Conclusión (Ciclo 1): igual que el detector, el clasificador queda fuera del contrato
+    /train — decisión de alcance explícita, no un bug. Coincide con el estado ya implementado
+    del plugin (TrainingNotSupportedError) y con que plugin-integration/SKILL.md cita
+    explícitamente ml5_meat_cow_behaviour/plugin.py como referencia del patrón
+    "training.supported=false".
+
+    [CORRECCIÓN Ciclo 3, 2026-10-06] Los motivos #2 y #3 ya NO aplican: el usuario añadió el
+    dataset CSIRO completo (raw frames + anotaciones CVAT/COCO por clip) a
+    inbox/a05/codigo/data/, así que SÍ hay con qué validar un procedimiento real. Y la
+    estructura "ZIP de clips por clase" que el motivo #2 decía que "no existe" tampoco hacía
+    falta inventarla: el contrato real de /train (train_dto.py) replica exactamente la
+    estructura que scripts/data/format.py YA consume — 'raw_frames/<clip_name>/<frame>.jpg' +
+    'annotations/<clip_name>/annotations/instances_default.json' (export COCO de CVAT por
+    clip) — no es una invención, es la estructura real del entregable. Los 4 bugs del código
+    de entrenamiento (ver known_issues, antes "NO corregido, por instrucción explícita de no
+    reentrenar") SÍ se corrigieron este ciclo, tanto en el plugin (app/plugins/
+    ml5_meat_cow_behaviour/training.py) como en el propio inbox/a05/codigo/ entregado. El
+    motivo #1 (detector) SIGUE vigente sin cambios — el detector permanece fuera de /train.
+    Alcance final: training.supported=true SOLO para el clasificador SlowFast; el detector
+    Faster R-CNN usa siempre el artefacto fijo servido, nunca es reentrenable vía API.
+
+constraints:
+  behavior_classes:   # configs/slowfast_cow_behavior.py: BEHAVIOR_TO_IDX (= README "12 comportamientos", coincide con memoria §1)
+    grazing: 0
+    resting-lying: 1
+    resting-standing: 2
+    hidden: 3
+    ruminating-lying: 4
+    drinking: 5
+    ruminating-standing: 6
+    other: 7
+    walking: 8
+    grooming: 9
+    none: 10
+    running: 11
+  clip_length: 32       # SLOWFAST_CONFIG['clip_length']; main.py default --clip-length 32
+  alpha: 4               # ratio slow/fast pathway
+  detection_threshold_default: 0.5   # main.py --detection-threshold; detectron2_config.py SCORE_THRESH_TEST
+  tracking_threshold_default: 0.5    # main.py --tracking-threshold; ByteTracker track_thresh
+  anomaly_threshold_default: 0.5     # main.py --anomaly-threshold; is_anomaly = confidence < threshold
+
+# metrics_reported: hold-out TEST set oficial (memoria §7.3 "Resultados en Conjunto de Test
+# (Hold-Out)") — NO la tabla de selección de modelos del 10%-subset (memoria §5.1 / Tabla 4-5 /
+# outputs/benchmark_model_selection/*.csv), que es solo para comparar arquitecturas candidatas.
+metrics_reported:
+  fuente: memoria_seccion_7.3_resultados_test_holdout
+  detector:
+    modelo: Faster R-CNN R-101-FPN
+    AP: 0.882          # memoria: "AP promediado (~88,2%) vs Target 85%"
+    AP50: 0.953         # memoria: "AP50 (~95,3%)"
+    AR: 0.915           # memoria: "AR (Recall) (~91,5%)"
+  clasificador:
+    modelo: SlowFast R50
+    macro_f1: 0.764      # memoria: "Macro F1-Score (~76,4%) vs Target 75%"
+    grazing_precision: 0.921   # memoria: "Precisión en Indicadores Productivos (Grazing: ~92,1%)"
+  pipeline_end_to_end:
+    precision: 0.65       # memoria §7.4: "Precision (65%) y Recall (72%) vs Target"
+    recall: 0.72
+    fpr: 0.042             # memoria: "False Positive Rate (FPR) (~4.2%) vs Target 8%"
+  kpi_objetivo_memoria:
+    AP_min: 0.85
+    macro_f1_min: 0.75
+    fpr_max: 0.08
+  veredicto_memoria: APTO   # "Supera el objetivo mínimo de calidad geométrica" / "Cumple el criterio de éxito" (memoria §7.3)
+
+# ACTUALIZADO Ciclo 2 (2026-10-06): el dataset real completo ya está disponible en
+# inbox/a05/codigo/data/ (annotations_{train,val,test}.json + data/{train,val,test}/*.jpg,
+# 33.875 imágenes de test). Los golden_cases de results.json del Ciclo 1 (que heredaban el
+# bug de decodificación — p.ej. sus 206 detecciones "resting-lying" eran en realidad
+# "drinking") se DESCARTAN y se reemplazan por 25 clips reales extraídos directamente de
+# data/annotations_test.json (nunca inventados): se agrupan las anotaciones por
+# (clip_name, track_id) igual que utils/data_utils.py:BehaviorClassificationDataset, se
+# toman los primeros 32 frames (CLIP_LENGTH) de cada track ordenados por image_id, y el
+# `expected.behavior` es el ground truth real (`attributes.behavior` de la anotación COCO),
+# NO una predicción del modelo — por eso es inmune al propio bug de decodificación que este
+# ciclo corrige. Se seleccionaron únicamente tracks con pureza 100% (un solo comportamiento
+# en los 32 frames) para no introducir ambigüedad de "mayoría" en el caso golden.
+#
+# Cobertura: 2 casos por clase (3 para grazing, la mayoritaria) = 25 casos, ver detalle
+# completo (clip_name, track_id, lista de frames+bbox) en inbox/a05/golden_cases_real.json
+# (generado por un script trazable a partir de annotations_test.json — no comiteado, igual
+# que el resto de inbox/). Cobertura real por clase, de 33.875 imágenes de test:
+#   grazing=1287, resting-lying=485, resting-standing=395, hidden=344, ruminating-lying=182,
+#   other=162, walking=158, drinking=127, grooming=86, ruminating-standing=77, none=66,
+#   running=20 (grupos track completos, antes de exigir >=32 frames).
+# ÚNICA CLASE CON COBERTURA DÉBIL: "running" — ningún track del split de test alcanza los
+# 32 frames completos (el más largo tiene 30); los 2 casos de running usan padding por
+# duplicación del último frame (mismo fallback que utils/data_utils.py:
+# BehaviorClassificationDataset.__getitem__ usa para tracks cortos) — documentado en
+# golden_cases_real.json como `padded_to_32: true`. No es una invención: son 26-30 frames
+# reales + relleno, igual que haría el propio pipeline de entrenamiento.
+golden_cases:
+  - id: caso_001_a_025_clips_reales_test_split
+    source: dataset_test_split   # inbox/a05/codigo/data/annotations_test.json + data/test/*.jpg
+    input:
+      descripcion: >
+        25 clips de 32 frames (CLIP_LENGTH), cada uno un (clip_name, track_id) real del
+        split de test, ROI recortado por bbox COCO real y redimensionado a 224×224 —
+        enviados a POST /predict (mode=inline, frames_base64) con threshold=0.5.
+      detalle_completo: inbox/a05/golden_cases_real.json   # 25 casos, 2-3 por clase (ver cobertura arriba)
+    expected:
+      por_caso: "behavior_ground_truth en cada entrada de golden_cases_real.json (ground truth real de attributes.behavior, pureza 100% en los 32 frames seleccionados)"
+    resultado_verificacion_2026-10-06: >
+      24/25 coinciden contra el servidor real (POST /predict) tras el fix de decodificación.
+      Único fallo: caso resting-standing (track 1349_..._cut_00011/track_id=1, 32/32 frames
+      reales, pureza 100%, sin padding) predicho como "hidden" con confidence=0.88 — fallo
+      real del modelo/artefacto sobre ese clip concreto, no de wiring/decodificación (las
+      otras 2 clases que comparten frontera con "hidden" en el resto de casos sí se deciden
+      bien). No se ajustó tolerancia para ocultarlo — ver outputs/a05/verification_report.md.
+  - id: caso_026_anomalia_logica_umbral
+    source: codigo_prediccion_original   # main.py: is_anomaly = confidence.item() < self.anomaly_threshold
+    input:
+      confidence: 0.45
+      threshold: 0.5
+    expected:
+      is_anomaly: true
+    nota: "Caso de lógica pura (no de dataset) para verificar el operador estricto '<' (no '<=') — replicado 1:1 en app/plugins/ml5_meat_cow_behaviour/postprocessing.py:decode_logits."
+
+known_issues:
+  - "[SUPERADO en Ciclo 2, 2026-10-06] Esta entrada decía (Ciclo 1) que el entregable no
+     incluía NINGÚN vídeo/imagen/frame real, limitando la verificación a chequeos
+     estructurales sobre results.json. Esto ya NO es así: inbox/a05/codigo/data/ ahora
+     contiene el dataset real completo (annotations_{train,val,test}.json +
+     data/{train,val,test}/*.jpg, 33.875 imágenes solo en test) — el CSIRO Cow Behavior
+     Dataset fue añadido al entregable en este ciclo. Esta disponibilidad es precisamente lo
+     que permitió detectar el bug crítico de decodificación de abajo (invisible en el Ciclo
+     1, que solo podía comparar formas/rangos, no clases reales contra clips reales).
+     golden_cases ya usa 25 clips reales de data/test/ (ver sección golden_cases arriba)."
+  - "Inconsistencia de umbral de anomalía en la documentación (no en el código): README.md dice
+     'confianza < 0.7 se marcan como anomalías'; la memoria es internamente inconsistente — §2/§7.1/
+     §8.1 dicen 'threshold < 0,5' pero §6.3 dice 'enfoque de umbral de confianza (𝜏 = 0,7)' para la
+     evaluación de anomalías. El CÓDIGO (main.py --anomaly-threshold default=0.5,
+     configs no lo sobreescriben) es consistente en 0.5 en todos los sitios donde realmente se
+     ejecuta. Se usa 0.5 como fuente de verdad (el código, no la prosa de la memoria) — el plugin
+     integrado ya usa DEFAULT_ANOMALY_THRESHOLD=0.5, correcto."
+  - "[CORREGIDO Ciclo 2, 2026-10-06 — esta entrada estaba MAL en el Ciclo 1, ver abajo]
+     utils/data_utils.py:BehaviorClassificationDataset define su propio behavior_to_idx
+     hardcodeado (12 claves, orden: grazing, drinking, walking, resting-lying,
+     resting-standing, ruminating-lying, ruminating-standing, running, grooming, hidden,
+     other, none) que es DISTINTO y con un orden distinto al BEHAVIOR_TO_IDX de
+     configs/slowfast_cow_behavior.py (12 claves, orden: grazing, resting-lying,
+     resting-standing, hidden, ruminating-lying, drinking, ruminating-standing, other,
+     walking, grooming, none, running — coincide con README/memoria). Los dos dicts solo
+     coinciden en los índices 0 (grazing) y 6 (ruminating-standing).
+     EL VEREDICTO DEL CICLO 1 ERA INCORRECTO: decía 'no afecta a la inferencia porque
+     main.py y el plugin reconstruyen idx_to_behavior siempre desde el behavior_to_idx
+     embebido en el checkpoint'. Eso es cierto como DESCRIPCIÓN del código original — pero
+     el checkpoint embebe el dict de configs/ (train_classifier.py hace
+     torch.save(..., 'behavior_to_idx': BEHAVIOR_TO_IDX), import de configs/), mientras que
+     las labels enteras con las que el modelo REALMENTE se entrenó
+     (BehaviorClassificationDataset.__getitem__: label = self.behavior_to_idx[...]) usan el
+     dict de data_utils.py. Es decir: main.py (el código original) decodifica con el dict
+     EQUIVOCADO, y heredar fielmente ese comportamiento (lo que hacía el plugin antes de
+     este ciclo) es precisamente el bug — no una fidelidad correcta al original.
+     CONFIRMADO ejecutando el checkpoint real sobre 1.500 clips reales del split de test:
+     decodificando con el dict del checkpoint (orden configs/) → accuracy=0.44, macro F1=0.17;
+     decodificando con el orden de data_utils.py (el real) → accuracy=0.91, macro F1=0.87.
+     FIX aplicado: app/plugins/ml5_meat_cow_behaviour/constants.py:TRAINING_BEHAVIOR_TO_IDX
+     + model_loader.py:_load_classifier ignora ahora checkpoint['behavior_to_idx'] para
+     decodificar. Re-verificado: 24/25 golden_cases reales coinciden tras el fix (ver
+     golden_cases arriba). AFECTA AL PLUGIN SERVIDO HOY — ya corregido."
+  - "Las métricas de outputs/benchmark_model_selection/{classification,detection}_benchmark.csv
+     (comparación de arquitecturas sobre el 10% del dataset) difieren ligeramente de las Tablas 4/5
+     de la memoria v1.5 (p.ej. SlowFast accuracy 70,0% en el CSV vs 72,4% en memoria; detector FPS
+     46,2 en CSV vs 54,0 en memoria) — el changelog de la memoria v1.5 indica 'Corrección de
+     inconsistencias entre código y reporte (SlowFast, hiperparámetros)', sugiriendo un re-run
+     posterior. metrics_reported de este manifest usa la tabla de TEST hold-out (memoria §7.3), no
+     esta tabla de selección de modelos, que solo sirve para justificar la elección de arquitectura."
+  - "La encoding de requirements.txt es UTF-8 estándar (verificado con `file`) — no presenta el
+     problema de UTF-16LE/CRLF mencionado como gotcha típico en manifest-extraction/SKILL.md."
+  - "Los pesos .pth (detector_model.pth 460MB, classifier_model.pth 387MB) ya estaban vendorizados
+     en artifacts/ml5_meat_cow_behaviour/ desde la integración previa a esta auditoría — no venían
+     en el ZIP de inbox/a05/codigo (que solo trae código fuente, sin pesos entrenados)."
+  - "[NUEVO Ciclo 2 — AFECTA AL PLUGIN SERVIDO HOY, no corregible sin reentrenar] El detector
+     (Faster R-CNN R-101-FPN) NO alcanza el AP reportado en la memoria: AP real=0.705 sobre
+     1.000 imágenes reales de data/test (vs. 0.882 reportado en memoria §7.3 / 0.85 objetivo
+     mínimo) — por debajo del objetivo de la memoria. AP50 SÍ coincide (0.948 real vs. 0.953
+     reportado), lo que indica que el wiring del plugin (preprocesado, umbral, invocación del
+     detector) es correcto — el gap es específico de la métrica AP estricta (promedio sobre
+     IoU 0.5:0.95), no un bug de integración. Se señala aquí para quien gestione la ficha
+     técnica (docs-generation): metrics_reported.detector.AP=0.882 de este manifest sigue
+     siendo la cifra de la memoria, pero debe anotarse como no reproducida — no se reemplaza
+     por la cifra real sin que el equipo de IA/producto decida cómo tratar la discrepancia."
+  - "[Ciclo 2: NO corregido, por instrucción explícita de no reentrenar en ese ciclo —
+     CORREGIDO Ciclo 3, 2026-10-06, ver detalle de cada fix abajo] 4 bugs en el código de
+     ENTRENAMIENTO entregado (scripts/training/, utils/data_utils.py, scripts/data/format.py):
+       1. [CORREGIDO] El scheduler de LR (train_classifier.py: LambdaLR con lr_lambda basado
+          en steps) se llamaba una vez por ÉPOCA (scheduler.step() dentro del bucle de
+          épocas) pero su fórmula cuenta steps POR BATCH (total_steps = len(train_loader) *
+          epochs) — el LR se quedaba prácticamente en 0 durante todo el entrenamiento real.
+          Fix: scheduler.step() ahora se llama una vez por BATCH (train_classifier.py línea
+          ~89 y app/plugins/ml5_meat_cow_behaviour/training.py::train_classifier). Verificado
+          con un smoke test corto (unos pocos batches/2 épocas, no un entrenamiento completo):
+          la curva de LR ya no se queda colapsada en el warmup, sube y decae con la forma
+          coseno esperada — ver outputs/a05/verification_report.md para los valores exactos.
+       2. [CORREGIDO] scripts/data/format.py:split_dataset dividía el dataset por IMAGEN
+          individual, no por clip/vídeo — los 502 clips del dataset aparecían simultáneamente
+          en train, val y test (leakage), lo que inflaba todas las métricas reportadas,
+          incluida la cifra 0.91 de accuracy del fix de decodificación arriba (ese 0.91 sigue
+          siendo válido como comparación A/B configs-vs-data_utils, porque ambas
+          decodificaciones se midieron sobre el mismo test leaky, pero NO debe leerse como una
+          estimación limpia de generalización). Fix: split_dataset ahora divide por
+          clip_name — ninguna imagen de un clip puede caer en más de un split. Verificado al
+          instante (sin entrenar): intersección de clip_names entre train/val/test = conjunto
+          vacío, confirmado sobre los 502 clips reales.
+       3. [CORREGIDO] Los track_id de utils/data_utils.py NO eran únicos entre vídeos
+          distintos — solo 23 IDs distintos para 502 clips — algunos clips de entrenamiento
+          mezclaban frames de vídeos diferentes bajo el mismo track_id. Fix: track_id se
+          namespacea con el clip_name ('{clip_name}__track{track_id}') al cargar las
+          anotaciones (load_all_clips). Verificado al instante (sin entrenar): recuento de
+          track_id únicos tras el fix = número real de tracks individuales por clip, ya no
+          colisiona entre vídeos.
+       4. [CORREGIDO] ColorJitter (utils/data_utils.py:BehaviorClassificationDataset, bloque
+          por defecto de self.transforms) se aplicaba también en VALIDACIÓN, no solo en
+          entrenamiento. Fix: el bloque de transforms por defecto ahora depende de
+          is_train — ColorJitter solo en is_train=True, identidad (sin augmentation) en
+          eval/test. Verificado al instante (sin entrenar): inspección programática de la
+          pipeline de transforms usada en el split de validación confirma 0 ColorJitter.
+     Los 4 fixes se aplicaron TANTO en app/plugins/ml5_meat_cow_behaviour/training.py (el
+     train() real del plugin) COMO en el propio inbox/a05/codigo/ entregado (scripts/training/
+     train_classifier.py, utils/data_utils.py, scripts/data/format.py), para que el repo de
+     entrenamiento original también sea correcto si alguien lo ejecuta de forma standalone
+     fuera de esta plataforma. Ningún entrenamiento LARGO/COMPLETO se ha ejecutado en este
+     ciclo (decisión explícita del usuario: ~4.5-6 días de GPU en este sandbox — detector
+     ~49h train + ~37h eval periódica, clasificador ~50h — no viable aquí); la verificación de
+     cada fix se hizo con comprobaciones rápidas (instantáneas para #2/#3/#4, un smoke test
+     corto de pocos batches para #1) más un smoke test end-to-end de train() completo sobre
+     un slice pequeño de datos reales (ver outputs/a05/verification_report.md). training.
+     supported ahora es true para el clasificador (ver bloque training arriba) — el
+     entrenamiento REAL a escala completa queda para quien tenga el presupuesto de GPU
+     necesario para ejecutarlo; este ciclo garantiza que el código es correcto y alcanzable
+     vía /train, no que un checkpoint reentrenado concreto ya se haya validado en precisión."

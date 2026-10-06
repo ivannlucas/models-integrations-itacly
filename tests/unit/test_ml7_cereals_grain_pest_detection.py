@@ -42,5 +42,17 @@ def test_predict_inline_invalid_image_maps_to_422(client, fake_plugins):
     assert resp.status_code == 422
 
 
-def test_train_returns_501(client):
-    assert client.post(f"{PREFIX}/train", json={"data_path": "/tmp/x", "mlflow_run_id": "test-run-id"}).status_code == 501
+def test_train(client):
+    resp = client.post(f"{PREFIX}/train", json={"data_path": "/tmp/dataset.yaml", "mlflow_run_id": "test-run-id"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["detail"] == "Fine-tuning completado"
+    assert isinstance(body["map50"], float)
+    assert isinstance(body["n_images"], int)
+
+
+def test_train_without_mlflow_run_id_rejected(client):
+    """mlflow_run_id is required (no default) — a retrain must always be persisted to a
+    specific MLflow run, never silently overwriting the fixed base artifact."""
+    resp = client.post(f"{PREFIX}/train", json={"data_path": "/tmp/dataset.yaml"})
+    assert resp.status_code == 422

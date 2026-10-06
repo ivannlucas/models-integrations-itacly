@@ -103,12 +103,43 @@ outputs:
     - {name: features_used, type: "list[string]"}
 
 training:
-  supported: false  # externally trained; el plugin lanza TrainingNotSupportedError explícitamente
-  target_column: null
-  required_columns: null
-  hyperparams: null
-  metrics_returned: null
-  source: "plugin.py::train() -- sin procedimiento de reentrenamiento entregado en este repo"
+  supported: true  # [CORREGIDO Ciclo 2, 2026-10-06] ver known_issues -- la conclusión anterior
+                    # (false) era incorrecta: sí hay un procedimiento de entrenamiento real
+                    # entregado (scripts/train.py -> src/training/runner.py -> compare_models.py)
+  target_column: target_h   # derivado internamente de target_precio_medio con shift(-horizon); no es columna de entrada
+  required_columns:
+    - fecha
+    - producto
+    - canal
+    - target_precio_medio   # resto de columnas exógenas (lags/medias móviles/HICP/IPC/MAPA) ya presentes en dataset_forecast_ready.csv
+  hyperparams:
+    architecture: GRU   # arquitectura ya seleccionada y desplegada -- train() NO re-ejecuta la
+                         # búsqueda completa (Naive/Drift/XGBoost/LSTM/GRU comparados por CV),
+                         # solo refit de esta arquitectura con datos nuevos (mismo patrón de
+                         # simplificación ya aplicado a la búsqueda neuroevolutiva de ml30/ml9)
+    horizon: 6
+    seq_len: 6
+    hidden_size: 64
+    num_layers: 2       # fijo en GRUModel, no parametrizado en config.yaml
+    dropout: 0.3        # fijo en GRUModel
+    epochs: 150
+    batch_size: 32
+    n_seeds: 3          # compare_models.py::N_SEEDS -- se entrena 3 veces (seeds 42,43,44) y
+                         # se selecciona por menor RMSE de validación (misma política usada
+                         # para elegir el artefacto gru_model.pt ya servido)
+    lr: 0.001
+    patience: 20
+    test_ratio: 0.1
+    val_ratio: 0.2
+    cv_val_size: 6      # tamaño de la ventana de validación de refit (cv_folds colapsado a 1 bloque de refit)
+    seed_base: 42
+    optimizer: Adam
+    weight_decay: 1e-5
+    scheduler: ReduceLROnPlateau(factor=0.5, patience=10)
+    loss: MSELoss
+    grad_clip_norm: 1.0
+  metrics_returned: [mae, rmse, mape_pct, r2, direction_acc_pct, n_train, n_test, training_time_s]
+  source: "codigo_entrenamiento (inbox/a23/codigo/src/training/compare_models.py::prepare_horizon_dataset/split_dev_test/make_refit_split/prepare_rnn_split_with_test/train_rnn_multi_seed) + config/config.yaml::training"
 
 constraints: {}  # no hay restricciones de negocio explícitas; single-instance GRU sin reglas duras
 
@@ -220,17 +251,55 @@ known_issues:
     si los ficheros ya existen localmente. Esto hace que load() falle en cualquier entorno de
     desarrollo/CI local sin STORAGE_BUCKET configurado, incluso con los 3 artefactos ya
     vendorizados en artifacts/ml23_lactic_market_price_forecast/. Mismo patrón (y mismo bug)
-    en otros 5 plugins de este repo (m21_cereal_price_spatial, ml25_wine_sulphites,
+    en otros 5 plugins de este repo (ml21_cereals_price_spatial, ml25_wine_sulphites,
     ml5_meat_cow_behaviour, ml17_meat_market_price_analysis, modelo10_lacteo) -- todos usan
     download_all_if_needed() en vez del patrón lazy _store.path(filename) que usan
     correctamente los otros ~18 plugins del repo. Corregido para ml23 en esta revisión; los
     otros 5 quedan fuera de alcance de esta tarea (no se tocan sin que se pida explícitamente).
+    [RESUELTO 2026-10-02] Los 5 plugins listados ya usan _store.path(filename) -- ninguno
+    llama a download_all_if_needed() a día de hoy. Corregidos en cambios posteriores a esta
+    nota, fuera de la tarea de a23.
   - >
-    Falta mlflow_utils.py en app/plugins/ml23_lactic_market_price_forecast/ -- viola la regla
-    del repo "todo plugin lleva mlflow_utils.py, sin excepción" (CLAUDE.md / skill
-    plugin-integration), aunque el modelo no soporte hoy reentrenamiento por usuario. Añadido
-    en esta revisión (plantilla base, ya que no hay lógica de descarga de modelo de usuario
-    que implementar mientras train() siga sin soportarse).
+    [CORREGIDO Ciclo 2, 2026-10-06] Faltaba mlflow_utils.py en
+    app/plugins/ml23_lactic_market_price_forecast/ -- viola la regla del repo "todo plugin
+    lleva mlflow_utils.py, sin excepción". En la revisión original (Ciclo 1) se añadió solo
+    como plantilla stub, con el argumento (ya corregido, ver el bloque `training:` arriba)
+    de que el modelo "no soporta hoy reentrenamiento por usuario". Reescrito en Ciclo 2:
+    download_user_model_from_mlflow() ahora descarga de verdad un bundle GRU+scaler+manifest
+    reentrenado por el usuario desde un run de MLflow, y upload_artifacts_to_mlflow() sube el
+    bundle que produce train(). predict_inline()/predict_batch()/stats() -- que antes
+    ignoraban mlflow_run_id por completo (`_ = mlflow_run_id`) incluso siendo aceptado en el
+    contrato -- ahora lo usan de verdad para servir el modelo de usuario cuando se indica,
+    restaurando el modelo base en el `finally` (patrón ya usado en ml2/ml4/ml7/ml17).
+  - >
+    [CORREGIDO Ciclo 2, 2026-10-06] BUG DE CLASE 3 (train() marcado como no soportado sin
+    respaldo real en el manifest, mismo patrón ya encontrado y corregido en ml2, ml4, ml7 y
+    ml17 en esta sesión): la conclusión original de este manifest ("sin procedimiento de
+    reentrenamiento entregado en este repo", ver `training.source` en el Ciclo 1) era
+    INCORRECTA. inbox/a23/codigo/ SÍ trae un procedimiento de entrenamiento real y completo:
+    scripts/train.py -> src/training/runner.py::train_from_config() ->
+    src/training/compare_models.py::run_comparison(), con hiperparámetros reales en
+    config/config.yaml::training (horizon=6, epochs=150, seq_len=6, hidden_size=64,
+    batch_size=32) y `modules.training_enabled: true` explícito en ese mismo config.yaml.
+    `plugin.py::train()` lanzaba `TrainingNotSupportedError` incondicionalmente. Corregido:
+    `train()` reimplementado portando fielmente SOLO el refit de la arquitectura GRU ya
+    seleccionada y desplegada (ver `training.hyperparams.architecture` arriba) -- no
+    re-ejecuta la búsqueda completa Naive/Drift/XGBoost/LSTM/GRU por CV que originalmente
+    seleccionó GRU, misma simplificación ya aplicada a la búsqueda neuroevolutiva de
+    ml30/ml9 en este repo. `mlflow_run_id` es obligatorio (sin default) en
+    `train_dto.TrainRequest`, y el bundle reentrenado se sube ÚNICAMENTE al run de MLflow
+    indicado -- nunca se escribe al artefacto base S3/local `gru_model.pt`.
+    Verificado end-to-end ejecutando `plugin.train()` directamente sobre el dataset real
+    completo (data/processed/dataset_forecast_ready.csv, 1.440 filas, 16 series) con
+    `BaseMLflowTracker` monkeypatcheado a un stub no-op (mismo workaround ya documentado
+    para otros modelos de este repo, MLFLOW_TRACKING_URI inalcanzable en este sandbox):
+    mae=0.0135, rmse=0.0170, r2=0.8994, direction_acc_pct=90.6 -- **coinciden a 4+ decimales
+    con `metrics_reported.gru_shipped_artifact_seed42` de arriba** (el bloque de métricas del
+    propio artefacto servido, ya auditado en el Ciclo 1), confirmando que el refit portado
+    reproduce exactamente el procedimiento original. Tiempo total: 48.4s (3 seeds, dataset
+    completo) -- no es un reentrenamiento largo. Confirmado también contra el servidor HTTP
+    real: `/train` sin `mlflow_run_id` -> 422; `/predict` inline y batch sin cambios de
+    comportamiento tras el fix.
   - >
     No existía inbox/a23/manifest.yaml (este fichero) antes de esta revisión: el plugin se
     integró sin pasar por el skill manifest-extraction, saltándose el orden de trabajo estándar

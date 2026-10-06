@@ -207,7 +207,7 @@ class Ml16MeatRawMaterialPriceAlertPlugin(ModelPluginPort):
 
     # ── train (retraining with the original procedure) ───────────────────────
 
-    def train(self, *, data_path: str, mlflow_run_id: str = "") -> TrainResponse:
+    def train(self, *, data_path: str, mlflow_run_id: str) -> TrainResponse:
         """Retrain both targets from scratch on a labeled CSV shaped like
         dataset_clasificacion_base.csv (target_animales/target_insumos already computed — this
         plugin does not reproduce create_targets() nor the raw MAPA/GEE/RASVE ETL).

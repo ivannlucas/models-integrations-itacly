@@ -14,3 +14,19 @@ DROPOUT = 0.3
 CLASS_NAMES = ["Healthy", "SCM"]
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp"}
+
+# Training (fine-tuning) hyperparameters — must match configs/baseline_efficientnet.yaml and
+# src/training/{trainer,losses}.py from the delivered training code exactly (manifest.training).
+TRAIN_LEARNING_RATE = 0.0001
+TRAIN_WEIGHT_DECAY = 0.0001
+TRAIN_BATCH_SIZE = 16
+TRAIN_MAX_EPOCHS = 100
+TRAIN_EARLY_STOPPING_PATIENCE = 15
+TRAIN_SEED = 42
+FOCAL_ALPHA = 0.25
+FOCAL_GAMMA = 2.0
+SCHEDULER_FACTOR = 0.5
+SCHEDULER_PATIENCE = 5
+SCHEDULER_MIN_LR = 0.000001
+TRAIN_VAL_SPLIT = 0.2
+MIN_TRAIN_SAMPLES = 10

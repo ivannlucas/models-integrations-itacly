@@ -50,8 +50,19 @@ def test_predict_batch(client):
     assert body["line"] == "official_v1_4"
 
 
-def test_train_returns_501(client):
+def test_train_returns_200_with_metrics(client):
     resp = client.post(
         f"{PREFIX}/train", json={"data_path": "/tmp/x.csv", "mlflow_run_id": "test-run-id"}
     )
-    assert resp.status_code == 501
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "mae" in body
+    assert "rmse" in body
+    assert body["n_samples"] > 0
+
+
+def test_train_without_mlflow_run_id_returns_422(client):
+    """mlflow_run_id is mandatory (no default) — the base S3 artifact must never be
+    overwritten by a retrain, so every /train call must be tied to a specific MLflow run."""
+    resp = client.post(f"{PREFIX}/train", json={"data_path": "/tmp/x.csv"})
+    assert resp.status_code == 422

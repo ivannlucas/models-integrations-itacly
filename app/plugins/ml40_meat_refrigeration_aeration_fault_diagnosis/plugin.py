@@ -239,7 +239,7 @@ class Ml40MeatRefrigerationAerationFaultDiagnosisPlugin(ModelPluginPort):
 
     # ── train (retraining with the original procedure) ───────────────────────
 
-    def train(self, *, data_path: str, mlflow_run_id: str = "", system: str | None = None) -> TrainResponse:
+    def train(self, *, data_path: str, mlflow_run_id: str, system: str | None = None) -> TrainResponse:
         """Retrain one subsystem's RandomForest from a labeled raw CSV.
 
         Follows the AI team's original trainers exactly (hyperparams, split, weights,

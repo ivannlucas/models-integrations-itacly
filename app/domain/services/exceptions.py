@@ -80,7 +80,7 @@ class InsufficientWindowHistoryError(ValueError):
 class InsufficientSensorWindowError(ValueError):
     """Raised when required sensor columns/values are missing or invalid, nulls exceed the
     allowed ratio, or too few rows survive to build a 180-row temporal window
-    (modelo43-cereales)."""
+    (ml43-cereals-dnsl-anomaly-fault-detection)."""
 
 
 class MissingRequiredFeatureError(ValueError):

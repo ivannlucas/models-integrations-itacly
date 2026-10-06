@@ -669,6 +669,9 @@ known_issues:
     ValueError con mensaje explícito en vez de fallar silenciosamente o más adelante con un error
     críptico. El _vendor/features.py del plugin (app/plugins/ml46_dairy_fouling_clog_detection/_vendor/)
     NO tiene estas comprobaciones todavía -- pendiente de sincronizar en el skill plugin-integration.
+    [RESUELTO] _vendor/features.py ya define y llama a validate_feature_artifacts() (lineas
+    198, 265, 267 llaman a la funcion definida en la linea 271) con las mismas comprobaciones
+    de medianas/IQR descritas arriba.
     src/training/data.py también difiere sustancialmente (277 líneas vendorizadas vs. 402 líneas
     en el original actual) -- requiere revisión línea a línea en plugin-integration antes de dar
     por buena la sincronización (fuera del alcance de esta actualización de manifest, que se limita

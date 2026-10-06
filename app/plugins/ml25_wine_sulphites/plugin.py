@@ -14,6 +14,7 @@ from app.application.dto.stats_dto import InputField, OutputField, RuntimeStats,
 from app.domain.ports.model_plugin_port import ModelPluginPort
 from app.domain.services.exceptions import NoValidSimulationPointError
 from app.domain.services.mlflow_tracker import BaseMLflowTracker
+from app.plugins.ml25_wine_sulphites.constants import BASE_FREE_SO2_P99, MODEL_ID, VERSION
 from app.plugins.ml25_wine_sulphites.model_loader import load_artifacts
 from app.plugins.ml25_wine_sulphites.predict_dto import (
     PredictBatchResponse,
@@ -39,9 +40,6 @@ from app.plugins.ml25_wine_sulphites.preprocessing import (
 
 logger = logging.getLogger(__name__)
 
-MODEL_NAME = "wine-sulphite"
-MODEL_VERSION = "1.2.0"
-
 # Wine analysis inputs accepted from the inline request, in snake_case (matches
 # PredictInlineRequest field names) — echoed back as xai_feature_values.
 WINE_ANALYSIS_KEYS = [
@@ -51,7 +49,7 @@ WINE_ANALYSIS_KEYS = [
 ]
 
 
-class WineSulphitePlugin(ModelPluginPort):
+class Ml25WineSulphitesPlugin(ModelPluginPort):
     """Plugin that recommends optimal free SO2 doses for wine preservation."""
 
     def __init__(self) -> None:
@@ -82,10 +80,14 @@ class WineSulphitePlugin(ModelPluginPort):
             self._metadata.get("metrics", {}).get("bound_cv", {}).get("mae_mean", 14.5)
         )
 
+        free_so2_p99 = self._metadata.get("simulation", {}).get(
+            "free_so2_p99", BASE_FREE_SO2_P99
+        )
+
         req_ns = types.SimpleNamespace(**features)
         base_wine = map_request_to_wine_dict(req_ns)
         free_targets, qual_rows, bound_rows = build_simulation_grid(
-            base_wine, features["delta_max"]
+            base_wine, features["delta_max"], free_so2_p99=free_so2_p99
         )
 
         raw_bound_pred = self._model_bound.predict(bound_rows)
@@ -234,7 +236,7 @@ class WineSulphitePlugin(ModelPluginPort):
             )
 
             return PredictBatchResponse(
-                model_id=MODEL_NAME,
+                model_id=MODEL_ID,
                 predictions=predictions,
                 output_path=None,
             )
@@ -305,7 +307,7 @@ class WineSulphitePlugin(ModelPluginPort):
             ]
 
             return PredictInlineResponse(
-                model_id=MODEL_NAME,
+                model_id=MODEL_ID,
                 threshold=threshold,
                 prediction=res["intervention"],
                 confidence=float(res["valid_qualities"][i]),
@@ -330,7 +332,7 @@ class WineSulphitePlugin(ModelPluginPort):
                 self._model_bound = saved_bound
                 self._metadata = saved_meta
 
-    def train(self, *, data_path: str, mlflow_run_id: str = "") -> TrainResponse:  # pylint: disable=too-many-locals
+    def train(self, *, data_path: str, mlflow_run_id: str) -> TrainResponse:  # pylint: disable=too-many-locals
         """Train dual RandomForest models from the CSV at *data_path* and upload them to MLflow."""
         # pylint: disable=import-outside-toplevel
         import os
@@ -340,11 +342,15 @@ class WineSulphitePlugin(ModelPluginPort):
         if mlflow_run_id:
             logger.info("Training with MLflow tracking, run_id=%s", mlflow_run_id)
             tracker = BaseMLflowTracker(mlflow_run_id)
+            # Hiperparámetros y protocolo del equipo de IA (inbox/a25/codigo/modules/
+            # wine_quality/src/training/train_rf.py: RF_MODEL_PARAMS + KFold(5,
+            # shuffle=True, seed=42) sobre el dataset completo) — no un 80/20 inventado.
             tracker.log_params({
-                "n_estimators": 200,
+                "n_estimators": 300,
                 "random_state": 42,
                 "n_jobs": -1,
-                "test_split": 0.2,
+                "cv_splits": 5,
+                "protocol": "official_cv5_full_dataset",
                 "model_qual": "RandomForestRegressor",
                 "model_bound": "RandomForestRegressor",
             })
@@ -382,19 +388,31 @@ class WineSulphitePlugin(ModelPluginPort):
                 except OSError:
                     pass
 
-    def _train_from_local(
+    def _train_from_local(  # pylint: disable=too-many-locals,too-many-statements
         self,
         data_path: str,
         mlflow_run_id: str = "",
         tracker: BaseMLflowTracker | None = None,
-    ) -> TrainResponse:  # pylint: disable=too-many-locals
-        """Core training logic operating on a local CSV file."""
+    ) -> TrainResponse:
+        """Core training logic operating on a local CSV file.
+
+        Replicates the real delivered protocol (inbox/a25/codigo/modules/wine_quality/
+        src/training/train_rf.py: ``train_dual_models`` + ``cv_regression_metrics``)
+        instead of an invented 80/20 chronological holdout: RF hyperparameters
+        n_estimators=300, random_state=42, n_jobs=-1; metrics reported are the mean
+        of a 5-fold KFold(shuffle=True, random_state=42) cross-validation over the
+        *entire* cleaned dataset (protocol "official_cv5_full_dataset"); the models
+        actually served are then refit on 100% of the data — CV never withholds
+        data from the shipped model, it only estimates its generalization error.
+        """
         # pylint: disable=import-outside-toplevel
         import json
         import joblib
         import tempfile
+        from sklearn.base import clone
         from sklearn.ensemble import RandomForestRegressor
-        from sklearn.metrics import mean_absolute_error
+        from sklearn.metrics import mean_absolute_error, r2_score
+        from sklearn.model_selection import KFold
         from app.plugins.ml25_wine_sulphites.constants import (
             QUALITY_RF_MODEL_FILENAME,
             BOUND_RF_MODEL_FILENAME,
@@ -408,40 +426,79 @@ class WineSulphitePlugin(ModelPluginPort):
         df = normalize_training_columns(df)
         require_training_columns(df)
 
+        # Misma limpieza de consistencia química que wine_quality.common.load_wine_data:
+        # descarta filas físicamente imposibles (total < free, negativos) y con NaN en
+        # columnas críticas — el 80/20 anterior entrenaba sobre datos sin este filtro.
+        df = df[
+            (df["free sulfur dioxide"] >= 0)
+            & (df["total sulfur dioxide"] >= 0)
+            & (df["total sulfur dioxide"] >= df["free sulfur dioxide"])
+        ].copy()
+        df["bound_so2"] = (df["total sulfur dioxide"] - df["free sulfur dioxide"]).clip(lower=0)
+        df = df.dropna(subset=FEATURES_QUAL + [TARGET_QUAL, "bound_so2"]).reset_index(drop=True)
+
+        rf_params = {"n_estimators": 300, "random_state": 42, "n_jobs": -1}
+        seed = 42
+        n_splits = 5
+
         # pylint: disable=invalid-name
         X_qual = df[FEATURES_QUAL]
         y_qual = df[TARGET_QUAL].astype(float)
-
-        bound_so2 = (df["total sulfur dioxide"] - df["free sulfur dioxide"]).clip(lower=0)
         X_bound = df[FEATURES_BOUND]
-        y_bound = np.log1p(bound_so2)
-
-        split = int(len(df) * 0.8)
-        X_qtrain, X_qtest = X_qual.iloc[:split], X_qual.iloc[split:]
-        y_qtrain, y_qtest = y_qual.iloc[:split], y_qual.iloc[split:]
-        X_btrain, X_btest = X_bound.iloc[:split], X_bound.iloc[split:]
-        y_btrain, y_btest = y_bound.iloc[:split], y_bound.iloc[split:]
+        y_bound = df["bound_so2"]
         # pylint: enable=invalid-name
 
-        model_qual = RandomForestRegressor(n_estimators=200, random_state=42, n_jobs=-1)
-        model_qual.fit(X_qtrain, y_qtrain)
-        mae_qual = float(mean_absolute_error(y_qtest, model_qual.predict(X_qtest)))
+        def _cv_mae_r2(x_all, y_all, log_transform: bool) -> tuple[float, float]:
+            """5-fold CV MAE/R2 mean, matching train_rf.py's cv_regression_metrics."""
+            kf = KFold(n_splits=n_splits, shuffle=True, random_state=seed)
+            template = RandomForestRegressor(**rf_params)
+            maes, r2s = [], []
+            for tr_idx, va_idx in kf.split(x_all, y_all):
+                model = clone(template)
+                x_tr, x_va = x_all.iloc[tr_idx], x_all.iloc[va_idx]
+                y_tr, y_va = y_all.iloc[tr_idx], y_all.iloc[va_idx]
+                if log_transform:
+                    model.fit(x_tr, np.log1p(y_tr))
+                    pred = np.maximum(np.expm1(model.predict(x_va)), 0.0)
+                else:
+                    model.fit(x_tr, y_tr)
+                    pred = model.predict(x_va)
+                maes.append(mean_absolute_error(y_va, pred))
+                r2s.append(r2_score(y_va, pred))
+            return float(np.mean(maes)), float(np.mean(r2s))
 
-        model_bound = RandomForestRegressor(n_estimators=200, random_state=42, n_jobs=-1)
-        model_bound.fit(X_btrain, y_btrain)
-        mae_bound = float(
-            mean_absolute_error(np.expm1(y_btest), np.expm1(model_bound.predict(X_btest)))
-        )
+        mae_qual, r2_qual = _cv_mae_r2(X_qual, y_qual, log_transform=False)
+        mae_bound, r2_bound = _cv_mae_r2(X_bound, y_bound, log_transform=True)
+
+        # El modelo que se sirve en producción se ajusta sobre el 100% de los datos
+        # limpios — la CV de arriba solo estima el error de generalización, nunca retira
+        # datos del modelo final (protocolo "official_cv5_full_dataset" del equipo de IA).
+        model_qual = RandomForestRegressor(**rf_params)
+        model_qual.fit(X_qual, y_qual)
+
+        model_bound = RandomForestRegressor(**rf_params)
+        model_bound.fit(X_bound, np.log1p(y_bound))
 
         metadata = {
             "metrics": {
-                "quality_cv": {"mae_mean": round(mae_qual, 4)},
-                "bound_cv": {"mae_mean": round(mae_bound, 4)},
+                "quality_cv": {"mae_mean": round(mae_qual, 4), "r2_mean": round(r2_qual, 4)},
+                "bound_cv": {"mae_mean": round(mae_bound, 4), "r2_mean": round(r2_bound, 4)},
             },
-            "n_train": int(split),
-            "n_test": int(len(df) - split),
+            "protocol": "official_cv5_full_dataset",
+            "cv_splits": n_splits,
+            "seed": seed,
+            "n_train": int(len(df)),
+            "n_test": 0,
             "features_qual": list(FEATURES_QUAL),
             "features_bound": list(FEATURES_BOUND),
+            "simulation": {
+                # Percentiles del free SO2 de entrenamiento — acotan el rango de dosis
+                # simulado en build_simulation_grid (ver wine_quality.common.build_free_grid,
+                # SimulationConfig.sim_free_p_low/p_high=1/99) para no extrapolar fuera de
+                # la distribución real del dataset con el que se entrenó este modelo.
+                "free_so2_p1": float(np.percentile(df["free sulfur dioxide"], 1.0)),
+                "free_so2_p99": float(np.percentile(df["free sulfur dioxide"], 99.0)),
+            },
         }
 
         # The retrained model lives only in its own MLflow run (predict with that
@@ -453,8 +510,8 @@ class WineSulphitePlugin(ModelPluginPort):
             tracker.log_metrics({
                 "mae_quality": mae_qual,
                 "mae_bound": mae_bound,
-                "n_train": int(split),
-                "n_test": int(len(df) - split),
+                "n_train": int(len(df)),
+                "n_test": 0,
             })
             try:
                 mlflow_tmp = tempfile.mkdtemp(prefix="wine_mlflow_")
@@ -476,8 +533,8 @@ class WineSulphitePlugin(ModelPluginPort):
             detail="Training completed",
             mae_quality=round(mae_qual, 4),
             mae_bound_so2=round(mae_bound, 4),
-            n_train=int(split),
-            n_test=int(len(df) - split),
+            n_train=int(len(df)),
+            n_test=0,
             training_time_s=round(elapsed, 1),
             upload_warning=upload_warning,
             mlflow_run_id=mlflow_run_id,
@@ -487,8 +544,8 @@ class WineSulphitePlugin(ModelPluginPort):
         """Build and return the full stats response including input/output schema and runtime metrics."""
         avg = self._total_latency_ms / self._predict_count if self._predict_count > 0 else None
         base = StatsResponse(
-            model_name=MODEL_NAME,
-            version=MODEL_VERSION,
+            model_name=MODEL_ID,
+            version=VERSION,
             description=(
                 "Recomendación de dosis óptima de SO2 libre en vinos mediante "
                 "RandomForestRegressor dual (calidad + SO2 combinado)"

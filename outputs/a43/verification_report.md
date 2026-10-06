@@ -1,5 +1,7 @@
 # Verificación — ml43-cereals-dnsl-anomaly-fault-detection (CU43+CU44)
 
+> **[RENOMBRADO 2026-10-06]** Nomenclatura alineada con el estándar `mlNN_<sector>_<desc>` del resto de plugins: `modelo43_cereales / modelo43-cereales` → `ml43_cereals_dnsl_anomaly_fault_detection / ml43-cereals-dnsl-anomaly-fault-detection`. La carpeta de artefactos (local y en S3) pasa de `artifacts/modelo_43_cereales/` a `artifacts/ml43_cereals_dnsl_anomaly_fault_detection/`. Las referencias a los nombres antiguos en el texto de abajo son históricas y corresponden a la fecha de cada ciclo.
+
 Fecha: 2026-08-05
 Rama de origen del código: `feature/ML43-1-neurofuzzy-model` (repo hermano `Bitbucket`, mismo
 plugin ya integrado allí; este informe cubre la integración equivalente en

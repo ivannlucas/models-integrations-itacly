@@ -53,11 +53,15 @@ def test_predict_batch_omits_system_when_not_declared():
 
 def test_train_forwards_system_when_declared():
     plugin = _PluginWithSystem()
-    TrainModelUseCase(plugin).execute(TrainRequest(data_path="a.csv", system="refrigeracion"))
+    TrainModelUseCase(plugin).execute(
+        TrainRequest(data_path="a.csv", mlflow_run_id="test-run-id", system="refrigeracion")
+    )
     assert plugin.calls[0]["system"] == "refrigeracion"
 
 
 def test_train_omits_system_when_not_declared():
     plugin = _PluginWithoutSystem()
-    TrainModelUseCase(plugin).execute(TrainRequest(data_path="a.csv", system="refrigeracion"))
+    TrainModelUseCase(plugin).execute(
+        TrainRequest(data_path="a.csv", mlflow_run_id="test-run-id", system="refrigeracion")
+    )
     assert "system" not in plugin.calls[0]

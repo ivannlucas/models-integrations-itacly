@@ -1,3 +1,7 @@
+# [RENOMBRADO 2026-10-06] Nomenclatura alineada con el estándar mlNN_<sector>_<desc>:
+#   modelo43_cereales / modelo43-cereales  ->  ml43_cereals_dnsl_anomaly_fault_detection / ml43-cereals-dnsl-anomaly-fault-detection
+#   Artefactos (local y S3): artifacts/modelo_43_cereales/ -> artifacts/ml43_cereals_dnsl_anomaly_fault_detection/
+#   Las menciones al nombre antiguo en comentarios/known_issues son históricas.
 model_id: ml43_cereals_dnsl_anomaly_fault_detection
 sector: cerealista
 nombre: "CU43 - Diseño y entrenamiento de un modelo basado en Deep Neuro-Fuzzy Learning para detectar anomalías y predecir fallas en hornos"
@@ -41,7 +45,7 @@ inputs:
   # (solapamiento 50%, step=90) genera UNA predicción — un ciclo completo (600 filas = 10h a
   # 1 muestra/min) produce varias ventanas de salida (5 en los ciclos de golden_cases). No existe
   # un modo predict_inline de "una fila = una predicción" tal cual lo tienen los modelos
-  # tabulares — mismo patrón que m47_dnsl_fallas_maquinaria_pasteurizado y ml45 (misma familia
+  # tabulares — mismo patrón que ml47_dairy_dnsl_pasteurization_fault_detection y ml45 (misma familia
   # DNSL): predict_inline resuelve esto con una ventana sintética "steady-state" (repetir el
   # snapshot de sensores 180 veces) para dar una respuesta de "¿este punto de operación es
   # anómalo?" sin requerir historial real, además de predict_batch para CSVs de ciclos completos.
@@ -278,7 +282,7 @@ known_issues:
     ARQUITECTURA: no existe un modo predict_inline "una fila = una predicción" — la unidad mínima
     de inferencia es una ventana de 180 timesteps. El precedente más cercano ya integrado en este
     mismo repo es ml45_cereals_dnsl_critical_point_detection y
-    m47_dnsl_fallas_maquinaria_pasteurizado (misma familia "DNSL") — revisados como plantilla de
+    ml47_dairy_dnsl_pasteurization_fault_detection (misma familia "DNSL") — revisados como plantilla de
     arquitectura para el plugin de a43.
   - >
     SHAP NO ES DEPENDENCIA DEL SERVICIO PRINCIPAL: shap no está en requirements.txt del repo raíz

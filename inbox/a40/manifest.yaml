@@ -242,6 +242,9 @@ known_issues:
     postprocess.py (0.90 y 5.0). No está documentado con qué umbrales se generaron las métricas de la
     memoria ni los evaluacion_test_*.csv. La verificación debe determinar qué combinación reproduce los
     golden cases y dejar fijada esa combinación en el plugin.
+    [RESUELTO] postprocessing.py lee los umbrales reales del {system}_thresholds.yaml entregado
+    via dyn.get("encostramiento_risk", 0.90) / dyn.get("fan_fail_hz", 5.0) — los defaults solo
+    se usan como fallback si el YAML no trae el campo, no sustituyen al umbral calibrado.
   - >
     ANOMALÍA EN EL INPUT DE EJEMPLO DE AIREADO: ejecutando el modo producción sobre el input crudo de
     ejemplo entregado (data/to_predict/input_aireado.csv, 21 runs), 13 de los 15 runs etiquetados NORMAL
@@ -253,10 +256,14 @@ known_issues:
     CARGA DE MODELO INTERACTIVA: src/predict/predictor.py::load_model despliega un menú input() en consola
     si existen modelos calibrados ({system}_model_calibrated_*.pkl). El plugin no debe heredar esa
     interactividad: servirá siempre el modelo base (o parametrizará la versión), nunca stdin.
+    [RESUELTO] No hay ninguna llamada a input() en app/plugins/ml40_meat_refrigeration_aeration_fault_diagnosis/
+    — el model_loader.py del plugin carga el artefacto directamente, sin menú interactivo.
   - >
     ESTADO STATEFUL DE SALUD: model_health (ESTABLE/DEGRADADO) depende del histórico acumulado en
     logs/monitorization_{system}.csv (media móvil de 50 predicciones vs. umbral 75). En el plugin este
     estado debe reubicarse (stats/MLflow) y no depender de CSVs locales mutables.
+    [RESUELTO] plugin.py calcula health = postprocessing.health_status(confianza_de_esta_peticion)
+    — estado derivado por petición, no lee ningún CSV mutable ni histórico acumulado.
   - >
     requirements.txt: UTF-8 con CRLF (sin problema UTF-16 esta vez), versiones no fijadas (>=) e incluye
     'pathlib>=1.0.1', un backport obsoleto de Python 2 que no debe instalarse en Python 3 (puede romper

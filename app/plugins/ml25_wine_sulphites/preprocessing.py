@@ -91,8 +91,17 @@ def map_request_to_wine_dict(request: Any) -> dict:
 def build_simulation_grid(
     base_wine: dict,
     delta_max: float,
+    free_so2_p99: float | None = None,
 ) -> tuple[np.ndarray, pd.DataFrame, pd.DataFrame]:
-    """Build simulation grid from current free SO2 up to current + delta_max."""
+    """Build simulation grid from current free SO2 up to current + delta_max.
+
+    ``free_so2_p99`` caps the upper bound at the 99th percentile of free SO2 in the
+    training dataset — matches ``wine_quality.common.build_free_grid`` /
+    ``SimulationConfig(sim_free_p_high=99.0)`` in the real delivered inference
+    pipeline, which never explores doses far outside the training distribution
+    regardless of how large ``delta_max`` is. ``None`` disables the cap (legacy
+    behaviour) — callers should always pass it when available.
+    """
     try:
         current_free = float(base_wine["free sulfur dioxide"])
     except KeyError as exc:
@@ -107,7 +116,10 @@ def build_simulation_grid(
         raise ValueError("delta_max must be non-negative")
 
     try:
-        free_targets = np.arange(current_free, current_free + delta_max + 1e-9, 1.0)
+        hi = current_free + delta_max
+        if free_so2_p99 is not None:
+            hi = min(hi, max(float(free_so2_p99), current_free))
+        free_targets = np.arange(current_free, hi + 1e-9, 1.0)
         n = len(free_targets)
 
         phys_base = {k: base_wine[k] for k in FEATURES_PHYS}

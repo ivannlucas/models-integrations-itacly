@@ -292,7 +292,7 @@ class Ml35DairyAnnCleaningCostPlugin(ModelPluginPort):
 
     # ── train ─────────────────────────────────────────────────────────────────
 
-    def train(self, *, data_path: str, mlflow_run_id: str = "") -> TrainResponse:  # pylint: disable=too-many-locals
+    def train(self, *, data_path: str, mlflow_run_id: str) -> TrainResponse:  # pylint: disable=too-many-locals
         """Fine-tune the ANN on user-labeled data (consumo_agua_l target required)."""
         import tempfile  # pylint: disable=import-outside-toplevel
         import joblib  # pylint: disable=import-outside-toplevel

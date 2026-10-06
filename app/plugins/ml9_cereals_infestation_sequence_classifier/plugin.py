@@ -252,7 +252,7 @@ class Ml9CerealsInfestationSequenceClassifierPlugin(ModelPluginPort):
 
     # ── train (fine-tuning) ───────────────────────────────────────────────────
 
-    def train(self, *, data_path: str, mlflow_run_id: str = "") -> TrainResponse:  # pylint: disable=too-many-locals,too-many-statements
+    def train(self, *, data_path: str, mlflow_run_id: str) -> TrainResponse:  # pylint: disable=too-many-locals,too-many-statements
         """Fine-tune the served GRU checkpoint on the caller's own labelled CSV.
 
         Follows the delivered training procedure (src/training/trainer.py) for everything that

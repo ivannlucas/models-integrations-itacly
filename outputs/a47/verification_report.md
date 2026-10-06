@@ -1,5 +1,7 @@
 # Verificación — a47 (m47-dnsl-fallas-maquinaria-pasteurizado)
 
+> **[RENOMBRADO 2026-10-06]** Nomenclatura alineada con el estándar `mlNN_<sector>_<desc>` del resto de plugins: `m47_dnsl_fallas_maquinaria_pasteurizado / m47-dnsl-fallas-maquinaria-pasteurizado` → `ml47_dairy_dnsl_pasteurization_fault_detection / ml47-dairy-dnsl-pasteurization-fault-detection`. La carpeta de artefactos (local y en S3) pasa de `artifacts/a47_dnsl_fallas_maquinaria_pasteurizado/` a `artifacts/ml47_dairy_dnsl_pasteurization_fault_detection/`. Las referencias a los nombres antiguos en el texto de abajo son históricas y corresponden a la fecha de cada ciclo.
+
 **Fecha:** 2026-07-16
 **Plugin:** `app/plugins/m47_dnsl_fallas_maquinaria_pasteurizado/`
 **Manifest:** `inbox/a47/manifest.yaml` (15 golden_cases)
@@ -9,7 +11,7 @@
 
 ## Checklist técnico (Parte A)
 
-- [x] **flake8**: 1 hallazgo menor — `mlflow_utils.py:78 F841 local variable 'last_error' is assigned to but never used`. Preexistente, no afecta a la correctitud. **No se corrigió** para respetar el alcance "no tocar app/plugins/" de esta tanda; queda anotado para revisión humana.
+- [x] **flake8**: 1 hallazgo menor — `mlflow_utils.py:78 F841 local variable 'last_error' is assigned to but never used`. Preexistente, no afecta a la correctitud. **No se corrigió** para respetar el alcance "no tocar app/plugins/" de esta tanda; queda anotado para revisión humana. **[RESUELTO 2026-10-02]** — `mlflow_utils.py` actual no tiene esa variable (flake8 limpio, 0 hallazgos); corregido en un cambio posterior a este informe.
 - [x] **pytest** (`tests/unit/test_a47_...py -p no:flask`): **4/4 passed** (health, stats, predict_inline, predict_batch). ⚠️ Estos tests usan el `FakePlugin` del conftest: validan el **wiring HTTP + esquema Pydantic + mapeo de excepciones**, NO el modelo real.
 - [x] **pylint** (`app/plugins/m47_.../`): **8.51/10**. Solo estilo (nombres `X_*` que replican el código original de forma intencionada, docstrings ausentes, `l_sup/l_pump/l_cool` sin usar). Sin issues de correctitud.
 - [~] **pip-audit** (`requirements.txt`): 5 CVEs en 3 paquetes — `torch 2.11.0` (CVE-2025-3000), `setuptools 81.0.0` (PYSEC-2026-3447), `keras 3.12.3` (×3). **Preexistentes y a nivel de repo** (no introducidas por a47; `keras` ni siquiera lo usa este plugin). Flag para revisión transversal de dependencias.
@@ -59,7 +61,7 @@ Nota sobre el caso 211: el `expected` es `[2,2,2,1]` mientras la etiqueta verdad
 **REQUIERE REVISIÓN HUMANA** — correctitud verificada en verde (15/15 golden), con los siguientes puntos para el revisor:
 
 1. **Correctitud**: ✅ el plugin reproduce fielmente el pipeline original (inline y batch), 15/15 golden exactos.
-2. **flake8 F841** en `mlflow_utils.py:78`: limpieza trivial pendiente (no se tocó por alcance).
+2. **flake8 F841** en `mlflow_utils.py:78`: limpieza trivial pendiente (no se tocó por alcance). **[RESUELTO 2026-10-02]**
 3. **HTTP end-to-end y `/train`** no ejercitados en local (limitación del entorno WSL / falta MLflow). Repetir en entorno completo antes del PR.
 4. **pip-audit**: CVEs preexistentes de dependencias compartidas (torch/setuptools/keras) — decisión transversal, no específica de a47.
 5. **BLOQUEANTE para producción (no para PR)**: métricas obtenidas sobre banco de laboratorio UCI (aceite, no leche). El modelo **requiere reentrenamiento/calibración con datos reales de planta** antes de cualquier despliegue. Advertido en manifest y en ambas fichas.

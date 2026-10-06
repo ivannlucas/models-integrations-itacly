@@ -37,7 +37,7 @@ def test_stats(client):
 
 def test_stats_without_mlflow_run_id_exposes_only_the_unified_metric_keys():
     """Modelo 43-45 audit, metrics unification: the base/served-model metrics dict must
-    contain exactly the same unified key set as modelo43_cereales's own stats() (no
+    contain exactly the same unified key set as ml43_cereals_dnsl_anomaly_fault_detection's own stats() (no
     legacy selected_threshold/bare fallo_f1-only naming)."""
     from app.plugins.ml45_cereals_dnsl_critical_point_detection.plugin import (
         Ml45CerealsDnslCriticalPointDetectionPlugin,
@@ -96,7 +96,9 @@ def test_predict_batch_insufficient_window_history_maps_to_422(client, fake_plug
 
 
 def test_train(client):
-    resp = client.post(f"{PREFIX}/train", json={"data_path": "/tmp/train.csv"})
+    resp = client.post(
+        f"{PREFIX}/train", json={"data_path": "/tmp/train.csv", "mlflow_run_id": "test-run-id"}
+    )
     assert resp.status_code == 200
     body = resp.json()
     assert body["detail"]
@@ -106,6 +108,11 @@ def test_train(client):
     # predict/stats have no way to ever use the retrained model.
     assert body["n_windows_test"] > 0
     assert body["mlflow_run_id"]
+
+
+def test_train_requires_mlflow_run_id(client):
+    resp = client.post(f"{PREFIX}/train", json={"data_path": "/tmp/train.csv"})
+    assert resp.status_code == 422
 
 
 # ── Feedback (modelo 43-44-45 audit, points 2/3/6): dedup + artifact validation ──────────
@@ -338,7 +345,7 @@ def test_stats_overwrites_legacy_keys_with_the_real_run_values():
 
 class TestValidateSavedArtifact:
     """Point 6 (0-byte artifacts): unit coverage for the helper itself, mirroring
-    modelo43_cereales's plugin.py::_validate_saved_artifact tests — same helper, copied
+    ml43_cereals_dnsl_anomaly_fault_detection's plugin.py::_validate_saved_artifact tests — same helper, copied
     into this plugin's train() to catch a 0-byte/corrupt save before it ever reaches
     MLflow (and, from there, the platform's model listing)."""
 

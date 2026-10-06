@@ -22,7 +22,7 @@ class TrainRequest(BaseModel):
         description="Subsistema a reentrenar; el CSV debe corresponder a él. Si se omite se "
                     "detecta por las columnas.",
     )
-    mlflow_run_id: str = ""
+    mlflow_run_id: str
 
 
 class TrainResponse(BaseModel):

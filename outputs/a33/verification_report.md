@@ -118,11 +118,19 @@ no funcional.
 
 ## Pendiente antes de PR (revisión humana)
 
-1. **Sin memoria .docx**: este delivery no trae `entregable/*.docx` — el manifest y este
+1. ~~**Sin memoria .docx**: este delivery no trae `entregable/*.docx` — el manifest y este
    informe se construyeron desde código real + README.md + JSONs de métricas auditados. Si
    existe una memoria oficial fuera de este repo, debe revisarse antes de `docs-generation`
    (puede tener secciones — título de negocio, autoría, contexto de proyecto — que el código no
-   expresa).
+   expresa).~~ **[RESUELTO 2026-10-06]** La memoria v2.0 (21/07/2026) se ha añadido a
+   `inbox/a33/entregable/` y se ha contrastado con este informe y con el manifest. Todas las
+   cifras coinciden exactamente: 27,63 %, Monte Carlo p05/p50/p95, comparativa de políticas,
+   distribución, capacidades y `lots_per_day`. No cambia ningún resultado de verificación. Se
+   han actualizado el título oficial y el acrónimo (MILPCO2), las fichas (versión 2.0,
+   robustez Monte Carlo, tres limitaciones nuevas) y `a33_metadatos.docx` (organismo, lote,
+   versión y fecha de la memoria). La memoria contiene algunos restos de redacción de la
+   v1.x que describen NEAT como motor desplegado; quedan documentados en el manifest como
+   known_issue para el equipo de IA.
 2. **Latencia de `predict_batch` en CSVs grandes**: varios minutos para 10 000 filas en este
    entorno de desarrollo (single-worker, 667 soluciones MILP secuenciales dentro de una única
    petición HTTP síncrona). Evaluar si el timeout del API gateway de producción lo tolera, o si

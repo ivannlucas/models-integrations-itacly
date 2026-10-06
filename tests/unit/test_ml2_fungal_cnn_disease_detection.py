@@ -63,6 +63,20 @@ def test_predict_inline_invalid_image_maps_to_422(client, fake_plugins):
     assert "imagen no decodificable" in resp.json()["detail"]
 
 
-def test_train_returns_501(client):
-    resp = client.post(f"{PREFIX}/train", json={"data_path": "/tmp/leaves_train.zip", "mlflow_run_id": "test-run-id"})
-    assert resp.status_code == 501
+def test_train_returns_200_with_metrics(client):
+    """training.supported=true (inbox/a02/manifest.yaml) — /train runs and returns metrics."""
+    resp = client.post(
+        f"{PREFIX}/train",
+        json={"data_path": "/tmp/leaves_train.zip", "mlflow_run_id": "test-run-id"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["mlflow_run_id"] == "test-run-id"
+    assert 0.0 <= body["accuracy"] <= 1.0
+    assert set(body["classes"]) == _CLASSES
+
+
+def test_train_without_mlflow_run_id_returns_422(client):
+    """mlflow_run_id is required — every retrain must be persisted to a specific MLflow run."""
+    resp = client.post(f"{PREFIX}/train", json={"data_path": "/tmp/leaves_train.zip"})
+    assert resp.status_code == 422

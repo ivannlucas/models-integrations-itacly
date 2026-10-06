@@ -68,7 +68,7 @@ def test_stats_fetches_mlflow_metrics_when_run_id_given():
     """Regression: stats(mlflow_run_id=...) accepted the parameter but never used it —
     every retrain's /stats always reported this plugin's own static/served metrics, no
     matter which trained run was asked about, same class of bug found and fixed in
-    modelo43_cereales/ml3_wine_disease_pest_forecast (see plugin.py::stats)."""
+    ml43_cereals_dnsl_anomaly_fault_detection/ml3_wine_disease_pest_forecast (see plugin.py::stats)."""
     from unittest.mock import patch
 
     from app.plugins.ml21_cereals_price_spatial.plugin import Ml21CerealsPriceSpatialPlugin

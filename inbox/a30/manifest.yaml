@@ -1,0 +1,955 @@
+model_id: ml30-meat-traceability-detection
+sector: carnico
+nombre: "Implementación de un modelo DNL para la optimización de la trazabilidad del producto en planta"
+task_type: classification_binary  # Scoring de incidencias de trazabilidad por evento/transición de lote (no timeseries; cada fila es un evento tabular independiente con features de "memoria" ya pre-calculadas)
+framework: [pytorch, scikit-learn]
+
+# ── Notas de alcance (de la memoria, sección 1/9.1) ─────────────────────────
+# El dataset y el target son 100% SINTÉTICOS, generados por reglas internas del simulador
+# (src/data_processing/pipeline.py) — NO hay datos reales de planta. El propio entregable (secc.
+# 10 "Limitaciones") advierte que las métricas reflejan la capacidad de aprender las reglas del
+# generador, no evidencia de generalización a incidencias reales. Esto no es un defecto de la
+# integración — es una característica documentada del modelo tal como fue entregado.
+#
+# El despliegue original es BATCH ("El despliegue actual es de tipo batch", memoria 8.1): CLI
+# sobre un CSV ya "procesado" (events_features.csv) con las 33 features ya calculadas — el
+# código entregado NO hace feature engineering en tiempo real sobre eventos crudos secuenciales
+# (eso solo ocurre en el pipeline de generación/entrenamiento, src/data_processing/pipeline.py,
+# para construir el dataset). El plugin integrado respeta exactamente este contrato: exige las
+# 33 features ya calculadas como entrada (ver inputs.fixed) — no intenta derivarlas de eventos
+# crudos, que sería inventar un pipeline de feature engineering en tiempo real que el equipo de
+# IA nunca entregó ni validó para ese modo.
+
+artifacts:
+  folder: models/artifacts/neuroevolution_mlp/   # ruta dentro del código entregado (inbox/a30/codigo/)
+  files:
+    - model_state.pt       # pesos PyTorch del MLP ganador (TorchBinaryMLP, hidden_layers=[12,32])
+    - model_payload.json    # {input_dim: 97, hidden_layers: [12,32], activation: relu} — arquitectura
+    - preprocessor.pkl      # TabularPreprocessor (fit sobre train): medianas/medias/stds + vocab one-hot
+    - model_card.json        # ficha del modelo (uso previsto, I/O, métricas, limitaciones)
+    - metadata.json          # contrato de features/target, métricas, hashes, seed — validado en carga
+
+# feature_columns del artefacto (metadata.json) == FEATURE_COLUMNS del plugin, verificado byte
+# a byte (19 numéricas + 14 categóricas = 33, mismo orden) — ver constants.py del plugin.
+inputs:
+  fixed:  # Las 33 features YA CALCULADAS del evento (contrato exacto de metadata.json/model_card.json)
+    numeric:
+      - {name: has_prev_event, type: int, values: [0, 1], description: "1 si el lote tiene evento previo"}
+      - {name: cold_start_lot, type: int, values: [0, 1], description: "1 si es el primer evento del lote"}
+      - {name: stage_order_obs, type: int, range: [0, 6], description: "orden observado de la etapa (0=desconocida)"}
+      - {name: time_since_prev_lot_hours, type: float, description: "horas desde el evento previo del lote; -1.0 si no hay previo"}
+      - {name: lot_stage_order_delta, type: float, description: "stage_order_obs actual - anterior; 1 en condiciones normales"}
+      - {name: events_seen_before, type: int, description: "nº de eventos previos del lote"}
+      - {name: max_stage_order_seen_before, type: int, description: "máximo stage_order_obs visto hasta ahora en el lote"}
+      - {name: stages_seen_count_before, type: int, description: "nº de etapas distintas vistas hasta ahora"}
+      - {name: prior_sequence_anomaly_count, type: int, description: "conteo acumulado de anomalías de secuencia previas"}
+      - {name: sensor_temp_c, type: float, unit: "°C"}
+      - {name: sensor_ph, type: float}
+      - {name: sensor_weight_kg, type: float, unit: kg}
+      - {name: ts_hour, type: int, range: [-1, 23]}
+      - {name: ts_dayofweek, type: int, range: [-1, 6]}
+      - {name: sensor_temp_c_delta_from_prev, type: float}
+      - {name: sensor_ph_delta_from_prev, type: float}
+      - {name: sensor_weight_kg_delta_from_prev, type: float}
+      - {name: yield_pct_from_parent, type: float, description: "sensor_weight_kg / parent_input_weight_kg"}
+      - {name: yield_delta_from_expected, type: float}
+    categorical:
+      - {name: stage, values: [recepcion, despiece, procesado, envasado, almacenamiento, expedicion]}
+      - {name: prev_stage, description: "'__START__' si no hay evento previo"}
+      - {name: plant_line, values: [linea_norte, linea_sur, linea_este]}
+      - {name: operator_shift, values: [M, T, N]}
+      - {name: process_route, values: [fresh_cut, minced, marinated], description: "null legítimo si stage_order < 3 (visibilidad progresiva, ver pipeline.py _visible_process_route)"}
+      - {name: packaging_type, values: [vacuum, map, tray, skin_pack], description: "null legítimo si stage_order < 4 (_visible_packaging_type)"}
+      - {name: trace_unit_type, values: [canal, sublote, batch, unidad_envasada, caja, pale]}
+      - {name: prev_trace_unit_type}
+      - {name: temp_sensor_location}
+      - {name: prev_temp_sensor_location}
+      - {name: ph_measurement_source, values: [qa_sample, spot_check, inline_probe]}
+      - {name: prev_ph_measurement_source}
+      - {name: cold_room_id, description: "'no_cold_room' fuera de almacenamiento/expedición"}
+      - {name: scale_id}
+  control: null   # no es un modelo de optimización/control — clasificación pura
+  derived_if_missing:
+    # El plugin NO deriva/calcula estas features desde eventos crudos (el código original tampoco
+    # lo hace en inferencia — ver nota de alcance arriba). Si el caller omite una columna, el
+    # plugin aplica un valor por defecto documentado (preprocessing.py:_coerce) y además EMITE UN
+    # WARNING explícito vía contract.py (check_data_contract) — nunca falla en silencio:
+    numeric_missing: 0.0        # valor por defecto si falta una columna numérica
+    categorical_missing: "unknown"  # valor por defecto si falta una columna categórica (distinto de
+                                      # "__MISSING__", el token interno del preprocessor entrenado —
+                                      # pero contract.py reconoce ambos como "ausente" vía _MISSING_TOKENS)
+
+outputs:
+  predict_inline:  # método existe (ModelPluginPort lo exige) pero está DESCONECTADO del router a
+                    # propósito (predict_dto.py: "Inline prediction removed for this model (product
+                    # decision)" — PredictRequest = PredictBatchRequest). Coherente con la memoria
+                    # 8.1: "El despliegue actual es de tipo batch". No es un bug, está documentado.
+    - {name: pred_traceability_incident, type: int, values: [0, 1]}
+    - {name: pred_score, type: float, range: [0.0, 1.0]}
+    - {name: confidence, type: float}
+    - {name: xai_feature_values, type: "dict|null", description: "features usadas, para el servicio XAI"}
+  predict_batch:
+    - {name: row_id, type: str, description: "si está en el CSV de entrada"}
+    - {name: event_uid, type: str, description: "si está en el CSV de entrada"}
+    - {name: pred_traceability_incident, type: int, values: [0, 1]}
+    - {name: pred_score, type: float}
+    - {name: model_name, type: str}
+    - {name: xai_feature_values, type: "dict|null"}
+    - {name: warnings, type: "list[str]", description: "avisos no bloqueantes del contrato de datos (contract.py)"}
+
+training:
+  supported: true
+  target_column: target_traceability_incident   # config.yaml modeling.target_column, verificado en metadata.json
+  required_columns:  # las 33 features (inputs.fixed) + target_column
+    - has_prev_event
+    - cold_start_lot
+    - stage_order_obs
+    - time_since_prev_lot_hours
+    - lot_stage_order_delta
+    - events_seen_before
+    - max_stage_order_seen_before
+    - stages_seen_count_before
+    - prior_sequence_anomaly_count
+    - sensor_temp_c
+    - sensor_ph
+    - sensor_weight_kg
+    - ts_hour
+    - ts_dayofweek
+    - sensor_temp_c_delta_from_prev
+    - sensor_ph_delta_from_prev
+    - sensor_weight_kg_delta_from_prev
+    - yield_pct_from_parent
+    - yield_delta_from_expected
+    - stage
+    - prev_stage
+    - plant_line
+    - operator_shift
+    - process_route
+    - packaging_type
+    - trace_unit_type
+    - prev_trace_unit_type
+    - temp_sensor_location
+    - prev_temp_sensor_location
+    - ph_measurement_source
+    - prev_ph_measurement_source
+    - cold_room_id
+    - scale_id
+    - target_traceability_incident
+  hyperparams:
+    # El entrenamiento ORIGINAL (src/training/neuroevolution_mlp.py) es una búsqueda genética
+    # completa: población=8, generaciones=4, elite=3, mutation_rate=0.35, 2 candidatos aleatorios
+    # por generación (32 configuraciones MLP evaluadas en total, cada una con su propio
+    # learning_rate/l2/epochs/batch_size/hidden_layers/activation muestreados), seleccionando por
+    # F1 de validación. El plugin integrado NO re-ejecuta esta búsqueda completa en cada /train —
+    # reutiliza directamente el genoma ganador (best_genome en metadata.json) y reentrena SOLO esa
+    # arquitectura fija con los datos nuevos. Esto es una simplificación deliberada y documentada
+    # (ver plugin.py docstring de train() y constants.py), no una aproximación oculta: re-correr
+    # una NAS de 32 configuraciones en cada petición de usuario sería impracticable para un
+    # endpoint HTTP síncrono. El algoritmo de ajuste de PESOS (Adam + BCEWithLogitsLoss) y los
+    # hiperparámetros del genoma ganador sí son IDÉNTICOS a los originales:
+    hidden_layers: [12, 32]
+    activation: relu
+    learning_rate: 0.0556514207154333   # == best_genome.learning_rate (metadata.json)
+    weight_decay: 0.0001236243687952708  # == best_genome.l2
+    epochs: 147
+    batch_size: 128
+    optimizer: Adam
+    loss: BCEWithLogitsLoss
+    seed: 42
+    test_split: 0.2   # NOTA: el split original de evaluación final usa train/val/test 70/15/15
+                       # fijos por lote (config.yaml data.split_ratio); el train() del plugin, al
+                       # recibir un único CSV de usuario (sin partición predefinida), hace un split
+                       # 80/20 simple sobre ese CSV para reportar métricas de evaluación post-fit.
+                       # Documentado en constants.py TRAIN_TEST_SPLIT — no es el split original,
+                       # es el split que aplica train() sobre los datos que el usuario aporte.
+  metrics_returned: [accuracy, f1, roc_auc, n_train, n_test, training_time_s]
+  source: codigo_entrenamiento  # src/training/neuroevolution_mlp.py + src/training/torch_mlp.py
+                                  # + models/artifacts/neuroevolution_mlp/metadata.json (best_genome)
+
+constraints: null   # no hay restricciones de negocio tipo "PU >= 13" (a35) en memoria ni en código;
+                     # decision_threshold=0.5 es un parámetro de clasificación, no una constraint de dominio
+
+metrics_reported:  # Tabla 4 de la memoria (sección 7.2) — test hold-out, 379 filas, neuroevolution_mlp
+  accuracy: 0.8707
+  precision: 0.7400
+  recall: 0.5068
+  f1: 0.6016
+  roc_auc: 0.7185
+  # reproducido exactamente ejecutando src/predict/predictor.py del código entregado sobre
+  # data/splits/test.csv con los artefactos entregados (ver golden_cases) — no se ha copiado
+  # ciegamente de la memoria, se ha verificado bit a bit.
+
+golden_cases:
+- id: obs_OBS0000269
+  source: dataset_test_split
+  input:
+    row_id: OBS0000269
+    event_uid: EVT-LOT00396-04
+    has_prev_event: 1
+    cold_start_lot: 0
+    stage_order_obs: 4
+    time_since_prev_lot_hours: 3.638964304869167
+    lot_stage_order_delta: 1
+    events_seen_before: 2
+    max_stage_order_seen_before: 3
+    stages_seen_count_before: 2
+    prior_sequence_anomaly_count: 1
+    sensor_temp_c: 2.872
+    sensor_ph: 5.739
+    sensor_weight_kg: 241.184
+    ts_hour: 7
+    ts_dayofweek: 5
+    sensor_temp_c_delta_from_prev: -1.024
+    sensor_ph_delta_from_prev: 0.0629999999999997
+    sensor_weight_kg_delta_from_prev: -0.304000000000002
+    yield_pct_from_parent: 0.2304549398216626
+    yield_delta_from_expected: 0.0021249398216626
+    stage: envasado
+    prev_stage: procesado
+    plant_line: linea_sur
+    operator_shift: M
+    process_route: fresh_cut
+    packaging_type: map
+    trace_unit_type: unidad_envasada
+    prev_trace_unit_type: batch
+    temp_sensor_location: linea_envasado
+    prev_temp_sensor_location: linea_proceso
+    ph_measurement_source: inline_probe
+    prev_ph_measurement_source: inline_probe
+    cold_room_id: no_cold_room
+    scale_id: bascula_02
+  expected:
+    pred_traceability_incident: 0
+    pred_score: 0.199724
+  ground_truth_target_traceability_incident: 0
+- id: obs_OBS0000325
+  source: dataset_test_split
+  input:
+    row_id: OBS0000325
+    event_uid: EVT-LOT00102-02
+    has_prev_event: 1
+    cold_start_lot: 0
+    stage_order_obs: 2
+    time_since_prev_lot_hours: 4.247214888899722
+    lot_stage_order_delta: 1
+    events_seen_before: 1
+    max_stage_order_seen_before: 1
+    stages_seen_count_before: 1
+    prior_sequence_anomaly_count: 0
+    sensor_temp_c: 5.819
+    sensor_ph: 5.673
+    sensor_weight_kg: 243.64
+    ts_hour: 12
+    ts_dayofweek: 4
+    sensor_temp_c_delta_from_prev: 2.141
+    sensor_ph_delta_from_prev: 0.0259999999999998
+    sensor_weight_kg_delta_from_prev: -6.616000000000014
+    yield_pct_from_parent: 0.2338435904646638
+    yield_delta_from_expected: 0.0
+    stage: despiece
+    prev_stage: recepcion
+    plant_line: linea_norte
+    operator_shift: M
+    process_route: null
+    packaging_type: null
+    trace_unit_type: sublote
+    prev_trace_unit_type: canal
+    temp_sensor_location: sala_despiece
+    prev_temp_sensor_location: vehiculo
+    ph_measurement_source: qa_sample
+    prev_ph_measurement_source: qa_sample
+    cold_room_id: no_cold_room
+    scale_id: bascula_01
+  expected:
+    pred_traceability_incident: 0
+    pred_score: 0.041464
+  ground_truth_target_traceability_incident: 0
+- id: obs_OBS0000475
+  source: dataset_test_split
+  input:
+    row_id: OBS0000475
+    event_uid: EVT-LOT00330-06
+    has_prev_event: 1
+    cold_start_lot: 0
+    stage_order_obs: 6
+    time_since_prev_lot_hours: 16.082564350833888
+    lot_stage_order_delta: 1
+    events_seen_before: 4
+    max_stage_order_seen_before: 5
+    stages_seen_count_before: 3
+    prior_sequence_anomaly_count: 0
+    sensor_temp_c: 3.715
+    sensor_ph: 5.63
+    sensor_weight_kg: 231.825
+    ts_hour: 14
+    ts_dayofweek: 3
+    sensor_temp_c_delta_from_prev: 1.2849999999999997
+    sensor_ph_delta_from_prev: -0.0990000000000002
+    sensor_weight_kg_delta_from_prev: -6.319000000000017
+    yield_pct_from_parent: 0.4321779381854586
+    yield_delta_from_expected: -0.0049620618145413
+    stage: expedicion
+    prev_stage: almacenamiento
+    plant_line: linea_este
+    operator_shift: T
+    process_route: fresh_cut
+    packaging_type: map
+    trace_unit_type: pale
+    prev_trace_unit_type: caja
+    temp_sensor_location: vehiculo
+    prev_temp_sensor_location: camara_frigorifica
+    ph_measurement_source: spot_check
+    prev_ph_measurement_source: spot_check
+    cold_room_id: camara_02
+    scale_id: bascula_03
+  expected:
+    pred_traceability_incident: 0
+    pred_score: 0.143161
+  ground_truth_target_traceability_incident: 1
+- id: obs_OBS0000675
+  source: dataset_test_split
+  input:
+    row_id: OBS0000675
+    event_uid: EVT-LOT00220-01
+    has_prev_event: 0
+    cold_start_lot: 1
+    stage_order_obs: 1
+    time_since_prev_lot_hours: -1.0
+    lot_stage_order_delta: 0
+    events_seen_before: 0
+    max_stage_order_seen_before: 0
+    stages_seen_count_before: 0
+    prior_sequence_anomaly_count: 0
+    sensor_temp_c: 2.443
+    sensor_ph: 5.627
+    sensor_weight_kg: 259.66
+    ts_hour: 23
+    ts_dayofweek: 2
+    sensor_temp_c_delta_from_prev: 0.0
+    sensor_ph_delta_from_prev: 0.0
+    sensor_weight_kg_delta_from_prev: 0.0
+    yield_pct_from_parent: 0.2334668834158131
+    yield_delta_from_expected: 0.0
+    stage: recepcion
+    prev_stage: __START__
+    plant_line: linea_sur
+    operator_shift: N
+    process_route: null
+    packaging_type: null
+    trace_unit_type: canal
+    prev_trace_unit_type: __START__
+    temp_sensor_location: vehiculo
+    prev_temp_sensor_location: __START__
+    ph_measurement_source: qa_sample
+    prev_ph_measurement_source: __START__
+    cold_room_id: no_cold_room
+    scale_id: bascula_02
+  expected:
+    pred_traceability_incident: 0
+    pred_score: 0.114083
+  ground_truth_target_traceability_incident: 0
+- id: obs_OBS0000721
+  source: dataset_test_split
+  input:
+    row_id: OBS0000721
+    event_uid: EVT-LOT00183-06
+    has_prev_event: 1
+    cold_start_lot: 0
+    stage_order_obs: 6
+    time_since_prev_lot_hours: 9.487006474505554
+    lot_stage_order_delta: 1
+    events_seen_before: 5
+    max_stage_order_seen_before: 5
+    stages_seen_count_before: 5
+    prior_sequence_anomaly_count: 0
+    sensor_temp_c: 2.918
+    sensor_ph: 5.855
+    sensor_weight_kg: 232.501
+    ts_hour: 15
+    ts_dayofweek: 4
+    sensor_temp_c_delta_from_prev: 0.2910000000000003
+    sensor_ph_delta_from_prev: -0.1439999999999992
+    sensor_weight_kg_delta_from_prev: 0.3420000000000129
+    yield_pct_from_parent: 0.2973671925460278
+    yield_delta_from_expected: 0.0055071925460277
+    stage: expedicion
+    prev_stage: almacenamiento
+    plant_line: linea_sur
+    operator_shift: T
+    process_route: fresh_cut
+    packaging_type: vacuum
+    trace_unit_type: pale
+    prev_trace_unit_type: caja
+    temp_sensor_location: vehiculo
+    prev_temp_sensor_location: camara_frigorifica
+    ph_measurement_source: spot_check
+    prev_ph_measurement_source: spot_check
+    cold_room_id: camara_01
+    scale_id: bascula_02
+  expected:
+    pred_traceability_incident: 0
+    pred_score: 0.033278
+  ground_truth_target_traceability_incident: 0
+- id: obs_OBS0000795
+  source: dataset_test_split
+  input:
+    row_id: OBS0000795
+    event_uid: EVT-LOT00054-03
+    has_prev_event: 1
+    cold_start_lot: 0
+    stage_order_obs: 3
+    time_since_prev_lot_hours: 4.477092462168056
+    lot_stage_order_delta: 1
+    events_seen_before: 2
+    max_stage_order_seen_before: 2
+    stages_seen_count_before: 2
+    prior_sequence_anomaly_count: 0
+    sensor_temp_c: 4.973
+    sensor_ph: 5.787
+    sensor_weight_kg: 238.404
+    ts_hour: 12
+    ts_dayofweek: 1
+    sensor_temp_c_delta_from_prev: 0.3709999999999995
+    sensor_ph_delta_from_prev: 0.0689999999999999
+    sensor_weight_kg_delta_from_prev: -10.453000000000005
+    yield_pct_from_parent: 0.4449172232704226
+    yield_delta_from_expected: -0.0034327767295774
+    stage: procesado
+    prev_stage: despiece
+    plant_line: linea_norte
+    operator_shift: M
+    process_route: fresh_cut
+    packaging_type: null
+    trace_unit_type: batch
+    prev_trace_unit_type: sublote
+    temp_sensor_location: linea_proceso
+    prev_temp_sensor_location: sala_despiece
+    ph_measurement_source: inline_probe
+    prev_ph_measurement_source: qa_sample
+    cold_room_id: no_cold_room
+    scale_id: bascula_01
+  expected:
+    pred_traceability_incident: 0
+    pred_score: 0.113355
+  ground_truth_target_traceability_incident: 0
+- id: obs_OBS0001067
+  source: dataset_test_split
+  input:
+    row_id: OBS0001067
+    event_uid: EVT-LOT00029-03
+    has_prev_event: 1
+    cold_start_lot: 0
+    stage_order_obs: 3
+    time_since_prev_lot_hours: 4.103592818585278
+    lot_stage_order_delta: 1
+    events_seen_before: 2
+    max_stage_order_seen_before: 2
+    stages_seen_count_before: 2
+    prior_sequence_anomaly_count: 0
+    sensor_temp_c: 7.65044659992334
+    sensor_ph: 6.14892810341879
+    sensor_weight_kg: 239.1280263722521
+    ts_hour: 14
+    ts_dayofweek: 6
+    sensor_temp_c_delta_from_prev: 2.52244659992334
+    sensor_ph_delta_from_prev: 0.2209281034187897
+    sensor_weight_kg_delta_from_prev: -15.4779736277479
+    yield_pct_from_parent: 0.2870708713905784
+    yield_delta_from_expected: -0.0110291286094215
+    stage: procesado
+    prev_stage: despiece
+    plant_line: linea_sur
+    operator_shift: N
+    process_route: fresh_cut
+    packaging_type: null
+    trace_unit_type: batch
+    prev_trace_unit_type: sublote
+    temp_sensor_location: linea_proceso
+    prev_temp_sensor_location: sala_despiece
+    ph_measurement_source: inline_probe
+    prev_ph_measurement_source: qa_sample
+    cold_room_id: no_cold_room
+    scale_id: bascula_03
+  expected:
+    pred_traceability_incident: 0
+    pred_score: 0.081986
+  ground_truth_target_traceability_incident: 0
+- id: obs_OBS0001335
+  source: dataset_test_split
+  input:
+    row_id: OBS0001335
+    event_uid: EVT-LOT00188-03
+    has_prev_event: 1
+    cold_start_lot: 0
+    stage_order_obs: 3
+    time_since_prev_lot_hours: 2.259880624678889
+    lot_stage_order_delta: 2
+    events_seen_before: 1
+    max_stage_order_seen_before: 1
+    stages_seen_count_before: 1
+    prior_sequence_anomaly_count: 0
+    sensor_temp_c: 6.262
+    sensor_ph: 5.821
+    sensor_weight_kg: 250.092
+    ts_hour: 15
+    ts_dayofweek: 5
+    sensor_temp_c_delta_from_prev: 1.6199999999999992
+    sensor_ph_delta_from_prev: 0.0529999999999999
+    sensor_weight_kg_delta_from_prev: -11.296999999999995
+    yield_pct_from_parent: 0.3174787748304017
+    yield_delta_from_expected: 0.0037087748304017
+    stage: procesado
+    prev_stage: recepcion
+    plant_line: linea_norte
+    operator_shift: T
+    process_route: fresh_cut
+    packaging_type: null
+    trace_unit_type: batch
+    prev_trace_unit_type: canal
+    temp_sensor_location: linea_proceso
+    prev_temp_sensor_location: vehiculo
+    ph_measurement_source: inline_probe
+    prev_ph_measurement_source: qa_sample
+    cold_room_id: no_cold_room
+    scale_id: bascula_01
+  expected:
+    pred_traceability_incident: 1
+    pred_score: 0.992749
+  ground_truth_target_traceability_incident: 1
+- id: obs_OBS0001351
+  source: dataset_test_split
+  input:
+    row_id: OBS0001351
+    event_uid: EVT-LOT00330-05
+    has_prev_event: 1
+    cold_start_lot: 0
+    stage_order_obs: 5
+    time_since_prev_lot_hours: 3.1592333585838888
+    lot_stage_order_delta: 1
+    events_seen_before: 3
+    max_stage_order_seen_before: 4
+    stages_seen_count_before: 2
+    prior_sequence_anomaly_count: 0
+    sensor_temp_c: 2.43
+    sensor_ph: 5.729
+    sensor_weight_kg: 238.144
+    ts_hour: 22
+    ts_dayofweek: 2
+    sensor_temp_c_delta_from_prev: -1.799
+    sensor_ph_delta_from_prev: 0.0030000000000001
+    sensor_weight_kg_delta_from_prev: -2.7489999999999952
+    yield_pct_from_parent: 0.4439580843793286
+    yield_delta_from_expected: 0.0021380843793286
+    stage: almacenamiento
+    prev_stage: envasado
+    plant_line: linea_este
+    operator_shift: M
+    process_route: fresh_cut
+    packaging_type: map
+    trace_unit_type: caja
+    prev_trace_unit_type: unidad_envasada
+    temp_sensor_location: camara_frigorifica
+    prev_temp_sensor_location: linea_envasado
+    ph_measurement_source: spot_check
+    prev_ph_measurement_source: inline_probe
+    cold_room_id: camara_02
+    scale_id: bascula_03
+  expected:
+    pred_traceability_incident: 0
+    pred_score: 2.0e-06
+  ground_truth_target_traceability_incident: 1
+- id: obs_OBS0001565
+  source: dataset_test_split
+  input:
+    row_id: OBS0001565
+    event_uid: EVT-LOT00201-02
+    has_prev_event: 1
+    cold_start_lot: 0
+    stage_order_obs: 2
+    time_since_prev_lot_hours: 1199.2067995114735
+    lot_stage_order_delta: -4
+    events_seen_before: 6
+    max_stage_order_seen_before: 6
+    stages_seen_count_before: 6
+    prior_sequence_anomaly_count: 0
+    sensor_temp_c: 6.595
+    sensor_ph: 5.763
+    sensor_weight_kg: 269.561
+    ts_hour: 0
+    ts_dayofweek: 0
+    sensor_temp_c_delta_from_prev: -9.194510484588914
+    sensor_ph_delta_from_prev: -0.1029999999999997
+    sensor_weight_kg_delta_from_prev: 41.07099999999997
+    yield_pct_from_parent: 0.3150715032931839
+    yield_delta_from_expected: 0.0
+    stage: despiece
+    prev_stage: expedicion
+    plant_line: linea_norte
+    operator_shift: N
+    process_route: null
+    packaging_type: null
+    trace_unit_type: sublote
+    prev_trace_unit_type: pale
+    temp_sensor_location: sala_despiece
+    prev_temp_sensor_location: vehiculo
+    ph_measurement_source: qa_sample
+    prev_ph_measurement_source: spot_check
+    cold_room_id: no_cold_room
+    scale_id: bascula_01
+  expected:
+    pred_traceability_incident: 1
+    pred_score: 0.992749
+  ground_truth_target_traceability_incident: 1
+- id: obs_OBS0001779
+  source: dataset_test_split
+  input:
+    row_id: OBS0001779
+    event_uid: EVT-LOT00339-01
+    has_prev_event: 0
+    cold_start_lot: 1
+    stage_order_obs: 1
+    time_since_prev_lot_hours: -1.0
+    lot_stage_order_delta: 0
+    events_seen_before: 0
+    max_stage_order_seen_before: 0
+    stages_seen_count_before: 0
+    prior_sequence_anomaly_count: 0
+    sensor_temp_c: 3.732
+    sensor_ph: 5.592
+    sensor_weight_kg: 271.867
+    ts_hour: 20
+    ts_dayofweek: 0
+    sensor_temp_c_delta_from_prev: 0.0
+    sensor_ph_delta_from_prev: 0.0
+    sensor_weight_kg_delta_from_prev: 0.0
+    yield_pct_from_parent: 0.3197547504457586
+    yield_delta_from_expected: 0.0
+    stage: recepcion
+    prev_stage: __START__
+    plant_line: linea_norte
+    operator_shift: T
+    process_route: null
+    packaging_type: null
+    trace_unit_type: canal
+    prev_trace_unit_type: __START__
+    temp_sensor_location: vehiculo
+    prev_temp_sensor_location: __START__
+    ph_measurement_source: qa_sample
+    prev_ph_measurement_source: __START__
+    cold_room_id: no_cold_room
+    scale_id: bascula_01
+  expected:
+    pred_traceability_incident: 0
+    pred_score: 0.032766
+  ground_truth_target_traceability_incident: 0
+- id: obs_OBS0001880
+  source: dataset_test_split
+  input:
+    row_id: OBS0001880
+    event_uid: EVT-LOT00339-02
+    has_prev_event: 1
+    cold_start_lot: 0
+    stage_order_obs: 2
+    time_since_prev_lot_hours: 6.121177375681111
+    lot_stage_order_delta: 1
+    events_seen_before: 1
+    max_stage_order_seen_before: 1
+    stages_seen_count_before: 1
+    prior_sequence_anomaly_count: 0
+    sensor_temp_c: 3.181
+    sensor_ph: 5.863
+    sensor_weight_kg: 269.155
+    ts_hour: 2
+    ts_dayofweek: 1
+    sensor_temp_c_delta_from_prev: -0.5510000000000002
+    sensor_ph_delta_from_prev: 0.2710000000000008
+    sensor_weight_kg_delta_from_prev: -2.712000000000046
+    yield_pct_from_parent: 0.3165650478220164
+    yield_delta_from_expected: 0.0
+    stage: despiece
+    prev_stage: recepcion
+    plant_line: linea_norte
+    operator_shift: N
+    process_route: null
+    packaging_type: null
+    trace_unit_type: sublote
+    prev_trace_unit_type: canal
+    temp_sensor_location: sala_despiece
+    prev_temp_sensor_location: vehiculo
+    ph_measurement_source: qa_sample
+    prev_ph_measurement_source: qa_sample
+    cold_room_id: no_cold_room
+    scale_id: bascula_01
+  expected:
+    pred_traceability_incident: 0
+    pred_score: 0.006805
+  ground_truth_target_traceability_incident: 1
+- id: obs_OBS0001947
+  source: dataset_test_split
+  input:
+    row_id: OBS0001947
+    event_uid: EVT-LOT00127-05
+    has_prev_event: 1
+    cold_start_lot: 0
+    stage_order_obs: 5
+    time_since_prev_lot_hours: 11.19807599363361
+    lot_stage_order_delta: 1
+    events_seen_before: 4
+    max_stage_order_seen_before: 4
+    stages_seen_count_before: 4
+    prior_sequence_anomaly_count: 0
+    sensor_temp_c: 2.205
+    sensor_ph: 4.666
+    sensor_weight_kg: 233.808
+    ts_hour: 11
+    ts_dayofweek: 3
+    sensor_temp_c_delta_from_prev: -2.68
+    sensor_ph_delta_from_prev: -1.1480000000000006
+    sensor_weight_kg_delta_from_prev: 0.2579999999999813
+    yield_pct_from_parent: 0.4570526003018242
+    yield_delta_from_expected: 0.0034226003018242
+    stage: almacenamiento
+    prev_stage: envasado
+    plant_line: linea_norte
+    operator_shift: M
+    process_route: fresh_cut
+    packaging_type: map
+    trace_unit_type: caja
+    prev_trace_unit_type: unidad_envasada
+    temp_sensor_location: camara_frigorifica
+    prev_temp_sensor_location: vehiculo
+    ph_measurement_source: spot_check
+    prev_ph_measurement_source: qa_sample
+    cold_room_id: camara_03
+    scale_id: bascula_01
+  expected:
+    pred_traceability_incident: 0
+    pred_score: 0.003004
+  ground_truth_target_traceability_incident: 0
+- id: obs_OBS0001997
+  source: dataset_test_split
+  input:
+    row_id: OBS0001997
+    event_uid: EVT-LOT00240-05
+    has_prev_event: 1
+    cold_start_lot: 0
+    stage_order_obs: 5
+    time_since_prev_lot_hours: 12.090874029681943
+    lot_stage_order_delta: 1
+    events_seen_before: 4
+    max_stage_order_seen_before: 4
+    stages_seen_count_before: 4
+    prior_sequence_anomaly_count: 0
+    sensor_temp_c: 2.369
+    sensor_ph: 5.763
+    sensor_weight_kg: 223.517
+    ts_hour: 2
+    ts_dayofweek: 2
+    sensor_temp_c_delta_from_prev: -1.6309999999999998
+    sensor_ph_delta_from_prev: 0.1109999999999997
+    sensor_weight_kg_delta_from_prev: -4.682000000000016
+    yield_pct_from_parent: 0.4441161568494988
+    yield_delta_from_expected: 0.0032761568494987
+    stage: almacenamiento
+    prev_stage: envasado
+    plant_line: linea_sur
+    operator_shift: N
+    process_route: minced
+    packaging_type: map
+    trace_unit_type: caja
+    prev_trace_unit_type: unidad_envasada
+    temp_sensor_location: camara_frigorifica
+    prev_temp_sensor_location: linea_envasado
+    ph_measurement_source: spot_check
+    prev_ph_measurement_source: qa_sample
+    cold_room_id: camara_01
+    scale_id: bascula_02
+  expected:
+    pred_traceability_incident: 0
+    pred_score: 0.043638
+  ground_truth_target_traceability_incident: 0
+- id: obs_OBS0002013
+  source: dataset_test_split
+  input:
+    row_id: OBS0002013
+    event_uid: EVT-LOT00114-03
+    has_prev_event: 1
+    cold_start_lot: 0
+    stage_order_obs: 3
+    time_since_prev_lot_hours: 4.922378695902778
+    lot_stage_order_delta: 1
+    events_seen_before: 2
+    max_stage_order_seen_before: 2
+    stages_seen_count_before: 2
+    prior_sequence_anomaly_count: 0
+    sensor_temp_c: 2.562
+    sensor_ph: 5.693
+    sensor_weight_kg: 242.206
+    ts_hour: 1
+    ts_dayofweek: 6
+    sensor_temp_c_delta_from_prev: -2.3320000000000003
+    sensor_ph_delta_from_prev: -0.1110000000000006
+    sensor_weight_kg_delta_from_prev: -2.740000000000009
+    yield_pct_from_parent: 0.9455631465937928
+    yield_delta_from_expected: 0.0074231465937927
+    stage: procesado
+    prev_stage: despiece
+    plant_line: linea_este
+    operator_shift: N
+    process_route: fresh_cut
+    packaging_type: null
+    trace_unit_type: batch
+    prev_trace_unit_type: sublote
+    temp_sensor_location: linea_proceso
+    prev_temp_sensor_location: sala_despiece
+    ph_measurement_source: inline_probe
+    prev_ph_measurement_source: qa_sample
+    cold_room_id: no_cold_room
+    scale_id: bascula_03
+  expected:
+    pred_traceability_incident: 0
+    pred_score: 0.131462
+  ground_truth_target_traceability_incident: 0
+- id: obs_OBS0002150
+  source: dataset_test_split
+  input:
+    row_id: OBS0002150
+    event_uid: EVT-LOT00348-05
+    has_prev_event: 1
+    cold_start_lot: 0
+    stage_order_obs: 5
+    time_since_prev_lot_hours: 10.587339464071666
+    lot_stage_order_delta: 1
+    events_seen_before: 4
+    max_stage_order_seen_before: 4
+    stages_seen_count_before: 4
+    prior_sequence_anomaly_count: 0
+    sensor_temp_c: 1.623
+    sensor_ph: 6.018
+    sensor_weight_kg: 246.103
+    ts_hour: 10
+    ts_dayofweek: 0
+    sensor_temp_c_delta_from_prev: -1.466
+    sensor_ph_delta_from_prev: 0.0779999999999994
+    sensor_weight_kg_delta_from_prev: -1.878999999999991
+    yield_pct_from_parent: 0.30518763044101
+    yield_delta_from_expected: 0.0022176304410099
+    stage: almacenamiento
+    prev_stage: envasado
+    plant_line: linea_este
+    operator_shift: M
+    process_route: minced
+    packaging_type: map
+    trace_unit_type: caja
+    prev_trace_unit_type: unidad_envasada
+    temp_sensor_location: camara_frigorifica
+    prev_temp_sensor_location: linea_envasado
+    ph_measurement_source: spot_check
+    prev_ph_measurement_source: qa_sample
+    cold_room_id: camara_03
+    scale_id: bascula_03
+  expected:
+    pred_traceability_incident: 0
+    pred_score: 0.004608
+  ground_truth_target_traceability_incident: 1
+- id: obs_OBS0002190
+  source: dataset_test_split
+  input:
+    row_id: OBS0002190
+    event_uid: EVT-LOT00141-02
+    has_prev_event: 1
+    cold_start_lot: 0
+    stage_order_obs: 2
+    time_since_prev_lot_hours: 5.476793969915278
+    lot_stage_order_delta: 1
+    events_seen_before: 1
+    max_stage_order_seen_before: 1
+    stages_seen_count_before: 1
+    prior_sequence_anomaly_count: 0
+    sensor_temp_c: 3.81
+    sensor_ph: 5.619
+    sensor_weight_kg: 240.568
+    ts_hour: 4
+    ts_dayofweek: 0
+    sensor_temp_c_delta_from_prev: -0.8589999999999995
+    sensor_ph_delta_from_prev: 0.0430000000000001
+    sensor_weight_kg_delta_from_prev: -2.283999999999992
+    yield_pct_from_parent: 0.2301920914766883
+    yield_delta_from_expected: 0.0
+    stage: despiece
+    prev_stage: recepcion
+    plant_line: linea_este
+    operator_shift: N
+    process_route: null
+    packaging_type: null
+    trace_unit_type: sublote
+    prev_trace_unit_type: canal
+    temp_sensor_location: linea_proceso
+    prev_temp_sensor_location: vehiculo
+    ph_measurement_source: spot_check
+    prev_ph_measurement_source: qa_sample
+    cold_room_id: no_cold_room
+    scale_id: bascula_03
+  expected:
+    pred_traceability_incident: 1
+    pred_score: 0.966893
+  ground_truth_target_traceability_incident: 1
+- id: obs_OBS0002226
+  source: dataset_test_split
+  input:
+    row_id: OBS0002226
+    event_uid: EVT-LOT00006-06
+    has_prev_event: 1
+    cold_start_lot: 0
+    stage_order_obs: 6
+    time_since_prev_lot_hours: 7.354626384371389
+    lot_stage_order_delta: 1
+    events_seen_before: 5
+    max_stage_order_seen_before: 5
+    stages_seen_count_before: 5
+    prior_sequence_anomaly_count: 0
+    sensor_temp_c: 4.106
+    sensor_ph: 5.76
+    sensor_weight_kg: 250.529
+    ts_hour: 11
+    ts_dayofweek: 3
+    sensor_temp_c_delta_from_prev: 2.687
+    sensor_ph_delta_from_prev: -0.0010000000000003
+    sensor_weight_kg_delta_from_prev: 2.6899999999999977
+    yield_pct_from_parent: 0.3098907405964304
+    yield_delta_from_expected: 0.0019807405964303
+    stage: expedicion
+    prev_stage: almacenamiento
+    plant_line: linea_este
+    operator_shift: M
+    process_route: minced
+    packaging_type: map
+    trace_unit_type: pale
+    prev_trace_unit_type: caja
+    temp_sensor_location: linea_envasado
+    prev_temp_sensor_location: camara_frigorifica
+    ph_measurement_source: qa_sample
+    prev_ph_measurement_source: spot_check
+    cold_room_id: camara_03
+    scale_id: bascula_03
+  expected:
+    pred_traceability_incident: 1
+    pred_score: 0.992749
+  ground_truth_target_traceability_incident: 1
+
+known_issues:
+  - "Dataset y target 100% sintéticos (generados por reglas internas del simulador, no datos
+     reales de planta) — advertido explícitamente en la memoria secc. 10. Las métricas deben
+     leerse como validación del pipeline, no como evidencia de generalización a planta real."
+  - "requirements.txt entregado fija torch==2.11.0 / scikit-learn==1.5.2 / numpy==2.4.4; el
+     entorno de este repo usa torch==2.13.0+cu130 / scikit-learn==1.5.2. La inferencia offline
+     (ver golden_cases) reproduce las predicciones originales con diferencia <2e-8 en pred_score,
+     así que la diferencia de versión de torch no afecta la correctitud numérica observada."
+  - "requirements.txt tiene CRLF pero SÍ es ASCII/UTF-8 (no UTF-16LE como en otros modelos del
+     proyecto) — confirmado con `file`, no requirió normalización de encoding."
+  - "predict_inline existe en el plugin (ModelPluginPort lo exige) pero el router solo acepta
+     'mode: batch' — decisión de producto documentada en predict_dto.py, coherente con 'despliegue
+     de tipo batch' de la memoria 8.1. Se ha verificado igualmente que predict_inline reproduce
+     la misma predicción que el pipeline original (ver sección de auditoría del plugin), por si se
+     reactiva en el futuro."
+

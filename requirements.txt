@@ -70,7 +70,7 @@ deap==1.4.4
 # GradientExplainer for the LSTM branch. Deliberate deviation from this repo's usual pattern
 # (SHAP normally delegated to the external explainability microservice) — the PCC catalog is
 # this model's own functional differentiator, ported inline per explicit product decision.
-# Also required by modelo43-cereales (same DNSL family, same temporal-branch XAI) — both
+# Also required by ml43-cereals-dnsl-anomaly-fault-detection (same DNSL family, same temporal-branch XAI) — both
 # only use shap.GradientExplainer.
 shap>=0.51.0
 

@@ -33,7 +33,7 @@
     "No da precios diarios ni movimientos dentro de un mismo mes: solo el precio medio mensual a seis meses vista.",
     "No cubre otros países: se limita al mercado español.",
     "No tiene en cuenta promociones, campañas comerciales ni cambios de estrategia de precios de las cadenas.",
-    "No se actualiza solo con tus datos desde esta herramienta: la puesta al día del sistema se hace aparte, con datos oficiales nuevos.",
+    "No se actualiza solo: aprender de datos nuevos requiere pedirlo explícitamente (reentrenamiento), y el resultado se guarda aparte sin tocar el modelo que se usa por defecto.",
     "No ofrece un porcentaje de confianza para cada estimación concreta."
   ],
   "puede_equivocarse": "Sí. En las pruebas mejora en torno a un 23% al método más simple de suponer que 'el precio seguirá igual', y acierta la dirección del cambio en más de 9 de cada 10 casos; pero su precisión se midió sobre un tramo de mercado concreto y reciente, y en periodos muy volátiles o ante situaciones nuevas puede desviarse más. Además, distintas ejecuciones del ajuste del sistema dan resultados algo diferentes (en una de ellas el resultado quedó por debajo del método simple). Úsalo como una ayuda para anticipar tendencias, no como una garantía del precio futuro.",

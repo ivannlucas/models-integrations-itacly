@@ -100,6 +100,14 @@
   {
    "tipo": "No sustituye a la neuroevolución del proyecto original",
    "descripcion": "El proyecto original también entrenó una política de aprendizaje automático (neuroevolución) como comparación; esta herramienta usa el cálculo exacto, que el propio equipo de IA demostró que reduce más emisión que esa alternativa aprendida."
+  },
+  {
+   "tipo": "Solo tiene en cuenta las emisiones",
+   "descripcion": "Elige el destino que menos CO2 genera, pero no considera lo que cuesta procesar o transportar cada lote. Antes de aplicar una recomendación, comprueba que es viable económicamente para tu explotación."
+  },
+  {
+   "tipo": "Se apoya en supuestos teóricos",
+   "descripcion": "Los datos con los que se diseñó parten de reglas teóricas sobre cómo emite cada destino, no de mediciones reales. Si en tu planta las emisiones reales se comportan de otra forma, la recomendación puede dejar de ser la mejor."
   }
  ]
 }

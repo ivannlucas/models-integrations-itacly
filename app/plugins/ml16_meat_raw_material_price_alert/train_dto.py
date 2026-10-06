@@ -17,7 +17,7 @@ class TrainRequest(BaseModel):
             "(walk-forward CV + búsqueda de umbral + bagging bootstrap)."
         ),
     )
-    mlflow_run_id: str = ""
+    mlflow_run_id: str
 
 
 class TrainResponse(BaseModel):

@@ -1,3 +1,7 @@
+# [RENOMBRADO 2026-10-06] Nomenclatura alineada con el estándar mlNN_<sector>_<desc>:
+#   m47_dnsl_fallas_maquinaria_pasteurizado / m47-dnsl-fallas-maquinaria-pasteurizado  ->  ml47_dairy_dnsl_pasteurization_fault_detection / ml47-dairy-dnsl-pasteurization-fault-detection
+#   Artefactos (local y S3): artifacts/a47_dnsl_fallas_maquinaria_pasteurizado/ -> artifacts/ml47_dairy_dnsl_pasteurization_fault_detection/
+#   Las menciones al nombre antiguo en comentarios/known_issues son históricas.
 # ─────────────────────────────────────────────────────────────────────────────
 # Manifest del modelo a47 — Deep Neurosymbolic Learning (DNSL) para detección de
 # fallas en maquinaria de pasteurizado.
@@ -5,12 +9,12 @@
 # Generado por el skill manifest-extraction a partir de:
 #   - codigo/a47-dnsl-fallas-maquinaria-pasteurizado/  (src, config.yaml, artefactos, splits)
 #   - entregable/47 - ... - v2.0.docx  (memoria del equipo de IA, v2.0 24/06/2026)
-#   - app/plugins/m47_dnsl_fallas_maquinaria_pasteurizado/  (plugin ya integrado — contrato I/O autoritativo)
+#   - app/plugins/ml47_dairy_dnsl_pasteurization_fault_detection/  (plugin ya integrado — contrato I/O autoritativo)
 # ─────────────────────────────────────────────────────────────────────────────
 
-model_id: lacteo-dnsl-fallas-maquinaria-pasteurizado
-model_key_runtime: m47-dnsl-fallas-maquinaria-pasteurizado   # MODEL_ID del plugin integrado
-artifact_folder: a47_dnsl_fallas_maquinaria_pasteurizado
+model_id: ml47-dairy-dnsl-pasteurization-fault-detection
+model_key_runtime: ml47-dairy-dnsl-pasteurization-fault-detection   # MODEL_ID del plugin integrado
+artifact_folder: ml47_dairy_dnsl_pasteurization_fault_detection
 sector: lacteo
 nombre: "Desarrollo de un modelo predictivo basado en DNSL para la detección de fallas en maquinaria de pasteurizado"
 acronimo: DEFPAM-DNSL
@@ -171,3 +175,4 @@ known_issues:
   - "scaler_cnn_dns.pkl se serializó con scikit-learn 1.6.1; el entorno local tiene 1.7.0 — carga con warnings de versión pero funciona. Fijar versión en verificación si se busca reproducción estricta."
   - "El dataset es de laboratorio (banco hidráulico UCI, fluido = aceite), NO de pasteurizado lácteo real. Todas las métricas son optimistas respecto a producción; el modelo requiere reentrenamiento/calibración con datos de planta antes de desplegar."
   - "No existe outputs/a47/verification_report.md — el modelo aún no ha pasado el skill verification contra estos golden cases."
+  - "[RESUELTO] outputs/a47/verification_report.md ya existe (15/15 golden cases reproducidos exactamente). La nota anterior quedó obsoleta tras esa ejecución del skill verification."

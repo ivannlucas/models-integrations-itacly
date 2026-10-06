@@ -41,8 +41,18 @@ def test_predict_batch(client):
     assert resp.json()["model_id"] == "ml23-lactic-market-price-forecast"
 
 
-def test_train_returns_501(client):
+def test_train_returns_200_with_metrics(client):
     resp = client.post(
         f"{PREFIX}/train", json={"data_path": "/tmp/x.csv", "mlflow_run_id": "test-run-id"}
     )
-    assert resp.status_code == 501
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["mae"] > 0
+    assert body["n_train"] > 0
+
+
+def test_train_without_mlflow_run_id_returns_422(client):
+    """mlflow_run_id is mandatory: a retrain must always be tied to a specific MLflow run,
+    since the fixed artifact served is never overwritten by a retrain."""
+    resp = client.post(f"{PREFIX}/train", json={"data_path": "/tmp/x.csv"})
+    assert resp.status_code == 422

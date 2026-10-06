@@ -1,0 +1,278 @@
+# Manifest — a04 / ml4-lactic-cnn-thermal-early-disease-detection
+#
+# Fuente del código entregado: inbox/a04/codigo/retech-lote2-cnn-thermal-early-disease-detection/
+# Fuente de la memoria: inbox/a04/entregable/4 - Modelo de CNN para la detección temprana de
+#   enfermedades a través del análisis de imágenes termográficas - v6 (1).docx
+#
+# NOTA IMPORTANTE: este modelo YA estaba integrado en app/plugins/ antes de pasar por este
+# skill (ver auditoría en outputs/a04/verification_report.md). Este manifest se generó a
+# POSTERIORI contra el plugin ya existente, exactamente como exige el flujo estándar, para
+# poder auditar el plugin contra él.
+
+model_id: ml4-lactic-cnn-thermal-early-disease-detection
+sector: lacteo
+nombre: "Modelo de CNN para la detección temprana de enfermedades a través del análisis de imágenes termográficas"
+task_type: binary_image_classification
+framework: [pytorch, timm, albumentations, opencv-python, grad-cam]
+
+artifacts:
+  folder: experiments/results/rigorous_final/
+  files:
+    - baseline_efficientnet_final_model.pth   # checkpoint EfficientNet-B0, ~16MB (memoria, sección "Inventario de artefactos de producción")
+
+inputs:
+  fixed:
+    - name: image
+      type: file
+      format: [jpg, jpeg, png, bmp]
+      description: >
+        Imagen térmica RGB de la ubre (de cualquier dimensión de entrada; se redimensiona
+        automáticamente a 224x224). Debe venir ya encuadrada/centrada en la región mamaria —
+        el modelo NO incluye detección/segmentación de ROI (memoria, "Requisito Operativo de
+        Captura").
+  control: null   # no es un modelo de optimización/control
+  derived_if_missing: null   # no hay features derivadas; la imagen se consume directamente
+
+outputs:
+  predict_inline:
+    - prediction            # 'Healthy' | 'SCM'
+    - predicted_class_index # 0=Healthy, 1=SCM
+    - confidence            # softmax de la clase ganadora
+    - probability_healthy
+    - probability_scm
+    - heatmap_url            # CAM superpuesto (auxiliar, no fallar la predicción si falla)
+
+training:
+  supported: true
+  # El código entregado incluye un procedimiento de entrenamiento real y reproducible:
+  # src/training/trainer.py (bucle train/val + early stopping + checkpoint),
+  # src/training/losses.py (FocalLoss/BaselineLoss), src/training/metrics.py,
+  # scripts/train_kfold.py (orquestación K-Fold + reentrenamiento final),
+  # configs/baseline_efficientnet.yaml (hiperparámetros del modelo campeón).
+  # El plugin YA integrado tenía train() marcado como TrainingNotSupportedError (501) —
+  # esto es un bug de integración (clase 3 del informe de auditoría), corregido en este ciclo.
+  target_column: label   # columna binaria en ID_Labels.csv (0=Healthy, 1=SCM) — src/data/dataset.py
+  required_columns: [ID, label]   # + imágenes en TIDS_cropped/{healthy,SCM}/<ID>.jpg (misma estructura que TIDSDataset)
+  hyperparams:
+    backbone: efficientnet_b0
+    dropout: 0.3
+    optimizer: adam
+    learning_rate: 0.0001
+    weight_decay: 0.0001
+    batch_size: 16
+    scheduler: reduce_on_plateau
+    scheduler_params: {mode: min, factor: 0.5, patience: 5, min_lr: 0.000001}
+    loss: focal_loss
+    focal_alpha: 0.25
+    focal_gamma: 2.0
+    max_epochs: 100
+    early_stopping_patience: 15
+    image_size: 224
+    random_seed: 42
+  metrics_returned: [accuracy, precision, recall, f1, auc, n_train, n_val]
+  source: codigo_entrenamiento   # configs/baseline_efficientnet.yaml + src/training/{trainer,losses,metrics}.py
+
+constraints: null   # no se detectó ninguna restricción dura de negocio en memoria ni en el código
+
+metrics_reported:
+  # Tabla 9 / experiments/results/rigorous_final/baseline_efficientnet_rigorous_results_20260526_074452.json
+  test_holdout_n42:
+    accuracy: 0.5952380952380952
+    precision: 0.5909090909090909
+    recall: 0.6190476190476191
+    f1: 0.6046511627906976
+    auc: 0.6167800453514739
+  # Tabla 8 — 5-Fold CV sobre el 90% dev set (n=376)
+  cv_5fold_n376:
+    accuracy: {mean: 0.6117543859649123, std: 0.04108081204020222}
+    precision: {mean: 0.5980124069341015, std: 0.03733740090269248}
+    recall: {mean: 0.6560455192034139, std: 0.05408698555136794}
+    f1: {mean: 0.6252635855931438, std: 0.042653547281467995}
+    auc: {mean: 0.6014411918844053, std: 0.03411764229688945}
+  source: memoria_tabla_8_y_9 + experiments/results/rigorous_final/baseline_efficientnet_rigorous_results_20260526_074452.json
+
+golden_cases:
+  # ACTUALIZACIÓN (ciclo 2): el usuario ha añadido el dataset TIDS real completo a
+  # inbox/a04/codigo/.../TIDS Dataset/ (862 imágenes: TIDS_cropped/ + TIDS_full_images/,
+  # healthy/SCM, 418+418) y el código entregado define, en
+  # experiments/results/rigorous_final/test_ids_20260526_074452.txt, el split de TEST
+  # hold-out EXACTO (42 IDs, 21 healthy + 21 SCM) usado para los resultados de la Tabla 9 de
+  # la memoria (accuracy=0.5952, f1=0.6047) — generado por
+  # src/data/dataset.py::create_dataloaders (train_test_split estratificado, random_state=42,
+  # train_ratio=0.70, val_ratio=0.15 → test=15%, n=42/418). Es la fuente PREFERIDA de golden
+  # cases (Paso 2 del skill): reproducible, no es un caso aislado de memoria, y permite elegir
+  # cuántas filas usar.
+  #
+  # test_images/ (vacío en la entrega original) se ha poblado con las 42 imágenes CROPPED
+  # (TIDS_cropped/, use_cropped=true en configs/baseline_efficientnet.yaml y en el
+  # preprocesado del plugin) de ese split oficial — test_images/healthy/<ID>.jpg y
+  # test_images/SCM/<ID>.jpg — en vez de dejarlo vacío o inventar una selección: es
+  # exactamente "test_images/ = imágenes que el modelo nunca vio durante el entrenamiento"
+  # (notebooks/predict_image.ipynb, celda de configuración), que es también la definición
+  # exacta del split test oficial.
+  #
+  # De los 42 casos del split oficial se seleccionan aquí 18 (9 healthy + 9 SCM, primeros 9
+  # IDs en orden numérico ascendente de cada clase — regla de selección determinista y sin
+  # sesgo por resultado, NO se filtra por si aciertan o fallan) como golden_cases ejecutables.
+  # `expected` = el label real de TIDS Dataset/ID_Labels.csv (columna 'label', ground truth
+  # clínico) para esa fila/ID — nunca inventado. `real_served_output` = lo que devuelve HOY
+  # el checkpoint real servido (baseline_efficientnet_final_model.pth vía /predict, este
+  # ciclo, device=cuda real) sobre esa misma imagen real — ver outputs/a04/verification_report.md
+  # Parte B para el resultado completo de los 42/42 (no solo los 18 aquí documentados).
+  - id: tids_test_017_healthy
+    input: {image_path: "TIDS Dataset/TIDS_cropped/healthy/17.jpg"}
+    expected: {label: Healthy}
+    real_served_output: {prediction: SCM, confidence: 0.6106}
+    source: dataset_test_split (test_ids_20260526_074452.txt, ID=17)
+  - id: tids_test_109_healthy
+    input: {image_path: "TIDS Dataset/TIDS_cropped/healthy/109.jpg"}
+    expected: {label: Healthy}
+    real_served_output: {prediction: SCM, confidence: 0.5199}
+    source: dataset_test_split (test_ids_20260526_074452.txt, ID=109)
+  - id: tids_test_147_healthy
+    input: {image_path: "TIDS Dataset/TIDS_cropped/healthy/147.jpg"}
+    expected: {label: Healthy}
+    real_served_output: {prediction: Healthy, confidence: 0.5650}
+    source: dataset_test_split (test_ids_20260526_074452.txt, ID=147)
+  - id: tids_test_326_healthy
+    input: {image_path: "TIDS Dataset/TIDS_cropped/healthy/326.jpg"}
+    expected: {label: Healthy}
+    real_served_output: {prediction: Healthy, confidence: 0.5583}
+    source: dataset_test_split (test_ids_20260526_074452.txt, ID=326)
+  - id: tids_test_365_healthy
+    input: {image_path: "TIDS Dataset/TIDS_cropped/healthy/365.jpg"}
+    expected: {label: Healthy}
+    real_served_output: {prediction: SCM, confidence: 0.6326}
+    source: dataset_test_split (test_ids_20260526_074452.txt, ID=365)
+  - id: tids_test_382_healthy
+    input: {image_path: "TIDS Dataset/TIDS_cropped/healthy/382.jpg"}
+    expected: {label: Healthy}
+    real_served_output: {prediction: Healthy, confidence: 0.6229}
+    source: dataset_test_split (test_ids_20260526_074452.txt, ID=382)
+  - id: tids_test_404_healthy
+    input: {image_path: "TIDS Dataset/TIDS_cropped/healthy/404.jpg"}
+    expected: {label: Healthy}
+    real_served_output: {prediction: Healthy, confidence: 0.5405}
+    source: dataset_test_split (test_ids_20260526_074452.txt, ID=404)
+  - id: tids_test_413_healthy
+    input: {image_path: "TIDS Dataset/TIDS_cropped/healthy/413.jpg"}
+    expected: {label: Healthy}
+    real_served_output: {prediction: Healthy, confidence: 0.5627}
+    source: dataset_test_split (test_ids_20260526_074452.txt, ID=413)
+  - id: tids_test_423_healthy
+    input: {image_path: "TIDS Dataset/TIDS_cropped/healthy/423.jpg"}
+    expected: {label: Healthy}
+    real_served_output: {prediction: Healthy, confidence: 0.5159}
+    source: dataset_test_split (test_ids_20260526_074452.txt, ID=423)
+  - id: tids_test_011_scm
+    input: {image_path: "TIDS Dataset/TIDS_cropped/SCM/11.jpg"}
+    expected: {label: SCM}
+    real_served_output: {prediction: Healthy, confidence: 0.5096}
+    source: dataset_test_split (test_ids_20260526_074452.txt, ID=11)
+  - id: tids_test_083_scm
+    input: {image_path: "TIDS Dataset/TIDS_cropped/SCM/83.jpg"}
+    expected: {label: SCM}
+    real_served_output: {prediction: Healthy, confidence: 0.5443}
+    source: dataset_test_split (test_ids_20260526_074452.txt, ID=83)
+  - id: tids_test_133_scm
+    input: {image_path: "TIDS Dataset/TIDS_cropped/SCM/133.jpg"}
+    expected: {label: SCM}
+    real_served_output: {prediction: Healthy, confidence: 0.6126}
+    source: dataset_test_split (test_ids_20260526_074452.txt, ID=133)
+  - id: tids_test_309_scm
+    input: {image_path: "TIDS Dataset/TIDS_cropped/SCM/309.jpg"}
+    expected: {label: SCM}
+    real_served_output: {prediction: SCM, confidence: 0.5840}
+    source: dataset_test_split (test_ids_20260526_074452.txt, ID=309)
+  - id: tids_test_311_scm
+    input: {image_path: "TIDS Dataset/TIDS_cropped/SCM/311.jpg"}
+    expected: {label: SCM}
+    real_served_output: {prediction: SCM, confidence: 0.5797}
+    source: dataset_test_split (test_ids_20260526_074452.txt, ID=311)
+  - id: tids_test_315_scm
+    input: {image_path: "TIDS Dataset/TIDS_cropped/SCM/315.jpg"}
+    expected: {label: SCM}
+    real_served_output: {prediction: SCM, confidence: 0.5377}
+    source: dataset_test_split (test_ids_20260526_074452.txt, ID=315)
+  - id: tids_test_366_scm
+    input: {image_path: "TIDS Dataset/TIDS_cropped/SCM/366.jpg"}
+    expected: {label: SCM}
+    real_served_output: {prediction: SCM, confidence: 0.6233}
+    source: dataset_test_split (test_ids_20260526_074452.txt, ID=366)
+  - id: tids_test_371_scm
+    input: {image_path: "TIDS Dataset/TIDS_cropped/SCM/371.jpg"}
+    expected: {label: SCM}
+    real_served_output: {prediction: Healthy, confidence: 0.5688}
+    source: dataset_test_split (test_ids_20260526_074452.txt, ID=371)
+  - id: tids_test_372_scm
+    input: {image_path: "TIDS Dataset/TIDS_cropped/SCM/372.jpg"}
+    expected: {label: SCM}
+    real_served_output: {prediction: SCM, confidence: 0.5760}
+    source: dataset_test_split (test_ids_20260526_074452.txt, ID=372)
+
+  # Validación externa complementaria (ciclo 1, conservada): 3 escenarios de la memoria con
+  # imagen de fuente pública independiente del dataset TIDS. Útil porque prueba el pipeline
+  # fuera del dominio exacto de TIDS (otra cámara/condiciones). 2/3 ejecutables.
+  - id: caso_prueba_1_scm_interempresas
+    input:
+      image_source: "https://www.interempresas.net/ovino/286846-Efectos-de-mamitis-subclinica-sobre-calidad-de-leche-de-oveja-y-rendimiento-quesero.html"
+      image_local_name: SubMastitis_sample.png
+    expected: null   # NO ejecutable: la imagen está embebida vía JS en la página y no se pudo descargar de forma estática en este entorno
+    original_model_output: {prediction: SCM, confidence: 0.6179}
+    source: memoria_caso_de_prueba_1
+
+  - id: caso_prueba_2_healthy_thermomast
+    input:
+      image_source: "https://github.com/ChristosTselios/THERMOMAST-Images/blob/main/Healthy%20Udders%20pt.1%20-%20November%202022%20-%20Tripolis/sample_14.jpg"
+    expected: {prediction: Healthy}
+    original_model_output: {prediction: Healthy, confidence: 0.6115}
+    source: memoria_caso_de_prueba_2 + imagen real descargada de la fuente pública original
+
+  - id: caso_prueba_3_scm_thermomast
+    input:
+      image_source: "https://github.com/ChristosTselios/THERMOMAST-Images/blob/main/Subclinical%20Mastitis%20-%20November%202022%20-%20Tripolis/sample_171.jpg"
+    expected: {prediction: SCM}
+    original_model_output: {prediction: SCM, confidence: 0.6255}
+    source: memoria_caso_de_prueba_3 + imagen real descargada de la fuente pública original
+
+known_issues:
+  - "ACTUALIZADO (ciclo 2): TIDS Dataset ya se entrega en inbox/a04/codigo/.../TIDS Dataset/
+    (862 imágenes). test_images/ (vacío en la entrega) se ha poblado con las 42 imágenes del
+    split test oficial (test_ids_20260526_074452.txt) — ver golden_cases arriba. Sobre los
+    42/42 casos del split oficial ejecutados contra el servidor real: 26/42 aciertan la clase
+    (accuracy=61.90%), coherente con el accuracy=59.52% (25/42) reportado en la memoria/JSON
+    auditado para este mismo split exacto — diferencia de 1 muestra, achacable al mismo drift
+    de versión de timm/PyTorch entre el entorno de entrenamiento original y este ya señalado
+    más abajo. NO es un bug de integración: los 16 casos que fallan la clase reproducen el
+    rendimiento moderado ya documentado del modelo, no un error de wiring (confirmado
+    comparando predict_inline vs predict_batch: salidas idénticas bit a bit)."
+  - "BUG DE CUDA REAL encontrado y corregido este ciclo:
+    model_loader.py::_safe_device() probaba la GPU con
+    'torch.nn.Conv2d(1,1,1)(torch.zeros(1,1,4,4).cuda())' — el módulo Conv2d NUNCA se movía a
+    .cuda(), solo el tensor de entrada, así que la prueba lanzaba SIEMPRE
+    'RuntimeError: Input type (cuda) and weight type (cpu) should be the same' y el except
+    hacía fallback a CPU incondicionalmente, incluso con una GPU real y compatible. En el
+    ciclo anterior esto quedó enmascarado porque el sandbox tenía una GTX 1060 (CC 6.1)
+    genuinamente incompatible con torch==2.13.0+cu130 — el fallback a CPU era 'correcto' por
+    la razón incorrecta. Con la RTX 2070 SUPER (CC 7.5) de este ciclo el bug se hizo visible:
+    el modelo cargaba en CPU en vez de CUDA a pesar de tener GPU funcional. Corregido
+    siguiendo el patrón ya usado en ml2_fungal_cnn_disease_detection/ml8_cereals_img_anomaly_detector
+    (probe = torch.nn.Conv2d(1,1,1).cuda(); probe(torch.zeros(1,1,4,4).cuda())). Verificado:
+    arranque real ahora reporta 'device=cuda'; /predict (inline y batch) y /train (fine-tuning
+    con copy.deepcopy + .to(device) sobre datos TIDS reales) ejecutados end-to-end sobre CUDA
+    real sin errores. NOTA: el mismo patrón roto existe en otros plugins (modelo10_lacteo,
+    ml41_meat_curing_machinery_acoustic_anomaly, ml5_meat_cow_behaviour,
+    ml7_cereals_grain_pest_detection) — fuera de alcance de este ciclo (solo se tocó ml4), se
+    señala para una revisión futura."
+  - "Discrepancia menor memoria vs. artefacto: la memoria (sección 7.3, Fase 2) afirma que el
+    reentrenamiento final usó exactamente '15 épocas', pero el JSON auditado
+    (experiments/results/rigorous_final/baseline_efficientnet_rigorous_results_20260526_074452.json)
+    reporta cv_results.avg_optimal_epochs=12. No afecta al pipeline de inferencia; se señala pero
+    no se investiga más a fondo por no ser bloqueante."
+  - "El modelo requiere imagen ya encuadrada en la región mamaria (sin detección/segmentación de
+    ROI) — fuera de ese dominio de captura (TIDS, FLIR E96, condiciones controladas) el rendimiento
+    reportado (F1=0.60, Accuracy=59.5%) no está garantizado (memoria, 'Limitaciones')."
+  - "El modelo tiene rendimiento moderado (F1 test=0.60, apenas por encima del azar en accuracy);
+    esto es del modelo entregado, no un bug de integración — documentado tal cual en LIMITATIONS.md
+    y en la memoria. Confirmado de nuevo este ciclo sobre el split de test real completo (42/42
+    casos, accuracy=61.90%)."

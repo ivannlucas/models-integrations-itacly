@@ -13,7 +13,7 @@ class TrainRequest(BaseModel):
             "+ targets E_consumo, T_out_leche"
         ),
     )
-    mlflow_run_id: str = ""
+    mlflow_run_id: str
 
 
 class TrainResponse(BaseModel):

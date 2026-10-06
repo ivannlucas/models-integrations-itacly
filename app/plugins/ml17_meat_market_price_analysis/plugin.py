@@ -1,37 +1,50 @@
 """Ml17MeatMarketPriceAnalysisPlugin — Ridge pork price forecast (official_v1_4).
 
 Predicts pork class E Spain price at t+1 (€/100 kg) from 6 exogenous features
-plus auto-computed month_sin/cos derived from a reference date.
-Externally trained; ``train()`` raises 501.
+plus auto-computed month_sin/cos derived from a reference date. ``train()`` refits the
+Ridge pipeline on user data and persists the result exclusively to MLflow (see train()).
 """
 from __future__ import annotations
 
 import logging
 import math
+import shutil
+import tempfile
 import time
 from datetime import datetime, timezone
 from typing import Any
 
+import numpy as np
 import pandas as pd
 
 from app.application.dto.stats_dto import InputField, OutputField, RuntimeStats, StatsResponse
 from app.domain.ports.model_plugin_port import ModelPluginPort
-from app.domain.services.exceptions import ModelNotLoadedError, TrainingNotSupportedError
+from app.domain.services.exceptions import ModelNotLoadedError
+from app.domain.services.mlflow_tracker import BaseMLflowTracker
 from app.infrastructure.artifact_store import local_file_path
 from app.plugins.ml17_meat_market_price_analysis.constants import (
     FEATURE_COLUMNS,
     FRAMEWORK,
+    IMPUTER_STRATEGY,
     LINE,
+    MODEL_FILENAME,
     MODEL_ID,
+    RIDGE_ALPHA,
     VERSION,
 )
+from app.plugins.ml17_meat_market_price_analysis.mlflow_utils import download_user_model_from_mlflow
 from app.plugins.ml17_meat_market_price_analysis.model_loader import load_model
 from app.plugins.ml17_meat_market_price_analysis.predict_dto import (
     PredictBatchResponse,
     PredictInlineResponse,
 )
+from app.plugins.ml17_meat_market_price_analysis.train_dto import TrainResponse
 
 logger = logging.getLogger(__name__)
+
+TARGET_COLUMN = "target_price_pigmeat_class_e_es"
+DATE_COLUMN = "date"
+TRAIN_REQUIRED_COLUMNS = [DATE_COLUMN, *FEATURE_COLUMNS]
 
 _EMPTY_TOKENS = {"", "nan", "none", "null", "nat"}
 
@@ -162,84 +175,210 @@ class Ml17MeatMarketPriceAnalysisPlugin(ModelPluginPort):
         mlflow_run_id: str = "",
     ) -> PredictInlineResponse:
         """Predict pork price t+1 from a single feature dict."""
-        _ = model_key, threshold, mlflow_run_id
-        self._require_loaded()
+        _ = model_key, threshold
+        user_temp_dir = None
+        saved_model = self._model
+        if mlflow_run_id:
+            loaded = download_user_model_from_mlflow(mlflow_run_id)
+            if loaded:
+                self._model, user_temp_dir = loaded
+        try:
+            self._require_loaded()
 
-        date_str = features.get("date", "")
-        t0 = time.perf_counter()
-        X = self._build_frame(features)
-        y_pred = float(self._model.predict(X)[0])
-        self._record((time.perf_counter() - t0) * 1000)
+            date_str = features.get("date", "")
+            t0 = time.perf_counter()
+            X = self._build_frame(features)
+            y_pred = float(self._model.predict(X)[0])
+            self._record((time.perf_counter() - t0) * 1000)
 
-        xai_fv = {col: float(X.iloc[0][col]) for col in FEATURE_COLUMNS}
-        logger.info(
-            "predict_inline done — date='%s' y_pred=%.4f count=%d",
-            date_str, y_pred, self._predict_count,
-        )
-        return PredictInlineResponse(
-            model_id=MODEL_ID,
-            line=LINE,
-            prediction=y_pred,
-            y_pred=y_pred,
-            confidence=None,
-            base_date=_iso_date(date_str),
-            xai_feature_values=xai_fv,
-        )
+            xai_fv = {col: float(X.iloc[0][col]) for col in FEATURE_COLUMNS}
+            logger.info(
+                "predict_inline done — date='%s' y_pred=%.4f count=%d mlflow=%s",
+                date_str, y_pred, self._predict_count, bool(mlflow_run_id),
+            )
+            return PredictInlineResponse(
+                model_id=MODEL_ID,
+                line=LINE,
+                prediction=y_pred,
+                y_pred=y_pred,
+                confidence=None,
+                base_date=_iso_date(date_str),
+                xai_feature_values=xai_fv,
+            )
+        finally:
+            if user_temp_dir:
+                shutil.rmtree(user_temp_dir, ignore_errors=True)
+                self._model = saved_model
 
     def predict_batch(
         self, *, data_path: str, mlflow_run_id: str = ""
     ) -> PredictBatchResponse:
         """Predict pork price t+1 for every row in a CSV."""
-        _ = mlflow_run_id
-        self._require_loaded()
+        user_temp_dir = None
+        saved_model = self._model
+        if mlflow_run_id:
+            loaded = download_user_model_from_mlflow(mlflow_run_id)
+            if loaded:
+                self._model, user_temp_dir = loaded
+        try:
+            self._require_loaded()
+
+            with local_file_path(data_path) as local_path:
+                df = pd.read_csv(local_path)
+            predictions: list[dict] = []
+            t0 = time.perf_counter()
+            for idx, row in df.iterrows():
+                row_dict = row.to_dict()
+                date_val = _find_date(row_dict)
+                try:
+                    X = self._build_frame(row_dict)
+                    y_pred = float(self._model.predict(X)[0])
+                    predictions.append({
+                        "row": int(idx),
+                        "date": _iso_date(date_val) if date_val is not None else "",
+                        "y_pred": y_pred,
+                        "model_id": MODEL_ID,
+                        "line": LINE,
+                        "xai_feature_values": {col: float(X.iloc[0][col]) for col in FEATURE_COLUMNS},
+                    })
+                except Exception as exc:  # pylint: disable=broad-exception-caught
+                    logger.warning("Error en fila %s: %s", idx, exc)
+                    predictions.append({
+                        "row": int(idx),
+                        "date": _iso_date(date_val) if date_val is not None else "",
+                        "error": str(exc),
+                    })
+            self._record((time.perf_counter() - t0) * 1000)
+            logger.info(
+                "predict_batch done — %d rows count=%d mlflow=%s",
+                len(predictions), self._predict_count, bool(mlflow_run_id),
+            )
+            return PredictBatchResponse(
+                model_id=MODEL_ID, line=LINE, predictions=predictions, output_path=None
+            )
+        finally:
+            if user_temp_dir:
+                shutil.rmtree(user_temp_dir, ignore_errors=True)
+                self._model = saved_model
+
+    def train(self, *, data_path: str, mlflow_run_id: str) -> TrainResponse:
+        """Refit the Ridge pipeline on a user CSV (one-step-ahead t -> t+1 supervision).
+
+        Mirrors the original training procedure (src/cu05/training/service.py::run_training +
+        src/cu05/models/ridge.py::build_ridge_pipeline from the delivered code): a fresh
+        ColumnTransformer(SimpleImputer(median) -> StandardScaler) + Ridge(alpha=RIDGE_ALPHA)
+        pipeline fit on X=features[:-1], y=target[1:]. The refit pipeline is a brand-new
+        object — self._model (the fixed S3 artifact served by default) is never mutated.
+        The result is persisted ONLY to the caller's MLflow run — the fixed base artifact is
+        never overwritten, matching the repo-wide convention for user retraining.
+        """
+        # pylint: disable=import-outside-toplevel
+        from sklearn.compose import ColumnTransformer
+        from sklearn.impute import SimpleImputer
+        from sklearn.linear_model import Ridge
+        from sklearn.pipeline import Pipeline
+        from sklearn.preprocessing import StandardScaler
+        import joblib
+        # pylint: enable=import-outside-toplevel
+
+        tracker = BaseMLflowTracker(mlflow_run_id)
+        tracker.log_params({
+            "alpha": RIDGE_ALPHA,
+            "imputer_strategy": IMPUTER_STRATEGY,
+            "scaler": "StandardScaler",
+        })
 
         with local_file_path(data_path) as local_path:
             df = pd.read_csv(local_path)
-        predictions: list[dict] = []
-        t0 = time.perf_counter()
-        for idx, row in df.iterrows():
-            row_dict = row.to_dict()
-            date_val = _find_date(row_dict)
-            try:
-                X = self._build_frame(row_dict)
-                y_pred = float(self._model.predict(X)[0])
-                predictions.append({
-                    "row": int(idx),
-                    "date": _iso_date(date_val) if date_val is not None else "",
-                    "y_pred": y_pred,
-                    "model_id": MODEL_ID,
-                    "line": LINE,
-                    "xai_feature_values": {col: float(X.iloc[0][col]) for col in FEATURE_COLUMNS},
-                })
-            except Exception as exc:  # pylint: disable=broad-exception-caught
-                logger.warning("Error en fila %s: %s", idx, exc)
-                predictions.append({
-                    "row": int(idx),
-                    "date": _iso_date(date_val) if date_val is not None else "",
-                    "error": str(exc),
-                })
-        self._record((time.perf_counter() - t0) * 1000)
-        logger.info(
-            "predict_batch done — %d rows count=%d", len(predictions), self._predict_count
+
+        missing = [c for c in TRAIN_REQUIRED_COLUMNS if c not in df.columns]
+        if missing:
+            raise ValueError(f"CSV falta columnas requeridas: {missing}")
+        if len(df) < 2:
+            raise ValueError(
+                "Se requieren al menos 2 filas mensuales para entrenar (supervisión one-step-ahead t -> t+1)."
+            )
+
+        df = df.copy()
+        df[DATE_COLUMN] = pd.to_datetime(df[DATE_COLUMN])
+        df = df.sort_values(DATE_COLUMN).reset_index(drop=True)
+
+        X_train = df.iloc[:-1][FEATURE_COLUMNS].copy()
+        y_train = df.iloc[1:][TARGET_COLUMN].to_numpy(dtype=float)
+        previous_actual = X_train[TARGET_COLUMN].to_numpy(dtype=float)
+        train_series = df[TARGET_COLUMN].to_numpy(dtype=float)
+
+        numeric_preprocessor = Pipeline(
+            steps=[("imputer", SimpleImputer(strategy=IMPUTER_STRATEGY)), ("scaler", StandardScaler())]
         )
-        return PredictBatchResponse(
-            model_id=MODEL_ID, line=LINE, predictions=predictions, output_path=None
+        new_model = Pipeline(steps=[
+            (
+                "preprocessor",
+                ColumnTransformer(
+                    transformers=[("numeric", numeric_preprocessor, list(FEATURE_COLUMNS))],
+                    remainder="drop",
+                ),
+            ),
+            ("model", Ridge(alpha=RIDGE_ALPHA)),
+        ])
+        new_model.fit(X_train, y_train)
+
+        y_pred = new_model.predict(X_train)
+        mae = float(np.mean(np.abs(y_train - y_pred)))
+        rmse = float(np.sqrt(np.mean((y_train - y_pred) ** 2)))
+
+        diff_scale = float(np.mean(np.abs(np.diff(train_series)))) if len(train_series) > 1 else 0.0
+        mase = (mae / diff_scale) if not np.isclose(diff_scale, 0.0) else None
+
+        denom = float(np.sum((y_train - np.mean(y_train)) ** 2))
+        r2_train = (1.0 - float(np.sum((y_train - y_pred) ** 2)) / denom) if not np.isclose(denom, 0.0) else None
+
+        actual_direction = np.sign(y_train - previous_actual)
+        predicted_direction = np.sign(y_pred - previous_actual)
+        valid_mask = (actual_direction != 0) & (predicted_direction != 0)
+        directional_accuracy = (
+            float(np.mean(actual_direction[valid_mask] == predicted_direction[valid_mask]))
+            if np.any(valid_mask) else None
         )
 
-    def train(self, *, data_path: str = "", mlflow_run_id: str = "") -> None:
-        """Raise TrainingNotSupportedError — model is externally trained."""
-        _ = data_path, mlflow_run_id
-        raise TrainingNotSupportedError(
-            "ml17 usa artefactos Ridge entrenados externamente (official_v1_4). "
-            "Re-entrena con el pipeline de ciencia de datos y sube el pickle a S3 "
-            "bajo artifacts/fixed/ml17_meat_market_price_analysis/."
+        upload_warning = None
+        tracker.log_metrics({
+            "mae": mae,
+            "rmse": rmse,
+            "n_samples": len(X_train),
+            **({"mase": mase} if mase is not None else {}),
+            **({"r2_train": r2_train} if r2_train is not None else {}),
+            **({"directional_accuracy": directional_accuracy} if directional_accuracy is not None else {}),
+        })
+        try:
+            mlflow_tmp = tempfile.mkdtemp(prefix="ml17_mlflow_")
+            joblib.dump(new_model, f"{mlflow_tmp}/{MODEL_FILENAME}")
+            tracker.upload_artifacts(mlflow_tmp, artifact_path="model")
+            shutil.rmtree(mlflow_tmp, ignore_errors=True)
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            logger.error("MLflow artifact upload failed: %s", exc)
+            upload_warning = f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}"
+
+        logger.info(
+            "train() done — mae=%.4f rmse=%.4f n=%d mlflow_run_id=%s",
+            mae, rmse, len(X_train), mlflow_run_id,
+        )
+        return TrainResponse(
+            detail="Reentrenamiento completado — modelo persistido en MLflow run "
+                   f"{mlflow_run_id} (el artefacto fijo S3 no se ha modificado).",
+            mae=round(mae, 4),
+            rmse=round(rmse, 4),
+            mase=round(mase, 4) if mase is not None else None,
+            r2_train=round(r2_train, 4) if r2_train is not None else None,
+            directional_accuracy=round(directional_accuracy, 4) if directional_accuracy is not None else None,
+            n_samples=int(len(X_train)),
+            upload_warning=upload_warning,
         )
 
     def stats(self, mlflow_run_id: str = "") -> StatsResponse:
         """Return model metadata and runtime statistics."""
-        _ = mlflow_run_id
         avg = self._total_latency_ms / self._predict_count if self._predict_count else None
-        return StatsResponse(
+        base = StatsResponse(
             model_name=MODEL_ID,
             version=VERSION,
             description=(
@@ -305,3 +444,14 @@ class Ml17MeatMarketPriceAnalysisPlugin(ModelPluginPort):
                 avg_latency_ms=round(avg, 1) if avg is not None else None,
             ),
         )
+        if mlflow_run_id:
+            try:
+                tracker = BaseMLflowTracker(mlflow_run_id)
+                base.metrics["mlflow"] = {
+                    "params": tracker.get_params(),
+                    "metrics": tracker.get_metrics(),
+                }
+                logger.info("Stats enriched with MLflow data for run_id=%s", mlflow_run_id)
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                logger.warning("Could not fetch MLflow stats for run_id=%s: %s", mlflow_run_id, exc)
+        return base

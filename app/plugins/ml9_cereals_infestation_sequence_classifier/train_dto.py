@@ -16,7 +16,7 @@ class TrainRequest(BaseModel):
             "48 observaciones horarias por sample_id."
         ),
     )
-    mlflow_run_id: str = Field(default="", description="MLflow run ID donde registrar métricas y artefactos")
+    mlflow_run_id: str = Field(description="MLflow run ID donde registrar métricas y artefactos")
 
 
 class TrainResponse(BaseModel):

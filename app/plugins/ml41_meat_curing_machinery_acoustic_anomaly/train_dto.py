@@ -14,7 +14,7 @@ class TrainRequest(BaseModel):
             "prediction requires an explicit threshold override or training with both classes."
         ),
     )
-    mlflow_run_id: str = ""
+    mlflow_run_id: str
 
 
 class CombinationTrainMetrics(BaseModel):

@@ -245,7 +245,7 @@ class Ml41MeatCuringMachineryAcousticAnomalyPlugin(ModelPluginPort):
 
     # ── train ────────────────────────────────────────────────────────────────
 
-    def train(self, *, data_path: str, mlflow_run_id: str = "") -> TrainResponse:
+    def train(self, *, data_path: str, mlflow_run_id: str) -> TrainResponse:
         """Fine-tune (or train from scratch) every (machine, machine_id, snr) combination
         found under data_path's {snr}_{machine}/{machine_id}/{normal,abnormal}/*.wav layout.
 
