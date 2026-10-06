@@ -1,7 +1,7 @@
-"""Constants for m21 — ESP-CEREAL spatial cereal price prediction."""
+"""Constants for ml21 — ESP-CEREAL spatial cereal price prediction."""
 
-MODEL_ID = "m21-cereal-price-spatial"
-ARTIFACT_FOLDER_NAME = "m21_cereal_price_spatial"
+MODEL_ID = "ml21-cereals-price-spatial"
+ARTIFACT_FOLDER_NAME = "ml21_cereals_price_spatial"
 VERSION = "1.0.0"
 FRAMEWORK = "scikit-learn+xgboost"
 
@@ -12,6 +12,12 @@ MODEL_H2_CLF = "datagia_best_h2_clf.joblib"
 MODEL_H3_REG = "datagia_best_h3_reg.joblib"
 MODEL_H3_CLF = "datagia_best_h3_clf.joblib"
 METADATA_FILENAME = "model_metadata.json"
+# Base panel dataset (provincia x cereal x mes, con todas las columnas de ingenieria ya
+# calculadas: lat_centroide, month_sin/cos, fase_*, lags de precios, clima, indices MAPA...).
+# predict_inline solo recibe provincia+cereal+date del caller (manifest inputs.fixed) — el resto
+# de las ~90 columnas que el modelo espera se buscan aqui, replicando run_single() del codigo
+# original (src/predict/predict_v1.py). Sin este fichero, esas columnas se rellenarian con 0.
+DATASET_FILENAME = "dataset_entrenamiento_final.csv"
 
 VALID_HORIZONS = (1, 2, 3)
 

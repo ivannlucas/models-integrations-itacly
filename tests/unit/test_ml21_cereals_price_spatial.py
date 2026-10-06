@@ -1,6 +1,6 @@
-"""Endpoint tests for ``m21-cereal-price-spatial`` (ESP-CEREAL spatial cereal price)."""
+"""Endpoint tests for ``ml21-cereals-price-spatial`` (ESP-CEREAL spatial cereal price)."""
 
-PREFIX = "/models/m21-cereal-price-spatial"
+PREFIX = "/models/ml21-cereals-price-spatial"
 
 INLINE_PAYLOAD = {
     "mode": "inline",
@@ -14,19 +14,19 @@ INLINE_PAYLOAD = {
 def test_health(client):
     body = client.get(f"{PREFIX}/health").json()
     assert body["status"] == "ok"
-    assert body["model"] == "m21-cereal-price-spatial"
+    assert body["model"] == "ml21-cereals-price-spatial"
     assert body["loaded"] is True
 
 
 def test_stats(client):
-    assert client.get(f"{PREFIX}/stats").json()["model_name"] == "m21-cereal-price-spatial"
+    assert client.get(f"{PREFIX}/stats").json()["model_name"] == "ml21-cereals-price-spatial"
 
 
 def test_predict_inline(client):
     resp = client.post(f"{PREFIX}/predict", json=INLINE_PAYLOAD)
     assert resp.status_code == 200
     body = resp.json()
-    assert body["model_id"] == "m21-cereal-price-spatial"
+    assert body["model_id"] == "ml21-cereals-price-spatial"
     assert "predictions" in body
     assert "H1" in body["predictions"]
     assert "H2" in body["predictions"]
@@ -40,7 +40,7 @@ def test_predict_batch(client):
         f"{PREFIX}/predict", json={"mode": "batch", "data_path": "/tmp/cereal.csv", "month": "2024-01"}
     )
     assert resp.status_code == 200
-    assert resp.json()["model_id"] == "m21-cereal-price-spatial"
+    assert resp.json()["model_id"] == "ml21-cereals-price-spatial"
 
 
 def test_train_returns_501(client):
@@ -71,11 +71,11 @@ def test_stats_fetches_mlflow_metrics_when_run_id_given():
     modelo43_cereales/ml3_wine_disease_pest_forecast (see plugin.py::stats)."""
     from unittest.mock import patch
 
-    from app.plugins.m21_cereal_price_spatial.plugin import M21CerealPriceSpatialPlugin
+    from app.plugins.ml21_cereals_price_spatial.plugin import Ml21CerealsPriceSpatialPlugin
 
-    plugin = M21CerealPriceSpatialPlugin()
+    plugin = Ml21CerealsPriceSpatialPlugin()
     with patch(
-        "app.plugins.m21_cereal_price_spatial.plugin.BaseMLflowTracker"
+        "app.plugins.ml21_cereals_price_spatial.plugin.BaseMLflowTracker"
     ) as mock_tracker_cls:
         mock_tracker_cls.return_value.get_metrics.return_value = {"H1_reg_MAE": 12.5}
         mock_tracker_cls.return_value.get_params.return_value = {}
@@ -93,11 +93,11 @@ def test_stats_overwrites_legacy_per_horizon_keys_with_the_real_run_values():
     showing the served model's fixed per-horizon numbers under those exact tiles."""
     from unittest.mock import patch
 
-    from app.plugins.m21_cereal_price_spatial.plugin import M21CerealPriceSpatialPlugin
+    from app.plugins.ml21_cereals_price_spatial.plugin import Ml21CerealsPriceSpatialPlugin
 
-    plugin = M21CerealPriceSpatialPlugin()
+    plugin = Ml21CerealsPriceSpatialPlugin()
     with patch(
-        "app.plugins.m21_cereal_price_spatial.plugin.BaseMLflowTracker"
+        "app.plugins.ml21_cereals_price_spatial.plugin.BaseMLflowTracker"
     ) as mock_tracker_cls:
         mock_tracker_cls.return_value.get_metrics.return_value = {
             "mae_h1": 11.2, "pearson_h1": 0.62, "da_h1": 0.58, "auc_h1": 0.71,

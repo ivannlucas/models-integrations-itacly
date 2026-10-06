@@ -233,10 +233,14 @@ from app.plugins.ml3_wine_disease_pest_forecast.train_dto import (
     TrainResponse as Ml3Wine_TrainResp,
 )
 
-from app.plugins.m21_cereal_price_spatial.plugin import M21CerealPriceSpatialPlugin
-from app.plugins.m21_cereal_price_spatial.predict_dto import (
-    PredictRequest as M21_Request,
-    PredictResponse as M21_Response,
+from app.plugins.ml21_cereals_price_spatial.plugin import Ml21CerealsPriceSpatialPlugin
+from app.plugins.ml21_cereals_price_spatial.predict_dto import (
+    PredictRequest as Ml21Cereals_Request,
+    PredictResponse as Ml21Cereals_Response,
+)
+from app.plugins.ml21_cereals_price_spatial.train_dto import (
+    TrainRequest as Ml21Cereals_TrainReq,
+    TrainResponse as Ml21CerealsTrainResp,
 )
 
 from app.plugins.ml16_meat_raw_material_price_alert.plugin import Ml16MeatRawMaterialPriceAlertPlugin
@@ -490,13 +494,15 @@ REGISTRY: list[ModelEntry] = [
         train_response_type=Ml3Wine_TrainResp,
     ),
     ModelEntry(
-        model_id="m21-cereal-price-spatial",
-        prefix="/models/m21-cereal-price-spatial",
+        model_id="ml21-cereals-price-spatial",
+        prefix="/models/ml21-cereals-price-spatial",
         version="1.0.0",
-        plugin_class=M21CerealPriceSpatialPlugin,
-        predict_request_type=M21_Request,
-        predict_response_type=M21_Response,
-        extra_predict_exceptions=(),
+        plugin_class=Ml21CerealsPriceSpatialPlugin,
+        predict_request_type=Ml21Cereals_Request,
+        predict_response_type=Ml21Cereals_Response,
+        train_request_type=Ml21Cereals_TrainReq,
+        train_response_type=Ml21CerealsTrainResp,
+        extra_predict_exceptions=(DataContractError,),
     ),
     ModelEntry(
         model_id="ml16-meat-raw-material-price-alert",
