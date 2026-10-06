@@ -1,4 +1,4 @@
-"""Artifact loading for m21 — ESP-CEREAL spatial cereal price prediction."""
+"""Artifact loading for ml21 — ESP-CEREAL spatial cereal price prediction."""
 from __future__ import annotations
 
 import json
@@ -6,10 +6,12 @@ import logging
 from typing import Any
 
 import joblib
+import pandas as pd
 
 from app.infrastructure.artifact_store import ArtifactStore
-from app.plugins.m21_cereal_price_spatial.constants import (
+from app.plugins.ml21_cereals_price_spatial.constants import (
     ARTIFACT_FOLDER_NAME,
+    DATASET_FILENAME,
     METADATA_FILENAME,
     MODEL_H1_CLF,
     MODEL_H1_REG,
@@ -24,14 +26,17 @@ logger = logging.getLogger(__name__)
 _store = ArtifactStore(ARTIFACT_FOLDER_NAME)
 
 
-def load_model_bundle() -> tuple[dict[str, dict[str, Any]], dict[str, Any]]:
-    """Download artifacts if needed and return (models_by_horizon, metadata).
+def load_model_bundle() -> tuple[dict[str, dict[str, Any]], dict[str, Any], pd.DataFrame]:
+    """Download artifacts if needed and return (models_by_horizon, metadata, panel_df).
 
     models_by_horizon = {
         "H1": {"reg": model, "clf": model},
         "H2": {"reg": model, "clf": model},
         "H3": {"reg": model, "clf": model},
     }
+
+    panel_df is the base panel dataset (provincia x cereal x mes, ~7.6k filas) used to look
+    up the engineered feature columns for predict_inline — see constants.DATASET_FILENAME.
 
     Each file is fetched lazily via _store.path(filename) below, which only reaches out
     to S3 for a file that isn't already present locally (and only if STORAGE_BUCKET is
@@ -64,10 +69,16 @@ def load_model_bundle() -> tuple[dict[str, dict[str, Any]], dict[str, Any]]:
             "clf": joblib.load(clf_path),
         }
 
+    panel_df = pd.read_csv(_store.path(DATASET_FILENAME))
+    panel_df["date"] = pd.to_datetime(panel_df["date"], errors="coerce")
+    panel_df = panel_df.dropna(subset=["date"]).sort_values("date").reset_index(drop=True)
+
     logger.info(
-        "m21 loaded — %s (reg=%s, clf=%s), %s (reg=%s, clf=%s), %s (reg=%s, clf=%s)",
+        "ml21 loaded — %s (reg=%s, clf=%s), %s (reg=%s, clf=%s), %s (reg=%s, clf=%s), "
+        "panel=%d filas",
         "H1", type(models["H1"]["reg"]).__name__, type(models["H1"]["clf"]).__name__,
         "H2", type(models["H2"]["reg"]).__name__, type(models["H2"]["clf"]).__name__,
         "H3", type(models["H3"]["reg"]).__name__, type(models["H3"]["clf"]).__name__,
+        len(panel_df),
     )
-    return models, metadata
+    return models, metadata, panel_df

@@ -239,15 +239,15 @@ from app.plugins.ml9_cereals_infestation_sequence_classifier.train_dto import (
     TrainRequest as Ml9Cereals_TrainReq,
     TrainResponse as Ml9CerealsTrainResp,
 )
-from app.plugins.m21_cereal_price_spatial.predict_dto import (
-    PredictBatchResponse as M21BatchResp,
-    PredictInlineResponse as M21InlineResp,
-    PredictRequest as M21_Request,
-    PredictResponse as M21_Response,
+from app.plugins.ml21_cereals_price_spatial.predict_dto import (
+    PredictBatchResponse as Ml21CerealsBatchResp,
+    PredictInlineResponse as Ml21CerealsInlineResp,
+    PredictRequest as Ml21Cereals_Request,
+    PredictResponse as Ml21Cereals_Response,
 )
-from app.plugins.m21_cereal_price_spatial.train_dto import (
-    TrainRequest as M21_TrainReq,
-    TrainResponse as M21TrainResp,
+from app.plugins.ml21_cereals_price_spatial.train_dto import (
+    TrainRequest as Ml21Cereals_TrainReq,
+    TrainResponse as Ml21CerealsTrainResp,
 )
 from app.plugins.ml16_meat_raw_material_price_alert.predict_dto import (
     PredictBatchResponse as Ml16BatchResp,
@@ -1335,10 +1335,10 @@ def _ml9_cereals_train(plugin: FakePlugin, *, data_path: str) -> Ml9CerealsTrain
     )
 
 
-def _m21_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> M21InlineResp:
-    """Fake inline response for the m21 ESP-CEREAL spatial cereal price model."""
-    return M21InlineResp(
-        model_id="m21-cereal-price-spatial",
+def _ml21_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> Ml21CerealsInlineResp:
+    """Fake inline response for the ml21 ESP-CEREAL spatial cereal price model."""
+    return Ml21CerealsInlineResp(
+        model_id="ml21-cereals-price-spatial",
         province="Burgos",
         cereal="trigo",
         month="2024-01",
@@ -1356,10 +1356,10 @@ def _m21_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> 
     )
 
 
-def _m21_batch(plugin: FakePlugin, *, data_path: str) -> M21BatchResp:
-    """Fake batch response for the m21 ESP-CEREAL spatial cereal price model."""
-    return M21BatchResp(
-        model_id="m21-cereal-price-spatial",
+def _ml21_batch(plugin: FakePlugin, *, data_path: str) -> Ml21CerealsBatchResp:
+    """Fake batch response for the ml21 ESP-CEREAL spatial cereal price model."""
+    return Ml21CerealsBatchResp(
+        model_id="ml21-cereals-price-spatial",
         predictions=[
             {
                 "row": 0,
@@ -1375,9 +1375,9 @@ def _m21_batch(plugin: FakePlugin, *, data_path: str) -> M21BatchResp:
     )
 
 
-def _m21_train(plugin: FakePlugin, *, data_path: str) -> M21TrainResp:
-    """Fake training response for the m21 ESP-CEREAL spatial cereal price model."""
-    return M21TrainResp(
+def _ml21_train(plugin: FakePlugin, *, data_path: str) -> Ml21CerealsTrainResp:
+    """Fake training response for the ml21 ESP-CEREAL spatial cereal price model."""
+    return Ml21CerealsTrainResp(
         detail="Training completado — 6 modelos entrenados (3H × reg+clf)",
         mae_h1=0.0508, mae_h2=0.0674, mae_h3=0.1012,
         pearson_h1=0.3785, pearson_h2=0.2653, pearson_h3=0.2093,
@@ -1574,7 +1574,7 @@ FAKE_FACTORIES: dict[str, tuple[Callable, Callable]] = {
     "modelo43-cereales": (_modelo43_inline, _modelo43_batch),
     "ml41-meat-curing-machinery-acoustic-anomaly": (_ml41_inline, _ml41_batch),
     "ml9-cereals-infestation-sequence-classifier": (_ml9_cereals_inline, _ml9_cereals_batch),
-    "m21-cereal-price-spatial": (_m21_inline, _m21_batch),
+    "ml21-cereals-price-spatial": (_ml21_inline, _ml21_batch),
     "ml16-meat-raw-material-price-alert": (_ml16_inline, _ml16_batch),
     "ml15-wine-ipi-price-forecast": (_ml15_inline, _ml15_batch),
 }
@@ -1592,7 +1592,7 @@ TRAIN_FACTORIES: dict[str, Callable] = {
     "modelo43-cereales": _modelo43_train,
     "ml41-meat-curing-machinery-acoustic-anomaly": _ml41_train,
     "ml9-cereals-infestation-sequence-classifier": _ml9_cereals_train,
-    "m21-cereal-price-spatial": _m21_train,
+    "ml21-cereals-price-spatial": _ml21_train,
     "ml16-meat-raw-material-price-alert": _ml16_train,
     "ml15-wine-ipi-price-forecast": _ml15_train,
 }
@@ -1833,15 +1833,15 @@ TEST_REGISTRY: list[ModelEntry] = [
         train_response_type=Ml9CerealsTrainResp,
     ),
     ModelEntry(
-        model_id="m21-cereal-price-spatial",
-        prefix="/models/m21-cereal-price-spatial",
+        model_id="ml21-cereals-price-spatial",
+        prefix="/models/ml21-cereals-price-spatial",
         version="1.0.0",
         plugin_class=FakePlugin,
-        predict_request_type=M21_Request,
-        predict_response_type=M21_Response,
+        predict_request_type=Ml21Cereals_Request,
+        predict_response_type=Ml21Cereals_Response,
         extra_predict_exceptions=(),
-        train_request_type=M21_TrainReq,
-        train_response_type=M21TrainResp,
+        train_request_type=Ml21Cereals_TrainReq,
+        train_response_type=Ml21CerealsTrainResp,
     ),
     ModelEntry(
         model_id="ml16-meat-raw-material-price-alert",

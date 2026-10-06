@@ -1,4 +1,4 @@
-"""M21CerealPriceSpatialPlugin — ESP-CEREAL spatial cereal price prediction.
+"""Ml21CerealsPriceSpatialPlugin — ESP-CEREAL spatial cereal price prediction.
 
 Predicts cereal prices across Spanish provinces at 1/2/3-month horizons using
 ExtraTrees (H1/H2) + XGBoost (H3) for regression and LogisticRegression for
@@ -21,7 +21,7 @@ from app.domain.ports.model_plugin_port import ModelPluginPort
 from app.domain.services.exceptions import ModelNotLoadedError
 from app.domain.services.mlflow_tracker import BaseMLflowTracker
 from app.infrastructure.artifact_store import local_file_path
-from app.plugins.m21_cereal_price_spatial.constants import (
+from app.plugins.ml21_cereals_price_spatial.constants import (
     FRAMEWORK,
     GEO_RISK_DEFAULT_PROVINCES,
     MODEL_ID,
@@ -29,11 +29,21 @@ from app.plugins.m21_cereal_price_spatial.constants import (
     VALID_HORIZONS,
     VERSION,
 )
-from app.plugins.m21_cereal_price_spatial.model_loader import load_model_bundle
-from app.plugins.m21_cereal_price_spatial.mlflow_utils import download_user_model_from_mlflow
-from app.plugins.m21_cereal_price_spatial.preprocessing import (
+from app.plugins.ml21_cereals_price_spatial.explain import (
+    extract_feature_importance,
+    top_causal_drivers,
+)
+from app.plugins.ml21_cereals_price_spatial.model_loader import load_model_bundle
+from app.plugins.ml21_cereals_price_spatial.mlflow_utils import download_user_model_from_mlflow
+from app.plugins.ml21_cereals_price_spatial.predict_dto import (
+    PredictBatchResponse,
+    PredictInlineResponse,
+)
+from app.plugins.ml21_cereals_price_spatial.preprocessing import (
+    build_features_batch,
     build_features_from_row,
     get_selected_feature_columns,
+    lookup_panel_row,
     signal_from_prob_return,
 )
 
@@ -198,19 +208,62 @@ def _xai_values_from_row(row: pd.Series, feature_cols: list[str]) -> dict[str, f
     return xai
 
 
-class M21CerealPriceSpatialPlugin(ModelPluginPort):
+class Ml21CerealsPriceSpatialPlugin(ModelPluginPort):
     """ESP-CEREAL plugin for spatial cereal price prediction across Spanish provinces."""
 
     def __init__(self) -> None:
         self._models: dict[str, dict[str, Any]] | None = None
         self._metadata: dict[str, Any] | None = None
+        self._panel_df: pd.DataFrame | None = None
+        self._h3_feature_mean: pd.Series | None = None
+        self._h3_feature_std: pd.Series | None = None
         self._predict_count: int = 0
         self._total_latency_ms: float = 0.0
         self._last_predict_at: str | None = None
 
     def load(self) -> None:
-        self._models, self._metadata = load_model_bundle()
-        logger.info("M21CerealPriceSpatialPlugin loaded: %s", MODEL_ID)
+        self._models, self._metadata, self._panel_df = load_model_bundle()
+        self._ensure_feature_importance(self._metadata, self._models)
+        self._h3_feature_mean, self._h3_feature_std = self._compute_h3_reference_stats(
+            self._panel_df, self._metadata
+        )
+        logger.info("Ml21CerealsPriceSpatialPlugin loaded: %s", MODEL_ID)
+
+    @staticmethod
+    def _ensure_feature_importance(metadata: dict, models: dict[str, dict[str, Any]]) -> None:
+        """Backfill feature_importance into metadata (in-memory only — never written back
+        to the fixed S3 artifact) when the shipped model_metadata.json lacks it.
+
+        Mirrors _ensure_importance_in_metadata from the original src/predict/predict_v1.py.
+        """
+        selected = metadata.get("selected_models", {})
+        for h_key, block in selected.items():
+            reg = block.get("regression", {})
+            if reg.get("expected_columns") and not reg.get("feature_importance"):
+                reg["feature_importance"] = extract_feature_importance(
+                    models[h_key]["reg"], reg["expected_columns"]
+                )
+            clf = block.get("classification", {})
+            if clf.get("expected_columns") and not clf.get("feature_importance"):
+                clf["feature_importance"] = extract_feature_importance(
+                    models[h_key]["clf"], clf["expected_columns"]
+                )
+
+    @staticmethod
+    def _compute_h3_reference_stats(
+        panel_df: pd.DataFrame, metadata: dict
+    ) -> tuple[pd.Series, pd.Series]:
+        """Mean/std of the H3-regression feature set over the base panel — the background
+        distribution used to z-score each prediction's causal drivers (explain.py).
+
+        The original computes this from X_train (pre-CUT_DATE rows) specifically; using the
+        full panel here is a deliberate simplification to avoid re-deriving the train/test
+        split at serving time. It only affects the *ranking* of causal drivers shown in the
+        decision card, never the prediction itself.
+        """
+        expected_r = get_selected_feature_columns(metadata, 3, "regresion")
+        feat = build_features_batch(panel_df, 3).reindex(columns=expected_r, fill_value=0)
+        return feat.mean(axis=0), feat.std(axis=0)
 
     def is_loaded(self) -> bool:
         return self._models is not None
@@ -285,7 +338,22 @@ class M21CerealPriceSpatialPlugin(ModelPluginPort):
 
             t0 = time.perf_counter()
 
-            raw_row = pd.DataFrame([features])
+            province = str(features.get("provincia", ""))
+            cereal = str(features.get("cereal_predominante", ""))
+            month = str(features.get("date", ""))
+
+            # The caller only supplies provincia/cereal_predominante/date (manifest
+            # inputs.fixed) — the ~90 engineered columns the models were trained on
+            # (lat_centroide, month_sin/cos, fase_*, price lags, climate, MAPA indices...)
+            # come from the base panel dataset, same as run_single() in the original
+            # src/predict/predict_v1.py. Any field the caller DOES supply explicitly (the
+            # optional lat_centroide/dist_puerto_min_km/... overrides in the DTO) wins over
+            # the panel lookup.
+            panel_row: dict[str, Any] = {}
+            if self._panel_df is not None:
+                panel_row = lookup_panel_row(self._panel_df, province, cereal, month).to_dict()
+            merged = {**panel_row, **{k: v for k, v in features.items() if v is not None}}
+            raw_row = pd.DataFrame([merged])
 
             predictions = self._predict_single(raw_row, self._metadata, self._models)
 
@@ -293,17 +361,30 @@ class M21CerealPriceSpatialPlugin(ModelPluginPort):
             h2_ret = predictions[2]["expected_return"]
             h3_ret = predictions[3]["expected_return"]
 
-            province = str(features.get("provincia", ""))
-            cereal = str(features.get("cereal_predominante", ""))
-            month = str(features.get("date", ""))
-
             geo_risk = province in self._get_geo_risk_provinces(self._metadata)
             coherence_msg = _coherence_message(
                 {h: predictions[h]["signal"] for h in VALID_HORIZONS}
             )
             timing_label = _timing_decision("comprador", h1_ret, h2_ret, h3_ret)
 
-            causal_drivers = ["No hay importancias disponibles para explicar esta prediccion."]
+            expected_r = get_selected_feature_columns(self._metadata, 3, "regresion")
+            if self._h3_feature_mean is not None and self._h3_feature_std is not None:
+                row_r_h3 = build_features_from_row(raw_row, expected_r)
+                h3_importance = (
+                    self._metadata.get("selected_models", {})
+                    .get("H3", {})
+                    .get("regression", {})
+                    .get("feature_importance", [])
+                )
+                causal_drivers = top_causal_drivers(
+                    row_features=row_r_h3,
+                    feature_mean=self._h3_feature_mean,
+                    feature_std=self._h3_feature_std,
+                    importance_records=h3_importance,
+                    top_n=3,
+                )
+            else:
+                causal_drivers = ["No hay importancias disponibles para explicar esta prediccion."]
 
             recommendation = _build_recommendation(
                 "comprador",
@@ -325,27 +406,24 @@ class M21CerealPriceSpatialPlugin(ModelPluginPort):
                 causal_drivers=causal_drivers,
             )
 
-            expected_r = get_selected_feature_columns(self._metadata, 3, "regresion")
             xai_values = _xai_values_from_row(raw_row.iloc[0], expected_r) or None
 
             elapsed_ms = (time.perf_counter() - t0) * 1000
             self._record(elapsed_ms)
 
-            return {
-                "model_id": MODEL_ID,
-                "province": province,
-                "cereal": cereal,
-                "month": month,
-                "geo_risk": geo_risk,
-                "timing_label": timing_label,
-                "causal_drivers": causal_drivers,
-                "card_text": card_text,
-                "predictions": {
-                    f"H{h}": predictions[h] for h in VALID_HORIZONS
-                },
-                "model_version": VERSION,
-                "xai_feature_values": xai_values,
-            }
+            return PredictInlineResponse(
+                model_id=MODEL_ID,
+                province=province,
+                cereal=cereal,
+                month=month,
+                geo_risk=geo_risk,
+                timing_label=timing_label,
+                causal_drivers=causal_drivers,
+                card_text=card_text,
+                predictions={f"H{h}": predictions[h] for h in VALID_HORIZONS},
+                model_version=VERSION,
+                xai_feature_values=xai_values,
+            )
 
         finally:
             if user_temp_dir:
@@ -405,11 +483,11 @@ class M21CerealPriceSpatialPlugin(ModelPluginPort):
                 "predict_batch done — %d rows in %.1fms count=%d",
                 len(results), elapsed_ms, self._predict_count,
             )
-            return {
-                "model_id": MODEL_ID,
-                "predictions": results,
-                "output_path": None,
-            }
+            return PredictBatchResponse(
+                model_id=MODEL_ID,
+                predictions=results,
+                output_path=None,
+            )
 
         finally:
             if user_temp_dir:
@@ -417,7 +495,7 @@ class M21CerealPriceSpatialPlugin(ModelPluginPort):
                 self._models = saved_models
                 self._metadata = saved_metadata
 
-    def train(self, *, data_path: str = "", mlflow_run_id: str = "") -> Any:
+    def train(self, *, data_path: str = "", mlflow_run_id: str) -> Any:
         """Train 6 models (3 horizons × reg+clf) from a CSV and upload to MLflow.
 
         Training CSV must contain raw panel rows with columns:
@@ -439,7 +517,7 @@ class M21CerealPriceSpatialPlugin(ModelPluginPort):
         from sklearn.model_selection import GridSearchCV, TimeSeriesSplit
         from xgboost import XGBRegressor
 
-        from app.plugins.m21_cereal_price_spatial.preprocessing import prepare_train_test
+        from app.plugins.ml21_cereals_price_spatial.preprocessing import prepare_train_test
 
         t0 = time.perf_counter()
 
@@ -457,7 +535,7 @@ class M21CerealPriceSpatialPlugin(ModelPluginPort):
         if mlflow_run_id:
             tracker = BaseMLflowTracker(mlflow_run_id)
 
-        tmp_dir = tempfile.mkdtemp(prefix="m21_train_")
+        tmp_dir = tempfile.mkdtemp(prefix="ml21_train_")
         all_metrics: dict[str, Any] = {}
         metadata: dict[str, Any] = {
             "run_started_at_utc": datetime.now(timezone.utc).isoformat(),
@@ -533,6 +611,9 @@ class M21CerealPriceSpatialPlugin(ModelPluginPort):
                                 "cv_best_score": float(search.best_score_),
                                 "metrics_test": {"MAE": mae, "Pearson": pearson, "DA": da, "AUC": float("nan")},
                                 "expected_columns": features,
+                                "feature_importance": extract_feature_importance(
+                                    best_model, features
+                                ),
                             },
                         }
 
@@ -578,6 +659,7 @@ class M21CerealPriceSpatialPlugin(ModelPluginPort):
                             "cv_best_score": float(search.best_score_),
                             "metrics_test": {"MAE": float("nan"), "Pearson": float("nan"), "DA": da, "AUC": auc},
                             "expected_columns": features,
+                            "feature_importance": extract_feature_importance(calibrated, features),
                         }
 
             metadata["run_finished_at_utc"] = datetime.now(timezone.utc).isoformat()
@@ -615,7 +697,7 @@ class M21CerealPriceSpatialPlugin(ModelPluginPort):
 
             self.load()
 
-            from app.plugins.m21_cereal_price_spatial.train_dto import TrainResponse
+            from app.plugins.ml21_cereals_price_spatial.train_dto import TrainResponse
 
             return TrainResponse(
                 detail="Training completado — 6 modelos entrenados (3H × reg+clf)",
