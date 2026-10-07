@@ -102,6 +102,59 @@ def build_windows_from_dataframe(
     return sequences_scaled, stats_scaled, list(stats_df.columns), timestamp_windows, entity_ids, y_seq
 
 
+def build_raw_windows_from_dataframe(df: pd.DataFrame, *, require_target: bool = False):
+    """Validate *df* and build UNSCALED (sequences, stats) windows.
+
+    Same validate -> prepare -> impute -> window -> stats steps as
+    build_windows_from_dataframe(), but stops before scaler_x.transform()/
+    scaler_num.transform() — used by train() (modelo 43-44-45 audit, Fase 5: faithful
+    from-scratch retrain) to fit FRESH scalers per training run instead of reusing the
+    served model's scalers, mirroring the real repo's data_processing.py, which always
+    fits new scalers on the train split of whatever CSV it's given.
+
+    Returns (sequences_raw [N,T,F], stats_df, stats_columns, timestamp_windows,
+    entity_ids, y_seq). Raises InsufficientWindowHistoryError if no window of
+    SEQUENCE_LENGTH consecutive rows can be built.
+    """
+    df = df.copy()
+    df.columns = df.columns.astype(str).str.strip().str.lower()
+
+    config = build_config_dict()
+    validation_report = validate_model_input_data(
+        df=df, config=config, context="entrenamiento", require_target=require_target,
+    )
+    df = prepare_model_input_dataframe(df, config, context="entrenamiento")
+
+    if TARGET_COLUMN not in df.columns:
+        df[TARGET_COLUMN] = 0
+
+    df = temporal_impute_partial_nulls(
+        df=df,
+        partial_null_stats=validation_report.get("partial_null_stats", {}),
+        id_column=ID_COLUMN,
+        timestamp_column=TIMESTAMP_COLUMN,
+    )
+
+    sequences, y_seq, timestamp_windows, entity_ids = create_sequences(
+        df,
+        target_column=TARGET_COLUMN,
+        seq_length=SEQUENCE_LENGTH,
+        solapamiento_beta=SOLAPAMIENTO_BETA,
+        id_column=ID_COLUMN,
+        timestamp_column=TIMESTAMP_COLUMN,
+        normal_tokens=NORMAL_TOKENS,
+    )
+    if len(sequences) == 0:
+        raise InsufficientWindowHistoryError(
+            f"No se generaron ventanas: se necesitan al menos {SEQUENCE_LENGTH} filas "
+            "consecutivas (por ciclo, si hay columna cycle_id) para construir una ventana."
+        )
+
+    stats_df = stats_windows(sequences, feature_names=SENSOR_COLUMNS, stats_creation=STATS_CREATION)
+
+    return sequences, stats_df, list(stats_df.columns), timestamp_windows, entity_ids, y_seq
+
+
 def build_windows_from_csv(
     csv_path: str,
     scaler_x,

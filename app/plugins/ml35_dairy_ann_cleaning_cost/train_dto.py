@@ -14,3 +14,6 @@ class TrainResponse(BaseModel):
     mae: float = Field(..., description="Mean absolute error on training data after fine-tuning (L)")
     r2: float = Field(..., description="R² on training data after fine-tuning")
     n_samples: int = Field(..., description="Number of training samples used")
+    upload_warning: str | None = Field(
+        default=None, description="Aviso si el modelo reentrenado no se ha guardado en MLflow"
+    )

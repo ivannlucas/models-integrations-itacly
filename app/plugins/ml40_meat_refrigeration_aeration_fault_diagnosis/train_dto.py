@@ -1,4 +1,6 @@
 """Pydantic request/response DTOs for the ml40 /train endpoint."""
+from typing import Literal, Optional
+
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -14,6 +16,11 @@ class TrainRequest(BaseModel):
             "(inbox/a40/manifest.yaml -> training.required_columns). Se reentrena el "
             "RandomForest desde cero con los hiperparámetros originales del equipo de IA."
         ),
+    )
+    system: Optional[Literal["refrigeracion", "aireado"]] = Field(
+        default=None,
+        description="Subsistema a reentrenar; el CSV debe corresponder a él. Si se omite se "
+                    "detecta por las columnas.",
     )
     mlflow_run_id: str = ""
 

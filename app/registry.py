@@ -19,8 +19,10 @@ from app.domain.services.exceptions import (
     InvalidAudioError,
     InvalidImageError,
     InvalidVideoError,
+    MissingRequiredFeatureError,
     NoValidSimulationPointError,
     PuConstraintViolationError,
+    DataContractError,
     UnknownDiagnosisSystemError,
     ThermalSafetyViolationError,
     UnsupportedMachineConfigurationError,
@@ -212,16 +214,14 @@ from app.plugins.ml28_meat_neuroevolutionary_raw_materials_prediction.predict_dt
     PredictRequest as Ml28Meat_Request,
     PredictResponse as Ml28Meat_Response,
 )
-from app.plugins.ml43_cereals_dnsl_anomaly_fault_detection.plugin import (
-    Ml43CerealsDnslAnomalyFaultDetectionPlugin,
+from app.plugins.modelo43_cereales.plugin import Modelo43CerealesPlugin
+from app.plugins.modelo43_cereales.predict_dto import (
+    PredictRequest as Modelo43_Request,
+    PredictResponse as Modelo43_Response,
 )
-from app.plugins.ml43_cereals_dnsl_anomaly_fault_detection.predict_dto import (
-    PredictRequest as Ml43_Request,
-    PredictResponse as Ml43_Response,
-)
-from app.plugins.ml43_cereals_dnsl_anomaly_fault_detection.train_dto import (
-    TrainRequest as Ml43_TrainReq,
-    TrainResponse as Ml43_TrainResp,
+from app.plugins.modelo43_cereales.train_dto import (
+    TrainRequest as Modelo43_TrainReq,
+    TrainResponse as Modelo43_TrainResp,
 )
 
 from app.plugins.ml3_wine_disease_pest_forecast.plugin import Ml3WineDiseasePestForecastPlugin
@@ -234,10 +234,14 @@ from app.plugins.ml3_wine_disease_pest_forecast.train_dto import (
     TrainResponse as Ml3Wine_TrainResp,
 )
 
-from app.plugins.m21_cereal_price_spatial.plugin import M21CerealPriceSpatialPlugin
-from app.plugins.m21_cereal_price_spatial.predict_dto import (
-    PredictRequest as M21_Request,
-    PredictResponse as M21_Response,
+from app.plugins.ml21_cereals_price_spatial.plugin import Ml21CerealsPriceSpatialPlugin
+from app.plugins.ml21_cereals_price_spatial.predict_dto import (
+    PredictRequest as Ml21Cereals_Request,
+    PredictResponse as Ml21Cereals_Response,
+)
+from app.plugins.ml21_cereals_price_spatial.train_dto import (
+    TrainRequest as Ml21Cereals_TrainReq,
+    TrainResponse as Ml21CerealsTrainResp,
 )
 
 from app.plugins.ml16_meat_raw_material_price_alert.plugin import Ml16MeatRawMaterialPriceAlertPlugin
@@ -259,6 +263,14 @@ from app.plugins.ml26_wine_sulfite_gru_pso_forecast.predict_dto import (
 from app.plugins.ml26_wine_sulfite_gru_pso_forecast.train_dto import (
     TrainRequest as Ml26_TrainReq,
     TrainResponse as Ml26_TrainResp,
+from app.plugins.ml15_wine_ipi_price_forecast.plugin import Ml15WineIpiPriceForecastPlugin
+from app.plugins.ml15_wine_ipi_price_forecast.predict_dto import (
+    PredictRequest as Ml15_Request,
+    PredictResponse as Ml15_Response,
+)
+from app.plugins.ml15_wine_ipi_price_forecast.train_dto import (
+    TrainRequest as Ml15_TrainReq,
+    TrainResponse as Ml15_TrainResp,
 )
 
 
@@ -348,6 +360,7 @@ REGISTRY: list[ModelEntry] = [
         predict_response_type=Ml30Trace_Response,
         train_request_type=Ml30Trace_TrainReq,
         train_response_type=Ml30Trace_TrainResp,
+        extra_predict_exceptions=(DataContractError,),
     ),
     ModelEntry(
         model_id="ml31-cereals-residue-optimizer",
@@ -479,15 +492,15 @@ REGISTRY: list[ModelEntry] = [
         extra_predict_exceptions=(),
     ),
     ModelEntry(
-        model_id="ml43-cereals-dnsl-anomaly-fault-detection",
-        prefix="/models/ml43-cereals-dnsl-anomaly-fault-detection",
+        model_id="modelo43-cereales",
+        prefix="/models/modelo43-cereales",
         version="1.0.0",
-        plugin_class=Ml43CerealsDnslAnomalyFaultDetectionPlugin,
-        predict_request_type=Ml43_Request,
-        predict_response_type=Ml43_Response,
+        plugin_class=Modelo43CerealesPlugin,
+        predict_request_type=Modelo43_Request,
+        predict_response_type=Modelo43_Response,
         extra_predict_exceptions=(InsufficientSensorWindowError,),
-        train_request_type=Ml43_TrainReq,
-        train_response_type=Ml43_TrainResp,
+        train_request_type=Modelo43_TrainReq,
+        train_response_type=Modelo43_TrainResp,
     ),
     ModelEntry(
         model_id="ml3-wine-disease-pest-forecast",
@@ -501,13 +514,15 @@ REGISTRY: list[ModelEntry] = [
         train_response_type=Ml3Wine_TrainResp,
     ),
     ModelEntry(
-        model_id="m21-cereal-price-spatial",
-        prefix="/models/m21-cereal-price-spatial",
+        model_id="ml21-cereals-price-spatial",
+        prefix="/models/ml21-cereals-price-spatial",
         version="1.0.0",
-        plugin_class=M21CerealPriceSpatialPlugin,
-        predict_request_type=M21_Request,
-        predict_response_type=M21_Response,
-        extra_predict_exceptions=(),
+        plugin_class=Ml21CerealsPriceSpatialPlugin,
+        predict_request_type=Ml21Cereals_Request,
+        predict_response_type=Ml21Cereals_Response,
+        train_request_type=Ml21Cereals_TrainReq,
+        train_response_type=Ml21CerealsTrainResp,
+        extra_predict_exceptions=(DataContractError,),
     ),
     ModelEntry(
         model_id="ml16-meat-raw-material-price-alert",
@@ -521,13 +536,27 @@ REGISTRY: list[ModelEntry] = [
         train_response_type=Ml16_TrainResp,
     ),
     ModelEntry(
+        model_id="ml15-wine-ipi-price-forecast",
+        prefix="/models/ml15-wine-ipi-price-forecast",
+        version="1.0.0",
+        plugin_class=Ml15WineIpiPriceForecastPlugin,
+        predict_request_type=Ml15_Request,
+        predict_response_type=Ml15_Response,
+        extra_predict_exceptions=(MissingRequiredFeatureError,),
+        train_request_type=Ml15_TrainReq,
+        train_response_type=Ml15_TrainResp,
+    ),
+    ModelEntry(
         model_id="ml41-meat-curing-machinery-acoustic-anomaly",
         prefix="/models/ml41-meat-curing-machinery-acoustic-anomaly",
         version="1.0.0",
         plugin_class=Ml41MeatCuringMachineryAcousticAnomalyPlugin,
         predict_request_type=Ml41_Request,
         predict_response_type=Ml41_Response,
-        extra_predict_exceptions=(UnsupportedMachineConfigurationError, InvalidAudioError),
+        extra_predict_exceptions=(
+            UnsupportedMachineConfigurationError,
+            InvalidAudioError,
+        ),
         train_request_type=Ml41_TrainReq,
         train_response_type=Ml41_TrainResp,
     ),

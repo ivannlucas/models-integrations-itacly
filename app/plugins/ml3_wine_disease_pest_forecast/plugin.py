@@ -9,6 +9,7 @@ non-degraded prediction).
 """
 from __future__ import annotations
 
+import copy
 import logging
 import shutil
 import tempfile
@@ -329,7 +330,7 @@ class Ml3WineDiseasePestForecastPlugin(ModelPluginPort):
             OutputField(name="probabilidades_clases", type="dict",
                         description="Probabilidad media por clase"),
         ]
-        return StatsResponse(
+        base = StatsResponse(
             model_name=MODEL_ID,
             version=VERSION,
             description=(
@@ -344,9 +345,56 @@ class Ml3WineDiseasePestForecastPlugin(ModelPluginPort):
             framework=FRAMEWORK,
             inputs=inputs,
             outputs=outputs,
-            metrics=REPORTED_METRICS,
+            # deepcopy, not dict(): REPORTED_METRICS nests "classification"/"regression"
+            # sub-dicts that the mlflow_run_id branch below mutates in place — a shallow
+            # copy would share those sub-dict objects with the module-level constant and
+            # corrupt it for every future request once a real retrain's numbers got
+            # written into it.
+            metrics=copy.deepcopy(REPORTED_METRICS),
             runtime_stats=RuntimeStats(
                 total_predictions=self._predict_count,
                 avg_latency_ms=None,
             ),
         )
+        # modelo 43-44-style audit follow-up: stats(mlflow_run_id=...) accepted the
+        # parameter but never used it — every retrain's /stats always reported the
+        # served model's static REPORTED_METRICS, no matter which trained run was
+        # asked about, even though train() already logs real metrics to MLflow.
+        if mlflow_run_id:
+            try:
+                tracker = BaseMLflowTracker(mlflow_run_id)
+                mlflow_metrics = tracker.get_metrics()
+                base.metrics["mlflow"] = {"params": tracker.get_params(), "metrics": mlflow_metrics}
+                for metric_name, metric_value in mlflow_metrics.items():
+                    if isinstance(metric_value, (int, float)):
+                        base.metrics[metric_name] = metric_value
+
+                # Regression (modelo 43-44-45 audit, Fase 5 follow-up): REPORTED_METRICS
+                # nests its reference numbers under "classification"/"regression"
+                # sub-dicts — the flattening loop above only adds FLAT top-level keys
+                # (train()'s own accuracy/precision_macro/.../mae/mse/r2 naming), it
+                # never touches those nested values, so the platform's
+                # classification.accuracy/regression.mae/... tiles (what
+                # statsMetricsList actually renders for this model, one dot-level of
+                # nesting flattened) kept showing the served model's fixed reference
+                # numbers for every retrain. mse->rmse below is an explicit sqrt, not a
+                # blind rename — REPORTED_METRICS's regression.rmse slot is genuinely
+                # root-mean-squared-error, a different unit from the mse train() logs.
+                if isinstance(base.metrics.get("classification"), dict):
+                    for key in ("accuracy", "precision_macro", "recall_macro", "f1_macro", "f1_weighted"):
+                        value = mlflow_metrics.get(key)
+                        if isinstance(value, (int, float)):
+                            base.metrics["classification"][key] = value
+                if isinstance(base.metrics.get("regression"), dict):
+                    mae = mlflow_metrics.get("mae")
+                    if isinstance(mae, (int, float)):
+                        base.metrics["regression"]["mae"] = mae
+                    mse = mlflow_metrics.get("mse")
+                    if isinstance(mse, (int, float)):
+                        base.metrics["regression"]["rmse"] = mse ** 0.5
+                    r2 = mlflow_metrics.get("r2")
+                    if isinstance(r2, (int, float)):
+                        base.metrics["regression"]["r2"] = r2
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                logger.warning("Could not fetch MLflow stats for run_id=%s: %s", mlflow_run_id, exc)
+        return base

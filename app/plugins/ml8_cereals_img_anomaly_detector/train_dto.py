@@ -28,3 +28,11 @@ class TrainResponse(BaseModel):
         default=None,
         description="Informativo si los artefactos se guardaron en local pero falló el upload a S3",
     )
+    mlflow_run_id: str = Field(
+        default="",
+        description=(
+            "Run de MLflow al que se subieron los artefactos. La plataforma lo toma como "
+            "autoritativo frente al run que pre-creó ella: si aquel falló, este es el que "
+            "de verdad tiene el modelo entrenado (train-task-manager.ts, confirmedRunId)."
+        ),
+    )

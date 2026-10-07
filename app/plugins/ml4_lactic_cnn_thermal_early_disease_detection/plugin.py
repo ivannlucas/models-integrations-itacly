@@ -108,10 +108,21 @@ class Ml4LacticCnnThermalEarlyDiseaseDetectionPlugin(ModelPluginPort):
         else:
             raise InvalidImageError("features debe contener 'image_path' o 'image_base64'")
 
-        result = self._infer_image(image_bytes)
+        tensor = preprocess_image(image_bytes).to(self._device)
+        with torch.no_grad():
+            logits, feature_map = self._model(tensor, return_features=True)
+        result = decode_logits(logits)
+        heatmap_url = None
+        try:
+            heatmap_url = compute_and_encode_cam(
+                feature_map, self._model.classifier[1].weight,
+                result["predicted_class_index"], Image.open(io.BytesIO(image_bytes)).convert("RGB"),
+            )
+        except Exception as exc:  # heatmap is auxiliary: never fail the prediction because of it
+            logger.warning("ml4 inline CAM failed: %s", exc)
         self._record()
         return PredictInlineResponse(
-            model_id=MODEL_ID, threshold=threshold, features_used=used, **result
+            model_id=MODEL_ID, threshold=threshold, features_used=used, heatmap_url=heatmap_url, **result
         )
 
     def predict_batch(self, *, data_path: str, mlflow_run_id: str = "") -> PredictBatchResponse:
@@ -153,11 +164,13 @@ class Ml4LacticCnnThermalEarlyDiseaseDetectionPlugin(ModelPluginPort):
                             feature_map, self._model.classifier[1].weight,
                             result["predicted_class_index"], image,
                         )
-                        if idx == 0:
+                        if idx == 0 or result["predicted_class_index"] != 0:
                             # Echo the first image back so the platform can request a real
                             # GradCAM explanation for the batch (mirrors the inline flow,
                             # which has a single image_path to read from — batch has none
-                            # once this temp dir is removed below).
+                            # once this temp dir is removed below). Non-healthy images
+                            # (class index != 0) are echoed too so their instances carry
+                            # the source image; healthy ones stay out to keep the payload small.
                             row["image_base64"] = base64.b64encode(image_bytes).decode("ascii")
                         predictions.append(row)
                     except Exception as exc:
@@ -205,7 +218,7 @@ class Ml4LacticCnnThermalEarlyDiseaseDetectionPlugin(ModelPluginPort):
                             description="P(clase=Healthy)"),
                 OutputField(name="probability_scm", type="float", description="P(clase=SCM)"),
                 OutputField(name="heatmap_url", type="str",
-                            description="Mapa de activación de clase (CAM) superpuesto en base64 JPEG data URI (solo en predict_batch)"),
+                            description="Mapa de activación de clase (CAM) superpuesto en base64 JPEG data URI"),
             ],
             metrics={},
             runtime_stats=RuntimeStats(total_predictions=self._predict_count, avg_latency_ms=None),

@@ -13,13 +13,28 @@ from app.domain.services.exceptions import InvalidImageError
 
 logger = logging.getLogger(__name__)
 
-# Transformación estándar ImageNet para el clasificador (igual que en entrenamiento)
-CLASSIFIER_TRANSFORM = transforms.Compose([
-    transforms.Resize(256),
-    transforms.CenterCrop(224),
-    transforms.ToTensor(),
-    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-])
+
+def build_eval_transform(imgsz: int = 224) -> transforms.Compose:
+    """Preprocessing transform for the classifier at eval/inference time.
+
+    Must stay identical to the eval-time preprocessing used to validate the classifier during
+    training (``_cls_transforms`` in plugin.py, which calls this same function instead of
+    building its own copy). A previous divergence here — ``Resize(256)+CenterCrop(224)`` at
+    inference vs. a plain square ``Resize((224, 224))`` during training/validation — silently
+    fed the classifier a different input distribution in production (CenterCrop discards the
+    edges of the detector's crop, which the model never saw at training time), producing
+    systematically biased, over-confident predictions despite the class mapping itself being
+    correct. Route both call sites through this single function so they cannot diverge again.
+    """
+    return transforms.Compose([
+        transforms.Resize((imgsz, imgsz)),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+    ])
+
+
+# Transformación real aplicada a cada crop del detector antes de clasificar.
+CLASSIFIER_TRANSFORM = build_eval_transform(224)
 
 
 def image_base64_to_pil(image_b64: str) -> Image.Image:

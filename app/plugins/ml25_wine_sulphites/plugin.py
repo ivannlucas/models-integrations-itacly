@@ -30,8 +30,11 @@ from app.plugins.ml25_wine_sulphites.postprocessing import (
 from app.plugins.ml25_wine_sulphites.preprocessing import (
     FEATURES_BOUND,
     FEATURES_QUAL,
+    TARGET_QUAL,
     build_simulation_grid,
     map_request_to_wine_dict,
+    normalize_training_columns,
+    require_training_columns,
 )
 
 logger = logging.getLogger(__name__)
@@ -328,7 +331,7 @@ class WineSulphitePlugin(ModelPluginPort):
                 self._metadata = saved_meta
 
     def train(self, *, data_path: str, mlflow_run_id: str = "") -> TrainResponse:  # pylint: disable=too-many-locals
-        """Train dual RandomForest models from the CSV at *data_path*, persist artifacts, and reload."""
+        """Train dual RandomForest models from the CSV at *data_path* and upload them to MLflow."""
         # pylint: disable=import-outside-toplevel
         import os
         import tempfile
@@ -392,7 +395,6 @@ class WineSulphitePlugin(ModelPluginPort):
         import tempfile
         from sklearn.ensemble import RandomForestRegressor
         from sklearn.metrics import mean_absolute_error
-        from app.plugins.ml25_wine_sulphites.model_loader import get_artifacts_dir
         from app.plugins.ml25_wine_sulphites.constants import (
             QUALITY_RF_MODEL_FILENAME,
             BOUND_RF_MODEL_FILENAME,
@@ -403,10 +405,12 @@ class WineSulphitePlugin(ModelPluginPort):
         t0 = time.perf_counter()
         df = pd.read_csv(data_path, sep=None, engine="python")
         df.columns = [c.strip() for c in df.columns]
+        df = normalize_training_columns(df)
+        require_training_columns(df)
 
         # pylint: disable=invalid-name
         X_qual = df[FEATURES_QUAL]
-        y_qual = df["quality"].astype(float)
+        y_qual = df[TARGET_QUAL].astype(float)
 
         bound_so2 = (df["total sulfur dioxide"] - df["free sulfur dioxide"]).clip(lower=0)
         X_bound = df[FEATURES_BOUND]
@@ -440,14 +444,11 @@ class WineSulphitePlugin(ModelPluginPort):
             "features_bound": list(FEATURES_BOUND),
         }
 
-        artifacts_dir = get_artifacts_dir()
-        artifacts_dir.mkdir(parents=True, exist_ok=True)
-        joblib.dump(model_qual, artifacts_dir / QUALITY_RF_MODEL_FILENAME)
-        joblib.dump(model_bound, artifacts_dir / BOUND_RF_MODEL_FILENAME)
-        with open(artifacts_dir / METADATA_FILENAME, "w", encoding="utf-8") as fh:
-            json.dump(metadata, fh)
-
-        # ── MLflow: log metrics and upload artifacts ────────────────────────
+        # The retrained model lives only in its own MLflow run (predict with that
+        # mlflow_run_id); the served base model and its local artifacts are never replaced.
+        upload_warning = None
+        if not tracker:
+            upload_warning = "Sin run de MLflow: el modelo reentrenado no se ha guardado."
         if tracker:
             tracker.log_metrics({
                 "mae_quality": mae_qual,
@@ -465,12 +466,11 @@ class WineSulphitePlugin(ModelPluginPort):
                 shutil.rmtree(mlflow_tmp, ignore_errors=True)
             except Exception as exc:
                 logger.error("MLflow artifact upload failed: %s", exc)
+                upload_warning = f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}"
 
         elapsed = time.perf_counter() - t0
         logger.info("train() done — mae_qual=%.4f mae_bound=%.4f elapsed=%.1fs mlflow=%s",
                     mae_qual, mae_bound, elapsed, bool(mlflow_run_id))
-
-        self.load()
 
         return TrainResponse(
             detail="Training completed",
@@ -479,6 +479,8 @@ class WineSulphitePlugin(ModelPluginPort):
             n_train=int(split),
             n_test=int(len(df) - split),
             training_time_s=round(elapsed, 1),
+            upload_warning=upload_warning,
+            mlflow_run_id=mlflow_run_id,
         )
 
     def stats(self, mlflow_run_id: str = "") -> StatsResponse:
@@ -514,12 +516,21 @@ class WineSulphitePlugin(ModelPluginPort):
             ],
             outputs=[
                 OutputField(name="recommended_free_so2", type="float", description="Recommended free SO2 dose (mg/L)"),
+                OutputField(name="recommended_bound_so2", type="float", description="Estimated bound SO2 (mg/L)"),
                 OutputField(name="recommended_total_so2", type="float", description="Estimated total SO2 (mg/L)"),
                 OutputField(name="recommended_molecular_so2", type="float", description="Molecular SO2 (mg/L)"),
                 OutputField(name="predicted_quality", type="float", description="Predicted sensory quality (0–10)"),
                 OutputField(
+                    name="baseline_predicted_quality", type="float",
+                    description="Predicted sensory quality at the current free SO2 (0–10)",
+                ),
+                OutputField(
                     name="intervention_recommended", type="bool",
                     description="True if sulphite intervention is recommended",
+                ),
+                OutputField(
+                    name="recommendation_reason", type="string",
+                    description="Quality gain vs. decision threshold behind the recommendation",
                 ),
             ],
             metrics={

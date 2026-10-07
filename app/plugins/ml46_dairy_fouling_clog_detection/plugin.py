@@ -365,10 +365,11 @@ class Ml46DairyFoulingClogDetectionPlugin(ModelPluginPort):
         pred_df = predict_loader(fine_model, eval_loader, sequences, self._train_cfg)
         metrics = window_metrics_from_preds(pred_df, self._train_cfg)
 
-        _store.local_dir.mkdir(parents=True, exist_ok=True)
-        torch.save(fine_model.state_dict(), _store.local_dir / MODEL_FILENAME)
-
+        # The retrained model lives only in its own MLflow run (predict with that
+        # mlflow_run_id); the served base model and its local artifacts are never replaced.
         upload_warning = None
+        if not tracker:
+            upload_warning = "Sin run de MLflow: el modelo reentrenado no se ha guardado."
         if tracker:
             try:
                 tracker.log_metrics({k: v for k, v in metrics.items() if math.isfinite(v)})
@@ -381,9 +382,8 @@ class Ml46DairyFoulingClogDetectionPlugin(ModelPluginPort):
                 shutil.rmtree(mlflow_tmp, ignore_errors=True)
             except Exception as exc:  # pylint: disable=broad-exception-caught
                 logger.error("MLflow artifact upload failed: %s", exc)
-                upload_warning = f"Fine-tuning guardado localmente, pero falló la subida a MLflow: {exc}"
+                upload_warning = f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}"
 
-        self.load()
         logger.info(
             "ml46 train() done — n_windows=%d epochs=%d stage_acc=%.4f mlflow=%s",
             len(dataset), self._train_cfg.epochs, metrics.get("stage_accuracy", float("nan")), bool(mlflow_run_id),
