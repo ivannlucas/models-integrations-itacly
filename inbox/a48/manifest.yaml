@@ -5,7 +5,7 @@
 #
 # Generado por manifest-extraction a partir de:
 #   - codigo/ (a48-dnsl-dairy-xai-deteccion-puntos-criticos-control.zip, descomprimido)
-#   - entregable/48 - ... - v1.1.docx (memoria, version 1.1, 11/06/2026)
+#   - entregable/48 - ... - v1.3.docx (memoria vigente, version 1.3, 10/07/2026)
 #   - inbox/a47/manifest.yaml y app/plugins/m47_* (plugin del modelo base ya integrado)
 # -----------------------------------------------------------------------------
 
@@ -15,16 +15,20 @@ nombre: "Implementación del modelo basado en XAI para la detección de puntos c
 acronimo: XAI-DEFPAM-DNSL
 organismo: AIR Institute
 lote: 2
-version_memoria: "1.1"          # 11/06/2026
+version_memoria: "1.3"          # 10/07/2026 (v1.1 y v1.2 superadas)
 task_type: multi_label_classification_xai   # 4 componentes x 3 estados + explicabilidad + prescripcion
-framework: [pytorch, "shap==0.42.0", scikit-learn, pandas, numpy, joblib, pyyaml]
+framework: [pytorch, "shap>=0.51.0 (equipo: 0.51.0; verificado tambien con 0.52.0)", scikit-learn, pandas, numpy, joblib, pyyaml]
 
 relacion_con_otros_modelos:
-  base: "a47 (plugin m47_dnsl_fallas_maquinaria_pasteurizado, ya integrado)"
+  base: "a47 v2.0 (plugin m47_dnsl_fallas_maquinaria_pasteurizado, ya integrado)"
   nota: >
-    a48 NO entrena un modelo propio: reutiliza la arquitectura CNN_Pasteurizer del a47 (src/training/model.py
-    y src/predict/) y añade el paquete src/xai/. Los artefactos entregados en a48 pueden NO ser los mismos
-    pesos que los del plugin m47 (ver known_issues).
+    a48 NO entrena un modelo propio: reutiliza la arquitectura CNN_Pasteurizer del a47 y añade el paquete
+    src/xai/. Confirmado por el equipo de IA: en la v1.3 los artefactos neurosymbolic_cnn.pth (MD5 5b087a2c...),
+    scaler_cnn_dns.pkl (ddae8685...), ts1_mean_train.pkl (fb5a0361...) y feature_columns.pkl (517503ee...) son
+    los del Entregable 47 v2.0. Las v1.1/v1.2 del 48 usaban pesos de un entrenamiento anterior (30/04/2026,
+    MD5 f79fd471...). El plugin m48 mantiene sus propios artefactos (autocontenido) y no depende de los de m47.
+    Split identico al del 47 (1543/331/331, seed 42); cycle_splits.json guarda los IDs en el orden barajado
+    (ordenado, el test empieza por 20, 23, 29, 32...).
 
 arquitectura:
   tipo: "1D-CNN multitarea (CNN_Pasteurizer) + Physics-Guided Loss (DNSL)"
@@ -40,13 +44,14 @@ arquitectura:
 artifacts:
   folder: models/artifacts/
   files:
-    - neurosymbolic_cnn.pth    # state_dict CNN_Pasteurizer (n_sensors=28, n_classes=3, dropout=0.2022) - 591 KB
-    - scaler_cnn_dns.pkl       # StandardScaler (28 features)
-    - feature_columns.pkl      # orden de las 28 columnas
-    - ts1_mean_train.pkl       # media TS1 train (offset gemelo termico a 65 C)
+    - neurosymbolic_cnn.pth    # state_dict CNN_Pasteurizer (n_sensors=28, n_classes=3, dropout=0.2022) - MD5 5b087a2c16777300521b08e7514fa0e8 (v1.3 = E47 v2.0)
+    - scaler_cnn_dns.pkl       # StandardScaler (28 features). REGENERADO por nosotros con scikit-learn 1.5.2 (pin del repo) a partir del entregado por el equipo (MD5 entregado ddae8685a8571db6502364a43c7f701a, sklearn 1.6.1); atributos mean_/scale_/var_/n_samples_seen_ identicos - MD5 1149dc17cb04e243b7acc5b4cbacb980
+    - feature_columns.pkl      # orden de las 28 columnas - MD5 517503ee6313305c7ffec69321c92620 (sin cambios)
+    - ts1_mean_train.pkl       # media TS1 train (offset gemelo termico a 65 C) = 45.3110734 - MD5 fb5a036109839ee9ffe3fc3e3ec70a5a
   config_files:
     - config/config.yaml                  # hiperparametros, window_size, seccion xai
     - config/maintenance_actions.yaml     # acciones prescriptivas por componente/clase
+  packaged_by_integration: ["shap_background.npy (50 ciclos de test escalados con el scaler v1.3)", "shap_background_meta.json"]
   no_usados_en_inferencia: ["models/fine_tuning/*.csv", "models/metrics/*"]   # trazabilidad Optuna / metricas
 
 inputs:
@@ -135,7 +140,7 @@ constraints:
   uso: "Apoyo a la decisión técnica, no sustituto del criterio de mantenimiento (memoria s.11)"
 
 metrics_reported:
-  fuente: "models/metrics/test_metrics_confusion.csv (artefacto del código); la memoria 48 solo cita F1 macro 99.63 % del e47"
+  fuente: "models/metrics/test_metrics_confusion.csv (artefacto del código); memoria v1.3: Exact Match 98.79 %, F1 macro 99.70 %"
   dataset: test_hold_out
   n_test_ciclos: 331
   exact_match_global: 0.9879
@@ -143,7 +148,7 @@ metrics_reported:
   errores_conocidos: "2 ciclos Sano->Warning en Bomba y 2 en Acumulador (falsas alarmas)"
   baseline_mayoritaria_exact_match: 0.0906
   cv_kfold_exact_match: [0.968, 0.977, 0.975, 0.971, 0.975]
-  memoria_f1_macro: 0.9963
+  memoria_v1_3: {exact_match: 0.9879, f1_macro: 0.9970}   # reproducidas por el equipo con los artefactos E47 v2.0 sobre el test de 331 ciclos
 
 # Golden cases - dos familias, ninguna inventada.
 #  (A) 20 ciclos de test_cycles (data/splits/cycle_splits.json), seleccion numpy seed 42 garantizando que
@@ -236,32 +241,35 @@ golden_cases:
     expected: {Fouling: 0, Valvula: 1, Bomba: 1, Acumulador: 0}
 golden_cases_xai:
   - id: xai_local_cycle_123
-    source: "memoria_tabla_3 + data/predictions/xai_report_cycle.csv"
+    source: "memoria v1.3 Tabla 3 + data/predictions/xai_report_cycle.csv (v1.3)"
     input: {cycle_id: 123, window_source: "codigo/golden/golden_cycles_10hz.csv, Cycle_ID=123", apply_digital_twin: true, split_real: val}
     etiqueta_real: {Fouling: 2, Valvula: 0, Bomba: 0, Acumulador: 0}    # profile.txt fila 124 = 3,100,0,130
     expected:
-      Fouling:    {prediccion: Crítico, confianza: 0.9964, sensor_mas_relevante: FS1, importancia_sensor: 0.2288, accion: "Detener producción y ejecutar limpieza CIP inmediata", urgencia: Alta, intervalo_ciclos: 0}
-      Válvula:    {prediccion: Sano, confianza: 1.0000, sensor_mas_relevante: FS1, importancia_sensor: 0.3224, urgencia: Ninguna}
-      Bomba:      {prediccion: Sano, confianza: 1.0000, sensor_mas_relevante: TS2, importancia_sensor: 0.2639, urgencia: Ninguna}
-      Acumulador: {prediccion: Sano, confianza: 0.9995, sensor_mas_relevante: TS2, importancia_sensor: 0.3334, urgencia: Ninguna}
-    tolerancia: "predicción, acción, urgencia, ventana Grad-CAM (s) y riesgo exactos; confianza +-0.001. El SHAP (sensor_mas_relevante/importancia_sensor) solo es comparable con shap>=0.51 (ver known_issues: depende de la versión de shap)."
-    verificado_plugin_m48: "2026-10-05: con shap==0.52.0 (Python 3.12, deps del repo) el plugin reproduce EXACTAMENTE Tabla 3/xai_report_cycle.csv incluyendo SHAP (FS1 0.2288, FS1 0.3224, TS2 0.2639, TS2 0.3334). Con shap==0.42.0 (Python 3.11) predicción/confianza/ventana/acción/riesgo coinciden y el SHAP difiere (VS1/PS3/PS3/PS3), igual que el código original con esa versión."
+      Fouling:    {prediccion: Crítico, confianza: 0.9604, sensor_mas_relevante: FS1, importancia_sensor: 0.2876, ventana_s: [9.1, 11.1], intensidad: 0.9108, urgencia: Alta, intervalo_ciclos: 0, riesgo_score: 1.0, riesgo_nivel: CRÍTICO}
+      Válvula:    {prediccion: Sano, confianza: 1.0000, sensor_mas_relevante: FS1, importancia_sensor: 0.3119, ventana_s: [8.7, 10.5], intensidad: 0.8957, urgencia: Ninguna, riesgo_score: 0.0, riesgo_nivel: NORMAL}
+      Bomba:      {prediccion: Sano, confianza: 0.9999, sensor_mas_relevante: TS2, importancia_sensor: 0.2526, ventana_s: [37.6, 39.9], intensidad: 0.8957, urgencia: Ninguna, riesgo_score: 0.0, riesgo_nivel: NORMAL}
+      Acumulador: {prediccion: Sano, confianza: 0.9890, sensor_mas_relevante: TS2, importancia_sensor: 0.3550, ventana_s: [9.0, 11.0], intensidad: 0.8978, urgencia: Ninguna, riesgo_score: 0.0, riesgo_nivel: NORMAL}
+    tolerancia: "las 13 columnas del informe local deben coincidir (numericas con tolerancia 1e-4)"
+    verificado_plugin_m48: "2026-10-07 (Python 3.12, shap 0.52.0, artefactos v1.3): las 13 columnas coinciden con el xai_report_cycle.csv de la v1.3."
+  - id: xai_global_50_test_cycles
+    source: "memoria v1.3 Tablas 1/2 + data/predictions/xai_report.csv y xai_report_shap.csv (v1.3)"
+    input: {window_source: "los 331 ciclos de test (hydraulic_10hz_raw.csv filtrado por test_cycles)", apply_digital_twin: true, include_xai: true, include_shap: true, n_samples: 50}
+    expected: "6 filas CCP (Fouling x3, Válvula, Bomba, Acumulador) y 28 filas SHAP, con los mismos 50 ciclos de la columna ciclos_analizados (muestra aleatoria seed 42)"
+    verificado_plugin_m48: "2026-10-07: los 50 ciclos, las 6 filas CCP y las 28 importancias SHAP coinciden exactamente (diferencia maxima 0.0). Tarda ~10 min en CPU."
 
 known_issues:
-  - "INCOHERENCIA memoria vs código entregado: las Tablas 1/2 de la memoria (Fouling: FS1 0.2291, ventana 94-111; Válvula FS1 0.2971; Bomba EPS1 0.2089; Acumulador TS2 0.3289) NO coinciden con data/predictions/xai_report.csv entregado (Fouling: TS2 0.1979, ventanas 103-293 y 507-583; Válvula FS1 0.2444, ventana 88-106). No se usan como golden. REQUIERE confirmación humana."
-  - "La memoria (s.10.4) menciona 'versión 1.2' y 'modelo 47 actualizado', pero el documento es v1.1. s.7.4/s.8.2 dicen que riesgo_score no se serializa en xai_report_cycle.csv y el CSV entregado sí incluye riesgo_score y riesgo_nivel."
-  - "Los splits de a48 (cycle_splits.json: 1543/331/331, test = 296, 807, 1480...) NO coinciden con los del golden a47 (test_split.csv con ciclos 20, 23, 210...). Probablemente son pesos distintos de los del plugin m47; comparar hashes de artefactos antes de reutilizarlos (artifacts/ local solo contiene ml36, no hay copia de los de m47)."
-  - "No hay test_split.csv / X_test.csv en la entrega, solo cycle_splits.json. Los datos de golden se extrajeron de data/processed/hydraulic_10hz_raw.csv (entregado) por Cycle_ID. Cycle_ID = índice 0-based de fila en profile.txt. Cada ciclo tiene 601 filas (0.0-60.0 s); el modelo trunca a 600."
-  - "requirements.txt de a48 está en ASCII/UTF-8 (sin el problema UTF-16 de otros modelos), pero incluye torch/torchvision/torchaudio sin versión con --extra-index-url cu130, jupyter, ipykernel==6.16.2, optuna y matplotlib: no usar tal cual en el plugin. shap==0.42.0 es necesario (GradientExplainer); verificar compatibilidad con numpy/torch del repo (raíz: torch>=2.13, scikit-learn==1.5.2 pineado, el equipo usa 1.6.1)."
-  - "scaler_cnn_dns.pkl: su _sklearn_version interno es 1.5.2 (no 1.6.1 como el requirements del equipo). Cargado en venv aislado con scikit-learn==1.5.2 (pin del repo), numpy 1.26.4, pandas 2.2.3, torch 2.5.1+cpu, shap 0.42.0, sin warnings ni errores. No hay incompatibilidad 1.5.2/1.6.1 observada; no se ha probado 1.6.1."
-  - "SHAP DEPENDE DE LA VERSIÓN DE shap (verificado 2026-10-05). Ciclo 123: con shap==0.42.0 (el pin del requirements del equipo) tanto el código ORIGINAL como el plugin m48 dan Fouling VS1 0.355, Válvula PS3 0.571, Bomba PS3 0.352, Acumulador PS3 0.450; con shap==0.52.0 (el que resuelve el requirements raíz del repo, shap>=0.51.0) el código original y el plugin dan FS1 0.2288, FS1 0.3224, TS2 0.2639, TS2 0.3334, que coincide EXACTAMENTE con xai_report_cycle.csv y la Tabla 3. Conclusión: el CSV entregado se generó con shap>=0.51 aunque el requirements del equipo diga 0.42.0 (inconsistencia en la entrega). El port es fiel; pendiente confirmar con IA qué versión de shap usaron. Predicciones, confianzas, ventanas Grad-CAM, acciones y riesgo no dependen de shap y coinciden en ambas."
-  - "El código ORIGINAL del equipo (src/main.py xai) FALLA con pandas 3.x (KeyError 'Cycle_ID' en feature_engineering: groupby().apply ya no devuelve la columna de agrupación). El requirements raíz del repo no fija pandas (resuelve 3.0.6 en Python 3.12). El plugin m48 no usa ese código y funciona con pandas 3.0.6."
-  - "Verificación del plugin m48 (2026-10-05, venv aislado CPU): 20/20 golden cases del split de test coinciden con las etiquetas reales de profile.txt con apply_digital_twin=true; caso XAI ciclo 123 verificado (ver golden_cases_xai)."
-  - "Datos de laboratorio UCI (aceite hidráulico), NO leche real. Con datos UCI hay que aplicar gemelo digital (offset a 65 C): predict lo tiene OFF por defecto y xai ON por defecto. El plugin debe exponerlo como flag explícito y los golden deben ejecutarse con apply_digital_twin=true."
-  - "En modo global el código original NO usa --input: reconstruye el test desde data/processed/hydraulic_10hz_raw.csv (101 MB). El plugin no puede depender de ese CSV: debe recibir ciclos por request y para SHAP necesita background (50 ciclos). Decisión de diseño pendiente: background desde request vs. muestra empaquetada en artefactos."
-  - "SHAP GradientExplainer cuesta ~2-3 min en CPU (memoria s.11.1): inviable en request síncrono; Grad-CAM individual es subsegundo. Considerar SHAP opcional/batch."
-  - "Estocasticidad: SHAP/Grad-CAM usan random_state=42 y torch.use_deterministic_algorithms(warn_only=True); CPU vs CUDA pueden diferir en decimales."
-  - "Datos pesados no copiables: data/raw/hydraulic_raw.csv (1.7 GB) y processed (101 MB). inbox/*/codigo/ ya está en .gitignore."
-  - "Los notebooks (EDA, modelos, tuning, xai) usan esquemas alternativos de sensores; la memoria indica que no forman parte de la ejecución reproducible."
-  - "Descarga incompleta 'Sin confirmar 672349.crdownload' sustituida por el .zip completo (ya borrada del inbox o ignorable)."
-  - "Entorno: venv aislado en C:/Users/paahh/venv_m48 (Python 3.11.4, torch 2.5.1+cpu, scikit-learn 1.5.2, shap 0.42.0, numpy 1.26.4, pandas 2.2.3). El entorno global no se ha modificado. Dockerfile usa Python 3.12: pendiente comprobar shap==0.42.0/torch del requirements raíz (torch>=2.13) en 3.12."
+  - "RESUELTO por el equipo de IA (v1.3): el pin shap==0.42.0 del requirements v1.1 era un error de un merge del 09/06/2026; los CSV de v1.1/v1.2 se generaron con shap 0.51.0 y la v1.3 fija shap==0.51.0. El plugin reproduce los CSV con shap 0.52.0 (verificado) y el equipo confirma que 0.52.0 da salidas identicas. El repo exige shap>=0.51.0: NO usar shap 0.42.0 (da otro SHAP). Predicciones, confianzas, ventanas Grad-CAM y acciones no dependen de shap."
+  - "RESUELTO por el equipo de IA (v1.3): las Tablas 1/2 de la memoria v1.1 salieron de una ejecucion con un fallo de muestreo (tomaba los 50 ciclos de menor Cycle_ID); la v1.2 lo corrigio (muestra aleatoria seed 42) y la v1.3 regenera tablas, CSV y figuras con el modelo del E47 v2.0. El plugin reproduce exactamente el analisis global de la v1.3 (verificado)."
+  - "RESUELTO por el equipo de IA (v1.3): la mencion a 'version 1.2' dentro de la memoria v1.1 era un error de redaccion (la v1.2 existe, 10/07/2026); riesgo_score y riesgo_nivel SI se serializan en xai_report_cycle.csv (texto de las secciones 7.4 y 8.2 corregido)."
+  - "RESUELTO por el equipo de IA (v1.3): el codigo original fallaba con pandas 3.x (KeyError Cycle_ID en feature_engineering); corregido y verificado por ellos con pandas 2.2.3 y 3.0.6. El plugin no usa ese codigo."
+  - "RESUELTO por el equipo de IA: los pesos de las v1.1/v1.2 del 48 NO eran los del 47 vigente; la v1.3 usa los artefactos del E47 v2.0 (hashes en artifacts). El split del 48 coincide con el del 47. El equipo pide el fichero golden del 47 (con ciclos 20, 23, 210) para revisarlo: pendiente de enviarselo."
+  - "RESUELTO: scaler_cnn_dns.pkl entregado (v1.3) estaba serializado con scikit-learn 1.6.1 y el repo pinea 1.5.2 (InconsistentVersionWarning). Decision: regenerarlo con 1.5.2 (joblib.load + joblib.dump bajo 1.5.2); mean_, scale_, var_ y n_samples_seen_ son identicos y el nuevo pickle carga sin warning (MD5 1149dc17cb04e243b7acc5b4cbacb980; el entregado era ddae8685a8571db6502364a43c7f701a; copia del original fuera del repo). Con el scaler regenerado: 20/20 golden y las 13 columnas del ciclo 123 siguen coincidiendo. Informar al equipo de IA de que el artefacto desplegado difiere del entregado en la serializacion, no en los valores."
+  - "requirements del equipo (v1.3) fija torch==2.5.1, numpy==2.2.6, pandas==2.2.3, scikit-learn==1.6.1, shap==0.51.0 en Python 3.12 (CPU). El repo usa torch>=2.13 (probado), numpy 2.5.3, pandas 3.0.6, scikit-learn==1.5.2, shap>=0.51.0 (0.52.0 probado)."
+  - "Los splits de a48 siguen en el orden barajado en cycle_splits.json; para reproducir los primeros 50 ciclos de test hay que ordenar los IDs (el plugin lo hace en el fondo SHAP)."
+  - "Datos de laboratorio UCI (aceite hidraulico), NO leche real. Con datos UCI hay que aplicar gemelo digital (offset a 65 C); con datos de planta NO (confirmado por el equipo: predict sin --apply_digital_twin, xai con --no_digital_twin). El equipo no tiene datos reales de planta para validar este comportamiento, ni ha podido ejecutar fine_tune."
+  - "En modo global el codigo original reconstruye el test desde data/processed/hydraulic_10hz_raw.csv (101 MB); el plugin recibe ciclos por request y usa un fondo SHAP empaquetado (50 ciclos de test) para el SHAP local."
+  - "SHAP GradientExplainer cuesta ~5-8 s por ciclo en el modo local y ~10 min en el global (331 ciclos de entrada, 50 explicados) en CPU: por eso es opcional en el plugin."
+  - "Cycle_ID = indice 0-based de fila en profile.txt; cada ciclo tiene 601 filas (0.0-60.0 s) y el modelo trunca a 600."
+  - "Datos pesados (data/raw/hydraulic_raw.csv 1.7 GB y processed 101 MB) viven en codigo/ (ignorado por git); no copiar al repo ni a artifacts."
+  - "Los notebooks usan esquemas alternativos de sensores; la memoria indica que no forman parte de la ejecucion reproducible."
+  - "Artefactos v1.3 subidos a s3://xai/artifacts/fixed/a48_dnsl_fallas_maquinaria_pasteurizado/ el 2026-10-07 (6 ficheros, tamaños iguales a los locales; evidencia del usuario). Pendiente (acceso): carga real desde S3, /train con MLflow real, Docker real y entrenamiento completo: ver outputs/a48/verification_report.md."

@@ -2,7 +2,7 @@
 
 Leyenda: **PASS** = ejecutado y correcto · **FAIL** = ejecutado y fallido · **BLOCKED** = no completable por dependencia externa/infraestructura · **NOT VERIFIED** = no validado completamente · **KNOWN ISSUE** = limitación o discrepancia documentada.
 
-Fecha de verificación: 2026-10-05. Este informe no abre PR, no hace commit ni sube artefactos.
+Fecha de verificación: 2026-10-05 (v1.1 del equipo) y **re-verificación 2026-10-07 con la v1.3** (artefactos del Entregable 47 v2.0). Donde una sección dice «v1.3» el resultado se ha vuelto a ejecutar con los artefactos nuevos; el resto procede de la verificación inicial y se indica cuando no se ha repetido. Este informe no abre PR, no hace commit ni sube artefactos.
 
 ## Identificación
 
@@ -11,17 +11,22 @@ Fecha de verificación: 2026-10-05. Este informe no abre PR, no hace commit ni s
 | Plugin | `app/plugins/m48_dnsl_fallas_maquinaria_pasteurizado/` |
 | `model_id` runtime / prefijo | `m48-dnsl-fallas-maquinaria-pasteurizado` / `/models/m48-dnsl-fallas-maquinaria-pasteurizado` |
 | Manifest | `inbox/a48/manifest.yaml` (model_id de manifest: `lacteo-xai-puntos-criticos-control`) |
-| Memoria | Entregable 48 v1.1 (11/06/2026) |
+| Memoria / entrega | Entregable 48 **v1.3** (10/07/2026), que sustituye a la v1.1 revisada inicialmente (la v1.2 existe, pero no se recibió) |
 | Tipo | Clasificación multietiqueta 4 componentes × 3 estados (DNSL, 1D-CNN) + XAI (Grad-CAM, SHAP opcional, CCP, motor prescriptivo) |
-| Relación con m47 | Plugin independiente y autocontenido, con artefactos propios; no reutiliza los de m47. Información secundaria: no se ha establecido formalmente si los pesos de m48 son idénticos o distintos a los de m47 (los splits de a48 y a47 difieren). Esto no afecta a la integración actual ni es un requisito de la misma. |
+| Relación con m47 | Plugin independiente y autocontenido, con artefactos propios (no depende de los de m47). **Según el equipo de IA**, en la v1.3 los artefactos del 48 son los del Entregable 47 v2.0 (hashes abajo); en las v1.1/v1.2 eran pesos de un entrenamiento anterior. Esa identidad con el 47 viene declarada por el equipo y no se ha comprobado nosotros (los artefactos del plugin m47 no están en este repo). No afecta a la integración. |
 
 ## Artefactos
 
-Ubicación local: `artifacts/a48_dnsl_fallas_maquinaria_pasteurizado/` (en `.gitignore`; la subida a S3 **no se ha realizado**).
+Ubicación local: `artifacts/a48_dnsl_fallas_maquinaria_pasteurizado/` (en `.gitignore`).
 
-- `neurosymbolic_cnn.pth`, `scaler_cnn_dns.pkl`, `feature_columns.pkl`, `ts1_mean_train.pkl` (entregados por el equipo de IA).
-- `shap_background.npy` (50 ciclos de test ya escalados, 3,4 MB) + `shap_background_meta.json` (generado por nosotros; no se incluye el CSV original de 101 MB).
-- Estado: carga **PASS** (ver Scaler). Subida a S3: **pendiente, no ejecutada**.
+- Artefactos **v1.3** (MD5 verificados contra los que declara el equipo):
+  - `neurosymbolic_cnn.pth` `5b087a2c16777300521b08e7514fa0e8`
+  - `scaler_cnn_dns.pkl` `1149dc17cb04e243b7acc5b4cbacb980` — **regenerado por nosotros con scikit-learn 1.5.2** a partir del entregado (`ddae8685a8571db6502364a43c7f701a`, sklearn 1.6.1); ver Scaler
+  - `ts1_mean_train.pkl` `fb5a036109839ee9ffe3fc3e3ec70a5a`
+  - `feature_columns.pkl` `517503ee6313305c7ffec69321c92620` (sin cambios)
+- `shap_background.npy` (50 ciclos de test ya escalados con el scaler v1.3, 3,4 MB) + `shap_background_meta.json`: **regenerados con los artefactos v1.3** (generados por nosotros; no se incluye el CSV original de 101 MB).
+- Los artefactos de la v1.1 (pesos `f79fd471…`) quedan sustituidos localmente; hay copia fuera del repo.
+- Estado: carga **PASS** con warning de versión del scaler (ver Scaler). Subida a S3 de los artefactos v1.3: **realizada por el usuario el 2026-10-07** en `s3://xai/artifacts/fixed/a48_dnsl_fallas_maquinaria_pasteurizado/` (ver «Validación de cierre»).
 
 ## Entorno
 
@@ -59,7 +64,7 @@ Notas:
 |---|---|
 | `GET /health` | **PASS** — `status: ok`, `loaded: true` |
 | `GET /stats` | **PASS** — `m48-dnsl-fallas-maquinaria-pasteurizado`, v1.0.0, métricas de referencia del test del equipo |
-| `POST /predict` inline (CSV del ciclo 123, `apply_digital_twin=true`, `include_shap=true`) | **PASS** — `[2,0,0,0]`; SHAP FS1 0,2288 / FS1 0,3224 / TS2 0,2639 / TS2 0,3334 |
+| `POST /predict` inline (CSV del ciclo 123, `apply_digital_twin=true`, `include_shap=true`) | **PASS** (ejecución con artefactos v1.1 del 05/10) — `[2,0,0,0]`; SHAP FS1 0,2288 / FS1 0,3224 / TS2 0,2639 / TS2 0,3334. Con artefactos v1.3 el HTTP no se ha repetido: se comprobó el mismo plugin por llamada directa (ver Resultados XAI) |
 | `POST /predict` batch con XAI (`include_xai`, `n_samples=10`) | **PASS** — 20 ciclos, 7 CCP, 10 ciclos analizados |
 | `POST /predict` batch sin XAI | **PASS** — 20 ciclos, `xai: null` |
 | `POST /predict` inválido (`include_shap` sin `include_xai`) | **PASS** — HTTP 422 |
@@ -104,37 +109,34 @@ Orden de valores: [Fouling, Válvula, Bomba, Acumulador] (0 = Sano, 1 = Warning,
 | cycle_1730 | [0, 1, 1, 0] | [0, 1, 1, 0] | 0 | PASS |
 
 Tolerancia usada: **igualdad exacta de clase** (las salidas son clases discretas 0/1/2, por lo que no aplica una tolerancia porcentual). Referencia de rendimiento esperada de la memoria/artefactos: exact_match 0,9879 sobre 331 ciclos de test, con errores solo Sano→Warning en Bomba y Acumulador.
-Resultado: **20/20 casos dentro de tolerancia — PASS.**
+Resultado: **20/20 casos dentro de tolerancia — PASS.** Ejecutado con los artefactos v1.1 (2026-10-05) y **repetido con los artefactos v1.3 (2026-10-07, Python 3.12, scikit-learn 1.5.2, shap 0.52.0): 20/20 PASS**; las clases son las mismas y cambian solo las confianzas (la tabla de abajo es la de las clases, idéntica en ambas versiones).
 
 Limitaciones de esta muestra: 20 ciclos no son una validación estadística (con un exact_match de 0,988 se esperaría ≈0,2 fallos en 20 casos); verifica el cableado y el preprocesado, no sustituye las métricas de test del equipo. Los datos de entrada se extrajeron de `data/processed/hydraulic_10hz_raw.csv` (601 filas por ciclo, el modelo trunca a 600). **Sin gemelo digital los resultados no son válidos para datos UCI** (los golden requieren `apply_digital_twin=true`).
 
-## Resultados XAI (ciclo 123, Tabla 3 de la memoria)
+## Resultados XAI (artefactos v1.3)
 
-El ciclo 123 pertenece al split de validación, no al de test. Referencia: Tabla 3 de la memoria / `xai_report_cycle.csv` entregado.
+Referencia: ficheros `data/predictions/xai_report_cycle.csv`, `xai_report.csv` y `xai_report_shap.csv` de la **v1.3**, regenerados por el equipo con el modelo del Entregable 47 v2.0. Ejecutado con Python 3.12, scikit-learn 1.5.2, shap 0.52.0, `apply_digital_twin=true`.
 
 | Elemento | Resultado |
 |---|---|
-| Predicción por componente (Crítico, Sano, Sano, Sano) y confianza (0,9964 / 1,0000 / 1,0000 / 0,9995) | **PASS** — coincide con la referencia (4 decimales) |
-| Ventana Grad-CAM (s) e intensidad: 9,1–11,0 (0,8651), 8,6–10,7 (0,8946), 37,4–39,9 (0,8940), 9,1–11,0 (0,8790) | **PASS** — coincide |
-| Acción, urgencia, intervalo, riesgo (1,0 CRÍTICO; 0,0 NORMAL ×3) | **PASS** — coincide |
-| Grad-CAM sin SHAP (`include_shap=false`) | **PASS** — `sensor_mas_relevante = null`, `riesgo_incluye_shap = false`; riesgo de Fouling 0,9964 (sin bonus SHAP, distinto de 1,0 con SHAP por diseño) |
-| Análisis global CCP (batch 20 ciclos, con y sin SHAP) | **PASS** funcional (8 filas CCP; con SHAP 28 filas SHAP, 59–64 s en CPU). No existe referencia numérica reproducible para el global (la muestra y los datos difieren), por lo que solo se verificó estructura y ejecución |
+| **Local, ciclo 123** (validación, no test): predicción, confianza (0,9604 / 1,0000 / 0,9999 / 0,9890), ventana Grad-CAM (9,1–11,1 / 8,7–10,5 / 37,6–39,9 / 9,0–11,0), intensidad, acción, urgencia, intervalo, riesgo, sensor más relevante e importancia SHAP | **PASS** — las **13 columnas** de `xai_report_cycle.csv` coinciden (numéricas con tolerancia 1e-4) |
+| **Global, 50 ciclos de test** (331 ciclos de test como entrada, `n_samples=50`, `include_shap=true`) | **PASS** — los 50 `ciclos_analizados` coinciden; las 6 filas CCP (componente, sensor crítico, importancia, ventanas en muestras y segundos, intensidad, severidad) coinciden; las 28 importancias SHAP coinciden con diferencia máxima **0,0**. Tarda ≈10 min en CPU |
+| Grad-CAM sin SHAP (`include_shap=false`) | **PASS** — `sensor_mas_relevante = null`, `riesgo_incluye_shap = false`; riesgo calculado sin el bonus SHAP por diseño |
+| Verificación anterior con v1.1 (2026-10-05) | Ciclo 123 coincidía con las referencias de la v1.1; el análisis global **no** se pudo reproducir entonces (ver SHAP) |
 
 ## Resultados SHAP
 
-- **PASS (Python 3.12, shap 0.52.0, entorno de referencia):** el plugin da para el ciclo 123 FS1 0,2288, FS1 0,3224, TS2 0,2639, TS2 0,3334, **idéntico** al `xai_report_cycle.csv` y a la Tabla 3.
-- **Código original del equipo con shap 0.52.0** (ejecutado en un venv Python 3.12 auxiliar con pandas 2.3.3, porque el código original falla con pandas 3): da exactamente el mismo resultado que el plugin y que el CSV entregado.
-- **Con shap 0.42.0 (Python 3.11):** tanto el código original como el plugin dan Fouling VS1 0,355, Válvula PS3 0,571, Bomba PS3 0,352, Acumulador PS3 0,450. Con 0,42.0 el SHAP difiere. En el ciclo 123, predicción, confianza, ventana Grad-CAM y acción coinciden con la referencia en ambas versiones, porque no dependen de SHAP; el riesgo calculado con SHAP incorpora por diseño un bonus basado en SHAP, de modo que en general puede variar con la versión (en el ciclo 123 los niveles de riesgo coincidieron).
-- **Conclusión:** la discrepancia observada inicialmente se debía a la **versión de shap**, no a un error del port. El `xai_report_cycle.csv` entregado se generó con shap ≥ 0,51, aunque el `requirements.txt` del equipo indica `shap==0.42.0`. El port se considera fiel. **No hay ninguna discrepancia SHAP abierta atribuible al plugin**; lo que queda es documental (el requirements entregado por el equipo declara una versión de shap que no reproduce sus propios CSV, ver known issue 7).
-- Estabilidad: con shap 0.42.0 el top-sensor del ciclo 123 fue estable entre 5 semillas en Fouling, Válvula y Acumulador y varió en Bomba (PS3/FS1); no se repitió ese barrido con 0,52.0.
-- **KNOWN ISSUE (para confirmar con IA, no bloqueante):** qué versión exacta de shap usaron para generar los CSV, dado que su requirements dice 0.42.0.
-- Las Tablas 1 y 2 de la memoria (análisis global) siguen sin coincidir con el `xai_report.csv` entregado (p. ej. Fouling: memoria FS1 ventana 94–111; CSV TS2 ventanas 103–293 y 507–583). Con la explicación de la versión de shap solo se ha comprobado el caso local del ciclo 123; **no se ha reproducido el análisis global**, por lo que esta discrepancia de las Tablas 1/2 sigue **sin explicar** y pendiente de validar con el equipo de IA. Es una discrepancia documental entre la memoria y el CSV entregado; **no se atribuye a un fallo del plugin**, que reproduce el CSV en el único caso verificado (ciclo 123) y coincide con el código original del equipo.
+- **PASS (v1.3, shap 0.52.0):** el plugin reproduce exactamente el SHAP local (ciclo 123) y el global (50 ciclos) del equipo.
+- **Causa de la discrepancia inicial (resuelta, confirmada por el equipo de IA):** el `requirements.txt` de la v1.1 fijaba `shap==0.42.0` por error (entró en un merge del 09/06/2026; antes decía `shap>=0.42.0`). Los CSV de v1.1 y v1.2 se generaron con shap 0.51.0 y la v1.3 fija `shap==0.51.0`. El equipo confirma que 0.52.0 da salidas idénticas, y nosotros lo hemos comprobado con el plugin. Con shap 0.42.0 (probado por nosotros en la verificación inicial) el SHAP es distinto; por eso **no debe usarse 0.42.0** (el repo exige `shap>=0.51.0`).
+- Predicción, confianza, ventana Grad-CAM y acción no dependen de la versión de shap; el riesgo con SHAP incorpora un bonus basado en SHAP y puede variar con la versión.
+- **Tablas 1 y 2 de la memoria: RESUELTO.** Según el equipo, las de la v1.1 salieron de una ejecución con un fallo de muestreo (tomaba los 50 ciclos de menor Cycle_ID); la v1.2 lo corrigió con una muestra aleatoria con semilla 42 y la v1.3 regenera tablas, CSV y figuras. Con la v1.3 el análisis global del plugin coincide exactamente con el CSV (arriba). Ya no es un known issue.
+- Estabilidad (verificación inicial, v1.1, shap 0.42.0): el sensor top del ciclo 123 fue estable entre 5 semillas salvo en Bomba. No se repitió con v1.3.
 
 ## Scaler y carga de artefactos
 
-- **PASS** — `scaler_cnn_dns.pkl` carga con scikit-learn 1.5.2 (pin del repo), numpy 2.5.3 y pandas 3.0.6 sin errores ni avisos; `n_features_in_ = 28`. Su `_sklearn_version` interno es 1.5.2 (no 1.6.1 como figura en el requirements del equipo). scikit-learn 1.6.x no se ha probado.
-- **PASS** — `feature_columns.pkl` (28 columnas, orden esperado), `ts1_mean_train.pkl` (45,311), `neurosymbolic_cnn.pth` (36 tensores, `weights_only=True`).
-- **PASS** — `shap_background.npy` (50, 28, 600) float32 carga y se usa en el SHAP local.
+- **PASS — `scaler_cnn_dns.pkl` regenerado con scikit-learn 1.5.2 (decisión tomada el 2026-10-07).** El entregado en la v1.3 estaba serializado con 1.6.1 y el repo pinea 1.5.2 (`InconsistentVersionWarning`). Se cargó con 1.5.2 y se volvió a serializar con `joblib` bajo 1.5.2: `mean_`, `scale_`, `var_` y `n_samples_seen_` son idénticos (comparación exacta), el nuevo pickle carga **sin warning** (comprobado con `-W error::UserWarning`; el original sí lo emite) y tiene MD5 `1149dc17cb04e243b7acc5b4cbacb980` (el entregado: `ddae8685a8571db6502364a43c7f701a`; copia del original guardada fuera del repo). Con el scaler regenerado se repitieron **20/20 golden PASS** y las **13 columnas del ciclo 123 PASS**; el fondo SHAP no se regeneró porque los valores del scaler son idénticos, y el análisis global (10 min) no se repitió. `requirements.txt` sin cambios. **Hay que informar al equipo de IA** de que el artefacto desplegado difiere del entregado en la serialización (no en los valores).
+- **PASS** — `feature_columns.pkl` (28 columnas, orden esperado), `ts1_mean_train.pkl` (45,3110734), `neurosymbolic_cnn.pth` (state_dict, `weights_only=True`), `shap_background.npy` (50, 28, 600) float32.
+- Los `.pkl`/`.pth` v1.3 se han comprobado por MD5 frente a los hashes que declara el equipo.
 
 ## Reentrenamiento y `/train`
 
@@ -156,17 +158,17 @@ Se intentó validar los puntos pendientes sin modificar código, requirements ni
 
 | Validación | Estado | Evidencia |
 |---|---|---|
-| Artefactos en `s3://xai/artifacts/fixed/a48_dnsl_fallas_maquinaria_pasteurizado/` | **BLOCKED** | No hay CLI de AWS ni credenciales en el entorno, por lo que no se pudo listar el prefijo ni comparar nombres/tamaños. No se sabe si los artefactos están subidos; no se subió nada. |
-| Carga real de artefactos desde S3 | **NOT VERIFIED** | Depende del punto anterior. Análisis estático (no es prueba): `plugin.load()` llama a `ArtifactStore(ARTIFACT_FOLDER_NAME).download_all_if_needed()` solo si `STORAGE_BUCKET` está definido; esto lista `artifacts/fixed/<carpeta>/` en el bucket y descarga a `artifacts/<carpeta>/` los ficheros que falten o cuyo tamaño difiera, y después el plugin carga siempre desde ese directorio local. Como el directorio local ya contiene los 6 ficheros, una ejecución con S3 configurado **no demostraría el origen S3** salvo que se vacíe el directorio local antes. El prefijo descargado incluye `shap_background.npy` y `shap_background_meta.json` porque se baja todo el prefijo. Los artefactos permanecen en disco tras la carga (mismo patrón que m47). |
+| Artefactos en `s3://xai/artifacts/fixed/a48_dnsl_fallas_maquinaria_pasteurizado/` | **PASS** (nombres y tamaños; evidencia del usuario) | Los 6 ficheros esperados están en S3 con los mismos tamaños que los locales (v1.3, scaler regenerado). Evidencia aportada por el usuario (salida de `aws s3 ls/cp --endpoint-url https://s3.datagia-int.es` pegada el 2026-10-07, no ejecutada desde este equipo): antes de la subida el prefijo contenía los 6 ficheros de la v1.1 (05/10/2026; p. ej. `neurosymbolic_cnn.pth` 591482 B y `scaler_cnn_dns.pkl` 1975 B); se subieron los 6 ficheros de `artifacts/a48_dnsl_fallas_maquinaria_pasteurizado/` y el listado posterior (2026-10-07 15:43) muestra 300 / 592347 / 1815 / 3360128 / 585 / 117 bytes, iguales a los locales. Solo se comparan nombres y tamaños; no se comparó MD5/ETag. Desde este equipo sigue sin haber CLI ni credenciales, por lo que no lo hemos ejecutado nosotros. |
+| Carga real de artefactos desde S3 | **NOT VERIFIED** | Los artefactos ya están en S3, pero falta arrancar el plugin con `STORAGE_BUCKET` definido y `artifacts/a48_*` local vacío para demostrar la descarga. Análisis estático (no es prueba): `plugin.load()` llama a `ArtifactStore(ARTIFACT_FOLDER_NAME).download_all_if_needed()` solo si `STORAGE_BUCKET` está definido; esto lista `artifacts/fixed/<carpeta>/` en el bucket y descarga a `artifacts/<carpeta>/` los ficheros que falten o cuyo tamaño difiera, y después el plugin carga siempre desde ese directorio local. Como el directorio local ya contiene los 6 ficheros, una ejecución con S3 configurado **no demostraría el origen S3** salvo que se vacíe el directorio local antes. El prefijo descargado incluye `shap_background.npy` y `shap_background_meta.json` porque se baja todo el prefijo. Los artefactos permanecen en disco tras la carga (mismo patrón que m47). |
 | E2E plataforma/orquestador → m48 | **NOT VERIFIED** | Lo que sí está verificado (PASS, secciones anteriores): HTTP real contra `main.py` con el registro → router → use case → plugin m48 → XAI/SHAP → respuesta, y la propagación de `include_xai`, `include_shap`, `n_samples` y `apply_digital_twin` sin afectar a plugins con firma estándar. La plataforma real no está integrada con m48: una búsqueda de `m48-dnsl`/`m48_dnsl` en los repos hermanos `retech-lote2-xai-plataforma`, `retech-lote2-xai-explicabilidad` y `retech-lote2-xai-odd-detection` da **0 referencias** (las skills `front-integration`, `explainability-integration` y `odd-integration` no se han aplicado a m48), y además no hay S3 ni MLflow accesibles. |
 | `/train` contra MLflow real | **BLOCKED** | `MLFLOW_TRACKING_URI` no definido; el valor por defecto `http://mlflow.mlflow:5000` no resuelve desde este equipo. Sin cambios respecto a la verificación anterior (HTTP 500 por la subida). No se creó ningún run ni se comprobaron parámetros, métricas o artefactos en MLflow. |
 | Entrenamiento completo | **NOT VERIFIED** | No existe evidencia real de un entrenamiento completo: ni checkpoint final, ni métricas, ni run de MLflow, ni informe. Solo hay el smoke test de 21 ciclos y un entrenamiento interrumpido en la época ≈40 (log con épocas hasta la 40). No se extrapola nada de esos resultados. |
 | Docker / imagen real | **NOT VERIFIED** | Docker no está instalado; no se construyó ni arrancó ninguna imagen. Se mantiene como evidencia indirecta el venv Python 3.12 con los requirements del repo. El `Dockerfile` usa `python:3.12-slim` (revisado, no ejecutado). |
 | pip-audit | **KNOWN ISSUE** (sin cambios) | No se volvió a ejecutar. `setuptools==80.9.0` / `PYSEC-2026-3447` sigue siendo preexistente (fijado por el repo, no introducido por m48). `torch`/`torchvision` (builds CPU locales) siguen sin poder auditarse (**NOT VERIFIED**). |
-| SHAP | **PASS / KNOWN ISSUE** (sin cambios) | Con `shap 0.52.0` el plugin reproduce el CSV (ya verificado). La discrepancia con el `shap==0.42.0` del requirements del equipo sigue como KNOWN ISSUE documental. |
+| SHAP | **PASS** (actualizado 07/10) | Con `shap 0.52.0` el plugin reproduce el SHAP local y global de la v1.3. El pin `shap==0.42.0` de la v1.1 era un error del equipo, ya corregido en la v1.3 (`shap==0.51.0`). |
 
 **Qué se necesita para cerrar estos puntos** (no se ha hecho nada de esto):
-1. Un entorno con credenciales S3 (`STORAGE_BUCKET=xai`, `CUSTOM_S3_ENDPOINT`, claves, región) y el AWS CLI, para listar el prefijo, comparar tamaños y, tras la subida si falta algo, ejecutar el plugin con el directorio `artifacts/a48_*` vacío para demostrar la descarga.
+1. Un entorno con credenciales S3 (`STORAGE_BUCKET=xai`, `CUSTOM_S3_ENDPOINT`, claves, región) para ejecutar el plugin con el directorio `artifacts/a48_*` vacío y demostrar la descarga desde S3 (la subida ya está hecha).
 2. Un `MLFLOW_TRACKING_URI` accesible para `/train` real.
 3. Docker (o la imagen ya construida por el pipeline) para el arranque en el entorno real.
 4. La integración de m48 en plataforma/explicabilidad/ODD si se quiere el E2E completo.
@@ -188,30 +190,33 @@ Se intentó validar los puntos pendientes sin modificar código, requirements ni
 3. **KNOWN ISSUE — CVE `PYSEC-2026-3447` en `setuptools==80.9.0`**, versión fijada por el repo y no introducida por m48. **NOT VERIFIED** la auditoría de `torch`/`torchvision` (builds CPU locales).
 4. **KNOWN ISSUE — cobertura de m48 39 %** en pytest (`plugin.py` al 0 % por el uso de `FakePlugin`); la verificación del plugin real se hizo con scripts y HTTP/E2E, fuera de pytest. Sería recomendable llevar esas pruebas a tests de integración (decisión pendiente).
 5. **NOT VERIFIED — imagen Docker real y wheel de torch de producción** (se verificó un venv Python 3.12 con wheels CPU, no la imagen).
-6. **KNOWN ISSUE — Tablas 1/2 de la memoria** frente a `xai_report.csv` (análisis global): sin explicar y sin reproducir; pendiente con el equipo de IA. Igualmente la mención a una «v1.2» inexistente en la memoria v1.1.
-7. **KNOWN ISSUE — el requirements del equipo** indica `shap==0.42.0` pero los CSV se generaron con shap ≥ 0,51; confirmar versión con IA.
-8. **KNOWN ISSUE — el código original del equipo no funciona con pandas 3** (`KeyError: 'Cycle_ID'` en `feature_engineering`); el plugin no lo usa y funciona con pandas 3.0.6.
+6. **RESUELTO (v1.3) — Tablas 1/2, «v1.2» y riesgo_score:** explicados y corregidos por el equipo de IA; el análisis global del plugin reproduce los CSV de la v1.3 (ver Resultados XAI).
+7. **RESUELTO (v1.3) — `shap==0.42.0` del requirements v1.1:** error del equipo (merge del 09/06/2026); la v1.3 fija `shap==0.51.0` y el repo exige `shap>=0.51.0`. El plugin se ha verificado con 0.52.0.
+8. **RESUELTO (v1.3) — código original con pandas 3:** corregido por el equipo; el plugin no lo usa.
+8b. **RESUELTO — scikit-learn del scaler:** regenerado con 1.5.2 (sin warning, valores idénticos); ver Scaler. Informar al equipo de IA.
+8c. **KNOWN ISSUE — versiones del equipo frente al repo:** el equipo ejecuta en Python 3.12 con torch 2.5.1, numpy 2.2.6, pandas 2.2.3, scikit-learn 1.6.1 y shap 0.51.0; el repo resuelve torch 2.13, numpy 2.5.3, pandas 3.0.6, scikit-learn 1.5.2 y shap 0.52.0 (el plugin está verificado con estas últimas).
+8d. **Pendiente con IA:** el equipo pide el fichero golden del Entregable 47 (con los ciclos «20, 23, 210») para revisarlo, porque no reconocen ese listado; hay que enviárselo.
 9. **KNOWN ISSUE — datos de laboratorio UCI (aceite), no de leche real.** Las métricas son optimistas para producción; con datos UCI hay que aplicar `apply_digital_twin=true`, con datos de planta debe ser `false`. El valor por defecto de la plataforma es `APPLY_DIGITAL_TWIN` (por defecto `false`).
 10. **KNOWN ISSUE — coste de SHAP en CPU:** ≈5–8 s por ciclo en local y ≈60 s para 20 ciclos con SHAP global; por eso es opcional.
 11. **Limitaciones de la muestra golden:** 20 ciclos (ver arriba), todos del split de test; el golden XAI es un único ciclo (123, de validación).
-12. **Información (no bloqueante) — pesos de a48 vs. m47:** no se ha establecido formalmente si son idénticos o distintos. No afecta a la integración actual: m48 usa sus propios artefactos de forma autocontenida y no depende de los de m47.
-13. **BLOCKED / pendiente — artefactos en S3:** no se pudo comprobar si están subidos (sin AWS CLI ni credenciales en este equipo) y no se subió nada. La carga real desde S3 y la integración E2E con la plataforma están **NOT VERIFIED** (ver «Validación de cierre»).
+12. **Información (no bloqueante) — pesos de a48 vs. m47:** el equipo declara que en la v1.3 son los del Entregable 47 v2.0 (no comprobado por nosotros). No afecta a la integración: m48 usa sus propios artefactos de forma autocontenida y no depende de los de m47.
+13. **Artefactos en S3: subidos (PASS por nombres y tamaños, evidencia del usuario).** Pendiente: la **carga real desde S3** y la integración E2E con la plataforma (**NOT VERIFIED**, ver «Validación de cierre»).
 
 ## Resumen de resultados
 
 | Verificación | Estado |
 |---|---|
-| Golden (20 casos) | **PASS** |
-| XAI ciclo 123 (predicción, confianza, ventana, riesgo, acción) | **PASS** |
-| SHAP ciclo 123 con shap 0.52.0 (plugin = código original = CSV del equipo) | **PASS** |
-| Análisis global CCP (estructura y ejecución) | **PASS** |
-| Tablas 1/2 de la memoria vs `xai_report.csv` global | **KNOWN ISSUE** |
-| pytest 556/556 | **PASS** |
+| Golden (20 casos), v1.1 y v1.3 | **PASS** |
+| XAI local ciclo 123 (13 columnas, v1.3) | **PASS** |
+| SHAP local y global con shap 0.52.0 (plugin = CSV v1.3 del equipo) | **PASS** |
+| Análisis global CCP + SHAP, 50 ciclos de test (6 filas CCP y 28 SHAP idénticas a la v1.3) | **PASS** |
+| Tablas 1/2 de la memoria vs `xai_report.csv` global | **RESUELTO** (v1.3) |
+| pytest 556/556 (artefactos v1.1; no repetido el suite completo con v1.3) y 15/15 tests de m48 repetidos con v1.3 | **PASS** |
 | flake8 (plugin) / pylint 8,14 | **PASS** |
 | Cobertura m48 (39 %) | **KNOWN ISSUE** |
 | HTTP: health, stats, predict inline/batch/XAI, 422 | **PASS** |
 | Cambio compartido en `predict_model_use_case.py` | **PASS** |
-| Carga de artefactos y scaler (sklearn 1.5.2) | **PASS** |
+| Carga de artefactos v1.3 y scaler regenerado con sklearn 1.5.2 (sin warning; golden 20/20 y ciclo 123 repetidos) | **PASS** |
 | pip-audit (setuptools preexistente) | **KNOWN ISSUE** |
 | pip-audit torch/torchvision | **NOT VERIFIED** |
 | `/train` con MLflow real | **BLOCKED** |
@@ -219,18 +224,18 @@ Se intentó validar los puntos pendientes sin modificar código, requirements ni
 | Smoke test de reentrenamiento (21 ciclos) | **PASS** funcional, sin valor estadístico |
 | Reentrenamiento completo (300 épocas) | **NOT VERIFIED** |
 | Imagen Docker real y wheel de torch de producción | **NOT VERIFIED** |
-| Artefactos presentes en S3 (`s3://xai/artifacts/fixed/a48_...`) | **BLOCKED** (sin CLI ni credenciales) |
+| Artefactos presentes en S3 (`s3://xai/artifacts/fixed/a48_...`) | **PASS** (6 ficheros, tamaños iguales a los locales; evidencia del usuario, sin MD5) |
 | Carga real de artefactos desde S3 | **NOT VERIFIED** |
 | E2E plataforma/orquestador real → m48 (m48 no está integrado en esos repos) | **NOT VERIFIED** |
 | CVE preexistente `setuptools==80.9.0` (fijado por el repo) | **KNOWN ISSUE** |
-| Requirements del equipo (`shap==0.42.0`) vs versión necesaria para reproducir sus CSV (`shap>=0.51`) | **KNOWN ISSUE** (documental, pendiente con IA) |
-| Código original del equipo con pandas 3 | **KNOWN ISSUE** (no afecta al plugin) |
+| Requirements del equipo (`shap==0.42.0` en v1.1) | **RESUELTO** (v1.3 fija 0.51.0) |
+| Código original del equipo con pandas 3 | **RESUELTO** (v1.3) |
 | Datos UCI/laboratorio y coste de SHAP en CPU | **KNOWN ISSUE** |
 
-**FAIL: ninguno.** Información no bloqueante: identidad de pesos m47/m48 no establecida formalmente (known issue 12).
+**FAIL: ninguno.** Información no bloqueante: identidad de pesos m47/m48 declarada por el equipo, no comprobada por nosotros (known issue 12).
 
 ## Estado final
 
 **REQUIERE REVISIÓN — ver detalle arriba.**
 
-El plugin es correcto en lo verificado (golden, XAI, SHAP, wiring, tests, HTTP) y no hay ninguna verificación fallida. **No está cerrada la integración**: quedan abiertos `/train` con MLflow real y los artefactos en S3 (BLOCKED por falta de acceso en este equipo), y la carga real desde S3, el E2E con la plataforma, el reentrenamiento completo y la imagen Docker/wheel de producción (NOT VERIFIED). Además hay discrepancias documentales pendientes con el equipo de IA (Tablas 1/2, versión de shap). No se ha subido ningún artefacto a S3.
+El plugin es correcto en lo verificado con los artefactos **v1.3** (golden, XAI local y global, SHAP, wiring, HTTP) y no hay ninguna verificación fallida. Las discrepancias con el equipo de IA de la verificación inicial (Tablas 1/2, versión de shap, pandas 3, pesos) están resueltas en la v1.3. **No está cerrada la integración**: los artefactos v1.3 ya están subidos a S3 (6 ficheros, tamaños verificados por el usuario); queda abierto `/train` con MLflow real (BLOCKED por falta de acceso), y la carga real desde S3, el E2E con la plataforma, el reentrenamiento completo y la imagen Docker/wheel de producción (NOT VERIFIED). El scaler se regeneró con scikit-learn 1.5.2. La subida a S3 la realizó el usuario, no este equipo de verificación.
