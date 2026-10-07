@@ -263,6 +263,7 @@ from app.plugins.ml26_wine_sulfite_gru_pso_forecast.predict_dto import (
 from app.plugins.ml26_wine_sulfite_gru_pso_forecast.train_dto import (
     TrainRequest as Ml26_TrainReq,
     TrainResponse as Ml26_TrainResp,
+)
 from app.plugins.ml15_wine_ipi_price_forecast.plugin import Ml15WineIpiPriceForecastPlugin
 from app.plugins.ml15_wine_ipi_price_forecast.predict_dto import (
     PredictRequest as Ml15_Request,

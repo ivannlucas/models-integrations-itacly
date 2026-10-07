@@ -190,16 +190,6 @@ from app.plugins.ml46_dairy_fouling_clog_detection.train_dto import (
     TrainRequest as Ml46Dairy_TrainReq,
     TrainResponse as Ml46DairyTrainResp,
 )
-from app.plugins.ml41_meat_curing_machinery_acoustic_anomaly.predict_dto import (
-    PredictBatchResponse as Ml41BatchResp,
-    PredictInlineResponse as Ml41InlineResp,
-    PredictRequest as Ml41_Request,
-    PredictResponse as Ml41_Response,
-)
-from app.plugins.ml41_meat_curing_machinery_acoustic_anomaly.train_dto import (
-    TrainRequest as Ml41_TrainReq,
-    TrainResponse as Ml41TrainResp,
-)
 from app.plugins.m47_dnsl_fallas_maquinaria_pasteurizado.predict_dto import (
     PredictBatchResponse as M47BatchResp,
     PredictInlineResponse as M47InlineResp,
@@ -1595,40 +1585,6 @@ def _ml15_batch(plugin: FakePlugin, *, data_path: str) -> Ml15BatchResp:
     )
 
 
-def _ml41_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> Ml41InlineResp:
-    """Fake inline prediction response for the ml41 acoustic anomaly model."""
-    return Ml41InlineResp(
-        model_id="ml41-meat-curing-machinery-acoustic-anomaly",
-        machine=features.get("machine", "fan"),
-        machine_id=features.get("machine_id", "id_00"),
-        snr=features.get("snr", "0_dB"),
-        mse_score=0.7368,
-        maha_score=6.1289,
-        predicted_label=0,
-        threshold_used=threshold if threshold is not None else 6.6067,
-    )
-
-
-def _ml41_batch(plugin: FakePlugin, *, data_path: str) -> Ml41BatchResp:
-    """Fake batch prediction response for the ml41 acoustic anomaly model."""
-    return Ml41BatchResp(
-        model_id="ml41-meat-curing-machinery-acoustic-anomaly",
-        predictions=[
-            {
-                "filename": "00000000.wav",
-                "machine": "fan",
-                "machine_id": "id_00",
-                "snr": "0_dB",
-                "mse_score": 0.6699,
-                "maha_score": 15.2161,
-                "predicted_label": 1,
-                "threshold_used": 6.6067,
-            }
-        ],
-        output_path=None,
-    )
-
-
 def _ml15_train(plugin: FakePlugin, *, data_path: str) -> Ml15TrainResp:
     """Fake retraining response for the ml15 national phytosanitary IPI (Ridge) forecast model."""
     return Ml15TrainResp(
@@ -1640,24 +1596,6 @@ def _ml15_train(plugin: FakePlugin, *, data_path: str) -> Ml15TrainResp:
         mape_pct=0.7377,
         r2=0.1751,
         mda_pct=100.0,
-        upload_warning=None,
-    )
-
-
-def _ml41_train(plugin: FakePlugin, *, data_path: str) -> Ml41TrainResp:
-    """Fake training response for the ml41 acoustic anomaly model."""
-    return Ml41TrainResp(
-        detail="Entrenamiento completado para 1 combinación(es)",
-        per_combination=[
-            {
-                "machine": "fan",
-                "machine_id": "id_00",
-                "snr": "0_dB",
-                "best_val_loss": 0.74,
-                "n_train": 40,
-                "n_val": 10,
-            }
-        ],
         upload_warning=None,
     )
 
