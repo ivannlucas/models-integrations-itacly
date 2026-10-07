@@ -11,6 +11,8 @@ silently discarded, never overwrites the fixed S3 artifact).
 """
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.application.dto.train_dto import MlflowRunId
+
 
 class TrainRequest(BaseModel):
     """Request body for retraining the SlowFast cow-behaviour classifier."""
@@ -29,7 +31,7 @@ class TrainRequest(BaseModel):
             "por frame). Admite s3://<bucket>/<key>.zip."
         ),
     )
-    mlflow_run_id: str = Field(
+    mlflow_run_id: MlflowRunId = Field(
         ...,
         description=(
             "MLflow run ID donde se persiste el clasificador reentrenado. Obligatorio: "

@@ -23,7 +23,7 @@ from torchvision import datasets, models, transforms
 from app.application.dto.stats_dto import InputField, OutputField, RuntimeStats, StatsResponse
 from app.application.dto.train_dto import TrainResponse
 from app.domain.ports.model_plugin_port import ModelPluginPort
-from app.domain.services.exceptions import InvalidImageError, ModelNotLoadedError
+from app.domain.services.exceptions import InvalidImageError, ModelNotLoadedError, ModelPersistenceError
 from app.domain.services.mlflow_tracker import BaseMLflowTracker
 from app.infrastructure.artifact_store import ArtifactStore
 from app.plugins.ml10_dairy_disease_vector_detection.model_loader import load_detector_and_classifier, safe_device
@@ -582,7 +582,7 @@ class Ml10DairyDiseaseVectorDetectionPlugin(ModelPluginPort):
             # mlflow_run_id); the served base classifier and its local artifacts are never replaced.
             upload_warning = None
             if not mlflow_run_id:
-                upload_warning = "Sin run de MLflow: el modelo reentrenado no se ha guardado."
+                raise ModelPersistenceError("Sin run de MLflow: el modelo reentrenado no se ha guardado.")
             if mlflow_run_id:
                 try:
                     # Save to a temporary dir for MLflow upload (matching artifact_path="classifier")
@@ -594,7 +594,7 @@ class Ml10DairyDiseaseVectorDetectionPlugin(ModelPluginPort):
                     shutil.rmtree(mlflow_tmp, ignore_errors=True)
                 except Exception as exc:
                     logger.error("MLflow artifact upload failed: %s", exc)
-                    upload_warning = f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}"
+                    raise ModelPersistenceError(f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}") from exc
 
             # ── Log final metrics to MLflow ─────────────────────────────────
             if mlflow_run_id:

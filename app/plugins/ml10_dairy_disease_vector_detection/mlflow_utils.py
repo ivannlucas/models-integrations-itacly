@@ -9,7 +9,7 @@ import torch
 from torch import nn
 from torchvision import models
 
-from app.domain.services.mlflow_tracker import BaseMLflowTracker
+from app.domain.services.mlflow_tracker import BaseMLflowTracker, require_user_model
 from app.plugins.ml10_dairy_disease_vector_detection.constants import (
     CLASSIFIER_FILENAME,
     CLASS_NAMES_FILENAME,
@@ -18,6 +18,7 @@ from app.plugins.ml10_dairy_disease_vector_detection.constants import (
 logger = logging.getLogger(__name__)
 
 
+@require_user_model
 def download_user_classifier_from_mlflow(run_id: str):
     """Download a user-trained MobileNetV3 classifier from MLflow.
 

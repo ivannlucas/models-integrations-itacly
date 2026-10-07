@@ -199,6 +199,11 @@ from app.plugins.ml41_meat_curing_machinery_acoustic_anomaly.train_dto import (
     TrainRequest as Ml41_TrainReq,
     TrainResponse as Ml41TrainResp,
 )
+from app.plugins.ml47_dairy_dnsl_pasteurization_fault_detection.train_dto import (
+    TrainRequest as Ml47Dairy_TrainReq,
+    TrainResponse as Ml47DairyTrainResp,
+)
+from app.plugins.ml10_dairy_disease_vector_detection.train_dto import TrainRequest as Ml10Dairy_TrainReq
 from app.plugins.ml47_dairy_dnsl_pasteurization_fault_detection.predict_dto import (
     PredictBatchResponse as Ml47DairyBatchResp,
     PredictInlineResponse as Ml47DairyInlineResp,
@@ -1070,6 +1075,16 @@ def _ml47_dairy_inline(plugin: FakePlugin, *, features: dict, model_key, thresho
     )
 
 
+def _ml47_dairy_train(plugin: FakePlugin, *, data_path: str) -> Ml47DairyTrainResp:
+    """Fake calibration response for ml47 (metrics of the real fine-tune on delivered data)."""
+    return Ml47DairyTrainResp(
+        detail="Calibración a planta de las 4 cabezas del modelo servido (procedimiento fine_tune del equipo de IA).",
+        mode="fine_tune", exact_match=0.96, accuracy=0.99, precision_macro=0.9792,
+        recall_macro=0.9929, f1_macro=0.9852, n_train=231, n_val=50, n_test=50, epochs_run=14,
+        training_time_s=5.1, mlflow_run_id="run-test-123", upload_warning=None,
+    )
+
+
 def _ml47_dairy_batch(plugin: FakePlugin, *, data_path: str) -> Ml47DairyBatchResp:
     """Fake batch response for the m47 DNSL model."""
     return Ml47DairyBatchResp(
@@ -1422,7 +1437,7 @@ def _ml9_cereals_train(plugin: FakePlugin, *, data_path: str) -> Ml9CerealsTrain
         precision_macro=0.9422, recall_macro=0.9452, log_loss=0.1830,
         validation_f1_macro=0.9543,
         baseline_f1_macro=0.9436,
-        artifact_path="artifacts/ml9_cereals_infestation_sequence_classifier/user_final_winner.pt",
+        artifact_path="runs:/run-test-123/model/user_final_winner.pt",
         upload_warning=None,
     )
 
@@ -1679,6 +1694,7 @@ TRAIN_FACTORIES: dict[str, Callable] = {
     "ml35-dairy-ann-cleaning-cost": _ml35_dairy_train,
     "ml34-dairy-pasteurization-energy-ga": _ml34_dairy_train,
     "ml10-dairy-disease-vector-detection": _ml10_dairy_train,
+    "ml47-dairy-dnsl-pasteurization-fault-detection": _ml47_dairy_train,
     "ml8-cereals-img-anomaly-detector": _ml8_cereals_train,
     "ml30-meat-traceability-detection": _ml30_trace_train,
     "ml7-cereals-grain-pest-detection": _ml7_grain_train,
@@ -1730,6 +1746,8 @@ TEST_REGISTRY: list[ModelEntry] = [
         predict_request_type=Ml10Dairy_Request,
         predict_response_type=Ml10Dairy_Response,
         extra_predict_exceptions=(),
+        train_request_type=Ml10Dairy_TrainReq,
+        train_response_type=BaseTrainResponse,
     ),
     ModelEntry(
         model_id="ml8-cereals-img-anomaly-detector",
@@ -1878,6 +1896,8 @@ TEST_REGISTRY: list[ModelEntry] = [
         predict_request_type=Ml47Dairy_Request,
         predict_response_type=Ml47Dairy_Response,
         extra_predict_exceptions=(),
+        train_request_type=Ml47Dairy_TrainReq,
+        train_response_type=Ml47DairyTrainResp,
     ),
     ModelEntry(
         model_id="ml40-meat-refrigeration-aeration-fault-diagnosis",

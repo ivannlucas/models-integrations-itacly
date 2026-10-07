@@ -1,6 +1,8 @@
 """Train DTOs for ml23 — GRU dairy price forecast refit."""
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.application.dto.train_dto import MlflowRunId
+
 
 class TrainRequest(BaseModel):
     """Retrain request: CSV with the same contract as data/processed/
@@ -17,7 +19,7 @@ class TrainRequest(BaseModel):
             "data/processed/dataset_forecast_ready.csv del equipo de IA."
         ),
     )
-    mlflow_run_id: str = Field(
+    mlflow_run_id: MlflowRunId = Field(
         ...,
         description=(
             "Run de MLflow donde se persiste el GRU reentrenado. Obligatorio: el artefacto "

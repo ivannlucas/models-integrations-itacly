@@ -2,6 +2,23 @@
 
 > **[RENOMBRADO 2026-10-06]** Nomenclatura alineada con el estándar `mlNN_<sector>_<desc>` del resto de plugins: `m47_dnsl_fallas_maquinaria_pasteurizado / m47-dnsl-fallas-maquinaria-pasteurizado` → `ml47_dairy_dnsl_pasteurization_fault_detection / ml47-dairy-dnsl-pasteurization-fault-detection`. La carpeta de artefactos (local y en S3) pasa de `artifacts/a47_dnsl_fallas_maquinaria_pasteurizado/` a `artifacts/ml47_dairy_dnsl_pasteurization_fault_detection/`. Las referencias a los nombres antiguos en el texto de abajo son históricas y corresponden a la fecha de cada ciclo.
 
+> **[CORREGIDO 2026-10-07] /train.** El entrenamiento del plugin no era utilizable: asignaba a todos
+> los ciclos la etiqueta del primero, calculaba las medias móviles mezclando ciclos, usaba
+> hiperparámetros inventados, un split sin semilla ni test y métricas falsas (`f1_macro = accuracy`).
+> Se ha reescrito `trainer.py` como port de los dos procedimientos entregados (`mode`: `fine_tune` por
+> defecto, `full`). Verificación con datos reales del entregable:
+>
+> | Comprobación | Resultado |
+> |---|---|
+> | Split 70/15/15 por Cycle_ID vs `cycle_splits.json` | Idéntico (incluido el orden) |
+> | 21 features derivadas vs `test_split.csv` (198.931 filas) | Diff. máx. 2,8e-7 |
+> | Modelo base evaluado con el código nuevo (331 ciclos test) | Exact 0.9879 · Acc 0.9970 · P 0.9969 · R 0.9972 · F1 0.9970 (= memoria) |
+> | `full` real (GPU, `hydraulic_10hz_raw.csv`, gemelo activo) | 1543/3086/331/331 ciclos · Exact 0.9940 · Acc 0.9985 · F1 0.9986 · 78 épocas, 80 s |
+> | `fine_tune` real (`val_split.csv`, 231/50/50) | Exact 0.94 → 0.96 en sus 50 ciclos de test · backbone y modelo base intactos · 5 s |
+>
+> Tests: `tests/unit/test_ml47_training.py` (código real del trainer) y endpoints `/train` en
+> `test_ml47_dairy_dnsl_pasteurization_fault_detection.py`.
+
 **Fecha:** 2026-07-16
 **Plugin:** `app/plugins/m47_dnsl_fallas_maquinaria_pasteurizado/`
 **Manifest:** `inbox/a47/manifest.yaml` (15 golden_cases)

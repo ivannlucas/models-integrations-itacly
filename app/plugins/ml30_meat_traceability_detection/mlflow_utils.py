@@ -7,7 +7,7 @@ import pickle
 
 import torch
 
-from app.domain.services.mlflow_tracker import BaseMLflowTracker
+from app.domain.services.mlflow_tracker import BaseMLflowTracker, require_user_model
 from app.plugins.ml30_meat_traceability_detection.constants import (
     MODEL_FILENAME,
     PREPROCESSOR_FILENAME,
@@ -16,6 +16,7 @@ from app.plugins.ml30_meat_traceability_detection.constants import (
 logger = logging.getLogger(__name__)
 
 
+@require_user_model
 def download_user_model_from_mlflow(run_id: str):
     """Download user-trained MLP + preprocessor from MLflow.
 

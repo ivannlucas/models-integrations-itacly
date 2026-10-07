@@ -8,7 +8,7 @@ import tempfile
 
 import joblib
 
-from app.domain.services.mlflow_tracker import BaseMLflowTracker
+from app.domain.services.mlflow_tracker import BaseMLflowTracker, require_user_model
 from app.plugins.ml15_wine_ipi_price_forecast.constants import MODEL_FILENAME
 
 logger = logging.getLogger(__name__)
@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 _REQUIRED_PAYLOAD_KEYS = ("model", "feature_columns", "target_column", "anchor_column")
 
 
+@require_user_model
 def download_user_model_from_mlflow(run_id: str):
     """Download a user-retrained artifact payload from MLflow.
 

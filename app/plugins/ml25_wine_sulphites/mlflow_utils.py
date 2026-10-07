@@ -6,7 +6,7 @@ import logging
 import os
 import pickle
 
-from app.domain.services.mlflow_tracker import BaseMLflowTracker
+from app.domain.services.mlflow_tracker import BaseMLflowTracker, require_user_model
 from app.plugins.ml25_wine_sulphites.constants import (
     BOUND_RF_MODEL_FILENAME,
     METADATA_FILENAME,
@@ -16,6 +16,7 @@ from app.plugins.ml25_wine_sulphites.constants import (
 logger = logging.getLogger(__name__)
 
 
+@require_user_model
 def download_user_predictor_from_mlflow(run_id: str):
     """Download user-trained RandomForest models from MLflow.
 

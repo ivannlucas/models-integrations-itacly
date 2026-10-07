@@ -8,6 +8,8 @@ path, exactly like every other plugin in this repo with real training support
 """
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.application.dto.train_dto import MlflowRunId
+
 
 class TrainRequest(BaseModel):
     """Train request: a ZIP with one subfolder per class, each full of leaf images."""
@@ -22,7 +24,7 @@ class TrainRequest(BaseModel):
             "data/processed/Images_256 en el código de entrenamiento original."
         ),
     )
-    mlflow_run_id: str
+    mlflow_run_id: MlflowRunId
 
 
 class TrainResponse(BaseModel):

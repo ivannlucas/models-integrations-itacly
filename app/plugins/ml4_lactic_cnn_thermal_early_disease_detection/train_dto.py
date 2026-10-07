@@ -7,6 +7,8 @@ inbox/a04/manifest.yaml).
 """
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.application.dto.train_dto import MlflowRunId
+
 
 class TrainRequest(BaseModel):
     """Train request: a dataset with the same layout as the original TIDS dataset."""
@@ -21,7 +23,7 @@ class TrainRequest(BaseModel):
             "dataset TIDS original (src/data/dataset.py)."
         ),
     )
-    mlflow_run_id: str = Field(
+    mlflow_run_id: MlflowRunId = Field(
         ...,
         description=(
             "Run de MLflow al que se persiste el reentrenamiento (obligatorio: un retrain "

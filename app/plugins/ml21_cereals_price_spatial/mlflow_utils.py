@@ -7,7 +7,7 @@ import os
 
 import joblib
 
-from app.domain.services.mlflow_tracker import BaseMLflowTracker
+from app.domain.services.mlflow_tracker import BaseMLflowTracker, require_user_model
 from app.plugins.ml21_cereals_price_spatial.constants import (
     METADATA_FILENAME,
     MODEL_H1_CLF,
@@ -21,6 +21,7 @@ from app.plugins.ml21_cereals_price_spatial.constants import (
 logger = logging.getLogger(__name__)
 
 
+@require_user_model
 def download_user_model_from_mlflow(run_id: str):
     """Download user-trained cereal models from MLflow.
 

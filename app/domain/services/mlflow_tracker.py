@@ -1,9 +1,34 @@
 from __future__ import annotations
 
+import functools
 import logging
 import os
+from typing import Any, Callable
+
+from app.domain.services.exceptions import UserModelUnavailableError
 
 logger = logging.getLogger(__name__)
+
+
+def require_user_model(download: Callable[..., Any]) -> Callable[..., Any]:
+    """Make a plugin's ``download_user_*_from_mlflow(run_id, ...)`` fail loudly.
+
+    The wrapped helpers return ``None`` when the run has no complete model or MLflow is
+    unreachable. Returning that ``None`` let callers fall back silently to the base model,
+    so a user asking for their retrained model got the base one's predictions. With this
+    decorator a ``None`` for a non-empty ``run_id`` raises ``UserModelUnavailableError``.
+    """
+    @functools.wraps(download)
+    def wrapper(run_id: str, *args: Any, **kwargs: Any) -> Any:
+        result = download(run_id, *args, **kwargs)
+        if result is None and run_id:
+            raise UserModelUnavailableError(
+                f"No se ha podido cargar el modelo reentrenado del run de MLflow '{run_id}': "
+                "el run no contiene un modelo completo o MLflow no es accesible. No se usa el "
+                "modelo base en su lugar."
+            )
+        return result
+    return wrapper
 
 
 class BaseMLflowTracker:

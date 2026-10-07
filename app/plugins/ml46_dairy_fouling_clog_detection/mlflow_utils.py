@@ -7,7 +7,7 @@ from dataclasses import fields
 
 import torch
 
-from app.domain.services.mlflow_tracker import BaseMLflowTracker
+from app.domain.services.mlflow_tracker import BaseMLflowTracker, require_user_model
 from app.plugins.ml46_dairy_fouling_clog_detection._vendor.common import FeatureArtifacts, TrainConfig
 from app.plugins.ml46_dairy_fouling_clog_detection.constants import (
     FEATURE_ARTIFACTS_FILENAME,
@@ -20,6 +20,7 @@ from app.plugins.ml46_dairy_fouling_clog_detection.model_loader import build_mod
 logger = logging.getLogger(__name__)
 
 
+@require_user_model
 def download_user_model_from_mlflow(run_id: str):
     """Download a user fine-tuned TCN + feature_artifacts + training_config + policy from MLflow.
 

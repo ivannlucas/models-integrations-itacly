@@ -8,7 +8,7 @@ import pickle
 import numpy as np
 import torch
 
-from app.domain.services.mlflow_tracker import BaseMLflowTracker
+from app.domain.services.mlflow_tracker import BaseMLflowTracker, require_user_model
 from app.plugins.ml43_cereals_dnsl_anomaly_fault_detection.constants import (
     ARTIFACT_FOLDER_NAME,
     MODEL_FILENAME,
@@ -21,6 +21,7 @@ from app.plugins.ml43_cereals_dnsl_anomaly_fault_detection.model_loader import b
 logger = logging.getLogger(__name__)
 
 
+@require_user_model
 def download_user_model_from_mlflow(run_id: str):
     """Download a user-trained model bundle from MLflow.
 

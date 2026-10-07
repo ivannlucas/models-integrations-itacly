@@ -141,6 +141,10 @@ constraints:
 training:
   supported: true
   threshold_persistence: >
+    [CORREGIDO 2026-10-07] train() ya no escribe en la carpeta local de artefactos: el
+    fine-tuning parte siempre del checkpoint base fijo y el resultado (best.pth con threshold
+    + maha_stats.npz) se guarda solo en el run de MLflow. Sin mlflow_run_id, predict usa el
+    checkpoint base con su umbral original. Texto histórico a continuación.
     El plugin guarda threshold en best.pth tanto localmente como en los artefactos
     enviados a MLflow. predict_inline y predict_batch usan el umbral del checkpoint
     seleccionado. Un override explícito en inline o batch tiene prioridad. Los checkpoints

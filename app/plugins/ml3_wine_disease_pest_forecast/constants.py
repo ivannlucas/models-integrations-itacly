@@ -10,12 +10,6 @@ MODEL_FILENAMES = ["M1_LSTM.keras", "M2_CNN.keras", "M3_BiGRU.keras"]
 SCALER_FILENAME = "scaler.pkl"
 LABEL_ENCODER_FILENAME = "label_encoder.pkl"
 
-# User-retrained artifacts are persisted under these names locally and uploaded to
-# MLflow with the canonical names — the fixed S3 artifacts are never overwritten.
-USER_MODEL_FILENAMES = ["user_M1_LSTM.keras", "user_M2_CNN.keras", "user_M3_BiGRU.keras"]
-USER_SCALER_FILENAME = "user_scaler.pkl"
-USER_LABEL_ENCODER_FILENAME = "user_label_encoder.pkl"
-
 FRAMEWORK = "tensorflow/keras/pandas/numpy/scikit-learn"
 VERSION = "1.0.0"
 

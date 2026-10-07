@@ -17,13 +17,14 @@ import tempfile
 import numpy as np
 import torch
 
-from app.domain.services.mlflow_tracker import BaseMLflowTracker
+from app.domain.services.mlflow_tracker import BaseMLflowTracker, require_user_model
 from app.plugins.ml23_lactic_market_price_forecast.constants import ARTIFACT_FOLDER_NAME
 from app.plugins.ml23_lactic_market_price_forecast.rnn_models import GRUModel
 
 logger = logging.getLogger(__name__)
 
 
+@require_user_model
 def download_user_model_from_mlflow(run_id: str):
     """Download a user-retrained GRU bundle (model + scaler + manifest) from MLflow.
 

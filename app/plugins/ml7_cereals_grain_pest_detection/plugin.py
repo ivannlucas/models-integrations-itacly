@@ -19,7 +19,7 @@ import yaml
 
 from app.application.dto.stats_dto import InputField, OutputField, RuntimeStats, StatsResponse
 from app.domain.ports.model_plugin_port import ModelPluginPort
-from app.domain.services.exceptions import InvalidImageError, ModelNotLoadedError
+from app.domain.services.exceptions import InvalidImageError, ModelNotLoadedError, ModelPersistenceError
 from app.domain.services.mlflow_tracker import BaseMLflowTracker
 from app.infrastructure.artifact_store import local_file_path
 from app.plugins.ml7_cereals_grain_pest_detection.constants import (
@@ -143,12 +143,6 @@ class Ml7CerealsGrainPestDetectionPlugin(ModelPluginPort):
             return self._require_model(), None
         logger.info("Using user-trained model from MLflow run_id=%s", mlflow_run_id)
         loaded = download_user_model_from_mlflow(mlflow_run_id)
-        if loaded is None:
-            logger.warning(
-                "MLflow download failed for run_id=%s, falling back to standard model",
-                mlflow_run_id,
-            )
-            return self._require_model(), None
         model, temp_dir = loaded
         return model, temp_dir
 
@@ -302,7 +296,7 @@ class Ml7CerealsGrainPestDetectionPlugin(ModelPluginPort):
             shutil.copy2(best_weights, upload_dir / MODEL_FILENAME)
 
             if not mlflow_run_id:
-                upload_warning = "Sin run de MLflow: el modelo reentrenado no se ha guardado."
+                raise ModelPersistenceError("Sin run de MLflow: el modelo reentrenado no se ha guardado.")
             else:
                 try:
                     upload_artifacts_to_mlflow(
@@ -315,9 +309,7 @@ class Ml7CerealsGrainPestDetectionPlugin(ModelPluginPort):
                     )
                 except Exception as exc:  # pylint: disable=broad-exception-caught
                     logger.error("MLflow artifact upload failed: %s", exc)
-                    upload_warning = (
-                        f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}"
-                    )
+                    raise ModelPersistenceError(f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}") from exc
 
             logger.info(
                 "train() done — map50=%.4f map50_95=%.4f precision=%.4f recall=%.4f "

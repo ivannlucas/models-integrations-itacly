@@ -21,7 +21,11 @@ from torch.utils.data import DataLoader
 
 from app.application.dto.stats_dto import InputField, OutputField, RuntimeStats, StatsResponse
 from app.domain.ports.model_plugin_port import ModelPluginPort
-from app.domain.services.exceptions import InsufficientTelemetryHistoryError, ModelNotLoadedError
+from app.domain.services.exceptions import (
+    InsufficientTelemetryHistoryError,
+    ModelNotLoadedError,
+    ModelPersistenceError,
+)
 from app.domain.services.mlflow_tracker import BaseMLflowTracker
 from app.infrastructure.artifact_store import local_file_path
 from app.plugins.ml46_dairy_fouling_clog_detection import model_loader
@@ -156,23 +160,31 @@ class Ml46DairyFoulingClogDetectionPlugin(ModelPluginPort):
 
     # ── predict_batch ─────────────────────────────────────────────────────────
 
+    def _resolve_model(self, mlflow_run_id: str) -> tuple[Any, Any, Any, dict, str | None]:
+        """Return (model, train_cfg, feature_artifacts, policy, temp_dir) to serve this request.
+
+        The user's retrained model (if mlflow_run_id) is returned, never assigned to self:
+        the plugin instance is shared by concurrent requests, so swapping it into self leaked
+        a user's model to other requests — and, with two overlapping runs, left it in place
+        as the "base" model. temp_dir is None for the base model.
+        """
+        if not mlflow_run_id:
+            self._require_loaded()
+            return self._model, self._train_cfg, self._feature_artifacts, self._policy, None
+        return download_user_model_from_mlflow(mlflow_run_id)
+
     def predict_batch(self, *, data_path: str, mlflow_run_id: str = "") -> PredictBatchResponse:
         """Score every valid 120-min window in a raw telemetry CSV (one or more assets)."""
-        user_tmp = None
-        saved = (self._model, self._train_cfg, self._feature_artifacts, self._policy)
         if mlflow_run_id:
             logger.info("predict_batch — using user fine-tuned model from MLflow run_id=%s", mlflow_run_id)
-            loaded = download_user_model_from_mlflow(mlflow_run_id)
-            if loaded:
-                self._model, self._train_cfg, self._feature_artifacts, self._policy, user_tmp = loaded
+        model, train_cfg, feature_artifacts, policy, user_temp_dir = self._resolve_model(mlflow_run_id)
         try:
-            self._require_loaded()
             with local_file_path(data_path) as local_path:
                 raw_df = pd.read_csv(local_path)
-            sequences, feature_indices, asset_ids = preprocessing.prepare_sequences(raw_df, self._train_cfg, self._feature_artifacts)
+            sequences, feature_indices, asset_ids = preprocessing.prepare_sequences(raw_df, train_cfg, feature_artifacts)
             pred_df = postprocessing.run_inference(
-                self._model, sequences, feature_indices, asset_ids, self._train_cfg,
-                batch_size=256, stride=self._train_cfg.stride,
+                model, sequences, feature_indices, asset_ids, train_cfg,
+                batch_size=256, stride=train_cfg.stride,
             )
             if len(pred_df) == 0:
                 logger.warning("predict_batch — no valid production windows found in %s", data_path)
@@ -180,7 +192,7 @@ class Ml46DairyFoulingClogDetectionPlugin(ModelPluginPort):
                 return PredictBatchResponse(model_id=MODEL_ID, predictions=[], alerts=[], output_path=None)
 
             explained, alerts = postprocessing.explain_and_alert(
-                pred_df, self._policy, self._feature_artifacts.predicate_thresholds, self._train_cfg,
+                pred_df, policy, feature_artifacts.predicate_thresholds, train_cfg,
             )
             explained = _attach_xai_feature_values(explained, raw_df)
             self._record_prediction()
@@ -193,9 +205,8 @@ class Ml46DairyFoulingClogDetectionPlugin(ModelPluginPort):
                 output_path=None,
             )
         finally:
-            if user_tmp:
-                shutil.rmtree(user_tmp, ignore_errors=True)
-                self._model, self._train_cfg, self._feature_artifacts, self._policy = saved
+            if user_temp_dir:
+                shutil.rmtree(user_temp_dir, ignore_errors=True)
 
     # ── predict_inline ────────────────────────────────────────────────────────
 
@@ -208,25 +219,20 @@ class Ml46DairyFoulingClogDetectionPlugin(ModelPluginPort):
         mlflow_run_id: str = "",
     ) -> PredictInlineResponse:
         """Score the most recent 120-min window from a submitted telemetry history."""
-        user_tmp = None
-        saved = (self._model, self._train_cfg, self._feature_artifacts, self._policy)
         if mlflow_run_id:
             logger.info("predict_inline — using user fine-tuned model from MLflow run_id=%s", mlflow_run_id)
-            loaded = download_user_model_from_mlflow(mlflow_run_id)
-            if loaded:
-                self._model, self._train_cfg, self._feature_artifacts, self._policy, user_tmp = loaded
+        model, train_cfg, feature_artifacts, policy, user_temp_dir = self._resolve_model(mlflow_run_id)
         try:
-            self._require_loaded()
             rows: list[dict] = features["rows"]
-            if len(rows) < self._train_cfg.seq_len:
+            if len(rows) < train_cfg.seq_len:
                 raise InsufficientTelemetryHistoryError(
-                    f"Se requieren al menos {self._train_cfg.seq_len} filas de telemetría "
+                    f"Se requieren al menos {train_cfg.seq_len} filas de telemetría "
                     f"(1 por minuto); se recibieron {len(rows)}."
                 )
 
             raw_df = preprocessing.build_raw_dataframe(rows)
-            sequences, feature_indices, _ = preprocessing.prepare_sequences(raw_df, self._train_cfg, self._feature_artifacts)
-            sequence_id, end_idx = preprocessing.last_window_only(sequences, feature_indices, seq_len=self._train_cfg.seq_len)
+            sequences, feature_indices, _ = preprocessing.prepare_sequences(raw_df, train_cfg, feature_artifacts)
+            sequence_id, end_idx = preprocessing.last_window_only(sequences, feature_indices, seq_len=train_cfg.seq_len)
             if end_idx == -1:
                 raise InsufficientTelemetryHistoryError(
                     "No hay ninguna ventana válida de 120 minutos en producción (sin mantenimiento "
@@ -234,14 +240,14 @@ class Ml46DairyFoulingClogDetectionPlugin(ModelPluginPort):
                 )
 
             pred_df = postprocessing.run_inference_single_window(
-                self._model, sequences, feature_indices, self._train_cfg, sequence_id, end_idx,
+                model, sequences, feature_indices, train_cfg, sequence_id, end_idx,
             )
-            policy = dict(self._policy)
+            policy = dict(policy)
             if threshold is not None:
                 policy["watch_foul_prob_thr"] = float(threshold)
 
             explained, alerts = postprocessing.explain_and_alert(
-                pred_df, policy, self._feature_artifacts.predicate_thresholds, self._train_cfg,
+                pred_df, policy, feature_artifacts.predicate_thresholds, train_cfg,
             )
             row = explained.iloc[0]
             is_alert = bool(len(alerts) > 0)
@@ -282,9 +288,8 @@ class Ml46DairyFoulingClogDetectionPlugin(ModelPluginPort):
                 },
             )
         finally:
-            if user_tmp:
-                shutil.rmtree(user_tmp, ignore_errors=True)
-                self._model, self._train_cfg, self._feature_artifacts, self._policy = saved
+            if user_temp_dir:
+                shutil.rmtree(user_temp_dir, ignore_errors=True)
 
     # ── train (fine-tuning) ──────────────────────────────────────────────────
 
@@ -369,7 +374,7 @@ class Ml46DairyFoulingClogDetectionPlugin(ModelPluginPort):
         # mlflow_run_id); the served base model and its local artifacts are never replaced.
         upload_warning = None
         if not tracker:
-            upload_warning = "Sin run de MLflow: el modelo reentrenado no se ha guardado."
+            raise ModelPersistenceError("Sin run de MLflow: el modelo reentrenado no se ha guardado.")
         if tracker:
             try:
                 tracker.log_metrics({k: v for k, v in metrics.items() if math.isfinite(v)})
@@ -382,7 +387,7 @@ class Ml46DairyFoulingClogDetectionPlugin(ModelPluginPort):
                 shutil.rmtree(mlflow_tmp, ignore_errors=True)
             except Exception as exc:  # pylint: disable=broad-exception-caught
                 logger.error("MLflow artifact upload failed: %s", exc)
-                upload_warning = f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}"
+                raise ModelPersistenceError(f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}") from exc
 
         logger.info(
             "ml46 train() done — n_windows=%d epochs=%d stage_acc=%.4f mlflow=%s",

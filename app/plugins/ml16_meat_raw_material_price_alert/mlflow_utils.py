@@ -9,7 +9,7 @@ import tempfile
 
 import joblib
 
-from app.domain.services.mlflow_tracker import BaseMLflowTracker
+from app.domain.services.mlflow_tracker import BaseMLflowTracker, require_user_model
 from app.plugins.ml16_meat_raw_material_price_alert.constants import (
     BAGGING_FILENAMES,
     MODEL_FILENAMES,
@@ -21,6 +21,7 @@ from app.plugins.ml16_meat_raw_material_price_alert.constants import (
 logger = logging.getLogger(__name__)
 
 
+@require_user_model
 def download_user_model_from_mlflow(run_id: str):
     """Download a user-retrained bundle (both targets) from MLflow.
 

@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 import os
 
-from app.domain.services.mlflow_tracker import BaseMLflowTracker
+from app.domain.services.mlflow_tracker import BaseMLflowTracker, require_user_model
 from app.plugins.ml41_meat_curing_machinery_acoustic_anomaly.constants import (
     CHECKPOINT_FILENAME,
     MAHA_STATS_FILENAME,
@@ -22,6 +22,7 @@ from app.plugins.ml41_meat_curing_machinery_acoustic_anomaly.thresholds import c
 logger = logging.getLogger(__name__)
 
 
+@require_user_model
 def download_user_model_from_mlflow(run_id: str):
     """Download every fine-tuned combination logged under this MLflow run.
 

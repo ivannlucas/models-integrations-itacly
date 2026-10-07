@@ -91,6 +91,24 @@ outputs:
 # ── Entrenamiento (fine-tune / re-entrenamiento por usuario) ─────────────────
 training:
   supported: true
+  # [CORREGIDO 2026-10-07] /train reescrito como port fiel de los DOS procedimientos del código
+  # entregado, elegidos con `mode` (opcional; por defecto fine_tune):
+  #   - fine_tune (por defecto): src/fine_tuning/fine_tuner.py — backbone CNN congelado, solo las 4
+  #     cabezas, CrossEntropy, LR = learning_rate/10, 50 épocas, paciencia 7, batch 32; reutiliza el
+  #     scaler y feature_columns del modelo servido. Camino previsto para datos de planta.
+  #   - full: src/training/trainer.py + preprocess.py — desde cero, hiperparámetros de Optuna
+  #     (abajo), Physics-Guided Loss con curriculum de lambda, augmentation con ruido 0.2·std, scaler
+  #     ajustado en train aumentado, gemelo térmico solo si APPLY_DIGITAL_TWIN (el original lo aplica
+  #     siempre porque sus datos son de laboratorio).
+  # Ambos: un único CSV separado 70/15/15 por Cycle_ID (split_data, random_state 42) y métricas del
+  # 15% de test con las fórmulas de la Tabla 6 (exact_match, accuracy = media por componente,
+  # precision/recall/f1_macro = media de componente×clase). Etiquetas Target_* (también se aceptan
+  # los nombres cortos anteriores). Verificado con datos reales 2026-10-07: split idéntico a
+  # cycle_splits.json, features con diff máx 2.8e-7, modelo base evaluado = 0.9879/0.9970/0.9970
+  # exactos; full real en GPU = 0.9940/0.9985/0.9986 (78 épocas); fine_tune real sobre val_split
+  # = 0.94→0.96 exact match en sus 50 ciclos de test, backbone intacto.
+  # El texto de abajo es histórico: el trainer anterior asignaba a todos los ciclos la etiqueta
+  # del primero, mezclaba ciclos en las medias móviles e ignoraba estos hiperparámetros.
   # El plugin implementa train() vía train_model_from_csv: reconstruye la CNN y la
   # entrena con PhysicsGuidedLoss + Early Stopping sobre los ciclos del CSV aportado.
   target_column: [Fouling, Valvula, Bomba, Acumulador]   # 4 targets (0/1/2) — nombres exigidos por el trainer del plugin

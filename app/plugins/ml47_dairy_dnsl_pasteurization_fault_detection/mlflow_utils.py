@@ -6,7 +6,7 @@ import os
 import joblib
 import torch
 
-from app.domain.services.mlflow_tracker import BaseMLflowTracker
+from app.domain.services.mlflow_tracker import BaseMLflowTracker, require_user_model
 from app.plugins.ml47_dairy_dnsl_pasteurization_fault_detection.constants import (
     ARTIFACT_FOLDER_NAME,
     FEATURE_COLUMNS_FILENAME,
@@ -18,6 +18,7 @@ from app.plugins.ml47_dairy_dnsl_pasteurization_fault_detection.constants import
 logger = logging.getLogger(__name__)
 
 
+@require_user_model
 def download_user_model_from_mlflow(run_id: str):
     import tempfile
     tmp = tempfile.mkdtemp(prefix="mlflow_m47_")

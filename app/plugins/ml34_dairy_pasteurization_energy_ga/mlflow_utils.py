@@ -8,7 +8,7 @@ import os
 import joblib
 import torch
 
-from app.domain.services.mlflow_tracker import BaseMLflowTracker
+from app.domain.services.mlflow_tracker import BaseMLflowTracker, require_user_model
 from app.plugins.ml34_dairy_pasteurization_energy_ga.constants import (
     MODEL_CONFIG_FILENAME,
     MODEL_FILENAME,
@@ -20,6 +20,7 @@ from app.plugins.ml34_dairy_pasteurization_energy_ga.model_loader import build_m
 logger = logging.getLogger(__name__)
 
 
+@require_user_model
 def download_user_model_from_mlflow(run_id: str):
     """Download a user fine-tuned MLP from MLflow.
 

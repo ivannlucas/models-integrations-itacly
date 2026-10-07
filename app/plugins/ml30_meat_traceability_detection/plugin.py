@@ -8,10 +8,11 @@ import time
 from datetime import datetime, timezone
 
 import pandas as pd
+from typing import Any
 
 from app.application.dto.stats_dto import InputField, OutputField, RuntimeStats, StatsResponse
 from app.domain.ports.model_plugin_port import ModelPluginPort
-from app.domain.services.exceptions import ModelNotLoadedError
+from app.domain.services.exceptions import ModelNotLoadedError, ModelPersistenceError
 from app.domain.services.mlflow_tracker import BaseMLflowTracker
 from app.infrastructure.artifact_store import local_file_path
 from app.plugins.ml30_meat_traceability_detection.constants import (
@@ -95,6 +96,19 @@ class Ml30MeatTraceabilityDetectionPlugin(ModelPluginPort):
         self._predict_count += 1
         self._last_predict_at = datetime.now(tz=timezone.utc).isoformat()
 
+    def _resolve_model(self, mlflow_run_id: str) -> tuple[Any, Any, list[str], str | None]:
+        """Return (preprocessor, mlp, feature_columns, temp_dir) to serve this request.
+
+        The user's retrained model (if mlflow_run_id) is returned, never assigned to self:
+        the plugin instance is shared by concurrent requests, so swapping it into self leaked
+        a user's model to other requests — and, with two overlapping runs, left it in place
+        as the "base" model. temp_dir is None for the base model.
+        """
+        if not mlflow_run_id:
+            self._require_loaded()
+            return self._preprocessor, self._mlp, self._feature_columns, None
+        return download_user_model_from_mlflow(mlflow_run_id)
+
     def predict_inline(
         self,
         *,
@@ -104,20 +118,14 @@ class Ml30MeatTraceabilityDetectionPlugin(ModelPluginPort):
         mlflow_run_id: str = "",
     ) -> PredictInlineResponse:
         """Score a single traceability event."""
-        user_temp_dir = None
-        saved_preprocessor = self._preprocessor
-        saved_mlp = self._mlp
         if mlflow_run_id:
             logger.info("predict_inline — using user-trained model from MLflow run_id=%s", mlflow_run_id)
-            loaded = download_user_model_from_mlflow(mlflow_run_id)
-            if loaded:
-                self._preprocessor, self._mlp, self._feature_columns, user_temp_dir = loaded
+        preprocessor, mlp, feature_columns, user_temp_dir = self._resolve_model(mlflow_run_id)
         try:
-            self._require_loaded()
             df = build_dataframe_from_features(features)
             present = [k for k, v in features.items() if v is not None]
-            enforce_data_contract(df, self._preprocessor, present, logger)
-            _, y_score = run_inference(self._preprocessor, self._mlp, df[self._feature_columns])
+            enforce_data_contract(df, preprocessor, present, logger)
+            _, y_score = run_inference(preprocessor, mlp, df[feature_columns])
 
             score = float(y_score[0])
             thr = threshold if threshold is not None else DEFAULT_THRESHOLD
@@ -131,32 +139,24 @@ class Ml30MeatTraceabilityDetectionPlugin(ModelPluginPort):
                 pred_score=score,
                 confidence=confidence,
                 model_name=MODEL_ID,
-                xai_feature_values=_xai_values_from_row(features, self._feature_columns),
+                xai_feature_values=_xai_values_from_row(features, feature_columns),
             )
         finally:
             if user_temp_dir:
                 shutil.rmtree(user_temp_dir, ignore_errors=True)
-                self._preprocessor = saved_preprocessor
-                self._mlp = saved_mlp
 
     def predict_batch(self, *, data_path: str, mlflow_run_id: str = "") -> PredictBatchResponse:
         """Score every row of a CSV of traceability events."""
-        user_temp_dir = None
-        saved_preprocessor = self._preprocessor
-        saved_mlp = self._mlp
         if mlflow_run_id:
             logger.info("predict_batch — using user-trained model from MLflow run_id=%s", mlflow_run_id)
-            loaded = download_user_model_from_mlflow(mlflow_run_id)
-            if loaded:
-                self._preprocessor, self._mlp, self._feature_columns, user_temp_dir = loaded
+        preprocessor, mlp, feature_columns, user_temp_dir = self._resolve_model(mlflow_run_id)
         try:
-            self._require_loaded()
             with local_file_path(data_path) as local_path:
                 raw_columns = pd.read_csv(local_path, nrows=0).columns
                 df = build_dataframe_from_csv(local_path)
-            warnings = enforce_data_contract(df, self._preprocessor, raw_columns, logger)
+            warnings = enforce_data_contract(df, preprocessor, raw_columns, logger)
             id_cols = [c for c in _ID_COLUMNS if c in df.columns]
-            y_pred, y_score = run_inference(self._preprocessor, self._mlp, df[self._feature_columns])
+            y_pred, y_score = run_inference(preprocessor, mlp, df[feature_columns])
 
             predictions: list[dict] = []
             for i in range(len(df)):
@@ -165,7 +165,7 @@ class Ml30MeatTraceabilityDetectionPlugin(ModelPluginPort):
                 row["pred_traceability_incident"] = int(y_pred[i])
                 row["pred_score"] = float(y_score[i])
                 row["model_name"] = MODEL_ID
-                row["xai_feature_values"] = _xai_values_from_row(df_row, self._feature_columns)
+                row["xai_feature_values"] = _xai_values_from_row(df_row, feature_columns)
                 predictions.append(row)
 
             self._record()
@@ -175,8 +175,6 @@ class Ml30MeatTraceabilityDetectionPlugin(ModelPluginPort):
         finally:
             if user_temp_dir:
                 shutil.rmtree(user_temp_dir, ignore_errors=True)
-                self._preprocessor = saved_preprocessor
-                self._mlp = saved_mlp
 
     def train(self, *, data_path: str, mlflow_run_id: str) -> TrainResponse:  # pylint: disable=too-many-locals
         """Retrain the MLP from scratch with the original best-genome hyperparameters (reusing
@@ -265,7 +263,7 @@ class Ml30MeatTraceabilityDetectionPlugin(ModelPluginPort):
         # mlflow_run_id); the served base model and its local artifacts are never replaced.
         upload_warning = None
         if not tracker:
-            upload_warning = "Sin run de MLflow: el modelo reentrenado no se ha guardado."
+            raise ModelPersistenceError("Sin run de MLflow: el modelo reentrenado no se ha guardado.")
         if tracker:
             tracker.log_metrics({
                 "test_accuracy": acc,
@@ -283,7 +281,7 @@ class Ml30MeatTraceabilityDetectionPlugin(ModelPluginPort):
                 shutil.rmtree(mlflow_tmp, ignore_errors=True)
             except Exception as exc:  # pylint: disable=broad-exception-caught
                 logger.error("MLflow artifact upload failed: %s", exc)
-                upload_warning = f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}"
+                raise ModelPersistenceError(f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}") from exc
 
         elapsed = time.perf_counter() - t0
         logger.info("train() done — acc=%.4f f1=%.4f auc=%.4f mlflow=%s",

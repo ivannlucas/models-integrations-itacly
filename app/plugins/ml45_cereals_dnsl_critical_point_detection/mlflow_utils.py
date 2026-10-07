@@ -8,7 +8,7 @@ import joblib
 import numpy as np
 import torch
 
-from app.domain.services.mlflow_tracker import BaseMLflowTracker
+from app.domain.services.mlflow_tracker import BaseMLflowTracker, require_user_model
 from app.plugins.ml45_cereals_dnsl_critical_point_detection._vendor.model import (
     ParallelDeepNeuroFuzzyModel,
 )
@@ -23,6 +23,7 @@ from app.plugins.ml45_cereals_dnsl_critical_point_detection.constants import (
 logger = logging.getLogger(__name__)
 
 
+@require_user_model
 def download_user_model_from_mlflow(run_id: str):
     """Download a user fine-tuned m45 model from MLflow.
 

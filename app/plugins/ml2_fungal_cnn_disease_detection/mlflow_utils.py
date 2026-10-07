@@ -16,12 +16,13 @@ import tempfile
 
 import torch
 
-from app.domain.services.mlflow_tracker import BaseMLflowTracker
+from app.domain.services.mlflow_tracker import BaseMLflowTracker, require_user_model
 from app.plugins.ml2_fungal_cnn_disease_detection.constants import IMAGE_SIZE, MODEL_FILENAME
 
 logger = logging.getLogger(__name__)
 
 
+@require_user_model
 def download_user_model_from_mlflow(run_id: str) -> tuple[dict, str] | None:
     """Download a user-trained LeafCNN checkpoint from MLflow run ``run_id``.
 

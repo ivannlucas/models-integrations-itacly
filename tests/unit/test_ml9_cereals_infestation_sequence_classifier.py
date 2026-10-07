@@ -86,7 +86,7 @@ def test_predict_batch_unexpected_error_maps_to_500(client, fake_plugins):
 
 
 def test_train(client):
-    resp = client.post(f"{PREFIX}/train", json={"data_path": "/tmp/train.csv", "mlflow_run_id": ""})
+    resp = client.post(f"{PREFIX}/train", json={"data_path": "/tmp/train.csv", "mlflow_run_id": "test-run-id"})
     assert resp.status_code == 200
     body = resp.json()
     assert body["detail"]
@@ -105,5 +105,5 @@ def test_train_bad_csv_maps_to_400(client, fake_plugins):
         raise ValueError("El CSV de entrenamiento no trae las columnas requeridas: ['target']")
 
     plugin._train_factory = _boom  # pylint: disable=protected-access
-    resp = client.post(f"{PREFIX}/train", json={"data_path": "/tmp/bad.csv", "mlflow_run_id": ""})
+    resp = client.post(f"{PREFIX}/train", json={"data_path": "/tmp/bad.csv", "mlflow_run_id": "test-run-id"})
     assert resp.status_code == 400

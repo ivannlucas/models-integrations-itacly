@@ -32,6 +32,7 @@ from app.domain.services.exceptions import (
     InsufficientFramesError,
     InvalidVideoError,
     ModelNotLoadedError,
+    ModelPersistenceError,
 )
 from app.domain.services.mlflow_tracker import BaseMLflowTracker
 from app.plugins.ml5_meat_cow_behaviour.byte_tracker import ByteTracker
@@ -404,7 +405,7 @@ class Ml5MeatCowBehaviourPlugin(ModelPluginPort):
                 tracker.upload_artifacts(mlflow_tmp, artifact_path="classifier")
             except Exception as exc:  # pylint: disable=broad-except
                 logger.error("MLflow artifact upload failed: %s", exc)
-                upload_warning = f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}"
+                raise ModelPersistenceError(f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}") from exc
             finally:
                 shutil.rmtree(mlflow_tmp, ignore_errors=True)
 

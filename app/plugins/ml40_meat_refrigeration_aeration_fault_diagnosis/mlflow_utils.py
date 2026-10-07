@@ -7,7 +7,7 @@ import os
 import joblib
 import yaml
 
-from app.domain.services.mlflow_tracker import BaseMLflowTracker
+from app.domain.services.mlflow_tracker import BaseMLflowTracker, require_user_model
 from app.plugins.ml40_meat_refrigeration_aeration_fault_diagnosis.constants import (
     MODEL_FILENAMES,
     SCALER_FILENAMES,
@@ -19,6 +19,7 @@ from app.plugins.ml40_meat_refrigeration_aeration_fault_diagnosis.constants impo
 logger = logging.getLogger(__name__)
 
 
+@require_user_model
 def download_user_model_from_mlflow(run_id: str):
     """Download a user-retrained RandomForest bundle (one system) from MLflow.
 

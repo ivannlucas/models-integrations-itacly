@@ -19,7 +19,7 @@ import torch
 
 from app.application.dto.stats_dto import InputField, OutputField, RuntimeStats, StatsResponse
 from app.domain.ports.model_plugin_port import ModelPluginPort
-from app.domain.services.exceptions import InvalidImageError, ModelNotLoadedError
+from app.domain.services.exceptions import InvalidImageError, ModelNotLoadedError, ModelPersistenceError
 from app.domain.services.mlflow_tracker import BaseMLflowTracker
 from app.plugins.ml2_fungal_cnn_disease_detection.constants import (
     CLASS_NAMES,
@@ -87,6 +87,18 @@ class Ml2FungalCnnDiseaseDetectionPlugin(ModelPluginPort):
             raise ModelNotLoadedError("El modelo no está cargado.")
         return self._bundle
 
+    def _resolve_bundle(self, mlflow_run_id: str) -> tuple[dict, str | None]:
+        """Return (bundle, temp_dir) to serve this request.
+
+        The user's retrained bundle (if mlflow_run_id) is returned, never assigned to
+        self._bundle: the plugin instance is shared by concurrent requests, so swapping it
+        into self leaked a user's model to other requests — and, with two overlapping runs,
+        left it in place as the "base" model. temp_dir is None for the base model.
+        """
+        if not mlflow_run_id:
+            return self._require_bundle(), None
+        return download_user_model_from_mlflow(mlflow_run_id)
+
     def predict_inline(
         self,
         *,
@@ -96,17 +108,12 @@ class Ml2FungalCnnDiseaseDetectionPlugin(ModelPluginPort):
         mlflow_run_id: str = "",
     ) -> PredictInlineResponse:
         """Classify a single base64 image and return the typed inline response."""
-        user_temp_dir: str | None = None
-        saved_bundle = self._bundle
         if mlflow_run_id:
             logger.info(
                 "predict_inline — using user-trained model from MLflow run_id=%s", mlflow_run_id
             )
-            loaded = download_user_model_from_mlflow(mlflow_run_id)
-            if loaded:
-                self._bundle, user_temp_dir = loaded
+        bundle, user_temp_dir = self._resolve_bundle(mlflow_run_id)
         try:
-            bundle = self._require_bundle()
             tensor = image_base64_to_tensor(
                 features["image_base64"], image_size=bundle["image_size"]
             ).to(bundle["device"])
@@ -129,21 +136,15 @@ class Ml2FungalCnnDiseaseDetectionPlugin(ModelPluginPort):
         finally:
             if user_temp_dir:
                 shutil.rmtree(user_temp_dir, ignore_errors=True)
-                self._bundle = saved_bundle
 
     def predict_batch(self, *, data_path: str, mlflow_run_id: str = "") -> PredictBatchResponse:
         """Classify every image inside a ZIP (local path or ``s3://`` URI)."""
-        user_temp_dir: str | None = None
-        saved_bundle = self._bundle
         if mlflow_run_id:
             logger.info(
                 "predict_batch — using user-trained model from MLflow run_id=%s", mlflow_run_id
             )
-            loaded = download_user_model_from_mlflow(mlflow_run_id)
-            if loaded:
-                self._bundle, user_temp_dir = loaded
+        bundle, user_temp_dir = self._resolve_bundle(mlflow_run_id)
         try:
-            bundle = self._require_bundle()
             model = bundle["model"]
             device: torch.device = bundle["device"]
             image_size: int = bundle["image_size"]
@@ -205,7 +206,6 @@ class Ml2FungalCnnDiseaseDetectionPlugin(ModelPluginPort):
         finally:
             if user_temp_dir:
                 shutil.rmtree(user_temp_dir, ignore_errors=True)
-                self._bundle = saved_bundle
 
     @staticmethod
     def _download_zip_from_s3(s3_uri: str) -> str:
@@ -461,7 +461,7 @@ class Ml2FungalCnnDiseaseDetectionPlugin(ModelPluginPort):
                 tracker.upload_artifacts(mlflow_tmp, artifact_path="model")
             except Exception as exc:  # pragma: no cover - network/MLflow failure path
                 logger.error("MLflow artifact upload failed: %s", exc)
-                upload_warning = f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}"
+                raise ModelPersistenceError(f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}") from exc
 
             logger.info(
                 "train() done — accuracy=%.4f f1=%.4f epochs_run=%d classes=%s",
@@ -491,17 +491,15 @@ class Ml2FungalCnnDiseaseDetectionPlugin(ModelPluginPort):
     def stats(self, mlflow_run_id: str = "") -> StatsResponse:
         """Return model metadata and runtime statistics."""
         user_temp_dir: str | None = None
-        saved_bundle = self._bundle
+        bundle = self._bundle
         mlflow_metrics: dict | None = None
         if mlflow_run_id:
-            loaded = download_user_model_from_mlflow(mlflow_run_id)
-            if loaded:
-                self._bundle, user_temp_dir = loaded
+            bundle, user_temp_dir = download_user_model_from_mlflow(mlflow_run_id)
             tracker = BaseMLflowTracker(mlflow_run_id)
             mlflow_metrics = {"params": tracker.get_params(), "metrics": tracker.get_metrics()}
 
         try:
-            model_id_v = self._bundle["model_id"] if self._bundle is not None else MODEL_ID
+            model_id_v = bundle["model_id"] if bundle is not None else MODEL_ID
             metrics: dict = {}
             if mlflow_metrics is not None:
                 metrics["mlflow"] = mlflow_metrics
@@ -557,4 +555,3 @@ class Ml2FungalCnnDiseaseDetectionPlugin(ModelPluginPort):
         finally:
             if user_temp_dir:
                 shutil.rmtree(user_temp_dir, ignore_errors=True)
-                self._bundle = saved_bundle

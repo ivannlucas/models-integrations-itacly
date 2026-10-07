@@ -4,12 +4,13 @@ from __future__ import annotations
 import logging
 import tempfile
 
-from app.domain.services.mlflow_tracker import BaseMLflowTracker
+from app.domain.services.mlflow_tracker import BaseMLflowTracker, require_user_model
 from app.plugins.ml3_wine_disease_pest_forecast.model_loader import load_user_artifacts
 
 logger = logging.getLogger(__name__)
 
 
+@require_user_model
 def download_user_model_from_mlflow(run_id: str):
     """Download a user-retrained LSTM/CNN/BiGRU bundle plus scaler and label_encoder.
 

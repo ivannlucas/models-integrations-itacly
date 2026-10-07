@@ -3,6 +3,8 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.application.dto.train_dto import MlflowRunId
+
 
 class TrainRequest(BaseModel):
     """Retrain request: labeled raw CSV of one subsystem."""
@@ -22,7 +24,7 @@ class TrainRequest(BaseModel):
         description="Subsistema a reentrenar; el CSV debe corresponder a él. Si se omite se "
                     "detecta por las columnas.",
     )
-    mlflow_run_id: str
+    mlflow_run_id: MlflowRunId
 
 
 class TrainResponse(BaseModel):

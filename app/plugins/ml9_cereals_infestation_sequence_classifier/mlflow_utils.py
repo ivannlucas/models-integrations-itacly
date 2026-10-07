@@ -10,7 +10,7 @@ import os
 import tempfile
 from typing import Any
 
-from app.domain.services.mlflow_tracker import BaseMLflowTracker
+from app.domain.services.mlflow_tracker import BaseMLflowTracker, require_user_model
 from app.plugins.ml9_cereals_infestation_sequence_classifier._vendor.sequential import load_checkpoint, load_pickle
 from app.plugins.ml9_cereals_infestation_sequence_classifier.constants import (
     BUNDLE_FILENAME,
@@ -34,6 +34,7 @@ def _first_existing(local_path: str, *filenames: str) -> str | None:
     return None
 
 
+@require_user_model
 def download_user_model_from_mlflow(run_id: str) -> tuple[dict, Any, dict, str] | None:
     """Download a user fine-tuned checkpoint + scaler + bundle from MLflow.
 
