@@ -15,6 +15,7 @@ import numpy as np
 import pandas as pd
 import torch
 
+from app.domain.services.exceptions import InsufficientDataError
 from app.plugins.ml14_wine_phyto_price_forecast.constants import (
     DATE_COL,
     DRIFT_COL,
@@ -54,7 +55,18 @@ def run_inference(bundle: dict, rows: list[dict]) -> dict:
     seq_df = features_df[feature_columns].tail(SEQ_LEN)
     mean = np.asarray(bundle["input_scaler_mean"], dtype=np.float32)
     scale = np.asarray(bundle["input_scaler_scale"], dtype=np.float32)
+    # El histórico ya se validó como finito en float64 (feature_engineering.py), pero un valor
+    # finito muy grande (p. ej. 1e250) desborda silenciosamente a +/-inf al convertir a float32
+    # aquí -- numpy no lanza excepción, solo un RuntimeWarning. Sin esta comprobación, ese
+    # desbordamiento llega al modelo y produce una predicción no finita que Pydantic serializa
+    # como "predicted_price": null con HTTP 200, en vez de un error explícito.
     seq_scaled = (seq_df.to_numpy(dtype=np.float32) - mean) / scale
+    if not np.isfinite(seq_scaled).all():
+        raise InsufficientDataError(
+            "El histórico contiene valores numéricos demasiado grandes: al menos uno desborda "
+            "la precisión numérica del modelo (float32) aunque sea un valor finito válido en la "
+            "entrada. Revisa las columnas numéricas del histórico aportado."
+        )
 
     model = bundle["model"]
     x = torch.tensor(seq_scaled[np.newaxis, ...], dtype=torch.float32)
@@ -69,6 +81,15 @@ def run_inference(bundle: dict, rows: list[dict]) -> dict:
     drift = float(last_row[DRIFT_COL])
     drift_baseline = float(current_price + drift * (HORIZON_WEEKS / 4.0))
     predicted_price = drift_baseline + residual
+    if not np.isfinite(predicted_price):
+        # Red de seguridad adicional: si, pese al chequeo de arriba, el modelo o la
+        # reconstrucción del precio produjeran NaN/inf por cualquier otra vía, lo rechazamos
+        # aquí en vez de dejar que Pydantic lo serialice silenciosamente como
+        # "predicted_price": null con HTTP 200.
+        raise InsufficientDataError(
+            "La predicción resultante no es un número finito (posible desbordamiento numérico "
+            "en el histórico aportado). Revisa las columnas numéricas del histórico."
+        )
 
     prediction_date = last_date + pd.Timedelta(weeks=HORIZON_WEEKS)
 

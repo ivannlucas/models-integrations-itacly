@@ -362,6 +362,17 @@ golden_cases:
     note: "Rechazo controlado, no una excepción no manejada -- debe mapearse a un 422 de dominio en el plugin, no a un 500."
 
 known_issues:
+  - "CORREGIDO (hallazgo post-integración, detectado por QA): un valor numérico finito pero muy
+     grande (p. ej. 1e250) en cualquier columna del histórico pasaba la validación de finitud de
+     feature_engineering.py (hecha en float64) pero desbordaba silenciosamente a +/-inf al
+     convertirse a float32 en preprocessing.py::run_inference (numpy no lanza excepción en ese
+     cast, solo un RuntimeWarning). El resultado llegaba al modelo y producía una predicción no
+     finita que Pydantic serializaba como 'predicted_price': null con HTTP 200, en vez de un
+     error explícito -- un cliente podía no darse cuenta de que la predicción había fallado.
+     Arreglado con dos comprobaciones de finitud en run_inference: una justo tras el escalado a
+     float32 (antes de entrar al modelo) y otra sobre el resultado final, ambas lanzando
+     InsufficientDataError (422) con un mensaje explícito. Test de regresión:
+     tests/unit/test_ml14_preprocessing.py::test_run_inference_rejects_float32_overflow_instead_of_returning_null."
   - "DOS ENTREGAS DISTINTAS DEL MISMO CÓDIGO (trazabilidad del proceso de integración, no un
      defecto del modelo): se recibió primero, por error, una copia local con una carpeta docs/ y
      reports/audit/ adicionales que documentaban una auditoría interna -- esa auditoría detectó
