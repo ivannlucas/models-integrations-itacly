@@ -1,0 +1,278 @@
+{
+  "model_id": "a48",
+  "model_slug": "dnsl-fallas-maquinaria-pasteurizado-xai",
+  "fecha": "Octubre 2026",
+  "model_key": "m48-dnsl-fallas-maquinaria-pasteurizado",
+  "version": "1.3 (entrega IA) · plugin 1.0.0",
+  "descripcion": "Red convolucional 1D multitarea con pérdida físico-informada (DNSL) que diagnostica el estado de cuatro componentes de un pasteurizador (enfriador, válvula, bomba y acumulador) a partir de un ciclo de 60 s de siete sensores a 10 Hz, y añade explicabilidad integrada: ventanas temporales críticas (Grad-CAM), importancia por sensor (SHAP opcional), puntos críticos de control (CCP) y acciones de mantenimiento priorizadas.",
+  "task_type": "Clasificación multietiqueta (4 componentes × 3 estados) con explicabilidad y recomendación prescriptiva",
+  "framework": "PyTorch (1D-CNN CNN_Pasteurizer + PhysicsGuidedLoss) + scikit-learn (StandardScaler) + SHAP (GradientExplainer) + pandas / numpy",
+  "artefacto": "neurosymbolic_cnn.pth + scaler_cnn_dns.pkl + feature_columns.pkl + ts1_mean_train.pkl + shap_background.npy (+ shap_background_meta.json). Pesos del Entregable 47 v2.0",
+  "objetivo": "Dotar al diagnóstico de fallos de maquinaria de pasteurizado (Entregable 47) de explicabilidad, diagnóstico causal aproximado y recomendación prescriptiva, de modo que el técnico de planta sepa no solo qué componente degrada, sino cuándo se manifiesta dentro del ciclo, qué sensor domina la decisión y qué acción priorizar. La detección de puntos críticos de control (CCP) se inspira en el paradigma HACCP.",
+  "caso_uso": "Modo inline: se envía un ciclo de 60 s (siete sensores a 10 Hz) y se obtiene el estado de los cuatro componentes con su confianza y un informe local con la ventana crítica, el riesgo y la acción recomendada por componente; SHAP es opcional. Modo batch: se envía un CSV con varios ciclos (Cycle_ID) y, con include_xai, se obtiene además el análisis global de CCP sobre una muestra de ciclos.",
+  "inputs": [
+    {
+      "nombre": "PS1",
+      "tipo": "list[float]",
+      "descripcion": "Presión de entrada del circuito (bar). Serie de un ciclo de 60 s a 10 Hz (600 pasos; se rellena con ceros o se trunca a 600)",
+      "obligatorio": "Sí (o data_path)",
+      "valor_defecto": "-"
+    },
+    {
+      "nombre": "PS3",
+      "tipo": "list[float]",
+      "descripcion": "Presión de salida / retorno (bar). Serie de un ciclo de 60 s a 10 Hz (600 pasos; se rellena con ceros o se trunca a 600)",
+      "obligatorio": "Sí (o data_path)",
+      "valor_defecto": "-"
+    },
+    {
+      "nombre": "EPS1",
+      "tipo": "list[float]",
+      "descripcion": "Potencia activa del motor (W). Serie de un ciclo de 60 s a 10 Hz (600 pasos; se rellena con ceros o se trunca a 600)",
+      "obligatorio": "Sí (o data_path)",
+      "valor_defecto": "-"
+    },
+    {
+      "nombre": "FS1",
+      "tipo": "list[float]",
+      "descripcion": "Caudal volumétrico (L/min). Serie de un ciclo de 60 s a 10 Hz (600 pasos; se rellena con ceros o se trunca a 600)",
+      "obligatorio": "Sí (o data_path)",
+      "valor_defecto": "-"
+    },
+    {
+      "nombre": "TS1",
+      "tipo": "list[float]",
+      "descripcion": "Temperatura de entrada (°C). Serie de un ciclo de 60 s a 10 Hz (600 pasos; se rellena con ceros o se trunca a 600)",
+      "obligatorio": "Sí (o data_path)",
+      "valor_defecto": "-"
+    },
+    {
+      "nombre": "TS2",
+      "tipo": "list[float]",
+      "descripcion": "Temperatura de salida (°C). Serie de un ciclo de 60 s a 10 Hz (600 pasos; se rellena con ceros o se trunca a 600)",
+      "obligatorio": "Sí (o data_path)",
+      "valor_defecto": "-"
+    },
+    {
+      "nombre": "VS1",
+      "tipo": "list[float]",
+      "descripcion": "Vibración mecánica (mm/s). Serie de un ciclo de 60 s a 10 Hz (600 pasos; se rellena con ceros o se trunca a 600)",
+      "obligatorio": "Sí (o data_path)",
+      "valor_defecto": "-"
+    },
+    {
+      "nombre": "Time_Segundos",
+      "tipo": "list[float]",
+      "descripcion": "Marca temporal de cada muestra (0,0–60,0 s); ordena la serie y se remuestrea a 10 Hz",
+      "obligatorio": "No",
+      "valor_defecto": "0,0, 0,1, 0,2…"
+    },
+    {
+      "nombre": "Cycle_ID",
+      "tipo": "int",
+      "descripcion": "Identificador del ciclo; en batch agrupa las filas de cada ciclo",
+      "obligatorio": "No (batch con varios ciclos: Sí)",
+      "valor_defecto": "-"
+    },
+    {
+      "nombre": "data_path",
+      "tipo": "string",
+      "descripcion": "Alternativa a los arrays: CSV (local o s3://) con las columnas anteriores; en batch es la entrada",
+      "obligatorio": "No (batch: Sí)",
+      "valor_defecto": "-"
+    },
+    {
+      "nombre": "apply_digital_twin",
+      "tipo": "bool",
+      "descripcion": "Desplaza TS1/TS2 al baseline de 65 °C. Solo para datos del banco de laboratorio UCI; con datos reales de planta debe ser false",
+      "obligatorio": "No",
+      "valor_defecto": "variable APPLY_DIGITAL_TWIN (false)"
+    },
+    {
+      "nombre": "include_xai",
+      "tipo": "bool",
+      "descripcion": "Inline: informe local por componente (ventana Grad-CAM, riesgo, acción). Batch: análisis global de puntos críticos (CCP)",
+      "obligatorio": "No",
+      "valor_defecto": "true (inline) / false (batch)"
+    },
+    {
+      "nombre": "include_shap",
+      "tipo": "bool",
+      "descripcion": "Añade SHAP (sensor más relevante e importancias). Requiere include_xai; coste alto en CPU",
+      "obligatorio": "No",
+      "valor_defecto": "false"
+    },
+    {
+      "nombre": "include_cam",
+      "tipo": "bool",
+      "descripcion": "Inline: devuelve además la curva Grad-CAM (600 valores) por componente",
+      "obligatorio": "No",
+      "valor_defecto": "false"
+    },
+    {
+      "nombre": "n_samples",
+      "tipo": "int",
+      "descripcion": "Batch con XAI: ciclos máximos del CSV usados en el análisis global (muestra aleatoria, semilla 42)",
+      "obligatorio": "No",
+      "valor_defecto": "50"
+    }
+  ],
+  "outputs": [
+    {
+      "nombre": "Enfriador_Fouling",
+      "tipo": "int",
+      "descripcion": "Estado del enfriador (ensuciamiento)",
+      "rango": "0, 1, 2",
+      "interpretacion": "0 = Sano, 1 = Warning (inspección programada), 2 = Crítico (degradación severa)"
+    },
+    {
+      "nombre": "Valvula_Switch",
+      "tipo": "int",
+      "descripcion": "Estado de la válvula",
+      "rango": "0, 1, 2",
+      "interpretacion": "0 = Sano, 1 = Warning (inspección programada), 2 = Crítico (degradación severa)"
+    },
+    {
+      "nombre": "Bomba_Leakage",
+      "tipo": "int",
+      "descripcion": "Estado de la bomba (fugas)",
+      "rango": "0, 1, 2",
+      "interpretacion": "0 = Sano, 1 = Warning (inspección programada), 2 = Crítico (degradación severa)"
+    },
+    {
+      "nombre": "Acumulador_Gas",
+      "tipo": "int",
+      "descripcion": "Estado del acumulador (presión de gas)",
+      "rango": "0, 1, 2",
+      "interpretacion": "0 = Sano, 1 = Warning (inspección programada), 2 = Crítico (degradación severa)"
+    },
+    {
+      "nombre": "Confianza_Fouling / _Valvula / _Bomba / _Acumulador",
+      "tipo": "float",
+      "descripcion": "Probabilidad softmax de la clase predicha para cada componente",
+      "rango": "0–1",
+      "interpretacion": "valores próximos a 1 indican alta seguridad del modelo; no es una probabilidad calibrada de fallo"
+    },
+    {
+      "nombre": "xai (inline)",
+      "tipo": "list[object]",
+      "descripcion": "Por componente: ventana crítica Grad-CAM en segundos (inicio/fin), intensidad, acción, urgencia, intervalo de ciclos, riesgo_score/nivel y, con SHAP, sensor más relevante e importancia",
+      "rango": "4 filas (Fouling, Válvula, Bomba, Acumulador)",
+      "interpretacion": "riesgo_score = severidad × confianza (con bonus SHAP si se pide); NORMAL < 0,5 ≤ WARNING < 0,8 ≤ CRÍTICO"
+    },
+    {
+      "nombre": "xai (batch)",
+      "tipo": "object",
+      "descripcion": "ccps (ventanas críticas por componente, sensor, regla física, severidad agregada), shap (importancia por componente y sensor, 28 filas) y summary (ciclos analizados)",
+      "rango": "según ciclos analizados",
+      "interpretacion": "severidad CRÍTICO si >10 % de ciclos son Crítico; WARNING si >20 % son Warning"
+    }
+  ],
+  "metricas": [
+    {
+      "nombre": "Exact Match (4 componentes a la vez)",
+      "valor": "98,79 % (331 ciclos de test)",
+      "descripcion": "Declarada por el equipo de IA (memoria v1.3, models/metrics/test_metrics_confusion.csv)",
+      "interpretacion": "En 327 de 331 ciclos de test el modelo acierta los cuatro componentes simultáneamente"
+    },
+    {
+      "nombre": "F1-Score macro",
+      "valor": "99,70 %",
+      "descripcion": "Declarada por el equipo de IA (memoria v1.3), criterio de éxito del E47 ≥ 95 %",
+      "interpretacion": "Rendimiento equilibrado entre clases Sano/Warning/Crítico"
+    },
+    {
+      "nombre": "Accuracy por componente",
+      "valor": "Fouling 100 % · Válvula 100 % · Bomba 99,40 % · Acumulador 99,40 %",
+      "descripcion": "Test hold-out de 331 ciclos; únicos errores: 2 ciclos Sano→Warning en Bomba y 2 en Acumulador",
+      "interpretacion": "Los errores son falsas alarmas de clase contigua; ningún fallo real se clasificó como Sano"
+    },
+    {
+      "nombre": "Baseline (clase mayoritaria)",
+      "valor": "Exact Match 9,06 %",
+      "descripcion": "Referencia trivial calculada por el equipo sobre el mismo test",
+      "interpretacion": "El modelo mejora ampliamente un predictor trivial"
+    },
+    {
+      "nombre": "Verificación tras integración: golden",
+      "valor": "20/20 ciclos",
+      "descripcion": "20 ciclos de test (semilla 42, cubren las 12 parejas componente/clase); etiqueta real de profile.txt; plugin m48 con apply_digital_twin=true",
+      "interpretacion": "El plugin reproduce las clases esperadas de los 20 ciclos (cableado y preprocesado correctos); no sustituye a las métricas de test"
+    },
+    {
+      "nombre": "Verificación tras integración: XAI",
+      "valor": "ciclo 123: 13/13 columnas · global: 6 CCP + 28 SHAP idénticos",
+      "descripcion": "Plugin frente a los CSV de la v1.3 del equipo (shap 0.52.0, scikit-learn 1.5.2); diferencia máxima SHAP 0,0",
+      "interpretacion": "La capa XAI del plugin reproduce exactamente la del equipo de IA"
+    }
+  ],
+  "limitaciones": [
+    {
+      "tipo": "Datos de laboratorio, no de leche real",
+      "descripcion": "Entrenado y evaluado con el banco hidráulico UCI (aceite, fallos inyectados de forma controlada), adaptado con un gemelo térmico. Las métricas son optimistas respecto a planta; requiere calibración (transfer learning) con datos etiquetados de un pasteurizador real antes de producción. El equipo de IA no dispone aún de datos reales."
+    },
+    {
+      "tipo": "Gemelo digital según el origen de los datos",
+      "descripcion": "Con datos UCI hay que aplicar apply_digital_twin=true (offset de TS1/TS2 a 65 °C con ts1_mean_train); con datos reales de planta debe ser false. Aplicarlo mal desplaza las temperaturas y degrada el diagnóstico."
+    },
+    {
+      "tipo": "Explicabilidad post-hoc, no causal",
+      "descripcion": "Grad-CAM y SHAP explican lo que el modelo 've', no prueban causalidad física; si el modelo se equivoca, la explicación justifica una predicción incorrecta. Las acciones prescriptivas son una tabla experta configurable (maintenance_actions.yaml), no una optimización."
+    },
+    {
+      "tipo": "SHAP: coste y dependencia de versión",
+      "descripcion": "SHAP (GradientExplainer) cuesta ≈5–8 s por ciclo en CPU y ≈10 min en el análisis global de 50 ciclos, por eso es opcional. Sus valores dependen de la versión de shap: se reproducen con shap ≥ 0,51 (verificado 0,52.0), no con 0,42."
+    },
+    {
+      "tipo": "Ventana fija de 600 pasos",
+      "descripcion": "Cada ciclo se procesa como 60 s a 10 Hz: con menos pasos se rellena con ceros (calidad no garantizada) y con más se trunca a los 600 primeros."
+    },
+    {
+      "tipo": "Pendiente de validación de infraestructura",
+      "descripcion": "Reentrenamiento completo (300 épocas) y /train contra un MLflow real no verificados; el plugin reentrena con los hiperparámetros del equipo, pero sus métricas a escala completa no se han comprobado."
+    }
+  ],
+  "fichero_nombre": "golden_cycles_10hz.csv (ciclos extraídos de data/processed/hydraulic_10hz_raw.csv)",
+  "fichero_registros": "21 ciclos × 601 filas a 10 Hz: 20 ciclos del split de test y el ciclo 123 (validación)",
+  "fichero_resultado": "predict_batch con apply_digital_twin=true reproduce las etiquetas reales de los 20 ciclos de test (20/20) y el informe local del ciclo 123 (13/13 columnas del xai_report_cycle.csv de la v1.3), con shap 0.52.0 y scikit-learn 1.5.2",
+  "observaciones_tecnicas": "Python 3.12; PyTorch ≥ 2.13 (CPU suficiente, sin GPU), scikit-learn 1.5.2 (el scaler se regeneró con esta versión), shap ≥ 0,51 (verificado 0,52.0), pandas / numpy. Artefactos ≈ 4 MB (pesos 592 KB + fondo SHAP 3,4 MB) en s3://xai/artifacts/fixed/a48_dnsl_fallas_maquinaria_pasteurizado/. Grad-CAM < 1 s por ciclo; SHAP ≈ 5–8 s por ciclo (inline) y ≈ 10 min en el análisis global de 50 ciclos. Servicio propio MODEL=m48-dnsl-fallas-maquinaria-pasteurizado; monitorizar deriva con el detector ODD (modelo-48) y revisar umbrales y acciones al disponer de datos reales.",
+  "que_no_responde": "No te dice cuánto tiempo falta exactamente para que falle un componente ni sustituye la inspección del técnico: te indica el estado actual de cada componente, en qué momento del ciclo aparece la anomalía y qué actuación se recomienda.",
+  "entradas_contexto": "Los datos son las lecturas de siete sensores del pasteurizador durante un ciclo completo de 60 segundos (diez lecturas por segundo), que llegan del sistema de planta o de un archivo CSV con varios ciclos.",
+  "ejemplo_interpretacion": "Si para un ciclo el enfriador sale como «Crítico» con una confianza del 96 %, la ventana crítica va de los segundos 9,1 a 11,1 y la acción es «Detener producción y ejecutar limpieza CIP inmediata», debes parar y limpiar; si válvula, bomba y acumulador salen «Sano», no requieren intervención en ese ciclo.",
+  "margen_error": "En las pruebas con ciclos que el modelo no había visto, acertó el estado de los cuatro componentes a la vez en cerca del 99 % de los ciclos. Los pocos errores fueron falsas alarmas (un componente sano marcado como «Warning»), no fallos reales pasados por alto.",
+  "revisar_manualmente": [
+    "Cuando un componente salga «Crítico» o «Warning» con confianza baja (por debajo del 70-80 %): confirma con una inspección antes de parar la producción.",
+    "Cuando las temperaturas de tus datos sean de planta real y no de laboratorio: comprueba con el equipo técnico que no se está aplicando el ajuste de laboratorio (gemelo digital).",
+    "Cuando el ciclo tenga menos de 60 s de datos o huecos en alguna lectura: el diagnóstico de ese ciclo no es fiable.",
+    "Cuando la explicación señale un sensor o un instante que no tenga sentido físico para ti: trátala como una pista, no como una causa demostrada."
+  ],
+  "que_no_hace": [
+    "No sustituye el criterio del técnico de mantenimiento ni garantiza que un componente no vaya a fallar.",
+    "No demuestra la causa física de una avería: la explicación señala dónde y qué sensor pesó más en la decisión, no por qué se estropeó.",
+    "No está validado todavía con datos reales de una planta lechera: se ha probado con un banco de pruebas de laboratorio.",
+    "No decide solo ni ejecuta paradas: las acciones recomendadas son una sugerencia que debe confirmar una persona."
+  ],
+  "puede_equivocarse": "Sí. En las pruebas de laboratorio acertó el estado de los cuatro componentes a la vez en el 98,79 % de los ciclos, y los errores observados fueron falsas alarmas. En una planta real el rendimiento puede ser menor hasta que el modelo se calibre con datos propios. Es una ayuda a la decisión, no una garantía.",
+  "kpis": [
+    {
+      "kpi": "Acierto simultáneo de los 4 componentes",
+      "valor_umbral": "98,79 % en test",
+      "descripcion": "Porcentaje de ciclos en los que se diagnostican bien los cuatro componentes a la vez"
+    },
+    {
+      "kpi": "Equilibrio entre detectar fallos y evitar falsas alarmas",
+      "valor_umbral": "≥ 95 % exigido · 99,70 % obtenido",
+      "descripcion": "Criterio de éxito del diagnóstico de fallos (F1 macro)"
+    },
+    {
+      "kpi": "Fallos reales no detectados",
+      "valor_umbral": "Ninguno clasificado como «Sano» en test",
+      "descripcion": "Los pocos errores fueron falsas alarmas, no fallos pasados por alto"
+    },
+    {
+      "kpi": "Explicación disponible por ciclo",
+      "valor_umbral": "Los 4 componentes",
+      "descripcion": "Para cada componente: momento crítico del ciclo, riesgo y acción de mantenimiento recomendada"
+    }
+  ]
+}
