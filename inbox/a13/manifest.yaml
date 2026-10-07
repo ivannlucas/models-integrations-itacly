@@ -1,0 +1,437 @@
+model_id: ml13-wine-price-fluctuation-prediction
+plugin_name: ml13_wine_price_fluctuation_prediction
+sector: vitivinicola
+nombre: "Modelo para la predicción de fluctuaciones de precios basado en redes neuronales recurrentes"
+acronimo: RNN-VINO
+memoria: "inbox/a13/entregable/13 - Modelo para la predicción de fluctuaciones de precios vino v1.10.docx (v1.10, 23/06/2026)"
+codigo: "inbox/a13/codigo/luce_back_front-retech-lote2-rnn-vitivinicola-price-fluctuation-prediction-50bf1214d89c/ (zip a13-luce_back_front-retech-lote2-rnn-vitivinicola-price-fluctuation-prediction.zip, commit 50bf1214d89c)"
+task_type: classification_binary_timeseries_tabular
+task_type_note: >
+  Clasificación binaria semanal: probabilidad de que la media del precio del vino tinto a granel
+  de las 4 semanas siguientes (t+1..t+4) supere en más de un 2,5% el precio de la semana t.
+  A PESAR DEL TÍTULO ("redes neuronales recurrentes"), el modelo de PRODUCCIÓN es una Regresión
+  Logística tabular sobre 6 indicadores técnicos (models/prod/model_config.json = logreg; memoria
+  sec. "Conclusiones y Selección Final"). GRU y ensemble GRU+LogReg son solo experimentales
+  (modules/RNN_models/), no se entrega artefacto GRU entrenado y la memoria los excluye
+  explícitamente del pipeline de producción. El plugin integra solo la rama de producción.
+
+framework:
+  - scikit-learn   # LogisticRegression + StandardScaler. Artefactos serializados con 1.3.2
+                   # (requirements del equipo de IA); el repo fija 1.5.2 -> InconsistentVersionWarning
+                   # al deserializar (ver known_issues y verification_report: equivalencia numérica comprobada)
+  - pandas
+  - numpy
+  - joblib
+  - xgboost        # solo para train(): el procedimiento original compite LogReg vs XGBoost por Smart Score
+  # requirements.txt del código entregado: ASCII, LF, sin BOM -- SIN problema de encoding.
+  # tensorflow==2.15.0, matplotlib, seaborn, requests, pdfplumber, beautifulsoup4 solo se usan en
+  # notebooks/RNN_models/scraper -- no forman parte de la inferencia de producción.
+
+artifacts:
+  folder: models/prod/
+  files:
+    - ml_model.pkl          # LogisticRegression(C=1.0, penalty=l2, class_weight=balanced, max_iter=1000, random_state=42)
+    - scaler.pkl            # StandardScaler ajustado sobre train+val (126 semanas)
+    - feature_schema.json   # orden de columnas de entrada + metadatos de fórmulas/umbral
+    - model_config.json     # {"model_type": "logreg"}
+  local_destination: artifacts/ml13_wine_price_fluctuation_prediction/
+
+inputs:
+  # El input NO es una fila de features: inference.py::predict_from_csv() recibe una serie semanal
+  # cruda y recalcula internamente los indicadores técnicos (ventana dominante Bollinger-20).
+  fixed:
+    - {name: campaign, type: str, example: "2024/2025", description: "Campaña vitivinícola (agosto año N - julio año N+1). Semana >= 31 -> año N; semana < 31 -> año N+1 (data.py::parse_campaign_date)."}
+    - {name: week, type: int, range: [1, 53], description: "Semana ISO. Fecha = lunes de la semana ISO (%G-W%V-%u)."}
+    - {name: price_red, type: float, unit: "EUR/hl", description: "Precio medio nacional semanal del vino tinto a granel (boletín MAPA). Detección automática de columna de precio en el orden: preciotinto, price_red, precio_blanco, price_white (config.py::DataConfig.price_column_candidates)."}
+  alternative_time_key:
+    - {name: bulletin, type: str, example: "SEMANA 50/2023", description: "Alternativa a campaign+week: SEMANA {week}/{year_end}; se deriva campaign='{year_end-1}/{year_end}'. Si vienen campaign+week, tienen prioridad."}
+  optional:
+    - {name: price_white, type: float, description: "Se acepta; solo se usa si no existe ninguna columna de tinto (orden de candidatos). La memoria afirma que el pipeline funciona con blanco, pero el artefacto entregado está entrenado SOLO con tinto."}
+  derived_internally: [logret, distsma12, rsi14, bollingerpos, weeksin, weekcos]
+  constraints:
+    min_historical_weeks: 20   # config.py::MIN_INFERENCE_WEEKS; memoria sec. "Mecanismo de Inferencia"
+    ordering: "Se reordena internamente por fecha reconstruida. El código original NO valida huecos semanales ni duplicados (ver known_issues)."
+
+outputs:
+  predict_batch:
+    # predict_from_csv(): left-merge sobre TODAS las filas de entrada; NaN en las ~19 primeras (warm-up).
+    - {name: fecha, type: date, description: "Lunes de la semana ISO de la fila de entrada (semana t de referencia, NO t+4)."}
+    - {name: campaign, type: str}
+    - {name: week, type: int}
+    - {name: price, type: float}
+    - {name: "logret|distsma12|rsi14|bollingerpos|weeksin|weekcos", type: float}
+    - {name: pred_proba_up, type: float, description: "P(mean(price[t+1..t+4]) > price_t * 1.025). NaN si la fila cae en el warm-up."}
+  predict_inline:
+    - {name: pred_proba_up, type: float, description: "Probabilidad para la ÚLTIMA semana del historial enviado."}
+    - {name: alerta_subida, type: int, description: "1 si pred_proba_up >= 0.5. Umbral de decisión 0.5 fijo en el código (inference.py::_compute_test_metrics y evaluate_on_last_weeks); predict_from_csv solo devuelve la probabilidad -- el plugin añade la etiqueta con ese mismo umbral, documentado como comportamiento añadido."}
+
+training:
+  supported: true
+  source: codigo_entrenamiento   # modules/ML_models/training.py (train_with_walk_forward + train_final_models) + modules/common/config.py
+  input_schema: "Mismo CSV crudo que inferencia (campaign+week o bulletin, + price_red). El target NO viene en el CSV: se calcula internamente."
+  target_column: target   # DERIVADA internamente (features.py::generate_technical_features):
+                          # target = 1 si mean(price[t+1..t+4]) > price_t * (1 + 0.025)
+  required_columns: [campaign, week, price_red]   # o [bulletin, price_red]
+  hyperparams:
+    return_threshold: 0.025
+    target_window: 4
+    test_size: 24          # últimas 24 semanas, hold-out
+    n_folds: 5             # walk-forward adaptativo (get_adaptive_walk_forward_splits)
+    gap: 4
+    random_seed: 42
+    model_selection: "Smart Score = 0.5*AUC_mean + 0.3*F1_mean + 0.2*(1 - min(auc_std/0.15, 1)); candidatos logreg vs xgboost"
+    logreg: {C: 1.0, penalty: l2, class_weight: balanced, max_iter: 1000}
+    xgboost: {n_estimators: 100, max_depth: 3, learning_rate: 0.1, scale_pos_weight: "n_neg/n_pos dinámico sobre trainval"}
+    scaler: "StandardScaler ajustado sobre train+val completo"
+    decision_threshold: 0.5
+  metrics_returned: [auc, accuracy, f1, precision, recall]   # hold-out (últimas 24 semanas) + medias CV + best_model_type
+  note: >
+    El entrenamiento original es "desde cero" (no fine-tuning incremental): reajusta scaler y modelo
+    sobre train+val y re-selecciona entre logreg/xgboost. El plugin reproduce ese procedimiento
+    exacto sin mutar el artefacto servido (ver plugin-integration).
+
+constraints:
+  historial_minimo:
+    rule: "len(serie semanal limpia) >= 20"
+    source: "config.py::MIN_INFERENCE_WEEKS; memoria sec. 'Entradas y Salidas' y 'Mecanismo de Inferencia'"
+    domain_exception: InsufficientDataError   # ya existe en app/domain/services/exceptions.py ("wine price"), sin usos previos -> 422
+  # No hay restricciones de negocio tipo umbral físico. La política "human-in-the-loop" para cambiar
+  # return_threshold (memoria sec. Objetivos) es proceso externo, no validación de input.
+
+success_criteria_memoria:   # sec. 7.1 "Criterios de Éxito"
+  auc_roc_min: 0.70
+  f1_min: 0.50
+  recall_min: 0.65
+
+metrics_reported:
+  modelo: LogisticRegression
+  test_holdout:   # Tabla 6 "Métricas Test" -- 24 semanas (2025-05-19 .. 2025-10-27), 8 positivos
+    AUC: 0.8438
+    F1: 0.593
+    Precision: 0.421
+    Recall: 1.000
+    Accuracy: 0.542
+    smart_score: 0.7997   # Tabla 4
+    implied_confusion_matrix: {TP: 8, FP: 11, TN: 5, FN: 0}   # deducida de Tabla 6 + 8 positivos (cuadra exactamente)
+  cv_walk_forward:   # Tabla 5 (+ Tabla 4 para AUC std y Score)
+    AUC_mean: 0.6564
+    AUC_std: 0.2704
+    Accuracy: 0.659
+    F1: 0.171
+    Precision: 0.321   # citado en el texto, no en la tabla
+    Recall: 0.290
+    smart_score: 0.3796
+  xgboost_alternativo: {AUC_val: 0.4328, AUC_std: 0.0685, AUC_test: 0.4688, Score_val: 0.3251, Score_test: 0.5267}
+  tolerance_derivation: >
+    Clasificador: no hay MAE/RMSE. Las métricas agregadas de test (Tabla 6) se publican a 3-4
+    decimales -> tolerancia = medio paso del último decimal publicado (atol 0.0005) al recalcular
+    sobre los 24 golden cases. Por caso, la etiqueta se compara de forma exacta contra el target
+    real; los fallos de etiqueta son errores del propio modelo ya declarados en la Tabla 6
+    (11 falsos positivos esperados, 0 falsos negativos), no se silencian.
+  source: "memoria v1.10, Tablas 4, 5 y 6; sec. 7.1"
+
+golden_cases:
+  # 24 casos = TODO el hold-out de test (no hay más filas de test disponibles). Fuente:
+  # data/processed/wine_prices_test_processed.csv entregado por el equipo de IA (generado por
+  # training.py::train_final_models). 'expected.target' es la etiqueta real del split.
+  # Para ejecutar un caso, el input efectivo es el historial crudo data/raw/mapa_wine_prices_raw.csv
+  # hasta la fecha del caso (>= 20 semanas); 'features_split' sirve para verificar paridad de
+  # feature engineering. Verificación agregada: recalcular Tabla 6 sobre los 24 casos.
+  - id: caso_2025-05-19
+    source: dataset_test_split  # data/processed/wine_prices_test_processed.csv
+    input:
+      fecha: "2025-05-19"
+      price_red: 47.2
+      historial: "data/raw/mapa_wine_prices_raw.csv, todas las semanas con fecha <= 2025-05-19"
+      features_split: {logret: -0.0004236390659, distsma12: 0.02798375706, rsi14: 65.45961003, bollingerpos: 0.5479413458, weeksin: 0.5680647467, weekcos: -0.8229838659}
+    expected:
+      target: 0
+  - id: caso_2025-05-26
+    source: dataset_test_split  # data/processed/wine_prices_test_processed.csv
+    input:
+      fecha: "2025-05-26"
+      price_red: 45.74
+      historial: "data/raw/mapa_wine_prices_raw.csv, todas las semanas con fecha <= 2025-05-26"
+      features_split: {logret: -0.031420704, distsma12: -0.00666812418, rsi14: 60.72351421, bollingerpos: 0.08228958342, weeksin: 0.464723172, weekcos: -0.8854560257}
+    expected:
+      target: 0
+  - id: caso_2025-06-02
+    source: dataset_test_split  # data/processed/wine_prices_test_processed.csv
+    input:
+      fecha: "2025-06-02"
+      price_red: 45.97
+      historial: "data/raw/mapa_wine_prices_raw.csv, todas las semanas con fecha <= 2025-06-02"
+      features_split: {logret: 0.005015821224, distsma12: -0.008012471902, rsi14: 57.18309859, bollingerpos: 0.1530933114, weeksin: 0.354604887, weekcos: -0.9350162427}
+    expected:
+      target: 0
+  - id: caso_2025-06-09
+    source: dataset_test_split  # data/processed/wine_prices_test_processed.csv
+    input:
+      fecha: "2025-06-09"
+      price_red: 43.78
+      historial: "data/raw/mapa_wine_prices_raw.csv, todas las semanas con fecha <= 2025-06-09"
+      features_split: {logret: -0.04881191772, distsma12: -0.05835998173, rsi14: 50.12345679, bollingerpos: -0.4910371359, weeksin: 0.2393156643, weekcos: -0.9709418174}
+    expected:
+      target: 1
+  - id: caso_2025-06-16
+    source: dataset_test_split  # data/processed/wine_prices_test_processed.csv
+    input:
+      fecha: "2025-06-16"
+      price_red: 44.52
+      historial: "data/raw/mapa_wine_prices_raw.csv, todas las semanas con fecha <= 2025-06-16"
+      features_split: {logret: 0.01676143431, distsma12: -0.04142333034, rsi14: 58.93011217, bollingerpos: -0.2570306214, weeksin: 0.1205366803, weekcos: -0.9927088741}
+    expected:
+      target: 1
+  - id: caso_2025-06-23
+    source: dataset_test_split  # data/processed/wine_prices_test_processed.csv
+    input:
+      fecha: "2025-06-23"
+      price_red: 46.03
+      historial: "data/raw/mapa_wine_prices_raw.csv, todas las semanas con fecha <= 2025-06-23"
+      features_split: {logret: 0.03335483142, distsma12: -0.008128756608, rsi14: 59.42028986, bollingerpos: 0.1871817697, weeksin: -3.216245299e-16, weekcos: -1}
+    expected:
+      target: 0
+  - id: caso_2025-06-30
+    source: dataset_test_split  # data/processed/wine_prices_test_processed.csv
+    input:
+      fecha: "2025-06-30"
+      price_red: 48.12
+      historial: "data/raw/mapa_wine_prices_raw.csv, todas las semanas con fecha <= 2025-06-30"
+      features_split: {logret: 0.04440453328, distsma12: 0.03402950956, rsi14: 64.66221232, bollingerpos: 0.7240723092, weeksin: -0.1205366803, weekcos: -0.9927088741}
+    expected:
+      target: 0
+  - id: caso_2025-07-07
+    source: dataset_test_split  # data/processed/wine_prices_test_processed.csv
+    input:
+      fecha: "2025-07-07"
+      price_red: 47.22
+      historial: "data/raw/mapa_wine_prices_raw.csv, todas las semanas con fecha <= 2025-07-07"
+      features_split: {logret: -0.01888035945, distsma12: 0.0150183538, rsi14: 56.42802156, bollingerpos: 0.420440133, weeksin: -0.2393156643, weekcos: -0.9709418174}
+    expected:
+      target: 0
+  - id: caso_2025-07-14
+    source: dataset_test_split  # data/processed/wine_prices_test_processed.csv
+    input:
+      fecha: "2025-07-14"
+      price_red: 44.67
+      historial: "data/raw/mapa_wine_prices_raw.csv, todas las semanas con fecha <= 2025-07-14"
+      features_split: {logret: -0.05551539629, distsma12: -0.03682561003, rsi14: 40.97771387, bollingerpos: -0.3499326928, weeksin: -0.354604887, weekcos: -0.9350162427}
+    expected:
+      target: 0
+  - id: caso_2025-07-21
+    source: dataset_test_split  # data/processed/wine_prices_test_processed.csv
+    input:
+      fecha: "2025-07-21"
+      price_red: 45.08
+      historial: "data/raw/mapa_wine_prices_raw.csv, todas las semanas con fecha <= 2025-07-21"
+      features_split: {logret: 0.009136553808, distsma12: -0.02197944395, rsi14: 43.58059914, bollingerpos: -0.255936046, weeksin: -0.464723172, weekcos: -0.8854560257}
+    expected:
+      target: 0
+  - id: caso_2025-07-28
+    source: dataset_test_split  # data/processed/wine_prices_test_processed.csv
+    input:
+      fecha: "2025-07-28"
+      price_red: 45.97
+      historial: "data/raw/mapa_wine_prices_raw.csv, todas las semanas con fecha <= 2025-07-28"
+      features_split: {logret: 0.01955032065, distsma12: 0.0002175331738, rsi14: 46.44549763, bollingerpos: -0.03730925272, weeksin: -0.5680647467, weekcos: -0.8229838659}
+    expected:
+      target: 0
+  - id: caso_2025-08-04
+    source: dataset_test_split  # data/processed/wine_prices_test_processed.csv
+    input:
+      fecha: "2025-08-04"
+      price_red: 43.91
+      historial: "data/raw/mapa_wine_prices_raw.csv, todas las semanas con fecha <= 2025-08-04"
+      features_split: {logret: -0.04584692524, distsma12: -0.0404046155, rsi14: 37.05808081, bollingerpos: -0.7931844627, weeksin: -0.6631226582, weekcos: -0.7485107482}
+    expected:
+      target: 1
+  - id: caso_2025-08-11
+    source: dataset_test_split  # data/processed/wine_prices_test_processed.csv
+    input:
+      fecha: "2025-08-11"
+      price_red: 43.57
+      historial: "data/raw/mapa_wine_prices_raw.csv, todas las semanas con fecha <= 2025-08-11"
+      features_split: {logret: -0.007773244444, distsma12: -0.04158059827, rsi14: 37.94440853, bollingerpos: -0.8747828875, weeksin: -0.7485107482, weekcos: -0.6631226582}
+    expected:
+      target: 1
+  - id: caso_2025-08-18
+    source: dataset_test_split  # data/processed/wine_prices_test_processed.csv
+    input:
+      fecha: "2025-08-18"
+      price_red: 45.63
+      historial: "data/raw/mapa_wine_prices_raw.csv, todas las semanas con fecha <= 2025-08-18"
+      features_split: {logret: 0.04619655481, distsma12: 0.005643217182, rsi14: 45.44412607, bollingerpos: -0.1488248693, weeksin: -0.8229838659, weekcos: -0.5680647467}
+    expected:
+      target: 0
+  - id: caso_2025-08-25
+    source: dataset_test_split  # data/processed/wine_prices_test_processed.csv
+    input:
+      fecha: "2025-08-25"
+      price_red: 47.24
+      historial: "data/raw/mapa_wine_prices_raw.csv, todas las semanas con fecha <= 2025-08-25"
+      features_split: {logret: 0.03467559639, distsma12: 0.03729184307, rsi14: 50.10504202, bollingerpos: 0.4184909244, weeksin: -0.8854560257, weekcos: -0.464723172}
+    expected:
+      target: 0
+  - id: caso_2025-09-01
+    source: dataset_test_split  # data/processed/wine_prices_test_processed.csv
+    input:
+      fecha: "2025-09-01"
+      price_red: 45.35
+      historial: "data/raw/mapa_wine_prices_raw.csv, todas las semanas con fecha <= 2025-09-01"
+      features_split: {logret: -0.04083081477, distsma12: -0.005714810731, rsi14: 48.99845917, bollingerpos: -0.2223057448, weeksin: -0.9350162427, weekcos: -0.354604887}
+    expected:
+      target: 0
+  - id: caso_2025-09-08
+    source: dataset_test_split  # data/processed/wine_prices_test_processed.csv
+    input:
+      fecha: "2025-09-08"
+      price_red: 44.44
+      historial: "data/raw/mapa_wine_prices_raw.csv, todas las semanas con fecha <= 2025-09-08"
+      features_split: {logret: -0.02027021179, distsma12: -0.02615886589, rsi14: 46.20347395, bollingerpos: -0.4928812973, weeksin: -0.9709418174, weekcos: -0.2393156643}
+    expected:
+      target: 1
+  - id: caso_2025-09-15
+    source: dataset_test_split  # data/processed/wine_prices_test_processed.csv
+    input:
+      fecha: "2025-09-15"
+      price_red: 44.78
+      historial: "data/raw/mapa_wine_prices_raw.csv, todas las semanas con fecha <= 2025-09-15"
+      features_split: {logret: 0.007621646399, distsma12: -0.01604138752, rsi14: 52.73224044, bollingerpos: -0.3353901558, weeksin: -0.9927088741, weekcos: -0.1205366803}
+    expected:
+      target: 0
+  - id: caso_2025-09-22
+    source: dataset_test_split  # data/processed/wine_prices_test_processed.csv
+    input:
+      fecha: "2025-09-22"
+      price_red: 46.7
+      historial: "data/raw/mapa_wine_prices_raw.csv, todas las semanas con fecha <= 2025-09-22"
+      features_split: {logret: 0.0419825535, distsma12: 0.02826552463, rsi14: 55.59548255, bollingerpos: 0.3948431347, weeksin: -1, weekcos: -1.836970199e-16}
+    expected:
+      target: 0
+  - id: caso_2025-09-29
+    source: dataset_test_split  # data/processed/wine_prices_test_processed.csv
+    input:
+      fecha: "2025-09-29"
+      price_red: 44.75
+      historial: "data/raw/mapa_wine_prices_raw.csv, todas las semanas con fecha <= 2025-09-29"
+      features_split: {logret: -0.04265271995, distsma12: -0.00947858473, rsi14: 46.78714859, bollingerpos: -0.3056149098, weeksin: -0.9927088741, weekcos: 0.1205366803}
+    expected:
+      target: 1
+  - id: caso_2025-10-06
+    source: dataset_test_split  # data/processed/wine_prices_test_processed.csv
+    input:
+      fecha: "2025-10-06"
+      price_red: 46.2
+      historial: "data/raw/mapa_wine_prices_raw.csv, todas las semanas con fecha <= 2025-10-06"
+      features_split: {logret: 0.03188835337, distsma12: 0.01944444444, rsi14: 45.02074689, bollingerpos: 0.2907994434, weeksin: -0.9709418174, weekcos: 0.2393156643}
+    expected:
+      target: 0
+  - id: caso_2025-10-13
+    source: dataset_test_split  # data/processed/wine_prices_test_processed.csv
+    input:
+      fecha: "2025-10-13"
+      price_red: 45.18
+      historial: "data/raw/mapa_wine_prices_raw.csv, todas las semanas con fecha <= 2025-10-13"
+      features_split: {logret: -0.02232528705, distsma12: -0.002877379371, rsi14: 44.74226804, bollingerpos: -0.1117940967, weeksin: -0.9350162427, weekcos: 0.354604887}
+    expected:
+      target: 1
+  - id: caso_2025-10-20
+    source: dataset_test_split  # data/processed/wine_prices_test_processed.csv
+    input:
+      fecha: "2025-10-20"
+      price_red: 46.59
+      historial: "data/raw/mapa_wine_prices_raw.csv, todas las semanas con fecha <= 2025-10-20"
+      features_split: {logret: 0.03073141479, distsma12: 0.02636474208, rsi14: 55.25739321, bollingerpos: 0.4401964892, weeksin: -0.8854560257, weekcos: 0.464723172}
+    expected:
+      target: 1
+  - id: caso_2025-10-27
+    source: dataset_test_split  # data/processed/wine_prices_test_processed.csv
+    input:
+      fecha: "2025-10-27"
+      price_red: 47.88
+      historial: "data/raw/mapa_wine_prices_raw.csv, todas las semanas con fecha <= 2025-10-27"
+      features_split: {logret: 0.02731195486, distsma12: 0.0456871345, rsi14: 57.31452456, bollingerpos: 0.8454746424, weeksin: -0.8229838659, weekcos: 0.5680647467}
+    expected:
+      target: 0
+
+known_issues:
+  - id: titulo_rnn_vs_modelo_produccion
+    detail: >
+      El título del proyecto/memoria y el nombre del repo dicen "redes neuronales recurrentes" (RNN),
+      pero el modelo entregado para producción es una Regresión Logística tabular. La memoria lo
+      justifica (sec. "Análisis de Modelos Recurrentes (GRU)": volumen de datos insuficiente) y
+      deja GRU/ensemble como experimentales sin artefacto entrenado. Se integra SOLO LogReg.
+      DECISIÓN HUMANA: confirmar que es aceptable publicar este modelo bajo el título "RNN" en las
+      fichas, o pedir al equipo de IA que ajuste el título.
+  - id: metricas_cv_no_cumplen_criterios
+    detail: >
+      La propia memoria (Tabla 5, sec. 7.2) reconoce que en validación cruzada el modelo NO cumple
+      sus criterios de éxito (AUC 0.656 < 0.70; F1 0.171 < 0.50; Recall 0.290 < 0.65; AUC std 0.27).
+      Solo los cumple en el hold-out de 24 semanas, que la memoria califica de "límite superior
+      alcanzable bajo condiciones de mercado favorables" (33,3% positivos vs 20% en CV). Esperable
+      en producción según la memoria: AUC 0.72-0.89, F1 0.19-0.33 (Folds 3-4).
+  - id: precision_baja_test
+    detail: >
+      Tabla 6 implica TP=8, FP=11, TN=5, FN=0 sobre 24 semanas: 19 alertas de 24 semanas (79%), de
+      las que 11 son falsas. Recall=1.0 se obtiene alertando casi siempre. Relevante para la ficha
+      funcional: no presentar el Recall 100% sin este contexto.
+  - id: sklearn_version_mismatch
+    detail: >
+      ml_model.pkl y scaler.pkl serializados con scikit-learn 1.3.2 (requirements del equipo de
+      IA); el repo fija scikit-learn==1.5.2 (compatibilidad con el servicio XAI). Deserializa con
+      InconsistentVersionWarning. Se verifica equivalencia numérica en verification (Parte B).
+  - id: requirements_entregado
+    detail: >
+      requirements.txt entregado en ASCII/LF sin BOM (sin problema de encoding). Fija
+      tensorflow==2.15.0 y pandas==2.1.4/numpy==1.24.3, versiones no necesarias/compatibles con el
+      repo; no se añaden dependencias nuevas a requirements.txt del repo (sklearn, pandas, numpy,
+      joblib y xgboost ya están).
+  - id: convencion_bulletin
+    detail: >
+      El esquema 'bulletin' usa "SEMANA {week}/{year_end}" con year_end = segundo año de la campaña
+      (p. ej. SEMANA 46/2026 = semana 46 de 2025, campaña 2025/2026). NO coincide con la rotulación
+      literal de los PDF del MAPA ("46-2025"): un usuario que copie el año del boletín oficial
+      obtendría fechas desplazadas un año sin ningún error. Se mantiene el comportamiento original
+      (data/README.md lo documenta así) y se avisa en el DTO.
+  - id: sin_validacion_huecos
+    detail: >
+      El código original no valida huecos semanales ni duplicados: los indicadores (rolling por
+      filas, no por calendario) se calcularían igualmente sobre una serie con huecos. El dataset
+      entregado no tiene huecos (verificado: 174 semanas consecutivas 2022-08-01..2025-11-24, una
+      sin price_red -> 173 válidas, cuadra con la memoria). El plugin replica el comportamiento
+      original y no añade validación nueva (sería cambiar el contrato del modelo).
+  - id: dataset_raw_vs_memoria
+    detail: >
+      La memoria dice 173 semanas; el CSV crudo tiene 174 filas, una sin precio (SEMANA 31/2023 =
+      2022-08-01) que el ETL descarta -> 173. Coherente.
+  - id: periodo_test_inconsistente_en_memoria
+    detail: >
+      La memoria describe el test como "19/05/2025 al 27/10/2025" (EDA) y en otro punto como
+      "mayo-noviembre 2025" (sec. 7.3). El split entregado confirma 2025-05-19..2025-10-27.
+      Errata menor de la memoria; también "p=0002" (debería ser p=0,0002) en el EDA.
+  - id: formulas_memoria_en_ecuaciones
+    detail: >
+      Las fórmulas del target, Smart Score, estabilidad y criterios de éxito están como ecuaciones
+      OMML/imagen en la memoria y se pierden en la conversión a texto; se han tomado del código
+      (training.py, features.py) y del texto adyacente, que son coherentes entre sí.
+  - id: memoria_metadatos
+    detail: >
+      Portada fechada 18/12/2025 y versión 1.10 de 23/06/2026; campo "Entregable" vacío en la tabla
+      de control. Sin impacto técnico; a revisar para la ficha de metadatos.
+  - id: semana_iso_53
+    detail: >
+      weeksin/weekcos usan semana/52; en años con semana ISO 53 (p. ej. 2026) el valor 53 se
+      codifica como ligeramente posterior a la semana 1. No afecta al dataset entregado (sin semana
+      53); comportamiento heredado, no se corrige en el plugin.
+  - id: train_desde_cero
+    detail: >
+      El reentrenamiento original reajusta desde cero y puede cambiar de familia (logreg -> xgboost)
+      según Smart Score; el target se deriva del precio (no viene en el CSV). El plugin lo replica
+      y guarda el resultado como artefacto de usuario (nunca sobreescribe models/prod).
+  - id: golden_sin_probabilidades_publicadas
+    detail: >
+      El código entregado no incluye output/test_predictions.csv ni output/test_metrics.json (están
+      en .gitignore del equipo de IA): no hay probabilidades por fila publicadas. Los golden cases
+      llevan solo la etiqueta real del split; la correctitud se contrasta (1) agregadamente con la
+      Tabla 6 y (2) por fila contra la salida del código original del equipo de IA ejecutado sobre
+      los artefactos entregados (cross-check de wiring, documentado en verification_report.md).
