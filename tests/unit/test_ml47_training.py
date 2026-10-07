@@ -1,6 +1,6 @@
 """Tests for ml47 /train — the real trainer code, not the FakePlugin wiring.
 
-Ports of the AI team's two procedures (inbox/a47/codigo/a47-dnsl-fallas-maquinaria-pasteurizado):
+Ports of the AI team's two procedures (inbox/a47/codigo):
 ``full`` = src/training/trainer.py + src/data_processing/preprocess.py (``main.py train``) and
 ``fine_tune`` = src/fine_tuning/fine_tuner.py (``main.py fine_tune``). The synthetic cycles below
 are small but shaped like the delivered CSVs (Cycle_ID, Time_Segundos, 7 sensors, Target_*).
@@ -92,6 +92,20 @@ def test_too_few_cycles_is_a_clear_error():
         trainer.split_cycle_ids(np.arange(3))
 
 
+def test_tensors_follow_ascending_cycle_id_like_the_original():
+    # The original builds tensors from a Cycle_ID-sorted frame; the split order is shuffled.
+    df = trainer.engineer_cycle_features(_cycles(n_cycles=3))
+    cols = trainer.feature_columns(df)
+    _, y = trainer.build_tensors(df, [2, 0, 1], cols, StandardScaler().fit(df[cols]))
+    assert y[:, 0].tolist() == [0, 1, 2]
+
+
+def test_augmented_copies_keep_the_order_of_their_source_cycles():
+    df = _cycles(n_cycles=6)
+    _, ids = trainer._augment_train_cycles(df, np.array([4, 1, 3]))
+    assert list(ids[3:]) == [6, 7, 8]  # copies of 1, 3, 4 in that order
+
+
 # ── Métricas: mismas fórmulas que la memoria (Tabla 6) ───────────────────────
 
 def test_metrics_follow_the_reported_formulas():
@@ -173,6 +187,10 @@ def test_full_training_is_reproducible(csv_path, monkeypatch):
     on the outputs, which is what this test checks.
     """
     monkeypatch.setitem(constants.TRAIN_HYPERPARAMS, "epochs", 2)
+    # On a GPU host cuDNN kernels are non-deterministic (and the trainer deliberately avoids the
+    # process-global torch.use_deterministic_algorithms), so two runs differ by ~3e-4. Pin CPU so
+    # the test checks the seeding, not the host's hardware.
+    monkeypatch.setattr(trainer, "_device", lambda: torch.device("cpu"))
     first, second = trainer.train_full(csv_path), trainer.train_full(csv_path)
     df = trainer.engineer_cycle_features(trainer.load_training_frame(csv_path))
     x, _ = trainer.build_tensors(df, sorted(df["Cycle_ID"].unique()), first.feature_cols, first.scaler)
@@ -275,3 +293,30 @@ def test_train_registers_a_new_model_in_mlflow_and_predict_uses_it(plugin_with_m
     assert instance._load_model_for_predict("") is None  # pylint: disable=protected-access
     served = instance._model.state_dict()  # pylint: disable=protected-access
     assert all(torch.equal(served[k].cpu(), v) for k, v in base_before.items())
+
+
+# ── Inferencia y carga: fidelidad con predictor.py ───────────────────────────
+
+def test_batch_csv_in_raw_bench_format_uses_time_column(tmp_path):
+    # data/raw/hydraulic_raw.csv (what main.py predict reads) has "Time" at 100 Hz, no Time_Segundos.
+    from app.plugins.ml47_dairy_dnsl_pasteurization_fault_detection.preprocessing import build_dataframe_from_csv
+    raw = _cycles(n_cycles=2, steps=40).rename(columns={"Time_Segundos": "Time"})
+    raw["Time"] = raw.groupby("Cycle_ID").cumcount() * 0.01
+    path = tmp_path / "raw.csv"
+    raw.to_csv(path, index=False)
+    x_df, cycle_ids = build_dataframe_from_csv(str(path), ts1_mean_train=45.0, apply_digital_twin_flag=False)
+    assert cycle_ids.value_counts().tolist() == [5, 5]  # 0.00–0.39 s → round(1) → 0.0…0.4
+    assert "PS1_rmean" in x_df.columns
+
+
+def test_loaded_model_uses_the_original_dropout(tmp_path):
+    import joblib
+    from app.plugins.ml47_dairy_dnsl_pasteurization_fault_detection.model_loader import load_artifacts_from_dir
+    cols = trainer.feature_columns(trainer.engineer_cycle_features(_cycles(n_cycles=1)))
+    torch.save(CNN_Pasteurizer(n_sensors=len(cols)).state_dict(), tmp_path / constants.MODEL_FILENAME)
+    joblib.dump(StandardScaler().fit(np.zeros((2, len(cols)))), tmp_path / constants.SCALER_FILENAME)
+    joblib.dump(cols, tmp_path / constants.FEATURE_COLUMNS_FILENAME)
+    joblib.dump(45.0, tmp_path / constants.TS1_MEAN_FILENAME)
+    model, *_ = load_artifacts_from_dir(tmp_path)
+    # fine_tune trains dropout_final from this model: it must be config.yaml's 0.2022, not 0.5.
+    assert model.dropout_final.p == constants.TRAIN_HYPERPARAMS["dropout_rate"]

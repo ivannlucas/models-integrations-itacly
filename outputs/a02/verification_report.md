@@ -1,5 +1,7 @@
 # Verificación — ml2-fungal-cnn-disease-detection
 
+> **[CORREGIDO 2026-10-07]** El patrón descrito más abajo para usar el modelo del usuario (sustituir `self._bundle` en `self` durante la petición y restaurarlo en `finally`) **no era seguro con peticiones concurrentes**: hay una sola instancia del plugin, así que una petición sin `mlflow_run_id` podía recibir el modelo de otro usuario, y dos peticiones solapadas podían dejar el de un usuario como modelo base. Se ha cambiado para resolver el modelo en variables locales, sin tocar `self` (rama `fix/retrain-mlflow-only-persistence`, cubierto por `tests/unit/test_user_model_isolation.py` y `test_user_model_download_hygiene.py`). Además, si el run pedido no tiene un modelo cargable, la petición falla con 422 en lugar de usar el modelo base. El texto de abajo se conserva como histórico.
+
 ## Contexto
 
 Este plugin ya estaba integrado y registrado en `app/registry.py` antes de esta sesión,

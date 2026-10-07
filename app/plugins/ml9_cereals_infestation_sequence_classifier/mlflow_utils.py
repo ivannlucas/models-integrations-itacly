@@ -8,6 +8,7 @@ from __future__ import annotations
 import logging
 import os
 import tempfile
+import shutil
 from typing import Any
 
 from app.domain.services.mlflow_tracker import BaseMLflowTracker, require_user_model
@@ -46,26 +47,32 @@ def download_user_model_from_mlflow(run_id: str) -> tuple[dict, Any, dict, str] 
     model retrained on a different class cardinality still loads correctly.
     """
     tmp = tempfile.mkdtemp(prefix="mlflow_ml9_")
-    local_path = BaseMLflowTracker(run_id).download_artifacts(tmp, artifact_path="model")
-    if not local_path:
-        return None
+    try:
+        local_path = BaseMLflowTracker(run_id).download_artifacts(tmp, artifact_path="model")
+        if not local_path:
+            shutil.rmtree(tmp, ignore_errors=True)
+            return None
 
-    model_path = _first_existing(local_path, USER_MODEL_FILENAME, MODEL_FILENAME)
-    bundle_path = _first_existing(local_path, USER_BUNDLE_FILENAME, BUNDLE_FILENAME)
-    scaler_path = _first_existing(local_path, USER_SCALER_FILENAME, SCALER_FILENAME)
-    if not model_path or not bundle_path or not scaler_path:
-        logger.error(
-            "MLflow run_id=%s does not contain the expected ml9 artifacts (checkpoint/bundle/scaler)",
-            run_id,
+        model_path = _first_existing(local_path, USER_MODEL_FILENAME, MODEL_FILENAME)
+        bundle_path = _first_existing(local_path, USER_BUNDLE_FILENAME, BUNDLE_FILENAME)
+        scaler_path = _first_existing(local_path, USER_SCALER_FILENAME, SCALER_FILENAME)
+        if not model_path or not bundle_path or not scaler_path:
+            logger.error(
+                "MLflow run_id=%s does not contain the expected ml9 artifacts (checkpoint/bundle/scaler)",
+                run_id,
+            )
+            shutil.rmtree(tmp, ignore_errors=True)
+            return None
+
+        checkpoint = load_checkpoint(model_path, map_location="cpu")
+        scaler = load_pickle(scaler_path)
+        bundle = _load_json(bundle_path)
+
+        logger.info(
+            "Downloaded user model from MLflow run_id=%s — model_type=%s n_features=%d",
+            run_id, checkpoint.get("model_type"), len(bundle.get("feature_columns") or []),
         )
-        return None
-
-    checkpoint = load_checkpoint(model_path, map_location="cpu")
-    scaler = load_pickle(scaler_path)
-    bundle = _load_json(bundle_path)
-
-    logger.info(
-        "Downloaded user model from MLflow run_id=%s — model_type=%s n_features=%d",
-        run_id, checkpoint.get("model_type"), len(bundle.get("feature_columns") or []),
-    )
-    return checkpoint, scaler, bundle, tmp
+        return checkpoint, scaler, bundle, tmp
+    except BaseException:
+        shutil.rmtree(tmp, ignore_errors=True)
+        raise

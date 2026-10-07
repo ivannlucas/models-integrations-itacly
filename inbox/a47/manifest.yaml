@@ -107,6 +107,13 @@ training:
   # cycle_splits.json, features con diff máx 2.8e-7, modelo base evaluado = 0.9879/0.9970/0.9970
   # exactos; full real en GPU = 0.9940/0.9985/0.9986 (78 épocas); fine_tune real sobre val_split
   # = 0.94→0.96 exact match en sus 50 ciclos de test, backbone intacto.
+  # [CORREGIDO 2026-10-07] Reanálisis con el código original completo: el modelo se cargaba con
+  # dropout 0.5 (no 0.2022) y fine_tune entrenaba dropout_final con él; los tensores no seguían el
+  # orden por Cycle_ID del original. Corregido: full real en GPU reproduce ahora EXACTAMENTE las
+  # métricas del modelo entregado (0.9879/0.9970/0.9969/0.9972/0.9970, 89 épocas); fine_tune
+  # real = 0.96 exact match. Las cifras de full de arriba (0.9940, 78 épocas) son del código previo.
+  # Comprobado también: fine_tuner.py original usa model.train() sobre todo el modelo (BatchNorm
+  # del backbone actualiza estadísticas, igual que el plugin) y fluid_density/cp solo se registran.
   # El texto de abajo es histórico: el trainer anterior asignaba a todos los ciclos la etiqueta
   # del primero, mezclaba ciclos en las medias móviles e ignoraba estos hiperparámetros.
   # El plugin implementa train() vía train_model_from_csv: reconstruye la CNN y la
@@ -194,3 +201,5 @@ known_issues:
   - "El dataset es de laboratorio (banco hidráulico UCI, fluido = aceite), NO de pasteurizado lácteo real. Todas las métricas son optimistas respecto a producción; el modelo requiere reentrenamiento/calibración con datos de planta antes de desplegar."
   - "No existe outputs/a47/verification_report.md — el modelo aún no ha pasado el skill verification contra estos golden cases."
   - "[RESUELTO] outputs/a47/verification_report.md ya existe (15/15 golden cases reproducidos exactamente). La nota anterior quedó obsoleta tras esa ejecución del skill verification."
+  - "[CORREGIDO 2026-10-07] La nota de arriba sobre prediction_output.csv es incorrecta: ese fichero son las predicciones de main.py predict sobre data/raw/hydraulic_raw.csv (Cycle_ID 0..2204 del CSV bruto) con --apply_digital_twin. El plugin con APPLY_DIGITAL_TWIN=true lo reproduce (50 primeros ciclos: clases idénticas, confianza diff máx 1.2e-4)."
+  - "[CORREGIDO 2026-10-07] /predict batch fallaba (KeyError 'Time_Segundos') con CSV en formato bruto del banco (columna Time a 100 Hz); ahora se usa Time como en predictor.apply_digital_twin_inference."

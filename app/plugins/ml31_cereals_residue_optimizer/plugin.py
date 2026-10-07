@@ -16,7 +16,6 @@ random seed, so results are exactly reproducible from the reference data.
 from __future__ import annotations
 
 import logging
-import shutil
 from datetime import datetime, timezone
 from typing import Any
 
@@ -191,24 +190,14 @@ class Ml31CerealsResidueOptimizerPlugin(ModelPluginPort):
     ) -> PredictOptimizeResponse | PredictParetoResponse:
         """Dispatch to the LP optimize or the Pareto frontier branch."""
         _ = threshold
-        user_temp_dir = None
-        saved = (self._economics, self._hi, self._df)
-        if mlflow_run_id:
-            loaded = download_user_model_from_mlflow(mlflow_run_id)
-            if loaded:
-                self._economics, self._hi, self._df, user_temp_dir = loaded
-        try:
-            self._require_loaded()
-            if model_key == "pareto":
-                result = self._run_pareto(features)
-            else:
-                result = self._run_optimize(features, with_sensitivity=True)
-            self._record()
-            return result
-        finally:
-            if user_temp_dir:
-                shutil.rmtree(user_temp_dir, ignore_errors=True)
-                self._economics, self._hi, self._df = saved
+        download_user_model_from_mlflow(mlflow_run_id)  # always None; logs that the run is ignored
+        self._require_loaded()
+        if model_key == "pareto":
+            result = self._run_pareto(features)
+        else:
+            result = self._run_optimize(features, with_sensitivity=True)
+        self._record()
+        return result
 
     def _solve_scenario(self, features: dict) -> dict:
         """Core LP solve shared by _run_optimize and _compute_sensitivity — returns a
@@ -457,50 +446,40 @@ class Ml31CerealsResidueOptimizerPlugin(ModelPluginPort):
     # ── predict_batch ──────────────────────────────────────────────────────────
     def predict_batch(self, *, data_path: str, mlflow_run_id: str = "") -> PredictBatchResponse:
         """Optimize each scenario row of a CSV (one LP solve per row)."""
-        user_temp_dir = None
-        saved = (self._economics, self._hi, self._df)
-        if mlflow_run_id:
-            loaded = download_user_model_from_mlflow(mlflow_run_id)
-            if loaded:
-                self._economics, self._hi, self._df, user_temp_dir = loaded
-        try:
-            self._require_loaded()
-            with local_file_path(data_path) as local_path:
-                df = pd.read_csv(local_path)
-            predictions: list[dict] = []
-            for idx, row in df.iterrows():
-                try:
-                    features = self._row_to_scenario(row)
-                    # Sensitivity (explainability) is only ever surfaced for the first row
-                    # of a batch by the platform's XAI panel — computing it for every row
-                    # would multiply solve time ~7x for no benefit, so it's skipped past idx 0.
-                    result = self._run_optimize(features, with_sensitivity=(idx == 0))
-                    row_out = {
-                        "row": int(idx),
-                        "reference_year": result.reference_year,
-                        "optimization_mode": result.optimization_mode,
-                        "total_production_t": result.total_production_t,
-                        "total_residue_t": result.total_residue_t,
-                        "total_benefit_eur": result.total_benefit_eur,
-                        "residue_reduction_pct": result.residue_reduction_pct,
-                        "benefit_change_pct": result.benefit_change_pct,
-                        "production_change_pct": result.production_change_pct,
-                        "solver_status": result.solver_status,
-                        "verdict": result.verdict,
-                    }
-                    if result.sensitivity is not None:
-                        row_out["sensitivity"] = result.sensitivity
-                    predictions.append(row_out)
-                except Exception as exc:  # pylint: disable=broad-exception-caught
-                    logger.warning("Error en fila %s: %s", idx, exc)
-                    predictions.append({"row": int(idx), "error": str(exc)})
-            self._record()
-            logger.info("predict_batch done — %d scenarios", len(predictions))
-            return PredictBatchResponse(model_id=MODEL_ID, predictions=predictions, output_path=None)
-        finally:
-            if user_temp_dir:
-                shutil.rmtree(user_temp_dir, ignore_errors=True)
-                self._economics, self._hi, self._df = saved
+        download_user_model_from_mlflow(mlflow_run_id)  # always None; logs that the run is ignored
+        self._require_loaded()
+        with local_file_path(data_path) as local_path:
+            df = pd.read_csv(local_path)
+        predictions: list[dict] = []
+        for idx, row in df.iterrows():
+            try:
+                features = self._row_to_scenario(row)
+                # Sensitivity (explainability) is only ever surfaced for the first row
+                # of a batch by the platform's XAI panel — computing it for every row
+                # would multiply solve time ~7x for no benefit, so it's skipped past idx 0.
+                result = self._run_optimize(features, with_sensitivity=(idx == 0))
+                row_out = {
+                    "row": int(idx),
+                    "reference_year": result.reference_year,
+                    "optimization_mode": result.optimization_mode,
+                    "total_production_t": result.total_production_t,
+                    "total_residue_t": result.total_residue_t,
+                    "total_benefit_eur": result.total_benefit_eur,
+                    "residue_reduction_pct": result.residue_reduction_pct,
+                    "benefit_change_pct": result.benefit_change_pct,
+                    "production_change_pct": result.production_change_pct,
+                    "solver_status": result.solver_status,
+                    "verdict": result.verdict,
+                }
+                if result.sensitivity is not None:
+                    row_out["sensitivity"] = result.sensitivity
+                predictions.append(row_out)
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                logger.warning("Error en fila %s: %s", idx, exc)
+                predictions.append({"row": int(idx), "error": str(exc)})
+        self._record()
+        logger.info("predict_batch done — %d scenarios", len(predictions))
+        return PredictBatchResponse(model_id=MODEL_ID, predictions=predictions, output_path=None)
 
     @staticmethod
     def _row_to_scenario(row: pd.Series) -> dict:

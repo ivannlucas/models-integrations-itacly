@@ -29,6 +29,7 @@ from app.plugins.ml47_dairy_dnsl_pasteurization_fault_detection.mlflow_utils imp
 )
 from app.plugins.ml47_dairy_dnsl_pasteurization_fault_detection.model_loader import (
     load_artifacts_from_dir,
+    safe_device,
 )
 from app.plugins.ml47_dairy_dnsl_pasteurization_fault_detection.postprocessing import (
     format_batch_row,
@@ -73,7 +74,7 @@ class Ml47DairyDnslPasteurizationFaultDetectionPlugin(ModelPluginPort):
             store = ArtifactStore(ARTIFACT_FOLDER_NAME)
             store.download_all_if_needed()
 
-        self._device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self._device = safe_device()
         model, scaler, feature_cols, ts1_mean_train = load_artifacts_from_dir(_ARTIFACT_DIR)
         self._model = model.to(self._device)
         self._scaler = scaler

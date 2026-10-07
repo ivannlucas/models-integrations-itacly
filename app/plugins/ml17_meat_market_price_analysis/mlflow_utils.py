@@ -13,6 +13,7 @@ import os
 import tempfile
 
 import joblib
+import shutil
 
 from app.domain.services.mlflow_tracker import BaseMLflowTracker, require_user_model
 from app.plugins.ml17_meat_market_price_analysis.constants import MODEL_FILENAME
@@ -30,18 +31,24 @@ def download_user_model_from_mlflow(run_id: str):
     if not run_id:
         return None
     tmp = tempfile.mkdtemp(prefix="mlflow_ml17_")
-    local_path = BaseMLflowTracker(run_id).download_artifacts(tmp, artifact_path="model")
-    if not local_path:
-        logger.warning("No user-trained artifact found in MLflow run_id=%s", run_id)
-        return None
+    try:
+        local_path = BaseMLflowTracker(run_id).download_artifacts(tmp, artifact_path="model")
+        if not local_path:
+            logger.warning("No user-trained artifact found in MLflow run_id=%s", run_id)
+            shutil.rmtree(tmp, ignore_errors=True)
+            return None
 
-    model_path = os.path.join(local_path, MODEL_FILENAME)
-    if not os.path.exists(model_path):
-        logger.warning(
-            "MLflow run_id=%s has no %s under artifact_path='model'", run_id, MODEL_FILENAME
-        )
-        return None
+        model_path = os.path.join(local_path, MODEL_FILENAME)
+        if not os.path.exists(model_path):
+            logger.warning(
+                "MLflow run_id=%s has no %s under artifact_path='model'", run_id, MODEL_FILENAME
+            )
+            shutil.rmtree(tmp, ignore_errors=True)
+            return None
 
-    model = joblib.load(model_path)
-    logger.info("Downloaded user-trained Ridge pipeline from MLflow run_id=%s", run_id)
-    return model, tmp
+        model = joblib.load(model_path)
+        logger.info("Downloaded user-trained Ridge pipeline from MLflow run_id=%s", run_id)
+        return model, tmp
+    except BaseException:
+        shutil.rmtree(tmp, ignore_errors=True)
+        raise

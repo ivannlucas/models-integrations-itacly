@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import os
+import shutil
 
 from app.domain.services.mlflow_tracker import BaseMLflowTracker, require_user_model
 from app.plugins.ml7_cereals_grain_pest_detection.constants import (
@@ -32,21 +33,27 @@ def download_user_model_from_mlflow(run_id: str):
     from ultralytics import YOLO  # noqa: PLC0415 — heavy import kept lazy
 
     tmp = tempfile.mkdtemp(prefix="mlflow_ml7_grain_")
-    local_path = BaseMLflowTracker(run_id).download_artifacts(tmp, artifact_path="model")
-    if not local_path:
-        return None
+    try:
+        local_path = BaseMLflowTracker(run_id).download_artifacts(tmp, artifact_path="model")
+        if not local_path:
+            shutil.rmtree(tmp, ignore_errors=True)
+            return None
 
-    checkpoint_path = os.path.join(local_path, MODEL_FILENAME)
-    if not os.path.exists(checkpoint_path):
-        logger.warning(
-            "MLflow run_id=%s did not contain %s under artifact_path='model'",
-            run_id, MODEL_FILENAME,
-        )
-        return None
+        checkpoint_path = os.path.join(local_path, MODEL_FILENAME)
+        if not os.path.exists(checkpoint_path):
+            logger.warning(
+                "MLflow run_id=%s did not contain %s under artifact_path='model'",
+                run_id, MODEL_FILENAME,
+            )
+            shutil.rmtree(tmp, ignore_errors=True)
+            return None
 
-    model = YOLO(checkpoint_path)
-    logger.info("Downloaded user model from MLflow run_id=%s", run_id)
-    return model, tmp
+        model = YOLO(checkpoint_path)
+        logger.info("Downloaded user model from MLflow run_id=%s", run_id)
+        return model, tmp
+    except BaseException:
+        shutil.rmtree(tmp, ignore_errors=True)
+        raise
 
 
 def upload_artifacts_to_mlflow(

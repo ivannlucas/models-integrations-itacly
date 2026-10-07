@@ -19,6 +19,28 @@
 > Tests: `tests/unit/test_ml47_training.py` (código real del trainer) y endpoints `/train` en
 > `test_ml47_dairy_dnsl_pasteurization_fault_detection.py`.
 
+> **[CORREGIDO 2026-10-07] Reanálisis contra el código original completo (`inbox/a47/codigo/`).**
+> Se han corregido tres desviaciones respecto al original:
+> (1) `/predict` por lotes fallaba con `KeyError` si el CSV venía en el formato bruto del banco
+> (columna `Time` a 100 Hz); ahora se usa como `Time_Segundos`, como hace `predictor.py`;
+> (2) el modelo se cargaba con `dropout_prob=0.5` en lugar del 0,2022 de `config.yaml`, y
+> `fine_tune` entrenaba `dropout_final` con ese valor;
+> (3) los tensores de entrenamiento no seguían el orden por `Cycle_ID` del original.
+> Las cifras de `full` de la tabla anterior (Exact 0.9940, 78 épocas) corresponden al código previo.
+>
+> | Comprobación (datos reales) | Resultado |
+> |---|---|
+> | md5 de los 4 artefactos vs `models/artifacts` entregado | Idénticos |
+> | Tensores train/val/test del plugin vs pipeline original (80 ciclos, ruido incluido) | Mismo orden, X diff máx. 2,3e-6, y idénticos |
+> | Inferencia sobre `hydraulic_raw.csv` (50 ciclos, gemelo activo) vs `prediction_output.csv` | Clases idénticas, confianza diff máx. 1,2e-4 |
+> | Inferencia sin gemelo vs `predictor.py` original (mismos ciclos) | Idéntica |
+> | `full` real (GPU, `hydraulic_10hz_raw.csv`, gemelo activo) | Exact 0.9879 · Acc 0.9970 · P 0.9969 · R 0.9972 · F1 0.9970 (= modelo entregado), 89 épocas, 122 s |
+> | `fine_tune` real (`val_split.csv`, 231/50/50) | Exact 0.96 · F1 0.985 · 8 épocas · modelo base intacto |
+> | HTTP `/predict` batch con CSV bruto (`Time`) | 200, mismas predicciones que `predictor.py` |
+>
+> Tests nuevos en `tests/unit/test_ml47_training.py` (orden de tensores, ids de copias aumentadas,
+> CSV con `Time`, dropout del modelo cargado). Suite completa: 736 passed.
+
 **Fecha:** 2026-07-16
 **Plugin:** `app/plugins/m47_dnsl_fallas_maquinaria_pasteurizado/`
 **Manifest:** `inbox/a47/manifest.yaml` (15 golden_cases)

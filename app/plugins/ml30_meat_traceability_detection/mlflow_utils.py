@@ -6,6 +6,7 @@ import os
 import pickle
 
 import torch
+import shutil
 
 from app.domain.services.mlflow_tracker import BaseMLflowTracker, require_user_model
 from app.plugins.ml30_meat_traceability_detection.constants import (
@@ -25,22 +26,27 @@ def download_user_model_from_mlflow(run_id: str):
     """
     import tempfile
     tmp = tempfile.mkdtemp(prefix="mlflow_ml30_")
-    local_path = BaseMLflowTracker(run_id).download_artifacts(tmp, artifact_path="model")
-    if not local_path:
-        return None
+    try:
+        local_path = BaseMLflowTracker(run_id).download_artifacts(tmp, artifact_path="model")
+        if not local_path:
+            shutil.rmtree(tmp, ignore_errors=True)
+            return None
 
-    from app.plugins.ml30_meat_traceability_detection.model_loader import build_torch_mlp, load_payload
-    from app.plugins.ml30_meat_traceability_detection.constants import FEATURE_COLUMNS
+        from app.plugins.ml30_meat_traceability_detection.model_loader import build_torch_mlp, load_payload
+        from app.plugins.ml30_meat_traceability_detection.constants import FEATURE_COLUMNS
 
-    preprocessor_path = os.path.join(local_path, PREPROCESSOR_FILENAME)
-    state_dict_path = os.path.join(local_path, MODEL_FILENAME)
+        preprocessor_path = os.path.join(local_path, PREPROCESSOR_FILENAME)
+        state_dict_path = os.path.join(local_path, MODEL_FILENAME)
 
-    with open(preprocessor_path, "rb") as f:
-        preprocessor = pickle.load(f)
+        with open(preprocessor_path, "rb") as f:
+            preprocessor = pickle.load(f)
 
-    mlp = build_torch_mlp(load_payload())
-    mlp.load_state_dict(torch.load(state_dict_path, map_location="cpu", weights_only=False))
-    mlp.eval()
+        mlp = build_torch_mlp(load_payload())
+        mlp.load_state_dict(torch.load(state_dict_path, map_location="cpu", weights_only=False))
+        mlp.eval()
 
-    logger.info("Downloaded user model from MLflow run_id=%s", run_id)
-    return preprocessor, mlp, list(FEATURE_COLUMNS), tmp
+        logger.info("Downloaded user model from MLflow run_id=%s", run_id)
+        return preprocessor, mlp, list(FEATURE_COLUMNS), tmp
+    except BaseException:
+        shutil.rmtree(tmp, ignore_errors=True)
+        raise

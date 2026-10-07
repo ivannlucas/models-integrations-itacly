@@ -84,6 +84,12 @@ def build_dataframe_from_csv(
     apply_digital_twin_flag: bool,
 ) -> pd.DataFrame:
     df = pd.read_csv(data_path)
+    if "Time_Segundos" not in df.columns:
+        # Raw exports of the bench (data/raw/hydraulic_raw.csv, what main.py predict reads) carry
+        # the 100 Hz clock as "Time"; predictor.apply_digital_twin_inference derives it the same way.
+        if "Time" not in df.columns:
+            raise ValueError("El CSV debe traer la columna de tiempo 'Time_Segundos' (o 'Time').")
+        df["Time_Segundos"] = df["Time"]
     has_cycle_id = "Cycle_ID" in df.columns
     if has_cycle_id and df["Cycle_ID"].nunique() > 1:
         df_10hz = _resample_10hz(df, ["Cycle_ID", "Time_Segundos"])

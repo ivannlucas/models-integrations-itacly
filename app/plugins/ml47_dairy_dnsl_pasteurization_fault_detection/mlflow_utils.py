@@ -1,19 +1,11 @@
 from __future__ import annotations
 
 import logging
-import os
-
-import joblib
-import torch
+import shutil
+from pathlib import Path
 
 from app.domain.services.mlflow_tracker import BaseMLflowTracker, require_user_model
-from app.plugins.ml47_dairy_dnsl_pasteurization_fault_detection.constants import (
-    ARTIFACT_FOLDER_NAME,
-    FEATURE_COLUMNS_FILENAME,
-    MODEL_FILENAME,
-    SCALER_FILENAME,
-    TS1_MEAN_FILENAME,
-)
+from app.plugins.ml47_dairy_dnsl_pasteurization_fault_detection.constants import ARTIFACT_FOLDER_NAME
 
 logger = logging.getLogger(__name__)
 
@@ -22,28 +14,22 @@ logger = logging.getLogger(__name__)
 def download_user_model_from_mlflow(run_id: str):
     import tempfile
     tmp = tempfile.mkdtemp(prefix="mlflow_m47_")
-    local_path = BaseMLflowTracker(run_id).download_artifacts(tmp, artifact_path="model")
-    if not local_path:
-        return None
+    try:
+        local_path = BaseMLflowTracker(run_id).download_artifacts(tmp, artifact_path="model")
+        if not local_path:
+            shutil.rmtree(tmp, ignore_errors=True)
+            return None
 
-    from app.plugins.ml47_dairy_dnsl_pasteurization_fault_detection.model_loader import CNN_Pasteurizer
+        from app.plugins.ml47_dairy_dnsl_pasteurization_fault_detection.model_loader import load_artifacts_from_dir
 
-    state_dict_path = os.path.join(local_path, MODEL_FILENAME)
-    scaler_path = os.path.join(local_path, SCALER_FILENAME)
-    feature_cols_path = os.path.join(local_path, FEATURE_COLUMNS_FILENAME)
-    ts1_path = os.path.join(local_path, TS1_MEAN_FILENAME)
+        # Same loader as the base model: same dropout, weights_only=True on the user's state_dict.
+        model, scaler, feature_cols, ts1_mean_train = load_artifacts_from_dir(Path(local_path))
 
-    scaler = joblib.load(scaler_path)
-    feature_cols = joblib.load(feature_cols_path)
-    ts1_mean_train = joblib.load(ts1_path)
-
-    n_sensors = len(feature_cols)
-    model = CNN_Pasteurizer(n_sensors=n_sensors, n_classes=3, dropout_prob=0.5)
-    model.load_state_dict(torch.load(state_dict_path, map_location="cpu", weights_only=False))
-    model.eval()
-
-    logger.info("Downloaded user model from MLflow run_id=%s", run_id)
-    return model, scaler, feature_cols, ts1_mean_train, tmp
+        logger.info("Downloaded user model from MLflow run_id=%s", run_id)
+        return model, scaler, feature_cols, ts1_mean_train, tmp
+    except BaseException:
+        shutil.rmtree(tmp, ignore_errors=True)
+        raise
 
 
 def upload_artifacts_to_mlflow(

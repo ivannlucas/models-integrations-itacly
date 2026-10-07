@@ -1,6 +1,6 @@
 """ml47 /train — ports of the AI team's two training procedures.
 
-Source: inbox/a47/codigo/a47-dnsl-fallas-maquinaria-pasteurizado (config/config.yaml).
+Source: inbox/a47/codigo (config/config.yaml, src/).
 
 * ``train_full`` = ``main.py train``: src/data_processing/preprocess.py (split by Cycle_ID,
   digital twin, noise augmentation, feature engineering, scaler) + src/training/trainer.py
@@ -62,6 +62,7 @@ from app.plugins.ml47_dairy_dnsl_pasteurization_fault_detection.constants import
 from app.plugins.ml47_dairy_dnsl_pasteurization_fault_detection.model_loader import (
     CNN_Pasteurizer,
     PhysicsGuidedLoss,
+    safe_device,
 )
 from app.plugins.ml47_dairy_dnsl_pasteurization_fault_detection.preprocessing import (
     apply_digital_twin,
@@ -155,10 +156,14 @@ def _scale(scaler: Any, frame: pd.DataFrame) -> np.ndarray:
 
 
 def build_tensors(df_feat: pd.DataFrame, cycle_ids, feature_cols: list[str], scaler: Any):
-    """create_tensors(): one (features x 600) window per cycle and its 4 labels (first row)."""
+    """create_tensors(): one (features x 600) window per cycle and its 4 labels (first row).
+
+    Cycles go in ascending Cycle_ID order, as in the original (feature_engineering's groupby
+    sorts df_final, and fine_tuner groups by Cycle_ID), so the DataLoader sees the same batches.
+    """
     groups = {cid: g for cid, g in df_feat.groupby("Cycle_ID", sort=False)}
     x_list, y_list = [], []
-    for cid in cycle_ids:
+    for cid in np.sort(np.asarray(cycle_ids)):
         group = groups[cid]
         x_list.append(pad_or_truncate(_scale(scaler, group[feature_cols])))
         y_list.append(group[TARGET_COLUMNS].iloc[0].to_numpy(dtype=int))
@@ -206,7 +211,7 @@ def _seed_everything(seed: int = RANDOM_STATE) -> None:
 
 
 def _device() -> torch.device:
-    return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    return safe_device()
 
 
 def _loader(x, y, batch_size: int, shuffle: bool) -> DataLoader:
@@ -245,7 +250,8 @@ def _augment_train_cycles(df: pd.DataFrame, train_ids: np.ndarray):
     """apply_digital_twin_and_augment(), noise part: a noisy copy of every train cycle."""
     noisy = df[df["Cycle_ID"].isin(train_ids)].copy()
     first_new_id = int(df["Cycle_ID"].max()) + 1
-    id_map = {cid: first_new_id + i for i, cid in enumerate(train_ids)}
+    # Ascending, like the original + 50000: copies keep the relative order of their source cycles.
+    id_map = {cid: first_new_id + i for i, cid in enumerate(np.sort(train_ids))}
     noisy["Cycle_ID"] = noisy["Cycle_ID"].map(id_map)
     for column in SENSOR_COLUMNS:
         std_dev = noisy[column].std()

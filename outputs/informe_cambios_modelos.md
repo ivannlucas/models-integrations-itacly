@@ -339,3 +339,75 @@ confirma de forma explícita que el modelo desplegado no se reentrena. Cambios:
   guardar el reentrenamiento "localmente siempre" y ml2/ml5/ml7 como ejemplos de modelo no
   entrenable. También corrige una plantilla de `mlflow_utils.py` que importaba una función
   inexistente.
+
+---
+
+## 8. Anexo (7 de octubre de 2026): persistencia solo en MLflow y aislamiento de modelos de usuario
+
+Cambios de la rama `fix/retrain-mlflow-only-persistence` sobre esta auditoría. Algunos corrigen
+errores de la propia auditoría y se indican como tales.
+
+> **Corrección de cifras.** Con ml15 (integrado en `main`) el registro tiene **26 plugins, 23
+> entrenables**, no 25 y 22 como dicen las secciones anteriores.
+
+### 8.1 Corrige errores de esta auditoría
+
+| Problema | Alcance | Corrección |
+|---|---|---|
+| **Fuga del modelo de usuario entre peticiones.** El patrón D de la §2.2 afirmaba "sin mutar `self.*`", pero ml2, ml4 y ml17 (y antes ml8, ml9, ml21, ml25, ml30, ml34, ml35 y ml46) sustituían el modelo en `self` durante la petición. Hay una sola instancia del plugin, así que una petición sin `mlflow_run_id` podía recibir el modelo de otro usuario | 11 plugins. Reproducido: 46/46 casos fallan en la rama anterior | El modelo se resuelve en variables locales (`test_user_model_isolation.py`) |
+| **ml31** seguía sustituyendo sus datos de referencia en `self` y llamando a MLflow, aunque no es entrenable | 1 plugin | Ignora el run sin tocar MLflow, igual que ml28 y ml33 |
+| **ml41** guardaba el checkpoint ajustado **encima del checkpoint base local**, y ml15, ml16, ml3, ml40 y ml9 dejaban copias `user_*` en la carpeta de artefactos | 6 plugins | El reentrenamiento solo se guarda en MLflow |
+| **ml47**: su `trainer.py` asignaba a todos los ciclos la etiqueta del primero, mezclaba ciclos en las medias móviles y calculaba `f1_macro = accuracy` | 1 plugin | Port fiel de los dos procedimientos entregados (`fine_tune` y `full`), verificado con datos reales |
+
+### 8.2 Contrato nuevo de MLflow
+
+- `mlflow_run_id` en `/train` es obligatorio **y no vacío** (`MlflowRunId`). Antes `""` pasaba la
+  validación, se entrenaba y el modelo se descartaba.
+- Si el modelo reentrenado no se puede guardar en MLflow, `/train` responde **502**
+  (`ModelPersistenceError`) en lugar de 200 con un aviso.
+- Si se pide un run cuyo modelo no se puede cargar, `/predict` y `/stats` responden **422**
+  (`UserModelUnavailableError`) en lugar de usar el modelo base sin avisar.
+
+### 8.3 Correcciones añadidas en la revisión de esa rama
+
+| Problema | Corrección |
+|---|---|
+| Un run con artefactos **incompletos** (p. ej. un entrenamiento que falló después de que la plataforma creara el run) hacía que 12 plugins respondieran **500**, en lugar del 422 previsto | `require_user_model` convierte cualquier error de carga de un run pedido en `UserModelUnavailableError` (422) |
+| Los 23 `download_*_from_mlflow` dejaban su directorio temporal en disco cuando el run no tenía modelo o fallaba la carga. Con el nuevo 422, cada reintento de un usuario sumaba un directorio huérfano | Limpieza en todas las salidas de error (`try/except` + `rmtree`) |
+| `test_full_training_is_reproducible` (ml47) fallaba en máquinas con GPU: cuDNN no es determinista | El test fija la CPU |
+| ml47 elegía la GPU con `torch.cuda.is_available()` sin autotest, en inferencia y en entrenamiento | `safe_device()`, igual que ml2, ml4 y ml8 |
+| Nada impedía que un plugin nuevo repitiera la fuga entre peticiones o la de temporales | `tests/unit/test_user_model_download_hygiene.py`: test estructural sobre todos los plugins, más un test de limpieza para cada helper de descarga |
+
+### 8.4 ml47: reanálisis completo contra su código original
+
+Con el código entregado completo en `inbox/a47/codigo/` se ha comparado el plugin, fichero a fichero,
+con `preprocess.py`, `trainer.py`, `fine_tuner.py`, `model.py` y `predictor.py`, y se ha comprobado
+con los datos reales del entregable.
+
+**Qué coincide con el original:**
+
+- Artefactos (md5 idéntico).
+- Split 70/15/15 (idéntico a `cycle_splits.json`, incluido el orden).
+- `ts1_mean_train`.
+- Features de test (diferencia máxima 9,6e-5, por redondeo del CSV en valores de ~2.400).
+- Métricas del modelo base en test (0,9879 / 0,9970 / 0,9970).
+- Inferencia: los 50 primeros ciclos de `hydraulic_raw.csv` dan las mismas clases que `prediction_output.csv`, con una diferencia de confianza de 1,2e-4 como máximo.
+
+**Corregido:**
+
+| Problema | Corrección |
+|---|---|
+| `/predict` por lotes fallaba con `KeyError: 'Time_Segundos'` si el CSV venía en el formato bruto del banco (columna `Time` a 100 Hz, el que lee `main.py predict`) | Se usa `Time` como hace `predictor.apply_digital_twin_inference`. Si falta la columna de tiempo, el error lo indica explícitamente |
+| El modelo se construía con `dropout_prob=0.5` en lugar del 0,2022 de `config.yaml`. En inferencia no influye, pero `fine_tune` entrenaba `dropout_final` con 0,5 | `load_artifacts_from_dir` usa `TRAIN_HYPERPARAMS["dropout_rate"]`. El helper de MLflow reutiliza ese mismo cargador (y con él `weights_only=True` para el `state_dict` del usuario) |
+| Los tensores de entrenamiento seguían el orden barajado del split. El original los ordena por `Cycle_ID` | Orden ascendente por `Cycle_ID` en `build_tensors` y en los ids de las copias aumentadas. Con datos reales los tensores coinciden con los del pipeline original elemento a elemento, en el mismo orden |
+
+**Resultado:** el entrenamiento `full` desde cero (GPU, `hydraulic_10hz_raw.csv`, gemelo térmico
+activo) reproduce exactamente las métricas del modelo entregado: 0,9879 / 0,9970 / 0,9969 / 0,9972 /
+0,9970, en 89 épocas y 122 s. Antes de la corrección daba 0,9940. `fine_tune` sobre `val_split.csv`
+da un exact match de 0,96 y deja el modelo base intacto.
+
+**Verificado y sin cambios:**
+
+- `fine_tuner.py` también llama a `model.train()` sobre el modelo completo, así que las BatchNorm del backbone congelado actualizan sus estadísticas igual que en el plugin.
+- La densidad y el Cp del fluido (`fluid_density_kg_l`, `fluid_cp_kj_kgK`) solo se registran en el informe de calibración, no intervienen en el cálculo.
+- El fine-tuning original no aplica el gemelo térmico.

@@ -20,7 +20,21 @@ def require_user_model(download: Callable[..., Any]) -> Callable[..., Any]:
     """
     @functools.wraps(download)
     def wrapper(run_id: str, *args: Any, **kwargs: Any) -> Any:
-        result = download(run_id, *args, **kwargs)
+        try:
+            result = download(run_id, *args, **kwargs)
+        except UserModelUnavailableError:
+            raise
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            if not run_id:
+                raise
+            # A run that exists but holds a partial/foreign model (e.g. a training that failed
+            # after the platform created the run) makes the loader raise FileNotFoundError,
+            # ValueError… That is still "this run has no loadable model" (→ 422), not a 500.
+            logger.exception("Could not load the user model of MLflow run '%s'", run_id)
+            raise UserModelUnavailableError(
+                f"No se ha podido cargar el modelo reentrenado del run de MLflow '{run_id}': "
+                f"{type(exc).__name__}: {exc}. No se usa el modelo base en su lugar."
+            ) from exc
         if result is None and run_id:
             raise UserModelUnavailableError(
                 f"No se ha podido cargar el modelo reentrenado del run de MLflow '{run_id}': "

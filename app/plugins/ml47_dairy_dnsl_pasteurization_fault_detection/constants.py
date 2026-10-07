@@ -25,7 +25,7 @@ COMPONENT_NAMES = ["Enfriador_Fouling", "Valvula_Switch", "Bomba_Leakage", "Acum
 STATE_LABELS = {0: "SANO", 1: "WARNING", 2: "CRÍTICO"}
 
 # ── /train — ported verbatim from the AI team's config/config.yaml ───────────
-# (inbox/a47/codigo/a47-dnsl-fallas-maquinaria-pasteurizado/config/config.yaml). Never tuned here.
+# (inbox/a47/codigo/config/config.yaml). Never tuned here.
 # features.cols_targets — one column per component, values 0=Sano, 1=Warning, 2=Crítico.
 TARGET_COLUMNS = ["Target_Fouling", "Target_Valvula", "Target_Bomba", "Target_Acumulador"]
 # Names the previous plugin trainer required; still accepted so existing uploads keep working.

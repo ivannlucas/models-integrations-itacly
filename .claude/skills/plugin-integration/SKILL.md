@@ -201,17 +201,21 @@ from app.plugins.<nombre>.constants import ARTIFACT_FOLDER_NAME, MODEL_FILENAME
 logger = logging.getLogger(__name__)
 
 
-@require_user_model   # un None con run_id → UserModelUnavailableError (→ 422), nunca el modelo base
+@require_user_model   # None o excepción al cargar, con run_id → UserModelUnavailableError (→ 422)
 def download_user_model_from_mlflow(run_id: str):
     """Return (model, ..., temp_dir). Caller MUST shutil.rmtree(temp_dir) in finally."""
     tmp = tempfile.mkdtemp(prefix="mlflow_<nombre>_")
-    local_path = BaseMLflowTracker(run_id).download_artifacts(tmp, artifact_path="model")
-    if not local_path or not os.path.exists(os.path.join(local_path, MODEL_FILENAME)):
-        logger.warning("MLflow run_id=%s sin artefacto completo en 'model'", run_id)
+    try:
+        local_path = BaseMLflowTracker(run_id).download_artifacts(tmp, artifact_path="model")
+        if not local_path or not os.path.exists(os.path.join(local_path, MODEL_FILENAME)):
+            logger.warning("MLflow run_id=%s sin artefacto completo en 'model'", run_id)
+            shutil.rmtree(tmp, ignore_errors=True)
+            return None
+        model = ...  # reconstruir desde los metadatos descargados (nº de clases, feature_cols, scaler…)
+        return model, tmp
+    except BaseException:   # p. ej. falta un fichero secundario: no dejar el temporal huérfano
         shutil.rmtree(tmp, ignore_errors=True)
-        return None
-    model = ...  # reconstruir desde los metadatos descargados (nº de clases, feature_cols, scaler…)
-    return model, tmp
+        raise
 
 
 def upload_artifacts_to_mlflow(artifact_dir: str, mlflow_run_id: str, metrics: dict | None = None):
@@ -345,6 +349,18 @@ Por eso, antes de dar el plugin por integrado:
 - `BaseMLflowTracker` **no tiene timeout de conexión**. En los tests que ejecuten el `train()`
   real, haz `patch(...BaseMLflowTracker)`, o la suite se bloquea minutos contra un MLflow
   inalcanzable. Para probar `train()` de verdad fuera del clúster, sustitúyelo por un stub.
+- Hay dos tests de regresión que se aplican **solos** a todo plugin nuevo, sin registrarlo en
+  ninguna lista (`tests/unit/test_user_model_download_hygiene.py`):
+  - ningún `predict*`/`stats` asigna atributos de modelo en `self`;
+  - todo `download_*_from_mlflow` borra su temporal cuando el run no trae un modelo cargable
+    y responde con `UserModelUnavailableError`.
+
+  Si un plugin nuevo los rompe, no los relajes: corrige el plugin. El aislamiento entre
+  peticiones concurrentes se prueba además con `test_user_model_isolation.py`; añade ahí el
+  plugin si es entrenable.
+- Los tests que entrenan de verdad y comparan dos ejecuciones deben fijar el dispositivo a CPU
+  (`monkeypatch` de la función de dispositivo): en GPU, cuDNN no es determinista y el test
+  pasaría o fallaría según la máquina.
 
 La correctitud numérica se valida después, en el skill `verification`, contra el golden dataset.
 

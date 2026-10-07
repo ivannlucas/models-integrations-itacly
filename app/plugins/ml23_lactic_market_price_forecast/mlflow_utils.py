@@ -16,6 +16,7 @@ import tempfile
 
 import numpy as np
 import torch
+import shutil
 
 from app.domain.services.mlflow_tracker import BaseMLflowTracker, require_user_model
 from app.plugins.ml23_lactic_market_price_forecast.constants import ARTIFACT_FOLDER_NAME
@@ -32,34 +33,40 @@ def download_user_model_from_mlflow(run_id: str):
     shutil.rmtree(temp_dir) after use — use try/finally.
     """
     tmp = tempfile.mkdtemp(prefix="mlflow_ml23_dairy_")
-    local_path = BaseMLflowTracker(run_id).download_artifacts(tmp, artifact_path="model")
-    if not local_path:
-        return None
+    try:
+        local_path = BaseMLflowTracker(run_id).download_artifacts(tmp, artifact_path="model")
+        if not local_path:
+            shutil.rmtree(tmp, ignore_errors=True)
+            return None
 
-    manifest_path = os.path.join(local_path, "manifest.json")
-    model_path = os.path.join(local_path, "gru_model.pt")
-    scaler_path = os.path.join(local_path, "rnn_scaler.npz")
-    if not all(os.path.exists(p) for p in (manifest_path, model_path, scaler_path)):
-        logger.warning(
-            "MLflow run_id=%s did not contain a complete GRU bundle under artifact_path='model'",
-            run_id,
+        manifest_path = os.path.join(local_path, "manifest.json")
+        model_path = os.path.join(local_path, "gru_model.pt")
+        scaler_path = os.path.join(local_path, "rnn_scaler.npz")
+        if not all(os.path.exists(p) for p in (manifest_path, model_path, scaler_path)):
+            logger.warning(
+                "MLflow run_id=%s did not contain a complete GRU bundle under artifact_path='model'",
+                run_id,
+            )
+            shutil.rmtree(tmp, ignore_errors=True)
+            return None
+
+        with open(manifest_path, encoding="utf-8") as fh:
+            manifest = json.load(fh)
+        bundle = np.load(scaler_path)
+        scaler_mean, scaler_scale = bundle["mean"], bundle["scale"]
+
+        model = GRUModel(
+            input_size=len(manifest["feature_cols"]), hidden_size=int(manifest["hidden_size"])
         )
-        return None
+        state = torch.load(model_path, map_location="cpu", weights_only=True)
+        model.load_state_dict(state)
+        model.eval()
 
-    with open(manifest_path, encoding="utf-8") as fh:
-        manifest = json.load(fh)
-    bundle = np.load(scaler_path)
-    scaler_mean, scaler_scale = bundle["mean"], bundle["scale"]
-
-    model = GRUModel(
-        input_size=len(manifest["feature_cols"]), hidden_size=int(manifest["hidden_size"])
-    )
-    state = torch.load(model_path, map_location="cpu", weights_only=True)
-    model.load_state_dict(state)
-    model.eval()
-
-    logger.info("Downloaded user GRU bundle from MLflow run_id=%s", run_id)
-    return model, scaler_mean, scaler_scale, manifest, tmp
+        logger.info("Downloaded user GRU bundle from MLflow run_id=%s", run_id)
+        return model, scaler_mean, scaler_scale, manifest, tmp
+    except BaseException:
+        shutil.rmtree(tmp, ignore_errors=True)
+        raise
 
 
 def upload_artifacts_to_mlflow(

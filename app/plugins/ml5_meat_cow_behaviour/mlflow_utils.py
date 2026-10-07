@@ -39,24 +39,28 @@ def download_user_model_from_mlflow(run_id: str) -> tuple[dict, str] | None:
         return None
 
     tmp_dir = tempfile.mkdtemp(prefix="mlflow_ml5_")
-    local_path = BaseMLflowTracker(run_id).download_artifacts(tmp_dir, artifact_path="classifier")
-    if not local_path:
-        logger.warning(
-            "mlflow_run_id=%s no tiene artefacto 'classifier'.", run_id
-        )
+    try:
+        local_path = BaseMLflowTracker(run_id).download_artifacts(tmp_dir, artifact_path="classifier")
+        if not local_path:
+            logger.warning(
+                "mlflow_run_id=%s no tiene artefacto 'classifier'.", run_id
+            )
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+            return None
+
+        checkpoint_path = os.path.join(local_path, CLASSIFIER_FILENAME)
+        if not os.path.exists(checkpoint_path):
+            logger.warning(
+                "mlflow_run_id=%s: falta %s en el artefacto 'classifier'.", run_id, CLASSIFIER_FILENAME,
+            )
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+            return None
+
+        checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
+        state_dict = checkpoint.get("model_state_dict", checkpoint)
+
+        logger.info("Downloaded user-retrained SlowFast classifier from MLflow run_id=%s", run_id)
+        return state_dict, tmp_dir
+    except BaseException:
         shutil.rmtree(tmp_dir, ignore_errors=True)
-        return None
-
-    checkpoint_path = os.path.join(local_path, CLASSIFIER_FILENAME)
-    if not os.path.exists(checkpoint_path):
-        logger.warning(
-            "mlflow_run_id=%s: falta %s en el artefacto 'classifier'.", run_id, CLASSIFIER_FILENAME,
-        )
-        shutil.rmtree(tmp_dir, ignore_errors=True)
-        return None
-
-    checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
-    state_dict = checkpoint.get("model_state_dict", checkpoint)
-
-    logger.info("Downloaded user-retrained SlowFast classifier from MLflow run_id=%s", run_id)
-    return state_dict, tmp_dir
+        raise
