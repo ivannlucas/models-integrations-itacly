@@ -102,6 +102,13 @@ def build_modeling_features(rows: list[dict]) -> pd.DataFrame:
             f"Columnas esperadas: {list(_DATE_ALIASES)} y {list(RAW_VALUE_COLS)}."
         )
 
+    # Descartar cualquier columna extra que el cliente haya incluido (p. ej. un campo de
+    # comentario/nota) ANTES de seguir: si esa columna no viene rellena en todas las filas por
+    # igual, el dropna() final de esta función la trataría como una feature más y descartaría
+    # silenciosamente filas válidas que no tienen ese dato -- hallazgo real de QA, ver
+    # inbox/a14/manifest.yaml known_issues.
+    df = df[[DATE_COL, *RAW_VALUE_COLS]].copy()
+
     result = _validate_weekly_dates(df)
 
     for col in RAW_VALUE_COLS:

@@ -65,3 +65,22 @@ def test_run_inference_rejects_float32_overflow_instead_of_returning_null():
     feature_columns = list(build_modeling_features(rows).columns.difference(["date"]))
     with pytest.raises(InsufficientDataError, match="desborda"):
         preprocessing.run_inference(_bundle(feature_columns), rows)
+
+
+def test_run_inference_ignores_sparse_extra_fields_like_comment():
+    """A client-supplied extra field (e.g. a free-text 'comment') present in only some rows
+    used to leak into the internal dropna(), silently discarding rows that had no value for
+    it and shifting/breaking the prediction window. Extra fields must be ignored entirely,
+    regardless of which rows carry them."""
+    from app.plugins.ml14_wine_phyto_price_forecast.feature_engineering import build_modeling_features
+
+    rows = _rows()
+    feature_columns = list(build_modeling_features(rows).columns.difference(["date"]))
+    bundle = _bundle(feature_columns)
+    baseline = preprocessing.run_inference(bundle, rows)
+
+    rows_with_sparse_comment = [dict(r) for r in rows]
+    rows_with_sparse_comment[-1]["comment"] = "solo la ultima fila"
+    result = preprocessing.run_inference(bundle, rows_with_sparse_comment)
+
+    assert result == baseline

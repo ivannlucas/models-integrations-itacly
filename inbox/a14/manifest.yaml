@@ -362,6 +362,19 @@ golden_cases:
     note: "Rechazo controlado, no una excepción no manejada -- debe mapearse a un 422 de dominio en el plugin, no a un 500."
 
 known_issues:
+  - "CORREGIDO (hallazgo post-integración, detectado por QA): si el cliente incluía un campo
+     extra no documentado (p. ej. 'comment', una nota de texto) en ALGUNAS filas del histórico
+     pero no en todas, ese campo se colaba como columna más en el DataFrame interno y el
+     dropna() final de feature_engineering.py la trataba como una feature cualquiera --
+     descartando silenciosamente cualquier fila donde ese campo extra viniera vacío. Según qué
+     filas tuvieran el campo relleno, esto producía o bien un 422 por historial insuficiente
+     (si sobrevivían muy pocas filas) o bien una predicción silenciosamente desplazada a una
+     fecha anterior a la última fila realmente enviada (si sobrevivía un subconjunto arbitrario
+     de filas). Arreglado seleccionando explícitamente solo las columnas del contrato (date +
+     las 6 columnas base) nada más construir el DataFrame, antes de cualquier validación o
+     derivación -- cualquier campo extra que el cliente incluya ahora se ignora por completo,
+     esté presente en todas las filas, en ninguna, o en una mezcla. Test de regresión:
+     tests/unit/test_ml14_preprocessing.py::test_run_inference_ignores_sparse_extra_fields_like_comment."
   - "CORREGIDO (hallazgo post-integración, detectado por QA): un valor numérico finito pero muy
      grande (p. ej. 1e250) en cualquier columna del histórico pasaba la validación de finitud de
      feature_engineering.py (hecha en float64) pero desbordaba silenciosamente a +/-inf al
