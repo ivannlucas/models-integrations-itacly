@@ -106,3 +106,5 @@ inbox/*/codigo/
 
 # Claude Code local settings (per-machine permissions/config, not shared config)
 .claude/settings.local.json
+# Metadatos de descarga de Windows (WSL)
+*:Zone.Identifier

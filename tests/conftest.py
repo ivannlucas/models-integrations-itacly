@@ -212,6 +212,12 @@ from app.plugins.ml46_dairy_fouling_clog_detection.train_dto import (
     TrainRequest as Ml46Dairy_TrainReq,
     TrainResponse as Ml46DairyTrainResp,
 )
+from app.plugins.ml18_meat_spatial_price_forecast.predict_dto import (
+    PredictBatchResponse as Ml18BatchResp,
+    PredictInlineResponse as Ml18InlineResp,
+    PredictRequest as Ml18_Request,
+    PredictResponse as Ml18_Response,
+)
 from app.plugins.ml47_dairy_dnsl_pasteurization_fault_detection.train_dto import (
     TrainRequest as Ml47Dairy_TrainReq,
     TrainResponse as Ml47DairyTrainResp,
@@ -313,6 +319,16 @@ from app.plugins.ml15_wine_ipi_price_forecast.predict_dto import (
 from app.plugins.ml15_wine_ipi_price_forecast.train_dto import (
     TrainRequest as Ml15_TrainReq,
     TrainResponse as Ml15TrainResp,
+)
+from app.plugins.ml13_wine_price_fluctuation_prediction.predict_dto import (
+    PredictBatchResponse as Ml13BatchResp,
+    PredictInlineResponse as Ml13InlineResp,
+    PredictRequest as Ml13_Request,
+    PredictResponse as Ml13_Response,
+)
+from app.plugins.ml13_wine_price_fluctuation_prediction.train_dto import (
+    TrainRequest as Ml13_TrainReq,
+    TrainResponse as Ml13TrainResp,
 )
 
 # ── ModelEntry dataclass (local copy — avoids importing app.registry which loads real plugins) ───
@@ -1752,7 +1768,103 @@ def _ml15_train(plugin: FakePlugin, *, data_path: str) -> Ml15TrainResp:
     )
 
 
+def _ml13_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> Ml13InlineResp:
+    """Fake inline response for the ml13 wine price fluctuation (LogReg price-rise alert) model."""
+    decision_threshold = 0.5 if threshold is None else threshold
+    proba = 0.6123
+    return Ml13InlineResp(
+        model_id="ml13-wine-price-fluctuation-prediction",
+        fecha="2025-10-27",
+        campaign="2025/2026",
+        week=44,
+        price=47.88,
+        pred_proba_up=proba,
+        alerta_subida=int(proba >= decision_threshold),
+        decision_threshold=decision_threshold,
+        horizon_weeks=4,
+        return_threshold=0.025,
+        n_rows_used=len(features.get("rows", [])),
+        n_predictions_available=1,
+        model_name="ml13-wine-price-fluctuation-prediction",
+        model_type="logreg",
+        xai_feature_values={
+            "logret": 0.0273, "distsma12": 0.0457, "rsi14": 57.31,
+            "bollingerpos": 0.8455, "weeksin": -0.8230, "weekcos": 0.5681,
+        },
+    )
+
+
+def _ml13_batch(plugin: FakePlugin, *, data_path: str) -> Ml13BatchResp:
+    """Fake batch response for the ml13 wine price fluctuation model."""
+    return Ml13BatchResp(
+        model_id="ml13-wine-price-fluctuation-prediction",
+        model_type="logreg",
+        predictions=[
+            {"fecha": "2022-08-08", "campaign": "2022/2023", "week": 32, "price": 37.1,
+             "logret": None, "distsma12": None, "rsi14": None, "bollingerpos": None,
+             "weeksin": None, "weekcos": None, "pred_proba_up": None},
+            {"fecha": "2025-10-27", "campaign": "2025/2026", "week": 44, "price": 47.88,
+             "logret": 0.0273, "distsma12": 0.0457, "rsi14": 57.31, "bollingerpos": 0.8455,
+             "weeksin": -0.8230, "weekcos": 0.5681, "pred_proba_up": 0.6123},
+        ],
+        n_rows=2,
+        n_predictions=1,
+        decision_threshold=0.5,
+        output_path=None,
+    )
+
+
+def _ml13_train(plugin: FakePlugin, *, data_path: str) -> Ml13TrainResp:
+    """Fake retraining response for the ml13 wine price fluctuation model."""
+    return Ml13TrainResp(
+        detail="Reentrenamiento completado (procedimiento original; modelo seleccionado: logreg).",
+        best_model_type="logreg",
+        n_trainval_rows=126,
+        n_test_rows=24,
+        test_period="2025-05-19..2025-10-27",
+        auc=0.8438,
+        accuracy=0.542,
+        f1=0.593,
+        precision=0.421,
+        recall=1.0,
+        cv_logreg_auc_mean=0.6564,
+        cv_logreg_auc_std=0.2704,
+        cv_logreg_f1_mean=0.171,
+        cv_xgboost_auc_mean=0.4328,
+        cv_xgboost_auc_std=0.0685,
+        cv_xgboost_f1_mean=0.2,
+        smart_score_logreg=0.3796,
+        smart_score_xgboost=0.3251,
+        upload_warning=None,
+    )
+
+
+def _ml18_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> Ml18InlineResp:
+    """Fake inline response for the ml18 GRU meat spatial price forecast model."""
+    rows = features.get("rows", [])
+    ccaa = rows[0].get("CCAA", "MADRID") if rows else "MADRID"
+    producto = rows[0].get("Producto", "CARNE POLLO") if rows else "CARNE POLLO"
+    preds = [{"CCAA": ccaa, "Producto": producto, "Fecha": "2022-01-01", "predicted_price": 4.542946}]
+    return Ml18InlineResp(
+        model_id="ml18-meat-spatial-price-forecast",
+        predictions=preds,
+        n_predictions=len(preds),
+    )
+
+
+def _ml18_batch(plugin: FakePlugin, *, data_path: str) -> Ml18BatchResp:
+    """Fake batch response for the ml18 GRU meat spatial price forecast model."""
+    preds = [{"CCAA": "ANDALUCIA", "Producto": "CARNE POLLO", "Fecha": "2022-01-01", "predicted_price": 4.542946}]
+    return Ml18BatchResp(
+        model_id="ml18-meat-spatial-price-forecast",
+        predictions=preds,
+        n_predictions=len(preds),
+        output_path=None,
+    )
+
+
 FAKE_FACTORIES: dict[str, tuple[Callable, Callable]] = {
+    "ml18-meat-spatial-price-forecast": (_ml18_inline, _ml18_batch),
     "ml46-dairy-fouling-clog-detection": (_ml46_dairy_inline, _ml46_dairy_batch),
     "ml40-meat-refrigeration-aeration-fault-diagnosis": (_ml40_meat_inline, _ml40_meat_batch),
     "ml35-dairy-ann-cleaning-cost": (_ml35_dairy_inline, _ml35_dairy_batch),
@@ -1781,6 +1893,7 @@ FAKE_FACTORIES: dict[str, tuple[Callable, Callable]] = {
     "ml21-cereals-price-spatial": (_ml21_inline, _ml21_batch),
     "ml16-meat-raw-material-price-alert": (_ml16_inline, _ml16_batch),
     "ml15-wine-ipi-price-forecast": (_ml15_inline, _ml15_batch),
+    "ml13-wine-price-fluctuation-prediction": (_ml13_inline, _ml13_batch),
 }
 
 TRAIN_FACTORIES: dict[str, Callable] = {
@@ -1807,6 +1920,7 @@ TRAIN_FACTORIES: dict[str, Callable] = {
     "ml23-lactic-market-price-forecast": _ml23_train,
     "ml2-fungal-cnn-disease-detection": _ml2_fungal_train,
     "ml4-lactic-cnn-thermal-early-disease-detection": _ml4_thermal_train,
+    "ml13-wine-price-fluctuation-prediction": _ml13_train,
 }
 
 
@@ -2050,6 +2164,15 @@ TEST_REGISTRY: list[ModelEntry] = [
         train_response_type=Ml41TrainResp,
     ),
     ModelEntry(
+        model_id="ml18-meat-spatial-price-forecast",
+        prefix="/models/ml18-meat-spatial-price-forecast",
+        version="1.0.0",
+        plugin_class=FakePlugin,
+        predict_request_type=Ml18_Request,
+        predict_response_type=Ml18_Response,
+        extra_predict_exceptions=(InsufficientRowsError,),
+    ),
+    ModelEntry(
         model_id="ml9-cereals-infestation-sequence-classifier",
         prefix="/models/ml9-cereals-infestation-sequence-classifier",
         version="1.0.0",
@@ -2092,6 +2215,17 @@ TEST_REGISTRY: list[ModelEntry] = [
         extra_predict_exceptions=(MissingRequiredFeatureError,),
         train_request_type=Ml15_TrainReq,
         train_response_type=Ml15TrainResp,
+    ),
+    ModelEntry(
+        model_id="ml13-wine-price-fluctuation-prediction",
+        prefix="/models/ml13-wine-price-fluctuation-prediction",
+        version="1.0.0",
+        plugin_class=FakePlugin,
+        predict_request_type=Ml13_Request,
+        predict_response_type=Ml13_Response,
+        extra_predict_exceptions=(InsufficientDataError, DataContractError),
+        train_request_type=Ml13_TrainReq,
+        train_response_type=Ml13TrainResp,
     ),
     ModelEntry(
         model_id="ml26-wine-sulfite-gru-pso-forecast",

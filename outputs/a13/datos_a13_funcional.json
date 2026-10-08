@@ -1,0 +1,148 @@
+{
+  "model_id": "a13",
+  "model_slug": "wine-price-fluctuation-prediction",
+  "fecha": "Octubre 2026",
+  "model_key": "ml13-wine-price-fluctuation-prediction",
+  "version": "1.0.0",
+  "descripcion": "Sistema de alerta temprana que, a partir de los precios semanales del vino tinto a granel publicados por el Ministerio de Agricultura, calcula cada semana la probabilidad de que el precio suba de forma relevante (más de un 2,5%) durante el mes siguiente.",
+  "task_type": "Clasificación binaria sobre serie temporal semanal (tabular, horizonte 4 semanas, umbral de subida 2,5%)",
+  "framework": "scikit-learn (LogisticRegression C=1.0, L2, class_weight=balanced + StandardScaler); pandas/numpy/joblib. El reentrenamiento compite LogReg frente a XGBoost por Smart Score",
+  "artefacto": "ml_model.pkl (LogisticRegression) + scaler.pkl (StandardScaler) + feature_schema.json + model_config.json (model_type=logreg)",
+  "objetivo": "Ayudarte a anticipar subidas del precio del vino a granel con unas cuatro semanas de margen, para planificar compras, existencias y negociaciones con más información que la simple intuición.",
+  "caso_uso": "1) Reúnes la serie de precios semanales del vino tinto a granel de los boletines del Ministerio (mínimo 20 semanas seguidas). 2) La introduces en la plataforma. 3) Obtienes, para la última semana, la probabilidad de subida y si hay o no alerta. 4) Si hay alerta, la contrastas con lo que sabes del mercado antes de decidir. Cuando se acumulen semanas nuevas, el modelo puede reentrenarse con ellas.",
+  "inputs": [
+    {
+      "nombre": "Campaña y semana",
+      "descripcion": "Campaña vitivinícola (de agosto a julio, por ejemplo 2024/2025) y número de semana del año. También puedes usar la referencia del boletín ('SEMANA 12/2025'), teniendo en cuenta que el año es el segundo año de la campaña."
+    },
+    {
+      "nombre": "Precio del vino tinto a granel",
+      "descripcion": "Precio medio nacional semanal, en euros por hectolitro, tal como lo publica el Ministerio."
+    },
+    {
+      "nombre": "Historial",
+      "descripcion": "Al menos 20 semanas seguidas de precios. Con menos, el sistema no puede calcular sus indicadores y te avisará."
+    }
+  ],
+  "outputs": [
+    {
+      "nombre": "Probabilidad de subida",
+      "descripcion": "Número entre 0 y 1: probabilidad de que el precio medio del próximo mes supere en más de un 2,5% el de esta semana.",
+      "interpretacion": "Por encima de 0,7 la señal es fuerte; en torno a 0,5 es dudosa."
+    },
+    {
+      "nombre": "Alerta de subida",
+      "descripcion": "Sí/No: se activa cuando la probabilidad llega a 0,5.",
+      "interpretacion": "Una alerta es un aviso para vigilar el mercado, no una subida segura: en las pruebas, más de la mitad de las alertas no se confirmaron."
+    },
+    {
+      "nombre": "Semana de referencia",
+      "descripcion": "La semana a la que corresponde el cálculo (la última que has enviado).",
+      "interpretacion": "La alerta se refiere a las cuatro semanas siguientes a esa fecha."
+    }
+  ],
+  "metricas": [
+    {
+      "nombre": "Test hold-out — declarado por el equipo de IA (memoria v1.10, Tabla 6)",
+      "valor": "AUC-ROC 0,8438; F1 0,593; Precision 0,421; Recall 1,000; Accuracy 0,542",
+      "descripcion": "Últimas 24 semanas (19/05/2025-27/10/2025), 8 subidas reales",
+      "interpretacion": "Cumple los objetivos de la memoria (AUC >= 0,70; F1 >= 0,50; Recall >= 0,65), pero la memoria lo califica de límite superior en un periodo favorable (33% de positivos frente al 20% en CV)"
+    },
+    {
+      "nombre": "Validación cruzada walk-forward — declarado (memoria v1.10, Tablas 4-5)",
+      "valor": "AUC-ROC 0,656 ± 0,270; F1 0,171; Precision 0,321; Recall 0,290; Accuracy 0,659 (recalculada: 0,660)",
+      "descripcion": "5 folds sobre las 126 semanas de desarrollo",
+      "interpretacion": "NO cumple ninguno de los tres criterios de éxito; alta variabilidad entre folds (AUC 0,27-0,90)"
+    },
+    {
+      "nombre": "Resultado verificado tras integración (golden dataset, 24 casos vía API)",
+      "valor": "AUC 0,8438; F1 0,5926; Precision 0,4211; Recall 1,0; Accuracy 0,5417 — 5/5 métricas dentro de tolerancia (±0,0005)",
+      "descripcion": "/predict real sobre cada semana del hold-out; matriz de confusión TP 8 · FP 11 · TN 5 · FN 0",
+      "interpretacion": "El plugin reproduce exactamente la Tabla 6; probabilidades idénticas al código original (diferencia <= 1e-16) en 24/24 casos"
+    },
+    {
+      "nombre": "Golden dataset — etiqueta por caso frente al target real",
+      "valor": "13/24 aciertos; 11/24 falsos positivos; 0 falsos negativos",
+      "descripcion": "Los 11 fallos son los falsos positivos ya declarados en la Tabla 6, no errores de integración",
+      "interpretacion": "Detecta todas las subidas, pero 11 de 19 alertas fueron falsas en el periodo de test"
+    },
+    {
+      "nombre": "Reproducibilidad del entrenamiento (verificado)",
+      "valor": "Coeficientes idénticos al artefacto entregado; /train del plugin: mismas métricas de CV y hold-out",
+      "descripcion": "Reentrenamiento con el código original (sklearn 1.3.2) y con el plugin (sklearn 1.5.2)",
+      "interpretacion": "El artefacto es reproducible a partir de los datos y el código entregados"
+    }
+  ],
+  "limitaciones": [
+    {
+      "tipo": "Su acierto cambia con el mercado",
+      "descripcion": "En el periodo de prueba más reciente (2025) funcionó bien detectando subidas, pero en años anteriores, más tranquilos, acertó bastante menos. No esperes siempre los mejores resultados."
+    },
+    {
+      "tipo": "Da muchas falsas alarmas",
+      "descripcion": "Prefiere avisar de más a dejar pasar una subida: en las pruebas, 11 de cada 19 alertas no se cumplieron."
+    },
+    {
+      "tipo": "Solo mira el precio",
+      "descripcion": "No conoce el clima, la cosecha, las exportaciones ni otros factores que mueven el mercado."
+    },
+    {
+      "tipo": "Historial corto",
+      "descripcion": "Se ha construido con poco más de tres años de datos semanales (agosto 2022 a noviembre 2025), por lo que no ha visto todas las situaciones de mercado posibles."
+    },
+    {
+      "tipo": "Solo vino tinto",
+      "descripcion": "Está preparado con precios del vino tinto. Para vino blanco habría que volver a entrenarlo."
+    },
+    {
+      "tipo": "Cuidado con las fechas",
+      "descripcion": "Si usas la referencia del boletín ('SEMANA n/año') con el año impreso en el PDF del Ministerio, las fechas pueden quedar desplazadas un año sin que el sistema lo detecte. Si faltan semanas en la serie, el resultado también puede ser incorrecto."
+    }
+  ],
+  "fichero_nombre": "inbox/a13/codigo/.../data/raw/mapa_wine_prices_raw.csv (+ data/processed/wine_prices_test_processed.csv como golden)",
+  "fichero_registros": "174 semanas (01/08/2022-24/11/2025; 173 con precio). Golden: 24 semanas de hold-out (19/05/2025-27/10/2025), 8 subidas reales",
+  "fichero_resultado": "Batch: 174 filas, 154 con pred_proba_up; última semana (24/11/2025) = 0,4621, sin alerta. Golden vía /predict: Tabla 6 reproducida (AUC 0,8438, F1 0,593, P 0,421, R 1,0, Acc 0,542) y probabilidades idénticas al código original en los 24 casos",
+  "observaciones_tecnicas": "Solo CPU; inferencia en milisegundos y reentrenamiento completo en < 1 s (memoria: 6,4 s de entrenamiento y 1,4 s de evaluación en un i7-13700H). Artefactos < 5 KB. Requiere scikit-learn (pin del repo 1.5.2), pandas, numpy y joblib; xgboost solo para /train. Requisito operativo: al menos 20 semanas de histórico continuo. La memoria recomienda monitorizar con métricas rolling y revisar return_threshold (analyze_threshold) antes de cada reentrenamiento. Verificación: flake8 0, pylint 10/10, pytest 547/547.",
+  "que_no_responde": "No dice cuánto subirá ni a qué precio llegará el vino: solo si es probable que la media del próximo mes supere en más de un 2,5% el precio de esta semana. Tampoco anticipa bajadas ni explica por qué sube el precio.",
+  "entradas_contexto": "Solo necesitas la serie de precios semanales del vino tinto a granel que publica el Ministerio de Agricultura en sus boletines (datos abiertos), con al menos 20 semanas seguidas. El sistema calcula el resto por su cuenta.",
+  "ejemplo_interpretacion": "Para la semana del 14 de julio de 2025 el sistema dio una probabilidad de 0,75 y, por tanto, una alerta de subida. En las cuatro semanas siguientes el precio medio no superó el 2,5% de subida: fue una falsa alarma. En cambio, la semana del 4 de agosto de 2025 dio 0,79 y la subida sí se produjo. Una alerta indica que conviene vigilar el mercado y contrastar, no que la subida esté asegurada.",
+  "margen_error": "En el periodo de prueba (mayo a octubre de 2025) el sistema avisó de todas las subidas reales, pero de cada 10 alertas unas 6 fueron falsas. En el histórico anterior, con un mercado más tranquilo, detectó bastantes menos subidas. Una probabilidad cercana a 0,5 es poco concluyente.",
+  "revisar_manualmente": [
+    "Cualquier alerta de subida: en las pruebas, más de la mitad de las alertas no se confirmaron. Contrástala con información de mercado antes de cambiar compras o precios.",
+    "Probabilidades entre 0,45 y 0,60: son las más sensibles y pueden cambiar de alerta a no alerta con una sola semana más de datos.",
+    "Semanas con cambios bruscos por causas externas (heladas, cosecha, aranceles, demanda exterior): el sistema solo ve el precio y no conoce esas causas.",
+    "Cuando falten semanas en la serie o se haya usado el formato 'SEMANA n/año' de los boletines: comprueba que las fechas resultantes son las correctas.",
+    "Si se quiere aplicar a vino blanco: el modelo actual está entrenado solo con tinto."
+  ],
+  "que_no_hace": [
+    "No predice el precio futuro ni el tamaño de la subida.",
+    "No avisa de bajadas de precio.",
+    "No tiene en cuenta clima, cosecha, exportaciones ni costes: solo la evolución del propio precio.",
+    "No sustituye el criterio comercial: es una alerta de apoyo a la decisión, no una orden de compra o venta.",
+    "No garantiza que una semana sin alerta esté libre de subida, aunque en las pruebas no se escapó ninguna."
+  ],
+  "puede_equivocarse": "Sí, y con frecuencia. En las pruebas del periodo más reciente detectó todas las subidas, pero a cambio dio muchas falsas alarmas (11 de 19). En el histórico más tranquilo su acierto fue moderado y variable según la época del año y el estado del mercado. El propio equipo que lo desarrolló advierte de que esos resultados recientes son el mejor caso esperable. Úsalo como un aviso para mirar el mercado con más atención, nunca como garantía.",
+  "kpis": [
+    {
+      "kpi": "Capacidad de distinguir semanas con y sin subida (AUC-ROC)",
+      "valor_umbral": ">= 0,70",
+      "descripcion": "Test 2025: 0,84 (cumple). Histórico (validación cruzada): 0,66 (no cumple)."
+    },
+    {
+      "kpi": "Equilibrio entre alertas acertadas y subidas detectadas (F1)",
+      "valor_umbral": ">= 0,50",
+      "descripcion": "Test 2025: 0,59 (cumple). Histórico: 0,17 (no cumple)."
+    },
+    {
+      "kpi": "Proporción de subidas reales detectadas (Recall)",
+      "valor_umbral": ">= 0,65",
+      "descripcion": "Test 2025: 1,00, las 8 de 8 (cumple). Histórico: 0,29 (no cumple)."
+    },
+    {
+      "kpi": "Alertas que se confirman (Precision)",
+      "valor_umbral": "Sin objetivo en la memoria",
+      "descripcion": "Test 2025: 0,42 (8 de 19 alertas). Se incluye por transparencia."
+    }
+  ],
+  "_nota_datos": "Datos reales (boletines MAPA, open data RISP); la memoria no contiene cifras de negocio basadas en datos sintéticos, por lo que no aplica la advertencia de validación con datos reales. Fuentes: inbox/a13/manifest.yaml, memoria v1.10, outputs/a13/verification_report.md."
+}
