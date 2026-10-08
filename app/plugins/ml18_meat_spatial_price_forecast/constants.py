@@ -42,6 +42,24 @@ HIDDEN_UNITS = 96
 DROPOUT = 0.2
 DENSE_UNITS = 32
 
+# ── /train — config/config.yaml (training.*) of the delivered code, never tuned here ─────────
+TRAIN_RATIO = 0.70
+VAL_RATIO = 0.15            # test = the remaining 15 % (temporal_cutoffs over unique dates)
+LEARNING_RATE = 0.001
+LOSS = "mse"
+TRAIN_EPOCHS = 60
+TRAIN_BATCH_SIZE = 32
+EARLY_STOPPING_PATIENCE = 8
+TRAIN_SEED = 42             # scripts/_seed.py::set_global_seed(42)
+# Columns src/main.py::train() validates before feature engineering (+ the target).
+TRAIN_BASE_REQUIRED_COLS = (
+    DATE_COL, CCAA_COL, PRODUCTO_COL,
+    "CONSUMO X CAPITA", "PENETRACION (%)", "Poblacion", "RentaHogar",
+)
+BEST_CONFIG_FILENAME = "best_config.json"
+METRICS_FILENAME = "metrics.json"
+MLFLOW_ARTIFACT_PATH = "model"
+
 # src/main.py::VECINOS_CCAA, literal — matriz de vecindad fija (16 CCAA peninsulares + Baleares
 # y Canarias, ambas sin vecinas por ser insulares: add_spatial_lags cae al valor propio como
 # fallback para estas dos, documentado explícitamente en la memoria).

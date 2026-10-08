@@ -218,6 +218,10 @@ from app.plugins.ml18_meat_spatial_price_forecast.predict_dto import (
     PredictRequest as Ml18_Request,
     PredictResponse as Ml18_Response,
 )
+from app.plugins.ml18_meat_spatial_price_forecast.train_dto import (
+    TrainRequest as Ml18_TrainReq,
+    TrainResponse as Ml18TrainResp,
+)
 from app.plugins.ml47_dairy_dnsl_pasteurization_fault_detection.train_dto import (
     TrainRequest as Ml47Dairy_TrainReq,
     TrainResponse as Ml47DairyTrainResp,
@@ -1896,7 +1900,21 @@ FAKE_FACTORIES: dict[str, tuple[Callable, Callable]] = {
     "ml13-wine-price-fluctuation-prediction": (_ml13_inline, _ml13_batch),
 }
 
+
+def _ml18_train(plugin: FakePlugin, *, data_path: str) -> Ml18TrainResp:
+    """Fake train response for ml18 (values of the delivered metrics.json)."""
+    return Ml18TrainResp(
+        detail="GRU reentrenada desde cero con el procedimiento del equipo de IA",
+        train_mae=0.749, train_rmse=1.5227, train_mape_pct=9.7449, train_r2=0.8492,
+        val_mae=0.8487, val_rmse=1.7815, val_mape_pct=9.9685, val_r2=0.843,
+        test_mae=1.0041, test_rmse=2.2113, test_mape_pct=9.9323, test_r2=0.8114,
+        n_train=48768, n_val=11568, n_test=11600, epochs_run=17, best_epoch=9,
+        training_time_s=150.0, mlflow_run_id="run-test-ml18", upload_warning=None,
+    )
+
+
 TRAIN_FACTORIES: dict[str, Callable] = {
+    "ml18-meat-spatial-price-forecast": _ml18_train,
     "ml5-meat-cow-behaviour": _ml5_cow_train,
     "ml46-dairy-fouling-clog-detection": _ml46_dairy_train,
     "ml40-meat-refrigeration-aeration-fault-diagnosis": _ml40_meat_train,
@@ -2171,6 +2189,8 @@ TEST_REGISTRY: list[ModelEntry] = [
         predict_request_type=Ml18_Request,
         predict_response_type=Ml18_Response,
         extra_predict_exceptions=(InsufficientRowsError,),
+        train_request_type=Ml18_TrainReq,
+        train_response_type=Ml18TrainResp,
     ),
     ModelEntry(
         model_id="ml9-cereals-infestation-sequence-classifier",
