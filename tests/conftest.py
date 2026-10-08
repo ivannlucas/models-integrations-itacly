@@ -191,6 +191,22 @@ from app.plugins.ml46_dairy_fouling_clog_detection.train_dto import (
     TrainRequest as Ml46Dairy_TrainReq,
     TrainResponse as Ml46DairyTrainResp,
 )
+from app.plugins.ml41_meat_curing_machinery_acoustic_anomaly.predict_dto import (
+    PredictBatchResponse as Ml41BatchResp,
+    PredictInlineResponse as Ml41InlineResp,
+    PredictRequest as Ml41_Request,
+    PredictResponse as Ml41_Response,
+)
+from app.plugins.ml41_meat_curing_machinery_acoustic_anomaly.train_dto import (
+    TrainRequest as Ml41_TrainReq,
+    TrainResponse as Ml41TrainResp,
+)
+from app.plugins.ml18_meat_spatial_price_forecast.predict_dto import (
+    PredictBatchResponse as Ml18BatchResp,
+    PredictInlineResponse as Ml18InlineResp,
+    PredictRequest as Ml18_Request,
+    PredictResponse as Ml18_Response,
+)
 from app.plugins.m47_dnsl_fallas_maquinaria_pasteurizado.predict_dto import (
     PredictBatchResponse as M47BatchResp,
     PredictInlineResponse as M47InlineResp,
@@ -1726,7 +1742,32 @@ def _ml13_train(plugin: FakePlugin, *, data_path: str) -> Ml13TrainResp:
     )
 
 
+def _ml18_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> Ml18InlineResp:
+    """Fake inline response for the ml18 GRU meat spatial price forecast model."""
+    rows = features.get("rows", [])
+    ccaa = rows[0].get("CCAA", "MADRID") if rows else "MADRID"
+    producto = rows[0].get("Producto", "CARNE POLLO") if rows else "CARNE POLLO"
+    preds = [{"CCAA": ccaa, "Producto": producto, "Fecha": "2022-01-01", "predicted_price": 4.542946}]
+    return Ml18InlineResp(
+        model_id="ml18-meat-spatial-price-forecast",
+        predictions=preds,
+        n_predictions=len(preds),
+    )
+
+
+def _ml18_batch(plugin: FakePlugin, *, data_path: str) -> Ml18BatchResp:
+    """Fake batch response for the ml18 GRU meat spatial price forecast model."""
+    preds = [{"CCAA": "ANDALUCIA", "Producto": "CARNE POLLO", "Fecha": "2022-01-01", "predicted_price": 4.542946}]
+    return Ml18BatchResp(
+        model_id="ml18-meat-spatial-price-forecast",
+        predictions=preds,
+        n_predictions=len(preds),
+        output_path=None,
+    )
+
+
 FAKE_FACTORIES: dict[str, tuple[Callable, Callable]] = {
+    "ml18-meat-spatial-price-forecast": (_ml18_inline, _ml18_batch),
     "ml46-dairy-fouling-clog-detection": (_ml46_dairy_inline, _ml46_dairy_batch),
     "ml40-meat-refrigeration-aeration-fault-diagnosis": (_ml40_meat_inline, _ml40_meat_batch),
     "ml35-dairy-ann-cleaning-cost": (_ml35_dairy_inline, _ml35_dairy_batch),
@@ -2001,6 +2042,15 @@ TEST_REGISTRY: list[ModelEntry] = [
         extra_predict_exceptions=(UnsupportedMachineConfigurationError, InvalidAudioError),
         train_request_type=Ml41_TrainReq,
         train_response_type=Ml41TrainResp,
+    ),
+    ModelEntry(
+        model_id="ml18-meat-spatial-price-forecast",
+        prefix="/models/ml18-meat-spatial-price-forecast",
+        version="1.0.0",
+        plugin_class=FakePlugin,
+        predict_request_type=Ml18_Request,
+        predict_response_type=Ml18_Response,
+        extra_predict_exceptions=(InsufficientRowsError,),
     ),
     ModelEntry(
         model_id="ml9-cereals-infestation-sequence-classifier",
