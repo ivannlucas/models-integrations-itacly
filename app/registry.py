@@ -10,6 +10,7 @@ from typing import Any
 from app.domain.services.exceptions import (
     InfeasibleOptimizationError,
     InsufficientCycleHistoryError,
+    InsufficientDataError,
     InsufficientFramesError,
     InsufficientRowsError,
     InsufficientSequenceHistoryError,
@@ -19,6 +20,7 @@ from app.domain.services.exceptions import (
     InvalidAudioError,
     InvalidImageError,
     InvalidVideoError,
+    MissingRequiredFeatureError,
     NoValidSimulationPointError,
     PuConstraintViolationError,
     DataContractError,
@@ -239,10 +241,14 @@ from app.plugins.ml3_wine_disease_pest_forecast.train_dto import (
     TrainResponse as Ml3Wine_TrainResp,
 )
 
-from app.plugins.m21_cereal_price_spatial.plugin import M21CerealPriceSpatialPlugin
-from app.plugins.m21_cereal_price_spatial.predict_dto import (
-    PredictRequest as M21_Request,
-    PredictResponse as M21_Response,
+from app.plugins.ml21_cereals_price_spatial.plugin import Ml21CerealsPriceSpatialPlugin
+from app.plugins.ml21_cereals_price_spatial.predict_dto import (
+    PredictRequest as Ml21Cereals_Request,
+    PredictResponse as Ml21Cereals_Response,
+)
+from app.plugins.ml21_cereals_price_spatial.train_dto import (
+    TrainRequest as Ml21Cereals_TrainReq,
+    TrainResponse as Ml21CerealsTrainResp,
 )
 
 from app.plugins.ml16_meat_raw_material_price_alert.plugin import Ml16MeatRawMaterialPriceAlertPlugin
@@ -253,6 +259,45 @@ from app.plugins.ml16_meat_raw_material_price_alert.predict_dto import (
 from app.plugins.ml16_meat_raw_material_price_alert.train_dto import (
     TrainRequest as Ml16_TrainReq,
     TrainResponse as Ml16_TrainResp,
+)
+
+from app.plugins.ml14_wine_phyto_price_forecast.plugin import Ml14WinePhytoPriceForecastPlugin
+from app.plugins.ml14_wine_phyto_price_forecast.predict_dto import (
+    PredictRequest as Ml14_Request,
+    PredictResponse as Ml14_Response,
+)
+
+from app.plugins.ml26_wine_sulfite_gru_pso_forecast.exceptions import InvalidWineryInputError
+from app.plugins.ml26_wine_sulfite_gru_pso_forecast.plugin import Ml26WineSulfiteGruPsoForecastPlugin
+from app.plugins.ml26_wine_sulfite_gru_pso_forecast.predict_dto import (
+    PredictRequest as Ml26_Request,
+    PredictResponse as Ml26_Response,
+)
+from app.plugins.ml26_wine_sulfite_gru_pso_forecast.train_dto import (
+    TrainRequest as Ml26_TrainReq,
+    TrainResponse as Ml26_TrainResp,
+)
+
+from app.plugins.ml15_wine_ipi_price_forecast.plugin import Ml15WineIpiPriceForecastPlugin
+from app.plugins.ml15_wine_ipi_price_forecast.predict_dto import (
+    PredictRequest as Ml15_Request,
+    PredictResponse as Ml15_Response,
+)
+from app.plugins.ml15_wine_ipi_price_forecast.train_dto import (
+    TrainRequest as Ml15_TrainReq,
+    TrainResponse as Ml15_TrainResp,
+)
+
+from app.plugins.ml13_wine_price_fluctuation_prediction.plugin import (
+    Ml13WinePriceFluctuationPredictionPlugin,
+)
+from app.plugins.ml13_wine_price_fluctuation_prediction.predict_dto import (
+    PredictRequest as Ml13_Request,
+    PredictResponse as Ml13_Response,
+)
+from app.plugins.ml13_wine_price_fluctuation_prediction.train_dto import (
+    TrainRequest as Ml13_TrainReq,
+    TrainResponse as Ml13_TrainResp,
 )
 
 
@@ -496,13 +541,15 @@ REGISTRY: list[ModelEntry] = [
         train_response_type=Ml3Wine_TrainResp,
     ),
     ModelEntry(
-        model_id="m21-cereal-price-spatial",
-        prefix="/models/m21-cereal-price-spatial",
+        model_id="ml21-cereals-price-spatial",
+        prefix="/models/ml21-cereals-price-spatial",
         version="1.0.0",
-        plugin_class=M21CerealPriceSpatialPlugin,
-        predict_request_type=M21_Request,
-        predict_response_type=M21_Response,
-        extra_predict_exceptions=(),
+        plugin_class=Ml21CerealsPriceSpatialPlugin,
+        predict_request_type=Ml21Cereals_Request,
+        predict_response_type=Ml21Cereals_Response,
+        train_request_type=Ml21Cereals_TrainReq,
+        train_response_type=Ml21CerealsTrainResp,
+        extra_predict_exceptions=(DataContractError,),
     ),
     ModelEntry(
         model_id="ml16-meat-raw-material-price-alert",
@@ -516,17 +563,31 @@ REGISTRY: list[ModelEntry] = [
         train_response_type=Ml16_TrainResp,
     ),
     ModelEntry(
+        model_id="ml15-wine-ipi-price-forecast",
+        prefix="/models/ml15-wine-ipi-price-forecast",
+        version="1.0.0",
+        plugin_class=Ml15WineIpiPriceForecastPlugin,
+        predict_request_type=Ml15_Request,
+        predict_response_type=Ml15_Response,
+        extra_predict_exceptions=(MissingRequiredFeatureError,),
+        train_request_type=Ml15_TrainReq,
+        train_response_type=Ml15_TrainResp,
+    ),
+    ModelEntry(
         model_id="ml41-meat-curing-machinery-acoustic-anomaly",
         prefix="/models/ml41-meat-curing-machinery-acoustic-anomaly",
         version="1.0.0",
         plugin_class=Ml41MeatCuringMachineryAcousticAnomalyPlugin,
         predict_request_type=Ml41_Request,
         predict_response_type=Ml41_Response,
-        extra_predict_exceptions=(UnsupportedMachineConfigurationError, InvalidAudioError),
+        extra_predict_exceptions=(
+            UnsupportedMachineConfigurationError,
+            InvalidAudioError,
+        ),
         train_request_type=Ml41_TrainReq,
         train_response_type=Ml41_TrainResp,
     ),
-    ModelEntry(
+        ModelEntry(
         model_id="ml18-meat-spatial-price-forecast",
         prefix="/models/ml18-meat-spatial-price-forecast",
         version="1.0.0",
@@ -536,5 +597,38 @@ REGISTRY: list[ModelEntry] = [
         extra_predict_exceptions=(InsufficientRowsError,),
         # train_request_type/train_response_type omitidos: training.supported=false — ver
         # inbox/a18/manifest.yaml::training. train() lanza TrainingNotSupportedError (501).
+    ),
+    ModelEntry(
+        model_id="ml13-wine-price-fluctuation-prediction",
+        prefix="/models/ml13-wine-price-fluctuation-prediction",
+        version="1.0.0",
+        plugin_class=Ml13WinePriceFluctuationPredictionPlugin,
+        predict_request_type=Ml13_Request,
+        predict_response_type=Ml13_Response,
+        extra_predict_exceptions=(InsufficientDataError, DataContractError),
+        train_request_type=Ml13_TrainReq,
+        train_response_type=Ml13_TrainResp,
+    ),
+    ModelEntry(
+        model_id="ml14-wine-phyto-price-forecast",
+        prefix="/models/ml14-wine-phyto-price-forecast",
+        version="1.0.0",
+        plugin_class=Ml14WinePhytoPriceForecastPlugin,
+        predict_request_type=Ml14_Request,
+        predict_response_type=Ml14_Response,
+        extra_predict_exceptions=(InsufficientDataError,),
+        # train_request_type/train_response_type omitidos: training.supported=false — ver
+        # inbox/a14/manifest.yaml::training. train() lanza TrainingNotSupportedError (501).
+    ),
+    ModelEntry(
+        model_id="ml26-wine-sulfite-gru-pso-forecast",
+        prefix="/models/ml26-wine-sulfite-gru-pso-forecast",
+        version="1.0.0",
+        plugin_class=Ml26WineSulfiteGruPsoForecastPlugin,
+        predict_request_type=Ml26_Request,
+        predict_response_type=Ml26_Response,
+        extra_predict_exceptions=(InsufficientSequenceHistoryError, InvalidWineryInputError),
+        train_request_type=Ml26_TrainReq,
+        train_response_type=Ml26_TrainResp,
     ),
 ]

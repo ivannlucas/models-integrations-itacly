@@ -1,4 +1,4 @@
-"""Preprocessing for m21 — ESP-CEREAL spatial cereal price prediction.
+"""Preprocessing for ml21 — ESP-CEREAL spatial cereal price prediction.
 
 Replicates the BLACKLIST filtering and one-hot encoding from the original
 prepare_data.py to ensure feature alignment with model_metadata.json.
@@ -9,7 +9,8 @@ from typing import Literal
 
 import pandas as pd
 
-from app.plugins.m21_cereal_price_spatial.constants import (
+from app.domain.services.exceptions import DataContractError
+from app.plugins.ml21_cereals_price_spatial.constants import (
     BLACKLIST,
     PROB_BEAR,
     PROB_BULL,
@@ -47,6 +48,42 @@ def build_features_from_row(
     feat = feat.reindex(sorted(feat.columns), axis=1)
 
     return feat.reindex(columns=expected_cols, fill_value=0)
+
+
+def lookup_panel_row(
+    panel_df: pd.DataFrame,
+    province: str | None,
+    cereal: str | None,
+    month: str | None,
+) -> pd.Series:
+    """Find the base-panel row matching provincia/cereal_predominante/mes.
+
+    Mirrors the "production inference" branch of run_single() in the original
+    src/predict/predict_v1.py: filters the full panel to date >= CUT_DATE (the model's
+    serving period — pre-CUT_DATE rows are training-only) and to the requested
+    province/cereal/month, then takes the most recent matching row. This is what
+    supplies the ~90 engineered columns (lat_centroide, month_sin/cos, fase_*, price
+    lags, climate, MAPA indices...) that predict_inline's caller is never expected to
+    provide directly (manifest inputs.fixed is only provincia/cereal_predominante/date).
+    """
+    candidate = panel_df[panel_df["date"] >= CUT_DATE].copy()
+    if province:
+        candidate = candidate[candidate["provincia"].astype(str).str.lower() == province.lower()]
+    if cereal:
+        candidate = candidate[
+            candidate["cereal_predominante"].astype(str).str.lower() == cereal.lower()
+        ]
+    if month:
+        m_ts = pd.to_datetime(f"{month}-01", errors="coerce")
+        if pd.notna(m_ts):
+            candidate = candidate[candidate["date"].dt.to_period("M") == m_ts.to_period("M")]
+
+    if candidate.empty:
+        raise DataContractError(
+            f"Sin datos de panel para provincia={province!r} cereal={cereal!r} mes={month!r}. "
+            "Verifica que la combinacion exista en el dataset base o actualiza el panel."
+        )
+    return candidate.sort_values("date").iloc[-1]
 
 
 def validate_expected_columns(

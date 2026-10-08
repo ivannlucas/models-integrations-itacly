@@ -1,0 +1,147 @@
+{
+  "model_id": "a14",
+  "model_slug": "wine-phyto-price-forecast",
+  "fecha": "Septiembre 2026",
+  "model_key": "ml14-wine-phyto-price-forecast",
+  "version": "1.0.0",
+  "descripcion": "Modelo de predicción semanal del índice MAPA de precios de protección fitosanitaria (sector vitivinícola, base 2020=100) a 16 semanas vista, mediante una red GRU (PyTorch, 2 capas, 64 unidades ocultas) que predice un residual sobre un baseline lineal de drift y reconstruye el precio en escala original. Es el artefacto y la evaluación oficialmente aprobados por el equipo de IA: en el test reportado, el GRU supera al baseline lineal de Drift.",
+  "task_type": "Regresión de serie temporal, horizonte fijo t+16 semanas (direct forecasting sobre residual de drift)",
+  "framework": "PyTorch (nn.GRU, 2 capas, hidden_size=64, dropout=0.3); scikit-learn (StandardScaler, reajustado desde el dataset de entrenamiento en cada predicción); pandas / numpy",
+  "artefacto": "gru_model.pt (state_dict PyTorch, 45.185 parámetros) + final_dataset_for_modeling.csv (dataset de referencia bundled, usado para reajustar los escaladores de entrada/objetivo en cada predicción, igual que hace el código original)",
+  "objetivo": "Anticipar con 16 semanas de antelación la evolución del índice nacional de precios de protección fitosanitaria, para dar soporte a la planificación de compras y a la evaluación de riesgo de coste del sector vitivinícola. En la evaluación de test reportada por el equipo de IA, el modelo GRU mejora de forma clara sobre el baseline de tendencia simple (Drift) y sobre no hacer ningún cambio (Naive).",
+  "caso_uso": "Modo predict inline y predict batch (idéntico cálculo, solo cambia el transporte del histórico — JSON o CSV): se aporta un histórico semanal continuo (frecuencia domingo, sin huecos ni duplicados) de al menos 24 semanas con 6 variables base (índice de protección fitosanitaria, carburantes, cobre, gas, petróleo Brent, tipo de cambio EUR/USD); el servicio deriva automáticamente las 39 features (estacionalidad, retardos de 4/8/12 semanas, medias móviles de 4/8 semanas, diferencia mensual) y devuelve el precio predicho a 16 semanas, el precio actual y el baseline de drift de referencia. No hay modo de reentrenamiento por usuario (ver limitaciones): el procedimiento de entrenamiento entregado siempre reentrena sobre el mismo histórico bundled del equipo de IA, no acepta datos de cliente.",
+  "inputs": [
+    {
+      "nombre": "rows (histórico semanal, mínimo 24 filas)",
+      "tipo": "list[dict]",
+      "descripcion": "Cada fila: date (YYYY-MM-DD, domingo), PROTECCION_FITO, CARBURANTES, COPPER_EUR_TON, GAS_EUR_MMBTU, COIL_EUR_BARRIL, DEXUSEU — todas índices/precios base 2020=100 o unidad de mercado (EUR/tonelada, EUR/MMBtu, EUR/barril, USD/EUR)",
+      "obligatorio": "Sí — mínimo 24 filas semanales consecutivas sin huecos ni duplicados",
+      "valor_defecto": "-"
+    },
+    {
+      "nombre": "MONTH, MONTH_SIN, MONTH_COS, *_LAG_{4,8,12}, *_MA_{4,8}, *_DIFF_MONTH (39 features totales)",
+      "tipo": "float",
+      "descripcion": "Variables derivadas automáticamente del histórico aportado (estacionalidad, retardos autorregresivos, medias móviles, diferencia mensual) — nunca se piden al cliente",
+      "obligatorio": "No — siempre calculadas por el servicio",
+      "valor_defecto": "derivadas del histórico"
+    }
+  ],
+  "outputs": [
+    {
+      "nombre": "predicted_price",
+      "tipo": "float (índice base 2020=100)",
+      "descripcion": "PROTECCION_FITO predicho a 16 semanas vista",
+      "rango": "continuo, típicamente 80-135 (rango histórico del índice, 2005-2025)",
+      "interpretacion": "valor esperado del índice nacional dentro de 16 semanas; comparar con current_price y drift_baseline"
+    },
+    {
+      "nombre": "current_price",
+      "tipo": "float",
+      "descripcion": "PROTECCION_FITO de la última fila del histórico aportado",
+      "rango": "igual rango que predicted_price",
+      "interpretacion": "ancla de referencia inmediata"
+    },
+    {
+      "nombre": "drift_baseline",
+      "tipo": "float",
+      "descripcion": "Baseline lineal simple (extrapolación de la tendencia mensual reciente) — la referencia frente a la que el GRU sí mejora en el test reportado",
+      "rango": "igual rango que predicted_price",
+      "interpretacion": "la diferencia entre predicted_price y drift_baseline es la corrección que aporta el modelo aprendido sobre la simple extrapolación de tendencia"
+    },
+    {
+      "nombre": "horizon_weeks / last_observed_date / prediction_date",
+      "tipo": "int / date / date",
+      "descripcion": "Horizonte (siempre 16), última fecha del histórico y fecha objetivo de la predicción (last_observed_date + 16 semanas)",
+      "rango": "-",
+      "interpretacion": "prediction_date es la fecha a la que se refiere predicted_price, no la fecha de ejecución"
+    },
+    {
+      "nombre": "gap_warning",
+      "tipo": "string | null",
+      "descripcion": "Aviso si el histórico aportado está desactualizado respecto a la fecha de ejecución",
+      "rango": "-",
+      "interpretacion": "si no es null, la predicción se basa en datos que ya no reflejan la semana actual"
+    }
+  ],
+  "metricas": [
+    {
+      "nombre": "Test reportado (models/metrics/model_comparison.json, split temporal único 80/20)",
+      "valor": "GRU: RMSE=2,2873; MAE=1,699; MAPE=1,3933%; R²=0,7108; acierto direccional=77,7%",
+      "descripcion": "211 observaciones de test, arquitectura seleccionada automáticamente por menor RMSE entre GRU/LSTM/XGBoost (media de 3 semillas)",
+      "interpretacion": "el modelo se equivoca de media 1,70 puntos de índice en el periodo evaluado"
+    },
+    {
+      "nombre": "Drift (baseline lineal, mismo test)",
+      "valor": "RMSE=2,5406; MAE=1,9403; MAPE=1,58%; R²=0,6432; acierto direccional=72,0%",
+      "descripcion": "Extrapolar la tendencia mensual reciente, sin ningún modelo aprendido",
+      "interpretacion": "el GRU se equivoca MENOS que el baseline simple en las 4 métricas evaluadas — el criterio de aceptación del proyecto (RMSE_GRU < RMSE_Drift) SÍ se cumple."
+    },
+    {
+      "nombre": "Naive y XGBoost (mismo test, referencia adicional)",
+      "valor": "Naive: RMSE=3,8856; XGBoost: RMSE=3,3076",
+      "descripcion": "Ambos peores que Drift y que el GRU en esta evaluación",
+      "interpretacion": "confirma que el GRU es la mejor opción disponible entre todas las evaluadas, no solo frente al baseline más simple"
+    },
+    {
+      "nombre": "Verificación golden dataset (post-integración)",
+      "valor": "5/5 casos, coincidencia exacta (diferencia 0,0) contra el endpoint HTTP real",
+      "descripcion": "4 ventanas históricas reales + 1 caso de rechazo controlado, re-ejecutados contra /predict del plugin integrado, incluida una verificación cruzada contra la salida literal del CLI original (`--model auto`) — ver outputs/a14/verification_report.md",
+      "interpretacion": "el servicio integrado reproduce exactamente el comportamiento del artefacto GRU entregado, incluida la selección automática de arquitectura del código original."
+    }
+  ],
+  "limitaciones": [
+    {
+      "tipo": "Evaluación con un único split temporal (sin partición de validación separada)",
+      "descripcion": "Esta entrega evalúa arquitecturas y reporta el resultado final sobre el mismo split de test (80/20), sin una fase de validación previa aislada del test. Existe una copia distinta y no oficial de este mismo código (no confirmada como aprobada por el equipo de IA) que identificaba esto como una posible fuga de datos entre selección de arquitectura y evaluación, y que, con un protocolo corregido, obtenía un resultado distinto (un modelo que no superaba a Drift). Esa auditoría no se ha podido contrastar con el equipo de IA y no forma parte de la entrega aprobada -- se deja constancia de su existencia por transparencia, sin que determine el estado de aceptación de este modelo."
+    },
+    {
+      "tipo": "Sin reentrenamiento por usuario",
+      "descripcion": "El procedimiento de entrenamiento entregado por el equipo de IA no acepta ningún dato de cliente: siempre reentrena sobre el mismo histórico fijo bundled, solo permite variar hiperparámetros. El endpoint /train de este servicio devuelve explícitamente 'no soportado' (HTTP 501) en vez de simular un reentrenamiento que no incorporaría datos nuevos."
+    },
+    {
+      "tipo": "Reajuste de escaladores en caliente, no un artefacto congelado",
+      "descripcion": "Esta entrega no incluye ningún escalador serializado -- el propio código original reajusta (fit) los escaladores de entrada/objetivo desde el dataset de entrenamiento bundled en cada predicción. Este servicio replica exactamente ese comportamiento, empaquetando el mismo dataset de referencia junto al modelo."
+    },
+    {
+      "tipo": "Dependencia de fuentes de datos externas y su continuidad",
+      "descripcion": "Las variables de entrada dependen de la publicación continuada de los índices MAPA (protección fitosanitaria, carburantes) y de las series FRED/IMF/EIA (cobre, gas, petróleo, tipo de cambio). Un cambio de metodología o una interrupción en cualquiera de esas fuentes no está contemplado por el modelo."
+    }
+  ],
+  "fichero_nombre": "Ventanas de 24 filas extraídas de data/processed/final_dataset_for_modeling.csv (mismo dataset bundled con el que se reajustan los escaladores)",
+  "fichero_registros": "5 casos: 4 ventanas históricas reales (24-30 filas cada una) + 1 caso de rechazo controlado con 23 filas (por debajo del mínimo operativo)",
+  "fichero_resultado": "predict inline sobre los 5 casos reproduce exactamente (diferencia 0,0, o HTTP 422 en el caso de rechazo) los golden_cases del manifest, ejecutado contra el endpoint HTTP real del plugin integrado con el artefacto PyTorch real cargado; un caso se verificó además contra la salida literal del CLI original del equipo de IA",
+  "observaciones_tecnicas": "Solo CPU, sin GPU (GRU pequeño, 45.185 parámetros, ~185 KB el artefacto). requirements.txt fija torch==2.10.0 sin distinguir variante CPU/CUDA — se recomienda fijar explícitamente la rueda CPU en el entorno de despliegue de este servicio para no arrastrar dependencias CUDA innecesarias. No requiere conexión a red en inferencia (el dataset de referencia va bundled).",
+  "que_no_responde": "El modelo no predice precios por Comunidad Autónoma ni por explotación individual, solo el índice nacional. No explica por sí mismo la causa de la subida o bajada prevista, ni incorpora eventos futuros conocidos (cambios regulatorios, roturas de stock) que no estén ya reflejados en la tendencia histórica.",
+  "entradas_contexto": "Los datos de entrada son índices y precios ya procesados de fuentes oficiales (MAPA para el índice de protección fitosanitaria y carburantes; FRED/IMF/EIA para cobre, gas, petróleo y tipo de cambio), agregados a frecuencia semanal — no son mediciones directas de sensor ni formularios rellenados por el usuario final.",
+  "ejemplo_interpretacion": "Si el sistema recibe un histórico cuya última semana tiene un índice de 125,0 y predice 121,4 para 16 semanas después, mientras que el baseline de tendencia simple (drift_baseline) apuntaba a 117,7, la diferencia entre predicted_price y drift_baseline (3,7 puntos) es la corrección que aporta el modelo aprendido sobre limitarse a extrapolar la tendencia — una corrección que, según la evaluación de test, mejora la precisión frente a esa tendencia simple.",
+  "margen_error": "En la evaluación de test reportada (211 semanas), el modelo se equivoca de media unos 1,70 puntos de índice — menos que extrapolar simplemente la tendencia reciente sin ningún modelo aprendido (esa alternativa se equivoca de media 1,94 puntos). Es decir: el modelo aprendido sí aporta una mejora de precisión medible frente a la regla simple, con una exactitud direccional (acertar si sube o baja) del 77,7%.",
+  "revisar_manualmente": [
+    "Predicciones emitidas en periodos de shock de mercado, cambio regulatorio o geopolítico repentino en insumos agroquímicos — el modelo aprende de la dinámica histórica y no anticipa rupturas de esa dinámica.",
+    "Cualquier histórico aportado con gap_warning distinto de null — indica que los datos de entrada ya están desactualizados respecto a la fecha de ejecución.",
+    "Predicciones fuera del rango histórico de entrenamiento (2005-2025) — son extrapolaciones no validadas."
+  ],
+  "que_no_hace": [
+    "No sustituye el criterio experto de compras, y menos aún ante episodios de mercado extraordinarios.",
+    "No predice precios oficiales por Comunidad Autónoma ni por explotación — solo el índice nacional.",
+    "No permite reentrenamiento con datos propios del usuario — solo existe el artefacto fijo entregado por el equipo de IA.",
+    "No garantiza que el precio real coincida con la predicción; es una estimación con margen de error medido, no un compromiso."
+  ],
+  "puede_equivocarse": "Sí. En la evaluación de test reportada se equivoca de media unos 1,70 puntos de índice (MAPE 1,39%), una mejora clara frente a extrapolar simplemente la tendencia reciente, con un 77,7% de acierto direccional. Debe usarse como apoyo a la planificación de compras y a la evaluación de riesgo, nunca como sustituto del criterio experto ante cambios bruscos del mercado, shocks regulatorios o fallos en la actualización de las fuentes de datos.",
+  "kpis": [
+    {
+      "kpi": "Criterio de aceptación del proyecto: RMSE del modelo seleccionado < RMSE del baseline de Drift, en test",
+      "valor_umbral": "RMSE_GRU < RMSE_Drift",
+      "descripcion": "CUMPLE. RMSE GRU=2,2873 frente a RMSE Drift=2,5406 -- una mejora del 10,0%."
+    },
+    {
+      "kpi": "Selección de mejor arquitectura entre GRU/LSTM/XGBoost",
+      "valor_umbral": "El modelo servido debe tener el menor RMSE de test entre las arquitecturas comparadas",
+      "descripcion": "CUMPLE. El GRU obtuvo el menor RMSE de test (2,2873 frente a 2,2983 LSTM y 3,3076 XGBoost)."
+    },
+    {
+      "kpi": "Acierto direccional (sube/baja) en test",
+      "valor_umbral": "Sin umbral contractual explícito -- referencia de calidad complementaria",
+      "descripcion": "77,7% para el GRU frente a 72,0% del baseline de Drift -- también mejor en esta métrica secundaria."
+    }
+  ]
+}

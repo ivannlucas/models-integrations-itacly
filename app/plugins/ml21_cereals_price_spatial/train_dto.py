@@ -1,4 +1,4 @@
-"""Pydantic DTOs for m21 (ESP-CEREAL) /train endpoint."""
+"""Pydantic DTOs for ml21 (ESP-CEREAL) /train endpoint."""
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -7,7 +7,7 @@ class TrainRequest(BaseModel):
     data_path: str = Field(
         ..., description="Path to CSV with raw panel rows + target columns"
     )
-    mlflow_run_id: str = ""
+    mlflow_run_id: str
 
 
 class TrainResponse(BaseModel):
