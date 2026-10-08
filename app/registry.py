@@ -10,6 +10,7 @@ from typing import Any
 from app.domain.services.exceptions import (
     InfeasibleOptimizationError,
     InsufficientCycleHistoryError,
+    InsufficientDataError,
     InsufficientFramesError,
     InsufficientRowsError,
     InsufficientSequenceHistoryError,
@@ -280,6 +281,23 @@ from app.plugins.ml16_meat_raw_material_price_alert.predict_dto import (
 from app.plugins.ml16_meat_raw_material_price_alert.train_dto import (
     TrainRequest as Ml16_TrainReq,
     TrainResponse as Ml16_TrainResp,
+)
+
+from app.plugins.ml14_wine_phyto_price_forecast.plugin import Ml14WinePhytoPriceForecastPlugin
+from app.plugins.ml14_wine_phyto_price_forecast.predict_dto import (
+    PredictRequest as Ml14_Request,
+    PredictResponse as Ml14_Response,
+)
+
+from app.plugins.ml26_wine_sulfite_gru_pso_forecast.exceptions import InvalidWineryInputError
+from app.plugins.ml26_wine_sulfite_gru_pso_forecast.plugin import Ml26WineSulfiteGruPsoForecastPlugin
+from app.plugins.ml26_wine_sulfite_gru_pso_forecast.predict_dto import (
+    PredictRequest as Ml26_Request,
+    PredictResponse as Ml26_Response,
+)
+from app.plugins.ml26_wine_sulfite_gru_pso_forecast.train_dto import (
+    TrainRequest as Ml26_TrainReq,
+    TrainResponse as Ml26_TrainResp,
 )
 
 from app.plugins.ml15_wine_ipi_price_forecast.plugin import Ml15WineIpiPriceForecastPlugin
@@ -594,5 +612,27 @@ REGISTRY: list[ModelEntry] = [
         ),
         train_request_type=Ml41_TrainReq,
         train_response_type=Ml41_TrainResp,
+    ),
+    ModelEntry(
+        model_id="ml14-wine-phyto-price-forecast",
+        prefix="/models/ml14-wine-phyto-price-forecast",
+        version="1.0.0",
+        plugin_class=Ml14WinePhytoPriceForecastPlugin,
+        predict_request_type=Ml14_Request,
+        predict_response_type=Ml14_Response,
+        extra_predict_exceptions=(InsufficientDataError,),
+        # train_request_type/train_response_type omitidos: training.supported=false — ver
+        # inbox/a14/manifest.yaml::training. train() lanza TrainingNotSupportedError (501).
+    ),
+    ModelEntry(
+        model_id="ml26-wine-sulfite-gru-pso-forecast",
+        prefix="/models/ml26-wine-sulfite-gru-pso-forecast",
+        version="1.0.0",
+        plugin_class=Ml26WineSulfiteGruPsoForecastPlugin,
+        predict_request_type=Ml26_Request,
+        predict_response_type=Ml26_Response,
+        extra_predict_exceptions=(InsufficientSequenceHistoryError, InvalidWineryInputError),
+        train_request_type=Ml26_TrainReq,
+        train_response_type=Ml26_TrainResp,
     ),
 ]

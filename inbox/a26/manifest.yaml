@@ -1,0 +1,799 @@
+model_id: ml26_wine_sulfite_gru_pso_forecast
+sector: vitivinicola
+nombre: "Desarrollo de un modelo basado en DL y PSO para la optimización de costes operativos y producción"
+# Título de la portada de la memoria. El nombre del fichero .docx dice "basado en algoritmos PSO"
+# (sin "DL y"); se toma el de la portada/tabla de identificación. Acrónimo: PSODL-OP.
+acronimo: PSODL-OP
+task_type: timeseries_regression_multitask  # GRU bidireccional multitarea: 2 salidas continuas a 72 h sobre ventanas de 24 pasos x 22 features
+task_type_note: >
+  A pesar del título ("optimización de costes"), el modelo NO es prescriptivo: no hay optimizador
+  de dosis ni de costes en inferencia. PSO se usa exclusivamente en ENTRENAMIENTO para buscar
+  hiperparámetros de la GRU (src/training/models/train_sequence_pso.py). El README y MODEL_CARD
+  lo dicen explícitamente: "el coste operativo se trata como contexto del caso de uso, no como una
+  salida directa del modelo". [C] README.md, [M] §1, §2.
+endpoint_id: ml26-wine-sulfite-gru-pso-forecast
+
+framework:
+  # [C] inbox/a26/codigo/requirements.txt — ASCII/LF (encoding correcto, sin BOM), versiones fijadas (==)
+  - torch==2.9.1
+  - numpy==2.3.5
+  - pandas==2.3.3
+  - scikit-learn==1.8.0
+  - scipy==1.16.3
+  - joblib==1.5.2
+  - PyYAML==6.0.3
+  - pydantic==2.12.0
+  # matplotlib/cycler/kiwisolver/nbformat/nbclient solo se usan en EDA — no son dependencias de inferencia.
+  # Entorno de desarrollo del equipo de IA: Python 3.12.3 [M] §4.3 (pyproject exige >=3.11).
+
+artifacts:
+  folder: models/artifacts/
+  files:
+    - gru_pso.pkl        # SequenceBundle pickled (dataclass de src.training.models.train_sequence): model_state (state_dict torch),
+                         # feature_names (22), target_names (2), mean/std shape (1,22) (z-score por feature sobre train),
+                         # y_mean/y_std (2), config (hiperparámetros finales). Se deserializa con un Unpickler que remapea
+                         # torch.storage._load_from_bytes a map_location (src/training/models/inference.py::_TorchDeviceUnpickler).
+    - best_model.json    # registro de selección: best_model_name=gru_pso, feature_columns, target_columns, scores de validación
+  not_served:
+    # Artefactos de la comparativa (sección 5 de la memoria); no se sirven en el plugin.
+    - gradient_boosting.pkl
+    - gru.pkl
+    - linear_regression.pkl
+    - lstm.pkl
+    - lstm_pso.pkl
+    - mlp_pso.pkl
+    - mlp_wide.pkl
+    - random_forest.pkl
+  pickle_dependency: >
+    gru_pso.pkl es un pickle de la dataclass SequenceBundle definida en el módulo
+    src.training.models.train_sequence del equipo de IA. Para deserializarlo el plugin necesita
+    que el nombre de clase resuelva → hay que vendorizar la definición (o remapear el módulo en
+    un Unpickler propio, como ya hace el original con torch.storage). No es un .pt/state_dict puro.
+  model_config:  # [A] models/metrics/gru_pso.json::model_config == [M] v2.5 Tabla 13 (v2.3: Tabla 7)
+    architecture: GRUMultiTaskRegressor  # GRU → AttentionPooling → LayerNorm → Linear → ReLU → Dropout → Linear(2)
+    input_dim: 22
+    hidden_dim: 96
+    num_layers: 2
+    bidirectional: true
+    dropout: 0.08727378740381384
+    head_dropout: 0.1056194063836242
+    output_dim: 2
+
+inputs:
+  # Modo operativo [M] §4.2 / §8.2, [C] src/predict/raw_inputs.py: dos tablas crudas.
+  lot:  # "lote.csv" — una fila por depósito. Todas obligatorias ([C] LOT_COLUMNS)
+    - {name: lot_id, type: string, description: "Identificador del lote/depósito"}
+    - {name: wine_type, type: categorical, values: [red, rose, white], description: "Tipo de vino"}
+    - {name: volume_l, type: float, unit: L, description: "Volumen del depósito", train_range: [2512.37, 14982.62]}
+    - {name: ambient_temp_c, type: float, unit: "°C", description: "Temperatura ambiente de la bodega", train_range: [10.01, 27.98]}
+  readings:  # "lecturas.csv" — serie temporal @2h por lote
+    required:  # [C] READING_COLUMNS (+ timestamp, que la memoria §4.2 lista como obligatoria aunque el código la trata como opcional)
+      - {name: lot_id, type: string}
+      - {name: timestamp, type: datetime, description: "Marca temporal de la lectura; paso nominal de 2 h"}
+      - {name: stage, type: categorical, values: [must, fermentation, stabilization, storage, pre_bottling]}
+      - {name: temperature_c, type: float, unit: "°C", train_range: [10.61, 28.44]}
+      - {name: dissolved_oxygen_mg_l, type: float, unit: "mg/L", train_range: [0.05, 7.0]}
+      - {name: density_g_ml, type: float, unit: "g/mL", train_range: [0.9943, 1.1131]}
+      - {name: co2_g_l, type: float, unit: "g/L", train_range: [0.0, 2.3525]}
+      - name: stage_progress
+        type: float
+        range: [0, 1]
+        mandatory_by_decision: true   # decisión del usuario 2026-09-29 (KI-01)
+        description: >
+          Avance de la etapa de la lectura (0 = inicio, 1 = fin). No figura como obligatoria en README ni en memoria
+          §4.2, pero el modelo auditado se entrenó con ella y el fallback del código entregado para cuando falta
+          triplica el error. Se exige en todas las lecturas; con ella el preprocesado original del equipo de IA
+          (sin cambios) reproduce exactamente las ventanas de entrenamiento.
+    optional:  # [C] OPTIONAL_READING_COLUMNS
+      - {name: timestamp_index, type: int, description: "Índice del paso; si falta se calcula por orden de timestamp dentro del lote"}
+      - {name: ph_lab, type: float, unit: pH, train_range: [3.0017, 3.7942], description: "Solo en filas con analítica; vacío entre muestras (se arrastra el último valor)"}
+      - {name: free_sulfite_lab, type: float, unit: "mg/L", train_range: [2.34, 55.01]}
+      - {name: total_sulfite_lab, type: float, unit: "mg/L", train_range: [9.76, 143.98]}
+      - {name: dose_mg_l, type: float, unit: "mg/L", train_range: [0.0, 10.53], description: "Dosis de SO2 añadida en ese paso (alias actual_dose_mg_l)"}
+  constraints:
+    stage_progress_required_on_every_reading: true   # KI-01
+    min_readings_per_lot: 24   # [C] _latest_sequence_windows; [M] §4.2 "mínimo de 24 filas consecutivas" (48 h)
+    lot_id_must_exist_in_lot_table: true  # [C] load_raw_inference_frame lanza ValueError
+  derived_if_missing:  # [C] feature_engineering.py — el usuario NO las aporta
+    stage_progress: "NO se deriva: es obligatoria (KI-01). El fallback original cumcount/(count-1) no se usa."
+    hours_since_last_lab: "(timestamp_index - índice de la última fila con analítica) * 2.0"
+    lab_sample: "1 si la fila trae alguna de ph_lab/free_sulfite_lab/total_sulfite_lab"
+    last_so2_addition_mg_l: "última dosis > 0 anterior a la fila (desplazada 1 paso), ffill; 0 si no hay"
+    hours_since_last_addition: "(timestamp_index - índice de la última dosis) * 2.0; si no hubo dosis = timestamp_index*2"
+    lab_values: "ffill + bfill por lote de ph_lab/free_sulfite_lab/total_sulfite_lab; mediana del frame si todo el lote viene vacío"
+    one_hot: "wine_type_{red,rose,white}, stage_{fermentation,must,pre_bottling,stabilization,storage} con niveles fijos de config.yaml"
+  model_features:  # [A] best_model.json::feature_columns — orden exacto del tensor (24, 22)
+    - volume_l
+    - ambient_temp_c
+    - stage_progress
+    - hours_since_last_lab
+    - last_so2_addition_mg_l
+    - hours_since_last_addition
+    - temperature_c
+    - dissolved_oxygen_mg_l
+    - density_g_ml
+    - co2_g_l
+    - ph_lab
+    - free_sulfite_lab
+    - total_sulfite_lab
+    - lab_sample
+    - wine_type_red
+    - wine_type_rose
+    - wine_type_white
+    - stage_fermentation
+    - stage_must
+    - stage_pre_bottling
+    - stage_stabilization
+    - stage_storage
+  window:
+    length: 24          # pasos (48 h) [C] config.yaml preprocessing.sequential_window
+    step_hours: 2
+    selection: "últimas 24 filas del lote tras el feature engineering (una predicción por lote)"
+  reproducibility_mode: >
+    [M] §4.2: además se aceptan ventanas ya procesadas (n, 24, 22) (data/splits/test_seq_X.npy) SOLO para
+    evaluación técnica. El plugin lo expone como entrada alternativa `feature_window` para poder
+    verificar el modelo aislado del feature engineering.
+
+outputs:
+  predict_inline:  # una fila por lote
+    - {name: lot_id, type: string}
+    - {name: timestamp, type: string, description: "timestamp de la última lectura usada (instante de predicción)"}
+    - {name: timestamp_index, type: int}
+    - {name: future_free_sulfite_72h, type: float, unit: "mg/L", description: "SO2 libre esperado dentro de 72 h"}
+    - {name: underprotection_risk_72h, type: float, range: [0, 1], description: "Score de riesgo de infraprotección a 72 h (no es probabilidad calibrada)"}
+  postprocess:
+    - "underprotection_risk_72h se recorta a [0, 1] (clip) [C] src/utils/target_constraints.py; [M] §2"
+    - "redondeo a 6 decimales [C] src/predict/postprocess.py::format_output"
+  derived_for_platform:
+    risk_band:
+      source: "[M] v2.5 §7.1 (párrafo antes de Tabla 15) == [C] notebooks/EDA/eda.ipynb::risk_band (no está en src/)"
+      rule: "bajo si < 0.33; medio si < 0.66; alto en otro caso"
+
+training:
+  supported: true
+  # [C] scripts/train.py → src/training/trainer.py::train → train_sequence_pso (búsqueda) → train_sequence_with_config (final)
+  target_column: free_sulfite_mg_l
+  target_note: >
+    Los dos targets NO vienen en el CSV: se DERIVAN en build_feature_frame(include_targets=True):
+    future_free_sulfite_72h = free_sulfite_mg_l desplazado 36 pasos por lote;
+    underprotection_risk_72h = estimate_underprotection_risk(...) sobre el estado futuro (src/utils/enology.py).
+    free_sulfite_mg_l es el SO2 libre "real" continuo del simulador (no la analítica free_sulfite_lab).
+    En datos reales de bodega este valor continuo no existe — ver known_issues.
+  targets_derived: [future_free_sulfite_72h, underprotection_risk_72h]
+  required_columns:
+    hard_required: [lot_id, timestamp_index, wine_type, volume_l, ambient_temp_c, stage, temperature_c,
+                    dissolved_oxygen_mg_l, density_g_ml, co2_g_l, free_sulfite_mg_l, stage_progress]
+    recommended: [ph_lab, free_sulfite_lab, total_sulfite_lab, actual_dose_mg_l, hours_since_last_lab,
+                  lab_sample, target_only, timestamp]
+    source: codigo_entrenamiento  # [C] feature_engineering.py::_ensure_required_columns + _add_prediction_targets
+    note: "Formato = data/raw/sequential.csv.gz (filas target_only=True se usan solo para construir targets)"
+  split:
+    strategy: hold-out por lot_id  # [C] splitters.py; [M] §6.3
+    train: 0.70
+    val: 0.15
+    test: 0.15
+    seed: 42   # experiment.seed
+  hyperparams:
+    # [C] config/config.yaml models.gru_pso + [A] models/metrics/gru_pso.json::model_config + [M] v2.5 Tablas 13/14 (coinciden)
+    final_model:
+      hidden_dim: 96
+      num_layers: 2
+      bidirectional: true
+      dropout: 0.08727378740381384
+      head_dropout: 0.1056194063836242
+      batch_size: 128
+      learning_rate: 0.0005201905904619833
+      weight_decay: 0.0004632265626210997
+      epochs: 40
+      patience: 8
+      lr_patience: 2
+      lr_decay_factor: 0.5
+      gradient_clip: 1.0
+      optimizer: AdamW
+      loss: SmoothL1Loss
+      scheduler: ReduceLROnPlateau(mode=min, sobre val_rmse)
+      normalization: "z-score de X por feature (media/std sobre train, eje (0,1)) y z-score de y"
+      seed: 7    # training.seed
+    window: 24
+    stride: 2
+    horizon_hours: 72
+    pso_search:  # [M] v2.5 Tabla 14; [C] config.yaml models.gru_pso
+      particles: 4
+      iterations: 3
+      search_repeats: 2
+      inertia: 0.72
+      cognitive: 1.4
+      social: 1.4
+      velocity_clip: 0.22
+      search_epochs: 14
+      search_patience: 4
+      objective: overall_rmse de validación
+      search_space:
+        hidden_dim: {min: 64, max: 160, step: 32}
+        num_layers: {min: 1, max: 3}
+        dropout: {min: 0.05, max: 0.25}
+        head_dropout: {min: 0.05, max: 0.25}
+        learning_rate: {min: 0.0003, max: 0.002, scale: log}
+        weight_decay: {min: 0.00001, max: 0.001, scale: log}
+        batch_size_choices: [64, 128]
+        bidirectional: [false, true]
+  metrics_returned: [val_rmse_future_free_sulfite_72h, val_mae_future_free_sulfite_72h,
+                     val_rmse_underprotection_risk_72h, val_mae_underprotection_risk_72h, val_overall_rmse, val_overall_mae]
+  source: codigo_entrenamiento
+
+constraints: {}
+  # No hay restricciones duras de negocio tipo "PU >= 13". La única regla de salida es el clip del
+  # riesgo a [0,1], que es postproceso, no restricción. Las reglas de entrada (>=24 lecturas por lote,
+  # lot_id presente en la tabla de lotes) son validación de datos → excepción de dominio de historial
+  # insuficiente, no restricción de negocio.
+
+metrics_reported:
+  dataset: test_hold_out   # 90 lotes sintéticos, 3096 ventanas
+  split: 70/15/15 por lot_id
+  random_seed: 42
+  n_samples_test: 3096
+  source: "[A] models/metrics/gru_pso.json::test == [M] v2.5 Tabla 17 (v2.3: Tabla 11)"
+  future_free_sulfite_72h: {rmse: 1.9765176202795756, mae: 1.5082366133845129, mape: 0.06731495206479939}
+  underprotection_risk_72h: {rmse: 0.06424548422487465, mae: 0.042862378850155716, mape: 0.10698414475909705}
+  overall_rmse: 1.3983471288487184
+  overall_mae: 0.7755494961173343
+  validation:  # [M] v2.5 Tabla 16
+    future_free_sulfite_72h: {rmse: 2.2117815520515447, mae: 1.6083012676848902}
+    underprotection_risk_72h: {rmse: 0.06908080743786876, mae: 0.04565301889102895}
+    overall_rmse: 1.564728377698793
+  operational_test:  # [M] v2.5 Tabla 18 / [A] notebooks/EDA/tables/risk_priority_kpi.csv
+    so2_within_2mg_l: 0.716
+    so2_within_3mg_l: 0.876
+    risk_within_0_15: 0.955
+    risk_within_0_20: 0.983
+    recall_riesgo_alto: 0.9247842170160296
+    precision_riesgo_alto: 0.9386733416770964
+    acierto_banda_exacta: 0.8746770025839793
+    misma_o_banda_contigua: 0.9996770025839793   # la memoria lo redondea a "100,0 %"
+    kpi_objetivo_recall_riesgo_alto: 0.85
+  success_criteria:  # [M] v2.5 Tabla 15 (== v2.3 Tabla 9; umbrales en controles de contenido w:sdt — ver KI-06)
+    nivel_1_recall_riesgo_alto_min: 0.85
+    nivel_2_precision_riesgo_alto_min: 0.85
+    nivel_3_so2_within_3mg_l_min: 0.85
+    nivel_4_risk_rmse_max: 0.10
+    nivel_4_risk_mae_max: 0.06
+    nivel_5: "RMSE validación < linear_regression"
+    nivel_6: "RMSE validación < random_forest"
+    nivel_7: "RMSE gru_pso < RMSE gru"
+  synthetic_data: true  # TODAS las métricas son sobre datos sintéticos del simulador — validación con datos reales pendiente
+  drift_alerts_recommended:  # [M] §10
+    future_free_sulfite_72h: {rmse_max: 2.5, mae_max: 2.0}
+    underprotection_risk_72h: {rmse_max: 0.10, mae_max: 0.06}
+    recall_riesgo_alto_min: 0.85
+    psi_max: 0.2
+    psi_features: [free_sulfite_lab, total_sulfite_lab, dissolved_oxygen_mg_l, temperature_c, hours_since_last_lab]
+
+tolerance_policy:
+  # Dos niveles de comprobación por golden case:
+  model_window:
+    description: >
+      Modo reproducibilidad: el plugin recibe la ventana procesada (24x22) de data/splits/test_seq_X.npy
+      [sample_index] y debe reproducir la predicción del pipeline ORIGINAL (data/predictions/gru_pso_test_predictions.csv).
+      Mide el modelo aislado (carga del artefacto + normalización + forward + desnormalización + clip).
+    future_free_sulfite_72h_atol: 0.01     # mg/L — tolerancia numérica (float32, CPU vs versión de torch distinta)
+    underprotection_risk_72h_atol: 0.001
+  raw_pipeline:
+    description: >
+      Modo operativo: el plugin recibe lote + lecturas crudas (historial del lote hasta el instante t) y debe
+      quedar a menos de 2 x MAE de test de la predicción de referencia. Tolerancia derivada de metrics_reported.
+    future_free_sulfite_72h_atol: 3.0165   # 2 x 1.50824 mg/L
+    underprotection_risk_72h_atol: 0.0857  # 2 x 0.042862
+
+golden_cases:
+  # 18 ventanas del split de TEST (data/splits/test_seq_X.npy, 90 lotes nunca vistos en train/PSO).
+  # Selección determinista (numpy default_rng(42)): 1 ventana por (etapa final x banda de riesgo real)
+  # + 5 ventanas aleatorias de lotes no cubiertos. No hay ventanas que terminen en 'must' (la etapa dura
+  # 13-15 pasos < 24 de ventana). Cobertura: storage 5, stabilization 5, fermentation 4, pre_bottling 4;
+  # red 7, rose 7, white 4; banda real alto 7, medio 6, bajo 5.
+  # Mapeo sample_index -> (lot_id, timestamp_index) reconstruido desde data/splits/test.csv.gz con el mismo
+  # algoritmo de dataset_builder._windows_for_split (window=24, stride=2): coincidencia exacta (diff 0.0) con test_seq_X.npy.
+  #
+  # expected.future_free_sulfite_72h / underprotection_risk_72h = predicción del pipeline ORIGINAL sobre la ventana
+  #   procesada, tomada de data/predictions/gru_pso_test_predictions.csv (re-ejecutada con torch 2.9.1 CPU: diff <= 3e-6).
+  # expected.orig_raw_no_stage_progress_* = salida del camino operativo ORIGINAL (src/predict/raw_inputs.py) con el
+  #   historial del lote truncado en timestamp_index y SIN stage_progress (como lo aportaría una bodega). Informativo:
+  #   documenta el sesgo train/serve del código original (ver known_issues) — permite distinguir wiring de modelo.
+  # expected.y_true_* = target real de test_seq_y.npy (informativo, no se compara).
+  #
+  # input.readings_source: filas de data/raw/sequential.csv.gz con lot_id, target_only=False y
+  #   timestamp_index <= window_end_timestamp_index, transformadas a 'modo bodega': ph_lab/free_sulfite_lab/
+  #   total_sulfite_lab solo en filas lab_sample==1 (NaN en el resto), dose_mg_l = actual_dose_mg_l si > 0.
+  #   Con stage_progress del simulador (obligatorio en el contrato). Sin él, la petición debe rechazarse (HTTP 422).
+  - id: caso_001
+    source: dataset_test_split
+    input:
+      sample_index: 151            # fila de data/splits/test_seq_X.npy (modo feature_window)
+      lot_id: LOT-00013
+      window_end_timestamp_index: 89
+      window_end_timestamp: "2025-01-21 10:00:00+00:00"
+      n_readings: 90               # historial completo del lote hasta el instante de predicción
+      readings_source: data/raw/sequential.csv.gz
+      lot: {wine_type: red, volume_l: 3228.784271, ambient_temp_c: 15.064910}
+      raw_snapshot_ultima_fila: {stage: storage, stage_progress_simulador: 0.280000, temperature_c: 20.474645, dissolved_oxygen_mg_l: 1.370988, density_g_ml: 1.052152, co2_g_l: 0.050494, ph_lab: 3.512409, free_sulfite_lab: 20.741034}
+    expected:
+      future_free_sulfite_72h: 34.195343
+      underprotection_risk_72h: 0.327868
+      orig_raw_no_stage_progress_future_free_sulfite_72h: 17.275892
+      orig_raw_no_stage_progress_underprotection_risk_72h: 0.899738
+      y_true_future_free_sulfite_72h: 33.321178
+      y_true_underprotection_risk_72h: 0.316666
+      risk_band_real: bajo
+    tolerance: {ref: tolerance_policy}
+
+  - id: caso_002
+    source: dataset_test_split
+    input:
+      sample_index: 272            # fila de data/splits/test_seq_X.npy (modo feature_window)
+      lot_id: LOT-00042
+      window_end_timestamp_index: 67
+      window_end_timestamp: "2025-02-17 14:00:00+00:00"
+      n_readings: 68               # historial completo del lote hasta el instante de predicción
+      readings_source: data/raw/sequential.csv.gz
+      lot: {wine_type: rose, volume_l: 14162.790270, ambient_temp_c: 24.478496}
+      raw_snapshot_ultima_fila: {stage: storage, stage_progress_simulador: 0.578947, temperature_c: 18.095533, dissolved_oxygen_mg_l: 0.050000, density_g_ml: 1.052807, co2_g_l: 0.169478, ph_lab: 3.359196, free_sulfite_lab: 25.750583}
+    expected:
+      future_free_sulfite_72h: 21.993731
+      underprotection_risk_72h: 0.755099
+      orig_raw_no_stage_progress_future_free_sulfite_72h: 17.027012
+      orig_raw_no_stage_progress_underprotection_risk_72h: 0.937553
+      y_true_future_free_sulfite_72h: 20.047108
+      y_true_underprotection_risk_72h: 0.834992
+      risk_band_real: alto
+    tolerance: {ref: tolerance_policy}
+
+  - id: caso_003
+    source: dataset_test_split
+    input:
+      sample_index: 290            # fila de data/splits/test_seq_X.npy (modo feature_window)
+      lot_id: LOT-00049
+      window_end_timestamp_index: 41
+      window_end_timestamp: "2025-02-22 10:00:00+00:00"
+      n_readings: 42               # historial completo del lote hasta el instante de predicción
+      readings_source: data/raw/sequential.csv.gz
+      lot: {wine_type: red, volume_l: 3167.274158, ambient_temp_c: 20.640589}
+      raw_snapshot_ultima_fila: {stage: fermentation, stage_progress_simulador: 0.736842, temperature_c: 25.208238, dissolved_oxygen_mg_l: 0.267702, density_g_ml: 1.027576, co2_g_l: 1.023682, ph_lab: 3.480835, free_sulfite_lab: 12.370102}
+    expected:
+      future_free_sulfite_72h: 28.697739
+      underprotection_risk_72h: 0.240347
+      orig_raw_no_stage_progress_future_free_sulfite_72h: 28.997534
+      orig_raw_no_stage_progress_underprotection_risk_72h: 0.282911
+      y_true_future_free_sulfite_72h: 26.771704
+      y_true_underprotection_risk_72h: 0.234985
+      risk_band_real: bajo
+    tolerance: {ref: tolerance_policy}
+
+  - id: caso_004
+    source: dataset_test_split
+    input:
+      sample_index: 406            # fila de data/splits/test_seq_X.npy (modo feature_window)
+      lot_id: LOT-00065
+      window_end_timestamp_index: 83
+      window_end_timestamp: "2025-03-13 22:00:00+00:00"
+      n_readings: 84               # historial completo del lote hasta el instante de predicción
+      readings_source: data/raw/sequential.csv.gz
+      lot: {wine_type: white, volume_l: 14140.452946, ambient_temp_c: 12.155205}
+      raw_snapshot_ultima_fila: {stage: pre_bottling, stage_progress_simulador: 0.125000, temperature_c: 14.981112, dissolved_oxygen_mg_l: 0.275561, density_g_ml: 1.033393, co2_g_l: 0.085336, ph_lab: 3.275339, free_sulfite_lab: 26.592890}
+    expected:
+      future_free_sulfite_72h: 22.813425
+      underprotection_risk_72h: 0.747780
+      orig_raw_no_stage_progress_future_free_sulfite_72h: 22.246359
+      orig_raw_no_stage_progress_underprotection_risk_72h: 0.772409
+      y_true_future_free_sulfite_72h: 27.464756
+      y_true_underprotection_risk_72h: 0.491160
+      risk_band_real: medio
+    tolerance: {ref: tolerance_policy}
+
+  - id: caso_005
+    source: dataset_test_split
+    input:
+      sample_index: 660            # fila de data/splits/test_seq_X.npy (modo feature_window)
+      lot_id: LOT-00117
+      window_end_timestamp_index: 49
+      window_end_timestamp: "2025-05-02 02:00:00+00:00"
+      n_readings: 50               # historial completo del lote hasta el instante de predicción
+      readings_source: data/raw/sequential.csv.gz
+      lot: {wine_type: rose, volume_l: 2556.251562, ambient_temp_c: 19.263328}
+      raw_snapshot_ultima_fila: {stage: storage, stage_progress_simulador: 0.357143, temperature_c: 17.148068, dissolved_oxygen_mg_l: 0.092168, density_g_ml: 1.042955, co2_g_l: 0.082429, ph_lab: 3.350766, free_sulfite_lab: 16.951093}
+    expected:
+      future_free_sulfite_72h: 21.564476
+      underprotection_risk_72h: 0.755285
+      orig_raw_no_stage_progress_future_free_sulfite_72h: 18.929708
+      orig_raw_no_stage_progress_underprotection_risk_72h: 0.850438
+      y_true_future_free_sulfite_72h: 23.450920
+      y_true_underprotection_risk_72h: 0.709176
+      risk_band_real: alto
+    tolerance: {ref: tolerance_policy}
+
+  - id: caso_006
+    source: dataset_test_split
+    input:
+      sample_index: 1119            # fila de data/splits/test_seq_X.npy (modo feature_window)
+      lot_id: LOT-00277
+      window_end_timestamp_index: 45
+      window_end_timestamp: "2025-10-08 18:00:00+00:00"
+      n_readings: 46               # historial completo del lote hasta el instante de predicción
+      readings_source: data/raw/sequential.csv.gz
+      lot: {wine_type: red, volume_l: 6971.032894, ambient_temp_c: 18.611289}
+      raw_snapshot_ultima_fila: {stage: stabilization, stage_progress_simulador: 0.833333, temperature_c: 23.553133, dissolved_oxygen_mg_l: 0.916424, density_g_ml: 1.033540, co2_g_l: 0.222862, ph_lab: 3.498181, free_sulfite_lab: 18.977918}
+    expected:
+      future_free_sulfite_72h: 30.575390
+      underprotection_risk_72h: 0.404583
+      orig_raw_no_stage_progress_future_free_sulfite_72h: 24.761724
+      orig_raw_no_stage_progress_underprotection_risk_72h: 0.614575
+      y_true_future_free_sulfite_72h: 30.644415
+      y_true_underprotection_risk_72h: 0.346388
+      risk_band_real: medio
+    tolerance: {ref: tolerance_policy}
+
+  - id: caso_007
+    source: dataset_test_split
+    input:
+      sample_index: 1266            # fila de data/splits/test_seq_X.npy (modo feature_window)
+      lot_id: LOT-00290
+      window_end_timestamp_index: 63
+      window_end_timestamp: "2025-10-23 06:00:00+00:00"
+      n_readings: 64               # historial completo del lote hasta el instante de predicción
+      readings_source: data/raw/sequential.csv.gz
+      lot: {wine_type: red, volume_l: 12649.852519, ambient_temp_c: 14.764811}
+      raw_snapshot_ultima_fila: {stage: stabilization, stage_progress_simulador: 0.705882, temperature_c: 22.254228, dissolved_oxygen_mg_l: 0.911557, density_g_ml: 1.038369, co2_g_l: 0.134681, ph_lab: 3.555777, free_sulfite_lab: 19.177907}
+    expected:
+      future_free_sulfite_72h: 35.890995
+      underprotection_risk_72h: 0.253687
+      orig_raw_no_stage_progress_future_free_sulfite_72h: 28.720381
+      orig_raw_no_stage_progress_underprotection_risk_72h: 0.407701
+      y_true_future_free_sulfite_72h: 33.083271
+      y_true_underprotection_risk_72h: 0.249194
+      risk_band_real: bajo
+    tolerance: {ref: tolerance_policy}
+
+  - id: caso_008
+    source: dataset_test_split
+    input:
+      sample_index: 1362            # fila de data/splits/test_seq_X.npy (modo feature_window)
+      lot_id: LOT-00301
+      window_end_timestamp_index: 75
+      window_end_timestamp: "2025-11-04 06:00:00+00:00"
+      n_readings: 76               # historial completo del lote hasta el instante de predicción
+      readings_source: data/raw/sequential.csv.gz
+      lot: {wine_type: red, volume_l: 7489.941283, ambient_temp_c: 10.632103}
+      raw_snapshot_ultima_fila: {stage: stabilization, stage_progress_simulador: 0.850000, temperature_c: 21.941175, dissolved_oxygen_mg_l: 0.881619, density_g_ml: 1.037680, co2_g_l: 0.315373, ph_lab: 3.507728, free_sulfite_lab: 17.713818}
+    expected:
+      future_free_sulfite_72h: 34.954269
+      underprotection_risk_72h: 0.245949
+      orig_raw_no_stage_progress_future_free_sulfite_72h: 33.924320
+      orig_raw_no_stage_progress_underprotection_risk_72h: 0.292640
+      y_true_future_free_sulfite_72h: 32.170078
+      y_true_underprotection_risk_72h: 0.229696
+      risk_band_real: bajo
+    tolerance: {ref: tolerance_policy}
+
+  - id: caso_009
+    source: dataset_test_split
+    input:
+      sample_index: 1640            # fila de data/splits/test_seq_X.npy (modo feature_window)
+      lot_id: LOT-00333
+      window_end_timestamp_index: 83
+      window_end_timestamp: "2025-12-06 22:00:00+00:00"
+      n_readings: 84               # historial completo del lote hasta el instante de predicción
+      readings_source: data/raw/sequential.csv.gz
+      lot: {wine_type: rose, volume_l: 5211.451535, ambient_temp_c: 11.713376}
+      raw_snapshot_ultima_fila: {stage: pre_bottling, stage_progress_simulador: 0.125000, temperature_c: 17.260109, dissolved_oxygen_mg_l: 0.539512, density_g_ml: 1.033822, co2_g_l: 0.245363, ph_lab: 3.427799, free_sulfite_lab: 24.536173}
+    expected:
+      future_free_sulfite_72h: 19.008781
+      underprotection_risk_72h: 0.879491
+      orig_raw_no_stage_progress_future_free_sulfite_72h: 18.350372
+      orig_raw_no_stage_progress_underprotection_risk_72h: 0.894427
+      y_true_future_free_sulfite_72h: 20.158503
+      y_true_underprotection_risk_72h: 0.848172
+      risk_band_real: alto
+    tolerance: {ref: tolerance_policy}
+
+  - id: caso_010
+    source: dataset_test_split
+    input:
+      sample_index: 1882            # fila de data/splits/test_seq_X.npy (modo feature_window)
+      lot_id: LOT-00403
+      window_end_timestamp_index: 87
+      window_end_timestamp: "2026-02-15 06:00:00+00:00"
+      n_readings: 88               # historial completo del lote hasta el instante de predicción
+      readings_source: data/raw/sequential.csv.gz
+      lot: {wine_type: white, volume_l: 6433.968093, ambient_temp_c: 16.392968}
+      raw_snapshot_ultima_fila: {stage: pre_bottling, stage_progress_simulador: 0.222222, temperature_c: 14.588411, dissolved_oxygen_mg_l: 0.050000, density_g_ml: 1.038553, co2_g_l: 0.147604, ph_lab: 3.279757, free_sulfite_lab: 26.368202}
+    expected:
+      future_free_sulfite_72h: 21.952858
+      underprotection_risk_72h: 0.798608
+      orig_raw_no_stage_progress_future_free_sulfite_72h: 21.042658
+      orig_raw_no_stage_progress_underprotection_risk_72h: 0.829211
+      y_true_future_free_sulfite_72h: 22.251221
+      y_true_underprotection_risk_72h: 0.779612
+      risk_band_real: alto
+    tolerance: {ref: tolerance_policy}
+
+  - id: caso_011
+    source: dataset_test_split
+    input:
+      sample_index: 1963            # fila de data/splits/test_seq_X.npy (modo feature_window)
+      lot_id: LOT-00432
+      window_end_timestamp_index: 109
+      window_end_timestamp: "2026-03-18 02:00:00+00:00"
+      n_readings: 110               # historial completo del lote hasta el instante de predicción
+      readings_source: data/raw/sequential.csv.gz
+      lot: {wine_type: rose, volume_l: 11173.241678, ambient_temp_c: 25.257996}
+      raw_snapshot_ultima_fila: {stage: pre_bottling, stage_progress_simulador: 0.727273, temperature_c: 18.243720, dissolved_oxygen_mg_l: 0.447151, density_g_ml: 1.044305, co2_g_l: 0.022250, ph_lab: 3.363643, free_sulfite_lab: 31.673531}
+    expected:
+      future_free_sulfite_72h: 10.537428
+      underprotection_risk_72h: 0.990975
+      orig_raw_no_stage_progress_future_free_sulfite_72h: 10.071533
+      orig_raw_no_stage_progress_underprotection_risk_72h: 0.990576
+      y_true_future_free_sulfite_72h: 12.023078
+      y_true_underprotection_risk_72h: 0.985312
+      risk_band_real: alto
+    tolerance: {ref: tolerance_policy}
+
+  - id: caso_012
+    source: dataset_test_split
+    input:
+      sample_index: 2105            # fila de data/splits/test_seq_X.npy (modo feature_window)
+      lot_id: LOT-00475
+      window_end_timestamp_index: 65
+      window_end_timestamp: "2026-04-26 10:00:00+00:00"
+      n_readings: 66               # historial completo del lote hasta el instante de predicción
+      readings_source: data/raw/sequential.csv.gz
+      lot: {wine_type: white, volume_l: 8678.247210, ambient_temp_c: 13.554677}
+      raw_snapshot_ultima_fila: {stage: storage, stage_progress_simulador: 0.687500, temperature_c: 14.694251, dissolved_oxygen_mg_l: 0.050000, density_g_ml: 1.048780, co2_g_l: 0.144194, ph_lab: 3.258211, free_sulfite_lab: 27.979586}
+    expected:
+      future_free_sulfite_72h: 24.541862
+      underprotection_risk_72h: 0.635372
+      orig_raw_no_stage_progress_future_free_sulfite_72h: 22.699697
+      orig_raw_no_stage_progress_underprotection_risk_72h: 0.735108
+      y_true_future_free_sulfite_72h: 25.806480
+      y_true_underprotection_risk_72h: 0.536274
+      risk_band_real: medio
+    tolerance: {ref: tolerance_policy}
+
+  - id: caso_013
+    source: dataset_test_split
+    input:
+      sample_index: 2239            # fila de data/splits/test_seq_X.npy (modo feature_window)
+      lot_id: LOT-00500
+      window_end_timestamp_index: 27
+      window_end_timestamp: "2026-05-18 06:00:00+00:00"
+      n_readings: 28               # historial completo del lote hasta el instante de predicción
+      readings_source: data/raw/sequential.csv.gz
+      lot: {wine_type: rose, volume_l: 3509.817049, ambient_temp_c: 25.877399}
+      raw_snapshot_ultima_fila: {stage: fermentation, stage_progress_simulador: 0.708333, temperature_c: 19.396329, dissolved_oxygen_mg_l: 0.192340, density_g_ml: 1.036805, co2_g_l: 1.270193, ph_lab: 3.284995, free_sulfite_lab: 11.132994}
+    expected:
+      future_free_sulfite_72h: 25.994129
+      underprotection_risk_72h: 0.265753
+      orig_raw_no_stage_progress_future_free_sulfite_72h: 30.868385
+      orig_raw_no_stage_progress_underprotection_risk_72h: 0.281229
+      y_true_future_free_sulfite_72h: 26.591808
+      y_true_underprotection_risk_72h: 0.232589
+      risk_band_real: bajo
+    tolerance: {ref: tolerance_policy}
+
+  - id: caso_014
+    source: dataset_test_split
+    input:
+      sample_index: 2451            # fila de data/splits/test_seq_X.npy (modo feature_window)
+      lot_id: LOT-00526
+      window_end_timestamp_index: 25
+      window_end_timestamp: "2026-06-13 02:00:00+00:00"
+      n_readings: 26               # historial completo del lote hasta el instante de predicción
+      readings_source: data/raw/sequential.csv.gz
+      lot: {wine_type: white, volume_l: 14681.261157, ambient_temp_c: 13.672237}
+      raw_snapshot_ultima_fila: {stage: fermentation, stage_progress_simulador: 0.312500, temperature_c: 12.850493, dissolved_oxygen_mg_l: 0.161805, density_g_ml: 1.041807, co2_g_l: 1.269560, ph_lab: 3.183859, free_sulfite_lab: 11.993593}
+    expected:
+      future_free_sulfite_72h: 18.721996
+      underprotection_risk_72h: 0.360338
+      orig_raw_no_stage_progress_future_free_sulfite_72h: 30.344826
+      orig_raw_no_stage_progress_underprotection_risk_72h: 0.335783
+      y_true_future_free_sulfite_72h: 18.987679
+      y_true_underprotection_risk_72h: 0.382684
+      risk_band_real: medio
+    tolerance: {ref: tolerance_policy}
+
+  - id: caso_015
+    source: dataset_test_split
+    input:
+      sample_index: 2520            # fila de data/splits/test_seq_X.npy (modo feature_window)
+      lot_id: LOT-00529
+      window_end_timestamp_index: 29
+      window_end_timestamp: "2026-06-16 10:00:00+00:00"
+      n_readings: 30               # historial completo del lote hasta el instante de predicción
+      readings_source: data/raw/sequential.csv.gz
+      lot: {wine_type: rose, volume_l: 9167.342885, ambient_temp_c: 22.123247}
+      raw_snapshot_ultima_fila: {stage: fermentation, stage_progress_simulador: 0.454545, temperature_c: 16.872909, dissolved_oxygen_mg_l: 0.093944, density_g_ml: 1.043034, co2_g_l: 1.905610, ph_lab: 3.292696, free_sulfite_lab: 10.522944}
+    expected:
+      future_free_sulfite_72h: 18.499367
+      underprotection_risk_72h: 0.430528
+      orig_raw_no_stage_progress_future_free_sulfite_72h: 29.578373
+      orig_raw_no_stage_progress_underprotection_risk_72h: 0.308844
+      y_true_future_free_sulfite_72h: 16.326757
+      y_true_underprotection_risk_72h: 0.739190
+      risk_band_real: alto
+    tolerance: {ref: tolerance_policy}
+
+  - id: caso_016
+    source: dataset_test_split
+    input:
+      sample_index: 2820            # fila de data/splits/test_seq_X.npy (modo feature_window)
+      lot_id: LOT-00555
+      window_end_timestamp_index: 41
+      window_end_timestamp: "2026-07-13 10:00:00+00:00"
+      n_readings: 42               # historial completo del lote hasta el instante de predicción
+      readings_source: data/raw/sequential.csv.gz
+      lot: {wine_type: red, volume_l: 8694.185052, ambient_temp_c: 21.112248}
+      raw_snapshot_ultima_fila: {stage: stabilization, stage_progress_simulador: 1.000000, temperature_c: 24.509708, dissolved_oxygen_mg_l: 1.795283, density_g_ml: 1.028418, co2_g_l: 0.287553, ph_lab: 3.503054, free_sulfite_lab: 12.540760}
+    expected:
+      future_free_sulfite_72h: 27.656008
+      underprotection_risk_72h: 0.565374
+      orig_raw_no_stage_progress_future_free_sulfite_72h: 27.656008
+      orig_raw_no_stage_progress_underprotection_risk_72h: 0.565374
+      y_true_future_free_sulfite_72h: 23.665344
+      y_true_underprotection_risk_72h: 0.752189
+      risk_band_real: alto
+    tolerance: {ref: tolerance_policy}
+
+  - id: caso_017
+    source: dataset_test_split
+    input:
+      sample_index: 3051            # fila de data/splits/test_seq_X.npy (modo feature_window)
+      lot_id: LOT-00585
+      window_end_timestamp_index: 87
+      window_end_timestamp: "2026-08-16 06:00:00+00:00"
+      n_readings: 88               # historial completo del lote hasta el instante de predicción
+      readings_source: data/raw/sequential.csv.gz
+      lot: {wine_type: red, volume_l: 5928.069190, ambient_temp_c: 24.613663}
+      raw_snapshot_ultima_fila: {stage: storage, stage_progress_simulador: 0.565217, temperature_c: 23.890848, dissolved_oxygen_mg_l: 3.256133, density_g_ml: 1.055976, co2_g_l: 0.159593, ph_lab: 3.585516, free_sulfite_lab: 32.148980}
+    expected:
+      future_free_sulfite_72h: 32.123852
+      underprotection_risk_72h: 0.439011
+      orig_raw_no_stage_progress_future_free_sulfite_72h: 18.199392
+      orig_raw_no_stage_progress_underprotection_risk_72h: 0.906143
+      y_true_future_free_sulfite_72h: 29.986368
+      y_true_underprotection_risk_72h: 0.390591
+      risk_band_real: medio
+    tolerance: {ref: tolerance_policy}
+
+  - id: caso_018
+    source: dataset_test_split
+    input:
+      sample_index: 3074            # fila de data/splits/test_seq_X.npy (modo feature_window)
+      lot_id: LOT-00591
+      window_end_timestamp_index: 47
+      window_end_timestamp: "2026-08-18 22:00:00+00:00"
+      n_readings: 48               # historial completo del lote hasta el instante de predicción
+      readings_source: data/raw/sequential.csv.gz
+      lot: {wine_type: rose, volume_l: 8612.193942, ambient_temp_c: 10.671585}
+      raw_snapshot_ultima_fila: {stage: stabilization, stage_progress_simulador: 0.133333, temperature_c: 16.078774, dissolved_oxygen_mg_l: 0.050000, density_g_ml: 1.012937, co2_g_l: 0.143961, ph_lab: 3.264871, free_sulfite_lab: 10.001299}
+    expected:
+      future_free_sulfite_72h: 27.144464
+      underprotection_risk_72h: 0.271133
+      orig_raw_no_stage_progress_future_free_sulfite_72h: 25.721466
+      orig_raw_no_stage_progress_underprotection_risk_72h: 0.287923
+      y_true_future_free_sulfite_72h: 27.151623
+      y_true_underprotection_risk_72h: 0.359854
+      risk_band_real: medio
+    tolerance: {ref: tolerance_policy}
+
+operational_mode_impact:
+  # [V] Por qué stage_progress es obligatorio. Medido por el agente re-ejecutando el código ORIGINAL (torch 2.9.1 CPU)
+  # sobre las 3096 ventanas de test con el historial truncado en t (outputs/a26/evidence/a26_operational_impact.py).
+  criterio_memoria_tabla15: {recall_alto_min: 0.85, precision_alto_min: 0.85, so2_within_3_min: 0.85, risk_rmse_max: 0.10, risk_mae_max: 0.06}
+  con_stage_progress: "idéntico a metrics_reported (ventanas con diff 0.0); cumple los 4 criterios"
+  sin_stage_progress_fallback_original:   # hoy se RECHAZA con 422; cifras solo como justificación
+    future_free_sulfite_72h: {rmse: 6.9454, mae: 4.8172}
+    underprotection_risk_72h: {rmse: 0.1703, mae: 0.1117}
+    so2_within_3mg_l: 0.4855
+    recall_riesgo_alto: 0.9815
+    precision_riesgo_alto: 0.6952
+    cumple_tabla15: {recall: true, precision: false, so2_within_3: false, risk: false}
+  propuesta_aparcada: >
+    Resolución de stage_progress en 3 niveles (aportado / duración prevista / duración típica) sin reentrenar el
+    modelo: nivel 3 con MAE SO2 2.23 mg/L. No integrada porque cambia el preprocesado del modelo auditado; guardada en
+    outputs/a26/propuesta_stage_progress_3_niveles/ para proponerla más adelante.
+
+known_issues:
+  - id: KI-01
+    severity: media
+    text: >
+      stage_progress OBLIGATORIO (decisión del usuario 2026-09-29). El modelo auditado se entrenó con el stage_progress
+      del simulador, que conoce la duración total de cada etapa. El fallback del código entregado para cuando falta
+      (cumcount/(count-1) sobre el historial observado) deja la etapa en curso siempre en 1.0: MAE SO2 4.82 mg/L frente
+      a 1.51 y precisión en riesgo alto 69.5 % frente a 93.9 % (incumple 3 de los 4 criterios de la Tabla 15). El modelo
+      está aceptado por los auditores y no se reentrena, y el preprocesado original se mantiene SIN cambios; por eso el
+      plugin exige stage_progress en todas las lecturas (inline, batch y /train) y rechaza con 422 si falta o está fuera
+      de [0, 1]. Con él, el resultado es idéntico al auditado (18/18 golden cases, diff <= 4e-6). Consecuencia
+      operativa: la bodega debe informar el avance de cada etapa. Propuesta alternativa aparcada en
+      outputs/a26/propuesta_stage_progress_3_niveles/.
+  - id: KI-02
+    severity: alta
+    text: >
+      DATOS SINTÉTICOS — JUSTIFICADO. No existe ningún dataset público con este tipo de datos (lecturas de proceso,
+      analítica y adiciones de SO2 por depósito son datos propios de cada bodega), por lo que el uso del simulador
+      está justificado. Aun así, dataset, targets y métricas proceden del simulador (600 lotes) y no hay validación
+      con históricos reales; underprotection_risk_72h es un score derivado de reglas del simulador, no una
+      probabilidad calibrada. Toda cifra de negocio conserva la advertencia de validación con datos reales.
+  - id: KI-03
+    severity: media
+    text: >
+      REENTRENAMIENTO CON DATOS REALES — NO VIABLE, LIMITACIÓN ACEPTADA (decisión del usuario 2026-09-29). /train se
+      mantiene con el formato de entrada actual (data/raw/sequential.csv.gz: lecturas + stage_progress +
+      free_sulfite_mg_l) y genera un modelo de usuario aparte (local user_trained/ y MLflow), no auditado; el modelo
+      aceptado nunca se modifica. El target se deriva de free_sulfite_mg_l (SO2 libre continuo), que una bodega real no
+      mide (solo analíticas puntuales), por lo que /train solo es aplicable a datos con ese formato (como los del
+      simulador), no a históricos reales de bodega tal cual.
+      [CORREGIDO 2026-10-08] Al integrar main en la rama de auditoría, ml26 se alinea con el contrato común de
+      reentrenamiento: mlflow_run_id obligatorio (422 si falta o va vacío), el modelo reentrenado se guarda SOLO en
+      MLflow (ya no en artifacts/.../user_trained/; TrainResponse devuelve mlflow_run_id en lugar de
+      local_artifact_dir), un fallo de subida es 502 en vez de un aviso, y predict/stats con un run sin modelo cargable
+      responden 422 en lugar de 500 (download_user_model_from_mlflow con @require_user_model y limpieza del temporal).
+  - id: KI-04
+    severity: media
+    text: >
+      train() del plugin reentrena la configuración FINAL de gru_pso (v2.5 Tabla 13) con train_sequence_with_config,
+      pero NO repite la búsqueda PSO (4 partículas x 3 iteraciones x 2 repeticiones = hasta 24 entrenamientos
+      de 14 épocas + final) por coste en un endpoint síncrono. La memoria §10 recomienda repetir PSO al pasar a
+      datos reales — eso queda fuera del endpoint /train.
+  - id: KI-05
+    severity: info
+    text: >
+      VERSIÓN DE LA MEMORIA — RESUELTO con la v2.5 (06/08/2026). La v2.3 tenía portada 2.3 (15/06/2026) pero su
+      registro de cambios ya incluía una v2.4 (06/07/2026). La v2.5 es coherente (portada = último registro) y solo
+      amplía documentación: trazabilidad de coeficientes del simulador (Tablas 2-3), diccionarios de entrada / 22
+      features / targets (Tablas 5-8), definición de bandas de riesgo (§7.1), corrección de épocas (mejor época 17 de
+      25, que ahora coincide con gru_pso.json::training_history; la v2.3 decía 26 de 34) y errata de RAM (75.445
+      pasos). NO cambia métricas, hiperparámetros, código ni artefactos (gru_pso.pkl con el mismo sha256). Persiste
+      una diferencia menor de título: fichero "basado en algoritmos PSO" frente a portada "basado en DL y PSO".
+  - id: KI-06
+    severity: info
+    text: >
+      RETIRADO (falso positivo de la extracción). En la versión anterior del manifest se indicó que la Tabla 9
+      (v2.5: Tabla 15) tenía vacíos los umbrales de los niveles 1-4. No es así: el texto está dentro de controles de
+      contenido (w:sdt) que la extracción con python-docx no leía (lo mismo ocurría con las Tablas 4, 5 y 12 de la
+      v2.3, hardware/librerías/cadencia). Umbrales reales, idénticos en v2.3 y v2.5: recall riesgo alto >= 85 %,
+      precisión riesgo alto >= 85 %, >= 85 % de predicciones de SO2 dentro de +/-3 mg/L, riesgo RMSE <= 0,10 y
+      MAE <= 0,06 (ver metrics_reported.success_criteria). Relevante para KI-01: en modo operativo sin
+      stage_progress fallan los niveles 2, 3 y 4 (69,5 %, 48,5 %, 0,170/0,112).
+  - id: KI-07
+    severity: info
+    text: >
+      BANDAS DE RIESGO — RESUELTO con la v2.5: la memoria §7.1 define ahora bajo < 0,33 <= medio < 0,66 <= alto,
+      igual que notebooks/EDA/eda.ipynb::risk_band. Siguen sin estar en src/; el plugin las expone como risk_band.
+  - id: KI-08
+    severity: baja
+    text: >
+      gru_pso.pkl es un pickle de la dataclass SequenceBundle (módulo src.training.models.train_sequence del
+      equipo de IA). El plugin vendoriza la definición mínima y remapea el módulo en un Unpickler propio. Los
+      pickles solo deben cargarse desde fuentes confiables (S3 fijo / MLflow del propio servicio).
+  - id: KI-09
+    severity: baja
+    text: >
+      Imputación dependiente del lote enviado: _impute_observable_columns rellena NaN residuales con la MEDIANA
+      del frame recibido (no con estadísticos de train). Solo afecta si un lote llega sin ninguna analítica de
+      laboratorio en todo su historial; en ese caso la predicción depende de los demás lotes de la misma petición.
+      Se replica tal cual para ser fiel al original.
+  - id: KI-10
+    severity: info
+    text: >
+      requirements.txt del equipo de IA: ASCII/LF, versiones fijadas — sin problemas de encoding. torch 2.9.1
+      (equipo) vs torch>=2.13 (repo): reproducción numérica verificada en ambos (ver verification_report.md).
+  - id: KI-11
+    severity: info
+    text: >
+      ENTORNO DEL REPO (no específico de a26): con Python 3.12, pip no consigue resolver requirements.txt
+      (backtracking por mlflow/mlflow-skinny -> acaba en sdists incompatibles de opt_einsum 3.1.0 / numba, o
+      resolution-too-deep); pip-audit -r requirements.txt falla por lo mismo, también en main. uv sí lo resuelve
+      sin modificarlo (mlflow 3.16.1 + pydantic 2.9.2). Además, en este equipo Windows el Control de aplicaciones
+      bloquea las DLL de torch; la verificación se hizo en WSL Ubuntu / Python 3.12 (outputs/a26/verification_report.md).
+  - id: KI-12
+    severity: info
+    text: >
+      No es un modelo prescriptivo pese al título: PSO optimiza hiperparámetros en entrenamiento; no hay
+      optimización de dosis ni de costes en inferencia. El "coste operativo" es contexto del caso de uso.
