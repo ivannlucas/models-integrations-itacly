@@ -16,7 +16,6 @@ import os
 import shutil
 import tempfile
 import time
-import zipfile
 from datetime import datetime, timezone
 
 import torch
@@ -35,6 +34,7 @@ from app.domain.services.exceptions import (
     ModelPersistenceError,
 )
 from app.domain.services.mlflow_tracker import BaseMLflowTracker
+from app.infrastructure.archive import safe_extract_zip
 from app.infrastructure.artifact_store import local_file_path
 from app.plugins.ml4_lactic_cnn_thermal_early_disease_detection.constants import (
     BACKBONE,
@@ -231,8 +231,7 @@ class Ml4LacticCnnThermalEarlyDiseaseDetectionPlugin(ModelPluginPort):
                 image_dir = local_data_path
                 if local_data_path.lower().endswith(".zip"):
                     temp_dir = tempfile.mkdtemp(prefix="ml4_thermal_batch_")
-                    with zipfile.ZipFile(local_data_path, "r") as zf:
-                        zf.extractall(temp_dir)
+                    safe_extract_zip(local_data_path, temp_dir)
                     entries = os.listdir(temp_dir)
                     if len(entries) == 1 and os.path.isdir(os.path.join(temp_dir, entries[0])):
                         image_dir = os.path.join(temp_dir, entries[0])
@@ -320,8 +319,7 @@ class Ml4LacticCnnThermalEarlyDiseaseDetectionPlugin(ModelPluginPort):
         try:
             with local_file_path(data_path) as local_path:
                 if os.path.isfile(local_path) and local_path.lower().endswith(".zip"):
-                    with zipfile.ZipFile(local_path, "r") as zf:
-                        zf.extractall(tmp_dir)
+                    safe_extract_zip(local_path, tmp_dir)
                     entries = os.listdir(tmp_dir)
                     data_root = (
                         os.path.join(tmp_dir, entries[0])

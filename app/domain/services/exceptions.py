@@ -119,3 +119,10 @@ class ModelPersistenceError(RuntimeError):
     The retrained model only lives in MLflow, so if the upload fails the training result
     is lost and the request must fail instead of answering 200 (→ 502).
     """
+
+
+class ArchiveLimitExceededError(ValueError):
+    """Raised when a ZIP sent to /train or batch /predict would expand beyond the configured
+    size, file-count or compression-ratio limits, or holds a path outside its destination (→ 413).
+    See app/infrastructure/archive.py::safe_extract_zip.
+    """

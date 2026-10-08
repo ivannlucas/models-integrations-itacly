@@ -8,6 +8,7 @@ from fastapi.responses import JSONResponse
 from app.application.dto.stats_dto import StatsResponse
 from app.application.dto.train_dto import TrainRequest as _DefaultTrainRequest, TrainResponse as _DefaultTrainResponse
 from app.domain.services.exceptions import (
+    ArchiveLimitExceededError,
     ModelPersistenceError,
     TrainingNotSupportedError,
     UserModelUnavailableError,
@@ -97,6 +98,10 @@ def make_model_router(
         container = _get_container(request)
         try:
             return container.predict_use_case.execute(body)
+        except ArchiveLimitExceededError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_413_CONTENT_TOO_LARGE, detail=str(exc)
+            ) from exc
         except Exception as exc:
             if isinstance(exc, UserModelUnavailableError) or (
                 extra_predict_exceptions and isinstance(exc, extra_predict_exceptions)
@@ -118,6 +123,10 @@ def make_model_router(
         except TrainingNotSupportedError as exc:
             raise HTTPException(
                 status_code=status.HTTP_501_NOT_IMPLEMENTED, detail=str(exc)
+            ) from exc
+        except ArchiveLimitExceededError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_413_CONTENT_TOO_LARGE, detail=str(exc)
             ) from exc
         except (FileNotFoundError, ValueError) as exc:
             raise HTTPException(

@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 from collections import Counter
 from typing import Any, Callable
@@ -137,13 +138,20 @@ def split_clips(data: dict, seed: int = TRAIN_SEED) -> dict[str, set[int]]:
     _, val_ratio, test_ratio = TRAIN_SPLIT_RATIOS
     clip_names = sorted({img["clip_name"] for img in data["images"]})
 
-    train_clips, temp_clips = train_test_split(
-        clip_names, test_size=(val_ratio + test_ratio), random_state=seed
-    )
-    val_ratio_adj = val_ratio / (val_ratio + test_ratio)
-    val_clips, test_clips = train_test_split(
-        temp_clips, test_size=(1 - val_ratio_adj), random_state=seed
-    )
+    try:
+        train_clips, temp_clips = train_test_split(
+            clip_names, test_size=(val_ratio + test_ratio), random_state=seed
+        )
+        val_ratio_adj = val_ratio / (val_ratio + test_ratio)
+        val_clips, test_clips = train_test_split(
+            temp_clips, test_size=(1 - val_ratio_adj), random_state=seed
+        )
+    except ValueError as exc:  # sklearn: "With n_samples=1, test_size=... the resulting train set will be empty"
+        raise ValueError(
+            f"El ZIP trae {len(clip_names)} clip(s)/vídeo(s) distintos y el split 70/15/15 se hace "
+            "por clip: hacen falta al menos 4 (con menos, el 30 % reservado no se puede repartir "
+            "entre validación y test)."
+        ) from exc
 
     train_clips, val_clips, test_clips = set(train_clips), set(val_clips), set(test_clips)
     return {
@@ -279,6 +287,13 @@ def train_classifier(
     behaviour versus the original. ``batch_size`` is clamped to the dataset size so this
     also works as a short wiring smoke test on a tiny real data slice.
     """
+    if not train_clips or not val_clips:
+        # Without validation clips val_acc would stay 0 and best_state would just be the last
+        # epoch, silently. plugin.train() checks it too; this guards direct callers.
+        raise ValueError(
+            f"Hacen falta clips de entrenamiento y de validación (train={len(train_clips)}, "
+            f"val={len(val_clips)})."
+        )
     torch.manual_seed(TRAIN_SEED)
 
     train_ds = ClipClassificationDataset(train_clips, raw_frames_dir, clip_length, is_train=True)
@@ -308,7 +323,9 @@ def train_classifier(
         if step < warmup_steps:
             return step / max(warmup_steps, 1)
         progress = (step - warmup_steps) / max(total_steps - warmup_steps, 1)
-        return 0.5 * (1.0 + torch.cos(torch.tensor(progress * 3.14159)))
+        # The delivered train_classifier.py builds a tensor with 3.14159; a float with math.pi
+        # is what LambdaLR expects (its own grid_search.py uses np.pi). Relative LR change ≤ 1e-6.
+        return 0.5 * (1.0 + math.cos(math.pi * progress))
 
     scheduler = optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
 

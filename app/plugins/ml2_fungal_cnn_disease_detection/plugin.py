@@ -11,7 +11,6 @@ import logging
 import os
 import shutil
 import tempfile
-import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -21,6 +20,7 @@ from app.application.dto.stats_dto import InputField, OutputField, RuntimeStats,
 from app.domain.ports.model_plugin_port import ModelPluginPort
 from app.domain.services.exceptions import InvalidImageError, ModelNotLoadedError, ModelPersistenceError
 from app.domain.services.mlflow_tracker import BaseMLflowTracker
+from app.infrastructure.archive import safe_extract_zip
 from app.plugins.ml2_fungal_cnn_disease_detection.constants import (
     CLASS_NAMES,
     IMAGE_EXTENSIONS,
@@ -158,8 +158,7 @@ class Ml2FungalCnnDiseaseDetectionPlugin(ModelPluginPort):
 
             try:
                 with tempfile.TemporaryDirectory() as tmp_dir:
-                    with zipfile.ZipFile(local_data_path, "r") as zf:
-                        zf.extractall(tmp_dir)
+                    safe_extract_zip(local_data_path, tmp_dir)
 
                     image_paths = sorted(
                         p for p in Path(tmp_dir).rglob("*")
@@ -283,8 +282,7 @@ class Ml2FungalCnnDiseaseDetectionPlugin(ModelPluginPort):
         mlflow_tmp: str | None = None
         upload_warning: str | None = None
         try:
-            with zipfile.ZipFile(local_data_path, "r") as zf:
-                zf.extractall(extract_dir)
+            safe_extract_zip(local_data_path, extract_dir)
 
             root = Path(extract_dir)
             entries = [p for p in root.iterdir() if p.is_dir()]

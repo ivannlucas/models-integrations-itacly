@@ -7,7 +7,6 @@ import random
 import shutil
 import tempfile
 import time
-import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -17,6 +16,7 @@ from app.application.dto.stats_dto import InputField, OutputField, RuntimeStats,
 from app.domain.ports.model_plugin_port import ModelPluginPort
 from app.domain.services.exceptions import InvalidImageError, ModelNotLoadedError, ModelPersistenceError
 from app.domain.services.mlflow_tracker import BaseMLflowTracker
+from app.infrastructure.archive import safe_extract_zip
 from app.plugins.ml8_cereals_img_anomaly_detector.constants import (
     CATEGORY_NAMES,
     CEREAL_NAMES,
@@ -290,8 +290,7 @@ class Ml8CerealsImgAnomalyDetectorPlugin(ModelPluginPort):
 
             try:
                 with tempfile.TemporaryDirectory() as tmp_dir:
-                    with zipfile.ZipFile(local_data_path, "r") as zf:
-                        zf.extractall(tmp_dir)
+                    safe_extract_zip(local_data_path, tmp_dir)
 
                     image_paths = sorted(
                         p for p in Path(tmp_dir).rglob("*")
@@ -479,8 +478,7 @@ class Ml8CerealsImgAnomalyDetectorPlugin(ModelPluginPort):
 
         tmp_dir = tempfile.mkdtemp(prefix="ml8_train_")
         try:
-            with zipfile.ZipFile(local_data_path, "r") as zf:
-                zf.extractall(tmp_dir)
+            safe_extract_zip(local_data_path, tmp_dir)
 
             entries = list(Path(tmp_dir).iterdir())
             data_root = entries[0] if len(entries) == 1 and entries[0].is_dir() else Path(tmp_dir)

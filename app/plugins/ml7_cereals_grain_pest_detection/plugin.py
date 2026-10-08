@@ -21,6 +21,7 @@ from app.application.dto.stats_dto import InputField, OutputField, RuntimeStats,
 from app.domain.ports.model_plugin_port import ModelPluginPort
 from app.domain.services.exceptions import InvalidImageError, ModelNotLoadedError, ModelPersistenceError
 from app.domain.services.mlflow_tracker import BaseMLflowTracker
+from app.infrastructure.archive import safe_extract_zip
 from app.infrastructure.artifact_store import local_file_path
 from app.plugins.ml7_cereals_grain_pest_detection.constants import (
     CONF_THRESHOLD,
@@ -197,8 +198,7 @@ class Ml7CerealsGrainPestDetectionPlugin(ModelPluginPort):
                     if not zipfile.is_zipfile(data_p):
                         raise ValueError(f"data_path is not a valid ZIP file: {data_path}")
                     tmp_dir = tempfile.mkdtemp(prefix="grain_pest_batch_")
-                    with zipfile.ZipFile(data_p) as zf:
-                        zf.extractall(tmp_dir)
+                    safe_extract_zip(data_p, tmp_dir)
                     data_p = Path(tmp_dir)
                 elif not data_p.is_dir():
                     raise ValueError(

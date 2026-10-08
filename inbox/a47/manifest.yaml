@@ -91,6 +91,7 @@ outputs:
 # ── Entrenamiento (fine-tune / re-entrenamiento por usuario) ─────────────────
 training:
   supported: true
+  duracion_estimada: "fine_tune 4 s; full 122 s en GPU (RTX 2070 SUPER, 89 épocas, 2205 ciclos)"   # [AÑADIDO 2026-10-08]
   # [CORREGIDO 2026-10-07] /train reescrito como port fiel de los DOS procedimientos del código
   # entregado, elegidos con `mode` (opcional; por defecto fine_tune):
   #   - fine_tune (por defecto): src/fine_tuning/fine_tuner.py — backbone CNN congelado, solo las 4

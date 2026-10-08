@@ -10,7 +10,6 @@ import csv
 import logging
 import shutil
 import tempfile
-import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -27,6 +26,7 @@ from app.domain.services.exceptions import (
     UserModelUnavailableError,
 )
 from app.domain.services.mlflow_tracker import BaseMLflowTracker
+from app.infrastructure.archive import safe_extract_zip
 from app.infrastructure.artifact_store import local_file_path
 from app.plugins.ml41_meat_curing_machinery_acoustic_anomaly.constants import (
     ARTIFACT_FOLDER_NAME,
@@ -210,8 +210,7 @@ class Ml41MeatCuringMachineryAcousticAnomalyPlugin(ModelPluginPort):
         predictions: list[dict] = []
         with local_file_path(data_path) as local_zip:
             with tempfile.TemporaryDirectory() as tmp_dir:
-                with zipfile.ZipFile(local_zip, "r") as zf:
-                    zf.extractall(tmp_dir)
+                safe_extract_zip(local_zip, tmp_dir)
 
                 manifest_path = next(Path(tmp_dir).rglob("manifest.csv"), None)
                 if manifest_path is None:
@@ -272,8 +271,7 @@ class Ml41MeatCuringMachineryAcousticAnomalyPlugin(ModelPluginPort):
             extract_dir = Path(tempfile.mkdtemp(prefix="ml41_train_"))
             staging_dir = Path(tempfile.mkdtemp(prefix="ml41_mlflow_"))
             try:
-                with zipfile.ZipFile(local_zip, "r") as zf:
-                    zf.extractall(extract_dir)
+                safe_extract_zip(local_zip, extract_dir)
 
                 combos_found = self._discover_combinations(extract_dir)
                 if not combos_found:

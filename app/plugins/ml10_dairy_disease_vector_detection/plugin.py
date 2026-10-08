@@ -10,7 +10,6 @@ import random
 import shutil
 import tempfile
 import time
-import zipfile
 from pathlib import Path
 from datetime import datetime, timezone
 
@@ -25,6 +24,7 @@ from app.application.dto.train_dto import TrainResponse
 from app.domain.ports.model_plugin_port import ModelPluginPort
 from app.domain.services.exceptions import InvalidImageError, ModelNotLoadedError, ModelPersistenceError
 from app.domain.services.mlflow_tracker import BaseMLflowTracker
+from app.infrastructure.archive import safe_extract_zip
 from app.infrastructure.artifact_store import ArtifactStore
 from app.plugins.ml10_dairy_disease_vector_detection.model_loader import load_detector_and_classifier, safe_device
 from app.plugins.ml10_dairy_disease_vector_detection.postprocessing import (
@@ -58,6 +58,10 @@ logger = logging.getLogger(__name__)
 
 SUPPORTED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
 _CLASSES = ["fly", "mos", "tick"]
+# config/config.yaml of the delivered code: `seed` (src/utils/seed.py::set_seed) and
+# `splits.max_ticks` (create_classification_splits balances ticks before splitting).
+TRAIN_SEED = 42
+MAX_TICKS = 1400
 
 _store = ArtifactStore(ARTIFACT_FOLDER_NAME)
 
@@ -97,10 +101,14 @@ def _cls_transforms(imgsz: int = 224):
 def _create_splits(data_root: Path, classes: list, tmp_base: str) -> Path:
     """Auto-split flat {class}/*.jpg → train/val/test folders.
 
-    Ratios (70/15/15) match ``splits.p_train/p_val/p_test`` in the original delivered
+    Ratios (70/15/15) and the tick cap (``splits.max_ticks``) match the original delivered
     ``config/config.yaml`` and ``create_classification_splits`` in
-    ``src/training/utils_train.py`` — not chosen independently.
+    ``src/training/utils_train.py`` — not chosen independently. The original shuffles
+    ``os.listdir`` under the global ``set_seed(42)``; here files are sorted first and shuffled
+    with a local ``Random(42)``, so the split is reproducible on any filesystem and does not
+    touch the process-wide RNG of a shared server.
     """
+    rng = random.Random(TRAIN_SEED)
     splits_root = Path(tmp_base) / "_splits"
     for phase in ("train", "val", "test"):
         for cls in classes:
@@ -110,8 +118,10 @@ def _create_splits(data_root: Path, classes: list, tmp_base: str) -> Path:
         cls_src = data_root / cls
         if not cls_src.is_dir():
             continue
-        files = [f for f in cls_src.iterdir() if f.suffix.lower() in SUPPORTED_EXTENSIONS]
-        random.shuffle(files)
+        files = sorted(f for f in cls_src.iterdir() if f.suffix.lower() in SUPPORTED_EXTENSIONS)
+        rng.shuffle(files)
+        if cls == "tick" and len(files) > MAX_TICKS:
+            files = files[:MAX_TICKS]
         total = len(files)
         idx_train = int(total * 0.7)
         idx_val = idx_train + int(total * 0.15)
@@ -140,6 +150,30 @@ def _cls_train_epoch(model, loader, optimizer, criterion, device):
         correct += (outputs.argmax(1) == labels).sum().item()
         total += inputs.size(0)
     return total_loss / max(total, 1), correct / max(total, 1)
+
+
+def _cls_test_metrics(model, loader, class_names, device) -> dict:
+    """Accuracy and per-class precision/recall/F1 on the test split, with the formulas of the
+    delivered src/predict/predictor.py (classification_metrics.json)."""
+    model.eval()
+    labels_all, preds_all = [], []
+    with torch.no_grad():
+        for inputs, labels in loader:
+            preds_all += model(inputs.to(device)).argmax(1).cpu().tolist()
+            labels_all += labels.tolist()
+    pairs = list(zip(labels_all, preds_all))
+    per_class = {}
+    for idx, name in enumerate(class_names):
+        tp = sum(1 for t, p in pairs if t == idx and p == idx)
+        fp = sum(1 for t, p in pairs if t != idx and p == idx)
+        fn = sum(1 for t, p in pairs if t == idx and p != idx)
+        precision = tp / (tp + fp) if tp + fp else 0.0
+        recall = tp / (tp + fn) if tp + fn else 0.0
+        f1 = 2 * precision * recall / (precision + recall) if precision + recall else 0.0
+        per_class[name] = {"precision": round(precision, 4), "recall": round(recall, 4),
+                           "f1": round(f1, 4), "support": sum(1 for t, _ in pairs if t == idx)}
+    accuracy = sum(1 for t, p in pairs if t == p) / len(pairs) if pairs else 0.0
+    return {"test_accuracy": round(accuracy, 4), "test_per_class": per_class}
 
 
 def _cls_validate(model, loader, criterion, device):
@@ -296,8 +330,7 @@ class Ml10DairyDiseaseVectorDetectionPlugin(ModelPluginPort):
                 image_files = self._image_paths_from_csv(local_data_path)
             elif local_data_path.lower().endswith(".zip"):
                 temp_dir = tempfile.mkdtemp(prefix="ml10_dairy_disease_vector_detection_batch_")
-                with zipfile.ZipFile(local_data_path, "r") as zf:
-                    zf.extractall(temp_dir)
+                safe_extract_zip(local_data_path, temp_dir)
                 entries = list(Path(temp_dir).iterdir())
                 image_dir = entries[0] if len(entries) == 1 and entries[0].is_dir() else Path(temp_dir)
                 image_files = sorted(f for f in image_dir.rglob("*") if f.suffix.lower() in SUPPORTED_EXTENSIONS)
@@ -453,7 +486,9 @@ class Ml10DairyDiseaseVectorDetectionPlugin(ModelPluginPort):
         Accepted ZIP structures:
           - Flat:     {fly|mos|tick}/*.jpg  (auto-split 70/15/15)
           - Pre-split: {train|val}/{fly|mos|tick}/*.jpg
-        If mlflow_run_id is provided, logs params/metrics and uploads artifacts to MLflow.
+        Logs params/metrics and uploads the classifier to the (mandatory) mlflow_run_id. Reports
+        best validation accuracy and, when a test split exists, the test metrics of the original
+        predictor (accuracy + per-class precision/recall/F1).
         """
         _tmp_zip: str | None = None
         local_data_path = data_path
@@ -481,8 +516,7 @@ class Ml10DairyDiseaseVectorDetectionPlugin(ModelPluginPort):
 
         temp_dir = tempfile.mkdtemp(prefix="ml10_dairy_train_")
         try:
-            with zipfile.ZipFile(local_data_path, "r") as zf:
-                zf.extractall(temp_dir)
+            safe_extract_zip(local_data_path, temp_dir)
 
             entries = list(Path(temp_dir).iterdir())
             data_root = entries[0] if len(entries) == 1 and entries[0].is_dir() else Path(temp_dir)
@@ -505,7 +539,15 @@ class Ml10DairyDiseaseVectorDetectionPlugin(ModelPluginPort):
             train_ds = datasets.ImageFolder(str(splits_root / "train"), train_tfm)
             val_ds = datasets.ImageFolder(str(splits_root / "val"), eval_tfm)
             class_names = train_ds.classes
-            logger.info("Dataset: %d train, %d val, clases=%s", len(train_ds), len(val_ds), class_names)
+            # Auto-split always has test/; a pre-split ZIP may bring it or not.
+            test_dir = splits_root / "test"
+            has_test = test_dir.is_dir() and any(p.is_file() for p in test_dir.rglob("*"))
+            test_ds = datasets.ImageFolder(str(test_dir), eval_tfm) if has_test else None
+            if test_ds is not None and test_ds.classes != class_names:
+                raise ValueError(f"Las clases de test {test_ds.classes} no coinciden con las de train {class_names}.")
+            logger.info("Dataset: %d train, %d val, %s test, clases=%s", len(train_ds), len(val_ds),
+                        len(test_ds) if test_ds is not None else 0, class_names)
+            torch.manual_seed(TRAIN_SEED)  # set_seed(42) of the delivered run_training
 
             # Hyperparams below match config/config.yaml's `classifier` section in the original
             # delivered code exactly (lr, weight_decay, optimizer=Adam, batch_size, epochs,
@@ -536,18 +578,17 @@ class Ml10DairyDiseaseVectorDetectionPlugin(ModelPluginPort):
             val_accs: list = []
 
             # ── MLflow logging ──────────────────────────────────────────────
-            if mlflow_run_id:
-                tracker = BaseMLflowTracker(mlflow_run_id)
-                tracker.log_params({
-                    "lr": lr,
-                    "weight_decay": weight_decay,
-                    "batch_size": 64,
-                    "max_epochs": 100,
-                    "patience": patience_cfg,
-                    "optimizer": "Adam",
-                    "scheduler": "StepLR(step_size=10)",
-                    "model": "MobileNetV3_Large",
-                })
+            tracker = BaseMLflowTracker(mlflow_run_id)
+            tracker.log_params({
+                "lr": lr,
+                "weight_decay": weight_decay,
+                "batch_size": 64,
+                "max_epochs": 100,
+                "patience": patience_cfg,
+                "optimizer": "Adam",
+                "scheduler": "StepLR(step_size=10)",
+                "model": "MobileNetV3_Large",
+            })
 
             t0 = time.perf_counter()
             for epoch in range(100):
@@ -555,13 +596,12 @@ class Ml10DairyDiseaseVectorDetectionPlugin(ModelPluginPort):
                 val_loss, val_acc = _cls_validate(model, val_loader, criterion, self._device)
                 scheduler.step()
                 val_accs.append(val_acc)
-                if mlflow_run_id:
-                    tracker.log_metrics({
-                        "train_loss": tr_loss,
-                        "train_accuracy": tr_acc,
-                        "val_loss": val_loss,
-                        "val_accuracy": val_acc,
-                    }, step=epoch)
+                tracker.log_metrics({
+                    "train_loss": tr_loss,
+                    "train_accuracy": tr_acc,
+                    "val_loss": val_loss,
+                    "val_accuracy": val_acc,
+                }, step=epoch)
                 logger.info("Epoch %d | tr_loss=%.4f tr_acc=%.4f val_loss=%.4f val_acc=%.4f",
                             epoch + 1, tr_loss, tr_acc, val_loss, val_acc)
                 if val_acc > best_acc:
@@ -578,30 +618,36 @@ class Ml10DairyDiseaseVectorDetectionPlugin(ModelPluginPort):
             if best_state:
                 model.load_state_dict(best_state)
 
+            test_metrics = {}
+            if test_ds is not None:
+                test_loader = DataLoader(test_ds, batch_size=64, shuffle=False, num_workers=0)
+                test_metrics = _cls_test_metrics(model, test_loader, class_names, self._device)
+                logger.info("Test: accuracy=%.4f", test_metrics["test_accuracy"])
+
             # The retrained classifier lives only in its own MLflow run (predict with that
             # mlflow_run_id); the served base classifier and its local artifacts are never replaced.
-            upload_warning = None
-            if not mlflow_run_id:
-                raise ModelPersistenceError("Sin run de MLflow: el modelo reentrenado no se ha guardado.")
-            if mlflow_run_id:
-                try:
-                    # Save to a temporary dir for MLflow upload (matching artifact_path="classifier")
-                    mlflow_tmp = tempfile.mkdtemp(prefix="ml10_dairy_mlflow_")
-                    torch.save(model.state_dict(), os.path.join(mlflow_tmp, CLASSIFIER_FILENAME))
-                    with open(os.path.join(mlflow_tmp, CLASS_NAMES_FILENAME), "w") as fh:
-                        json.dump(class_names, fh)
-                    tracker.upload_artifacts(mlflow_tmp, artifact_path="classifier")
-                    shutil.rmtree(mlflow_tmp, ignore_errors=True)
-                except Exception as exc:
-                    logger.error("MLflow artifact upload failed: %s", exc)
-                    raise ModelPersistenceError(f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}") from exc
+            # mlflow_run_id is mandatory in TrainRequest, so there is always a run to save into.
+            mlflow_tmp = tempfile.mkdtemp(prefix="ml10_dairy_mlflow_")
+            try:
+                # Save to a temporary dir for MLflow upload (matching artifact_path="classifier")
+                torch.save(model.state_dict(), os.path.join(mlflow_tmp, CLASSIFIER_FILENAME))
+                with open(os.path.join(mlflow_tmp, CLASS_NAMES_FILENAME), "w") as fh:
+                    json.dump(class_names, fh)
+                tracker.upload_artifacts(mlflow_tmp, artifact_path="classifier")
+            except Exception as exc:
+                logger.error("MLflow artifact upload failed: %s", exc)
+                raise ModelPersistenceError(f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}") from exc
+            finally:
+                shutil.rmtree(mlflow_tmp, ignore_errors=True)
 
             # ── Log final metrics to MLflow ─────────────────────────────────
-            if mlflow_run_id:
-                tracker.log_metrics({
-                    "best_val_accuracy": round(best_acc * 100, 1),
-                    "training_time_min": round(elapsed / 60, 1),
-                })
+            final_metrics = {
+                "best_val_accuracy": round(best_acc * 100, 1),
+                "training_time_min": round(elapsed / 60, 1),
+            }
+            if test_metrics:
+                final_metrics["test_accuracy"] = test_metrics["test_accuracy"]
+            tracker.log_metrics(final_metrics)
 
             train_metrics = {
                 "train_samples": len(train_ds),
@@ -609,6 +655,8 @@ class Ml10DairyDiseaseVectorDetectionPlugin(ModelPluginPort):
                 "classes": class_names,
                 "epochs_run": len(val_accs),
                 "best_val_acc": round(best_acc * 100, 1),
+                "test_samples": len(test_ds) if test_ds is not None else 0,
+                **test_metrics,
                 "time_min": round(elapsed / 60, 1),
             }
 
@@ -616,7 +664,6 @@ class Ml10DairyDiseaseVectorDetectionPlugin(ModelPluginPort):
                 detail="Entrenamiento del clasificador completado",
                 metrics=train_metrics,
                 mlflow_run_id=mlflow_run_id,
-                upload_warning=upload_warning,
             )
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)

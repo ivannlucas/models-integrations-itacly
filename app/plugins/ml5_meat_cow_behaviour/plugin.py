@@ -12,7 +12,6 @@ import gc
 import logging
 import shutil
 import time
-import zipfile
 from collections import defaultdict, deque
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -35,6 +34,7 @@ from app.domain.services.exceptions import (
     ModelPersistenceError,
 )
 from app.domain.services.mlflow_tracker import BaseMLflowTracker
+from app.infrastructure.archive import safe_extract_zip
 from app.plugins.ml5_meat_cow_behaviour.byte_tracker import ByteTracker
 from app.plugins.ml5_meat_cow_behaviour.constants import (
     ALPHA,
@@ -339,8 +339,7 @@ class Ml5MeatCowBehaviourPlugin(ModelPluginPort):
 
         temp_dir = tempfile.mkdtemp(prefix="ml5_train_")
         try:
-            with zipfile.ZipFile(local_data_path, "r") as zf:
-                zf.extractall(temp_dir)
+            safe_extract_zip(local_data_path, temp_dir)
 
             root = Path(temp_dir)
             entries = list(root.iterdir())

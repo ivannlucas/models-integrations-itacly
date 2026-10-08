@@ -106,6 +106,7 @@ training:
   supported: true  # [CORREGIDO Ciclo 2, 2026-10-06] ver known_issues -- la conclusión anterior
                     # (false) era incorrecta: sí hay un procedimiento de entrenamiento real
                     # entregado (scripts/train.py -> src/training/runner.py -> compare_models.py)
+  duracion_estimada: "48 s (3 semillas, como compare_models.py; 1040 train / 128 test)"   # [AÑADIDO 2026-10-08]
   target_column: target_h   # derivado internamente de target_precio_medio con shift(-horizon); no es columna de entrada
   required_columns:
     - fecha

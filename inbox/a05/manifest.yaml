@@ -121,6 +121,7 @@ outputs:
 
 training:
   supported: true   # [CORREGIDO Ciclo 3, 2026-10-06] — SOLO el clasificador SlowFast; ver scope abajo
+  duracion_estimada: "Más de 19 min sin terminar con datos reales (cuello de botella: lectura de frames con cv2.imread); 30 épocas. Supera el timeout HTTP habitual — ver plugin-integration § Duración"   # [AÑADIDO 2026-10-08]
   target_column: behavior   # attributes.behavior por frame (mayoría por clip, ver training.procedure)
   required_columns: null   # no aplica — el contrato /train es un ZIP CVAT/COCO, no un CSV (ver train_dto.py)
   hyperparams:

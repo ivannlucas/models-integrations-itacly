@@ -142,7 +142,16 @@ sin motivo. Antes de fijar `training.supported`:
   `YOLO(path)` fresco o `load_*()`). Una petición de predict concurrente nunca debe ver un
   modelo a medio entrenar.
 - Validar `training.required_columns`. Si falta algo, `raise ValueError(...)` con detalle
-  (→ 400).
+  (→ 400). Lo mismo con un dataset **insuficiente** (pocos clips, series más cortas que el
+  horizonte, split de validación vacío): compruébalo antes de que falle `train_test_split` o
+  `pd.concat` con un mensaje que el usuario no entiende, y nunca entrenes con validación vacía
+  (la métrica sale 0 y el "mejor" modelo es la última época, sin avisar).
+- ⚠ **ZIPs del usuario: `safe_extract_zip(zip, dest)`** (`app/infrastructure/archive.py`),
+  **nunca `zf.extractall`**. `extractall` no tiene tope: un ZIP de KB puede expandirse a cientos
+  de GB y llenar el disco del pod. El helper limita tamaño total, número de ficheros y ratio de
+  compresión (`ARCHIVE_MAX_TOTAL_BYTES` 10 GiB, `ARCHIVE_MAX_FILES` 200.000,
+  `ARCHIVE_MAX_RATIO` 200, configurables por entorno) y responde 413. Aplica también al
+  `/predict` por lotes.
 
 ### Fidelidad al procedimiento original
 
@@ -160,6 +169,13 @@ sin motivo. Antes de fijar `training.supported`:
   artefacto servido a 4 decimales en 48 s. Si el entrenamiento real dura horas, verifica cada
   pieza por separado (scheduler, split, *transforms*) con *smoke tests* de segundos, y reduce
   `epochs` solo con *monkeypatch* en el script de prueba, nunca tocando `constants.py`.
+- **Split reproducible y sin tocar el RNG global**: ordena los ficheros y baraja con un
+  `random.Random(seed)` local (el servidor es compartido). El original suele barajar
+  `os.listdir` bajo un `set_seed` global, que ni siquiera es reproducible entre sistemas de
+  ficheros. Porta también el preprocesado del split (ml10: tope `max_ticks` para equilibrar).
+- **Si el split tiene test, evalúalo** con las fórmulas del original y devuélvelo en la
+  respuesta. Reportar solo la mejor métrica de validación (la usada para el *early stopping*)
+  es optimista. ml10 calculaba el 15 % de test y nunca lo usaba.
 - Si encuentras bugs en el **código de entrenamiento entregado** (ml5: *scheduler* por época,
   fuga de datos por split por imagen, `track_id` no único, `ColorJitter` en validación),
   corrígelos en el plugin **y** en `inbox/aNN/codigo/`, y documéntalos en `known_issues`.
@@ -180,6 +196,19 @@ class TrainRequest(BaseModel):
     mlflow_run_id: MlflowRunId = Field(..., description="Run de MLflow donde se persiste el modelo "
                                        "reentrenado. Obligatorio: el artefacto base nunca se sobrescribe.")
 ```
+
+### Duración: `/train` es síncrono
+
+El entrenamiento corre dentro de la petición HTTP (patrón del repo). Duraciones medidas:
+ml23 48 s (3 semillas, las del original), ml47 `full` 122 s en GPU, ml5 (SlowFast) más de
+19 min sin terminar con datos reales, ml10 hasta 100 épocas. Lo que esté por encima de un
+par de minutos depende del timeout del cliente HTTP de la plataforma y del ingress, que no
+están en este repo. **No añadas un timeout dentro del plugin**: un hilo de PyTorch no se puede
+cancelar, así que la petición respondería 504 mientras el entrenamiento sigue ocupando la GPU
+y acaba guardando en MLflow un run que la plataforma da por fallido. La solución es un
+`/train` asíncrono (202 + id de tarea + consulta de estado), que exige cambios en la
+plataforma. Mientras tanto, documenta la duración esperada del plugin en su manifest
+(`training.duracion_estimada`).
 
 ### Si `training.supported: false`
 
@@ -313,7 +342,8 @@ aunque la suite pasaba en verde.
 | `/predict`, `/stats` | `UserModelUnavailableError` (el run pedido no tiene un modelo cargable: sin artefacto, o error de `ARTIFACT_LOAD_ERRORS` al cargarlo) | 422 |
 | `/predict` | Cualquier otra excepción | 500 |
 | `/train` | `TrainingNotSupportedError` | 501 |
-| `/train` | `ValueError` o `FileNotFoundError` (datos inválidos o ausentes) | 400 |
+| `/predict`, `/train` | `ArchiveLimitExceededError` (ZIP por encima de los límites de `safe_extract_zip`) | 413 |
+| `/train` | `ValueError` o `FileNotFoundError` (datos inválidos o ausentes, ZIP corrupto) | 400 |
 | `/train` | `ModelPersistenceError` (no se pudo guardar el modelo en MLflow) | 502 |
 | `/train` | Cualquier otra excepción | 500 |
 | `/health` | Modelo sin cargar | 503 |
@@ -348,6 +378,12 @@ en `FAKE_FACTORIES` y, si es entrenable, en `TRAIN_FACTORIES` y en el `ModelEntr
 
 ⚠ **Estos tests usan `FakePlugin`, que devuelve el DTO correcto sin ejecutar el código del
 plugin.** Validan el *wiring*, no el plugin. Ningún bug de la tabla de trampas los hizo fallar.
+Lo mismo vale para cualquier test que sustituya el modelo, el detector o `load_artifacts` por
+un `MagicMock` (`test_ml10_…_unit.py`, `test_ml25_…_unit.py`): sirven para las funciones puras
+(preprocesado, formato de salida), pero no demuestran que la API devuelva resultados
+correctos. Los tests de entrenamiento y robustez llaman al código real
+(`test_ml47_training.py`, `test_training_robustness.py`), y la correctitud se respalda con el
+informe de verificación contra el servidor real.
 Por eso, antes de dar el plugin por integrado:
 
 - Arranca el servidor real (`MODEL=<model-id> python main.py`) y llama a `/health`, `/predict`
@@ -387,6 +423,9 @@ La correctitud numérica se valida después, en el skill `verification`, contra 
 [ ] Si es entrenable: mlflow_run_id obligatorio, guardado solo en MLflow, procedimiento
     original portado fielmente y métricas reportadas reproducidas con una ejecución real
 [ ] Si no lo es: TrainingNotSupportedError explicado y sin train types en registry
+[ ] Ningún zf.extractall: los ZIPs del usuario pasan por safe_extract_zip
+[ ] Si es entrenable: split reproducible, test evaluado si existe, datos insuficientes → ValueError
+    claro, duración estimada en el manifest
 [ ] Trampas de fidelidad revisadas: orden de clases frente a etiquetas reales, preprocesado,
     features derivadas, CUDA, device, md5 del artefacto base
 [ ] registry.py: ModelEntry con train types (ambos o ninguno); `from app.registry import REGISTRY` OK

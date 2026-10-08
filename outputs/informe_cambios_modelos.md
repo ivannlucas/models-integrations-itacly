@@ -411,3 +411,85 @@ da un exact match de 0,96 y deja el modelo base intacto.
 - `fine_tuner.py` también llama a `model.train()` sobre el modelo completo, así que las BatchNorm del backbone congelado actualizan sus estadísticas igual que en el plugin.
 - La densidad y el Cp del fluido (`fluid_density_kg_l`, `fluid_cp_kj_kgK`) solo se registran en el informe de calibración, no intervienen en el cálculo.
 - El fine-tuning original no aplica el gemelo térmico.
+
+## 9. Anexo (8 de octubre de 2026): revisión de la PR de auditoría
+
+### 9.1 ZIPs sin límite de descompresión
+
+`zf.extractall` se usaba en **12 sitios de 7 plugins** (ml2, ml4, ml5, ml7, ml8, ml10, ml41), en
+`/train` y en `/predict` por lotes. Python ya neutraliza `..` y las rutas absolutas, así que no
+había *zip-slip*, pero no había ningún tope: un ZIP de pocos KB podía expandirse a cientos de GB.
+
+Ahora los 12 pasan por `safe_extract_zip` (`app/infrastructure/archive.py`):
+
+- Descomprime en *streaming* y cuenta los bytes realmente escritos. No se fía de los tamaños de
+  la cabecera del ZIP.
+- Corta al superar el tamaño total (`ARCHIVE_MAX_TOTAL_BYTES`, 10 GiB), el número de ficheros
+  (`ARCHIVE_MAX_FILES`, 200.000) o el ratio de compresión por fichero (`ARCHIVE_MAX_RATIO`, 200).
+  Los tres se configuran por entorno.
+- Comprueba antes el espacio libre en disco.
+- Rechaza las rutas que salen del destino.
+
+El ratio es el que detecta un zip bomb: imágenes, vídeo y audio comprimen cerca de 1x. Los
+límites de tamaño y de número de ficheros quedan holgados respecto a los datasets entregados.
+
+Respuestas: **413** (`ArchiveLimitExceededError`) en `/train` y `/predict`; un ZIP corrupto da 400
+en `/train`. Comprobado contra el servidor real de ml2: un ZIP de imágenes reales da 200 y un zip
+bomb de 64 KB → 64 MB da 413.
+
+### 9.2 ml10 `/train`
+
+| Problema | Corrección |
+|---|---|
+| Rama `if not mlflow_run_id` muerta (`mlflow_run_id` es obligatorio en `TrainRequest`) | Eliminada, junto con las comprobaciones redundantes |
+| Si `torch.save` fallaba, el temporal de MLflow no se borraba | `try/finally` |
+| `random.shuffle` sin semilla en el split automático | Ficheros ordenados y `random.Random(42)` local, con la semilla de `config.yaml`. Además, `torch.manual_seed(42)` |
+| El 15 % de test se separaba y nunca se evaluaba | Evaluado con las fórmulas de `src/predict/predictor.py` del original: `test_accuracy` y `test_per_class` (P/R/F1). Se registra en MLflow |
+| No detectado en la revisión: el split automático no aplicaba el tope `splits.max_ticks: 1400` del original | Aplicado |
+
+Los hiperparámetros fijos no son un defecto: son los de `config.yaml` del equipo de IA.
+
+### 9.3 ml5 `training.py`
+
+- `lr_lambda` devuelve un `float` con `math.cos(math.pi * progress)`. El original usaba un tensor
+  y `3.14159`; la diferencia en el LR es ≤ 1e-6 relativo.
+- Con menos de 4 clips, el split 70/15/15 por clip lanza un error claro. Antes salía el
+  `ValueError` de sklearn. El mínimo real es 4, comprobado.
+- `train_classifier` rechaza la validación vacía. `plugin.train()` ya lo comprobaba antes de
+  llamarla; ahora también lo hace la función.
+
+### 9.4 ml23 `training.py`
+
+- Corregida la anotación de `prepare_rnn_split_with_test`: devuelve 8 elementos.
+- `prepare_horizon_dataset` da un error claro si ninguna serie supera el horizonte. Antes fallaba
+  con `No objects to concatenate`, o más adelante con un error de forma.
+- Se mantienen las 3 semillas del original (48 s medidos).
+
+### 9.5 Entrenamiento síncrono
+
+No se añade un timeout dentro del plugin: un hilo de PyTorch no se puede cancelar. La petición
+respondería 504 mientras el entrenamiento sigue en la GPU y guarda en MLflow un run que la
+plataforma da por fallido.
+
+Queda documentado en `plugin-integration` (§ Duración) y en el campo
+`training.duracion_estimada` de los manifests de a05, a10, a23 y a47:
+
+- ml5: más de 19 min sin terminar.
+- ml47 `full`: 122 s.
+- ml23: 48 s.
+
+La solución de fondo es un `/train` asíncrono (202 + estado), que requiere cambios en la
+plataforma.
+
+### 9.6 Cobertura de tests
+
+`test_ml10_…_unit.py` y `test_ml25_…_unit.py` sustituyen el modelo por `MagicMock`: cubren las
+funciones puras, no la correctitud de la API. El SKILL lo indica de forma explícita.
+
+Los tests nuevos de esta ronda llaman al código real:
+
+- `test_training_robustness.py`: split de ml10, métricas de test, errores de ml5 y ml23.
+- `test_archive_limits.py`.
+
+La correctitud de cada modelo sigue respaldada por su informe de verificación contra el servidor
+real.

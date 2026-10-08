@@ -104,6 +104,7 @@ outputs:
 
 training:
   supported: true   # SOLO el clasificador MobileNetV3 — ver known_issues
+  duracion_estimada: "No medida con el dataset completo; hasta 100 épocas con early stopping (paciencia 15) sobre MobileNetV3 con backbone congelado"   # [AÑADIDO 2026-10-08]
   target_column: null  # no aplica: clasificación de imágenes vía ImageFolder (carpeta = clase), no CSV con columna objetivo
   required_columns: null  # no aplica (ver required_structure)
   required_structure: >
@@ -126,7 +127,11 @@ training:
     best_model_criterion: val_accuracy   # se guarda el mejor state_dict por val_acc, no por val_loss
     augmentation_train: "RandomHorizontalFlip + RandomRotation(15)"
     split_ratios: {train: 0.7, val: 0.15, test: 0.15}  # splits.p_train/p_val/p_test en config.yaml
-  metrics_returned: [train_samples, val_samples, classes, epochs_run, best_val_acc, time_min]
+  # [CORREGIDO 2026-10-08] El split de test (15 %) se calculaba y nunca se evaluaba; ahora se
+  # evalúa con las fórmulas de src/predict/predictor.py (accuracy + P/R/F1 por clase). El split
+  # automático aplica el tope splits.max_ticks=1400 del original y es reproducible (ficheros
+  # ordenados + Random(42) local; el original baraja os.listdir bajo set_seed(42) global).
+  metrics_returned: [train_samples, val_samples, test_samples, classes, epochs_run, best_val_acc, test_accuracy, test_per_class, time_min]
   source: codigo_entrenamiento  # src/training/trainer.py, config/config.yaml
   # Re-confirmado en el ciclo 3 (2026-10-05): split real reproducido ejecutando
   # set_seed(42) + create_detection_splits + create_classification_splits

@@ -41,6 +41,13 @@ def prepare_horizon_dataset(df: pd.DataFrame, horizon: int) -> pd.DataFrame:
         grp[CURRENT_PRICE_COL] = grp["target_precio_medio"]
         grp = grp.dropna(subset=[TARGET_COL])
         pieces.append(grp)
+    # pd.concat([]) would fail with "No objects to concatenate"; a dataset whose series are all
+    # shorter than the horizon would pass that and break later with an obscure shape error.
+    if not pieces or all(piece.empty for piece in pieces):
+        raise ValueError(
+            f"El dataset no tiene ninguna serie (producto, canal) con más de {horizon} meses: no hay "
+            f"ninguna fila con objetivo a {horizon} meses vista para entrenar."
+        )
     result = pd.concat(pieces, ignore_index=True)
     result.drop(columns=["target_precio_medio"], inplace=True)
     return result
@@ -150,7 +157,7 @@ def build_eval_sequences_with_bridge(
 def prepare_rnn_split_with_test(  # pylint: disable=too-many-locals
     train_df: pd.DataFrame, val_df: pd.DataFrame, test_df: pd.DataFrame,
     feature_cols: list[str], seq_len: int,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, StandardScaler]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, StandardScaler]:
     """Prepare train/val/test sequences for the final refit (ported verbatim)."""
     scaler = StandardScaler()
     scaler.fit(train_df[feature_cols].values)
