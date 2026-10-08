@@ -10,6 +10,8 @@ exactly like every other plugin with real training support.
 """
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.application.dto.train_dto import MlflowRunId
+
 
 class TrainRequest(BaseModel):
     model_config = ConfigDict(protected_namespaces=())
@@ -21,4 +23,4 @@ class TrainRequest(BaseModel):
             "({train|val}/{fly|mos|tick}/*.jpg)."
         ),
     )
-    mlflow_run_id: str
+    mlflow_run_id: MlflowRunId

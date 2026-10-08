@@ -22,7 +22,7 @@ import torch
 
 from app.application.dto.stats_dto import InputField, OutputField, RuntimeStats, StatsResponse
 from app.domain.ports.model_plugin_port import ModelPluginPort
-from app.domain.services.exceptions import ModelNotLoadedError
+from app.domain.services.exceptions import ModelNotLoadedError, ModelPersistenceError
 from app.domain.services.mlflow_tracker import BaseMLflowTracker
 from app.infrastructure.artifact_store import local_file_path
 from app.plugins.ml23_lactic_market_price_forecast.constants import (
@@ -150,12 +150,6 @@ class Ml23LacticMarketPriceForecastPlugin(ModelPluginPort):
             return self._model, self._scaler_mean, self._scaler_scale, self._manifest, None
         logger.info("Using user-trained GRU bundle from MLflow run_id=%s", mlflow_run_id)
         loaded = download_user_model_from_mlflow(mlflow_run_id)
-        if loaded is None:
-            logger.warning(
-                "MLflow download failed for run_id=%s, falling back to standard model",
-                mlflow_run_id,
-            )
-            return self._model, self._scaler_mean, self._scaler_scale, self._manifest, None
         model, mean, scale, manifest, temp_dir = loaded
         return model, mean, scale, manifest, temp_dir
 
@@ -369,7 +363,7 @@ class Ml23LacticMarketPriceForecastPlugin(ModelPluginPort):
             n_test = int(len(test_X))
 
             if not mlflow_run_id:
-                upload_warning = "Sin run de MLflow: el modelo reentrenado no se ha guardado."
+                raise ModelPersistenceError("Sin run de MLflow: el modelo reentrenado no se ha guardado.")
             else:
                 try:
                     upload_artifacts_to_mlflow(
@@ -383,9 +377,7 @@ class Ml23LacticMarketPriceForecastPlugin(ModelPluginPort):
                     )
                 except Exception as exc:  # pylint: disable=broad-exception-caught
                     logger.error("MLflow artifact upload failed: %s", exc)
-                    upload_warning = (
-                        f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}"
-                    )
+                    raise ModelPersistenceError(f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}") from exc
 
             logger.info(
                 "train() done — mae=%.4f rmse=%.4f r2=%.4f n_train=%d n_test=%d time=%.1fs",

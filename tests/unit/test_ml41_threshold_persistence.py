@@ -3,7 +3,10 @@
 Only the expensive neural-network training/audio decoding is replaced. The real
 train orchestration, threshold calculation, torch serialization, local/MLflow
 loaders and both prediction methods are exercised without touching user artifacts.
+The retrained model must live only in MLflow: the fixed base checkpoint is never
+written by train().
 """
+import hashlib
 import shutil
 import zipfile
 from pathlib import Path
@@ -13,7 +16,11 @@ import numpy as np
 import pytest
 import torch
 
-from app.domain.services.exceptions import UnsupportedMachineConfigurationError
+from app.domain.services.exceptions import (
+    ModelPersistenceError,
+    UnsupportedMachineConfigurationError,
+    UserModelUnavailableError,
+)
 from app.application.use_cases.predict_model_use_case import PredictModelUseCase
 from app.plugins.ml41_meat_curing_machinery_acoustic_anomaly import (
     mlflow_utils, model_loader, plugin,
@@ -76,6 +83,8 @@ def runtime(tmp_path, monkeypatch):
 
         def download_artifacts(self, destination, artifact_path):
             assert artifact_path == "model"
+            if not remote.exists():
+                return ""  # BaseMLflowTracker's answer for a run without artifacts
             return shutil.copytree(remote, Path(destination) / "model")
 
     monkeypatch.setattr(plugin, "BaseMLflowTracker", Tracker)
@@ -101,51 +110,108 @@ def training_zip(tmp_path, with_anomalies):
     return path
 
 
-@pytest.mark.parametrize("source", ["local", "mlflow"])
-def test_train_persists_calibration_for_inline_and_batch_after_reload(runtime, tmp_path, source):
+def _md5(path):
+    return hashlib.md5(Path(path).read_bytes()).hexdigest()
+
+
+def test_train_persists_calibration_only_in_mlflow(runtime, tmp_path):
     instance = runtime.instance
+    base_files = (runtime.combo_dir / "best.pth", runtime.combo_dir / "maha_stats.npz")
+    base_md5 = [_md5(path) for path in base_files]
     # Prime the cache with the original checkpoint and its static threshold.
     assert instance.predict_inline(features=FEATURES).threshold_used == THRESHOLDS[COMBINATION]
+
     result = instance.train(data_path=str(training_zip(tmp_path, True)), mlflow_run_id="run-1")
     learned = result.per_combination[0].threshold
     assert learned > 12.0 > THRESHOLDS[COMBINATION]
-    assert runtime.downloads == []  # train must not replace its new checkpoint from S3
-    assert instance.predict_inline(features=FEATURES).threshold_used == learned
+    assert result.upload_warning is None
+    assert runtime.downloads == []
 
-    for checkpoint_path in (runtime.combo_dir / "best.pth", runtime.remote / "fan/id_00/0_dB/best.pth"):
-        assert torch.load(checkpoint_path, weights_only=False)["threshold"] == learned
+    # The fixed base checkpoint is untouched, on disk and in the served cache.
+    assert [_md5(path) for path in base_files] == base_md5
+    assert instance.predict_inline(features=FEATURES).threshold_used == THRESHOLDS[COMBINATION]
+    assert torch.load(runtime.remote / "fan/id_00/0_dB/best.pth", weights_only=False)["threshold"] == learned
 
-    # A separate plugin instance must recover calibration, not depend on global state.
+    # A separate plugin instance recovers the calibration from the MLflow run only.
     fresh = plugin.Ml41MeatCuringMachineryAcousticAnomalyPlugin()
     fresh.load()
-    if source == "mlflow":
-        # Deliberately diverge local calibration to detect use of the wrong model's threshold.
-        checkpoint = torch.load(runtime.combo_dir / "best.pth", weights_only=False)
-        checkpoint["threshold"] = 1.0
-        torch.save(checkpoint, runtime.combo_dir / "best.pth")
-    run_id = "run-1" if source == "mlflow" else ""
-    inline = fresh.predict_inline(features=FEATURES, mlflow_run_id=run_id)
-    batch = fresh.predict_batch(data_path=str(runtime.batch), mlflow_run_id=run_id).predictions[0]
+    assert fresh.predict_inline(features=FEATURES).threshold_used == THRESHOLDS[COMBINATION]
+    inline = fresh.predict_inline(features=FEATURES, mlflow_run_id="run-1")
+    batch = fresh.predict_batch(data_path=str(runtime.batch), mlflow_run_id="run-1").predictions[0]
     assert inline.threshold_used == batch["threshold_used"] == learned
     assert inline.predicted_label == batch["predicted_label"] == 0
-    override = fresh.predict_inline(features=FEATURES, threshold=0.0, mlflow_run_id=run_id)
+    override = fresh.predict_inline(features=FEATURES, threshold=0.0, mlflow_run_id="run-1")
     assert override.threshold_used == 0.0
     assert override.predicted_label == 1
-    assert fresh.predict_inline(features=FEATURES, mlflow_run_id=run_id).threshold_used == learned
+    assert fresh.predict_inline(features=FEATURES, mlflow_run_id="run-1").threshold_used == learned
     routed = PredictModelUseCase(fresh).execute(PredictBatchRequest(
-        data_path=str(runtime.batch), mlflow_run_id=run_id, threshold=0.0,
+        data_path=str(runtime.batch), mlflow_run_id="run-1", threshold=0.0,
     ))
     assert routed.predictions[0]["threshold_used"] == 0.0
     assert routed.predictions[0]["predicted_label"] == 1
 
 
-@pytest.mark.parametrize("source", ["local", "mlflow"])
-def test_normal_only_training_does_not_reuse_old_calibration(runtime, tmp_path, source):
+def test_repeated_training_always_starts_from_base_checkpoint(runtime, tmp_path, monkeypatch):
+    starting_points = []
+    real_load = torch.load
+
+    def recording_load(path, *args, **kwargs):
+        checkpoint = real_load(path, *args, **kwargs)
+        starting_points.append(checkpoint.get("threshold", "base"))
+        return checkpoint
+
+    monkeypatch.setattr(plugin.torch, "load", recording_load)
+    for _ in range(2):
+        runtime.instance.train(data_path=str(training_zip(tmp_path, True)), mlflow_run_id="run-1")
+    # Both fine-tunes start from the fixed base checkpoint, never from a previous retrain.
+    assert starting_points == ["base", "base"]
+
+
+def test_train_without_mlflow_run_fails_and_does_not_persist(runtime, tmp_path):
+    base_md5 = _md5(runtime.combo_dir / "best.pth")
+    with pytest.raises(ModelPersistenceError, match="Sin run de MLflow"):
+        runtime.instance.train(data_path=str(training_zip(tmp_path, True)), mlflow_run_id="")
+    assert _md5(runtime.combo_dir / "best.pth") == base_md5
+    assert not runtime.remote.exists()
+
+
+def test_train_fails_when_mlflow_upload_fails(runtime, tmp_path, monkeypatch):
+    base_md5 = _md5(runtime.combo_dir / "best.pth")
+
+    def unreachable(self, path, artifact_path):
+        raise ConnectionError("MLflow unreachable")
+
+    monkeypatch.setattr(plugin.BaseMLflowTracker, "upload_artifacts", unreachable)
+    with pytest.raises(ModelPersistenceError, match="MLflow unreachable"):
+        runtime.instance.train(data_path=str(training_zip(tmp_path, True)), mlflow_run_id="run-1")
+    assert _md5(runtime.combo_dir / "best.pth") == base_md5
+
+
+def test_predict_with_run_missing_the_combination_fails_instead_of_serving_base(runtime, tmp_path):
+    other = runtime.remote / "fan/id_02/0_dB"
+    other.mkdir(parents=True)
+    shutil.copy(runtime.combo_dir / "best.pth", other / "best.pth")
+    shutil.copy(runtime.combo_dir / "maha_stats.npz", other / "maha_stats.npz")
+    with pytest.raises(UserModelUnavailableError, match="fan/id_00/0_dB"):
+        runtime.instance.predict_inline(features=FEATURES, mlflow_run_id="run-1")
+    batch = runtime.instance.predict_batch(data_path=str(runtime.batch), mlflow_run_id="run-1")
+    assert "fan/id_00/0_dB" in batch.predictions[0]["error"]
+    assert "predicted_label" not in batch.predictions[0]
+
+
+def test_predict_with_run_without_model_fails_instead_of_serving_base(runtime):
+    with pytest.raises(UserModelUnavailableError, match="run-404"):
+        runtime.instance.predict_inline(features=FEATURES, mlflow_run_id="run-404")
+
+
+def test_normal_only_training_does_not_reuse_old_calibration(runtime, tmp_path):
     result = runtime.instance.train(data_path=str(training_zip(tmp_path, False)), mlflow_run_id="run-1")
     assert result.per_combination[0].threshold is None
-    run_id = "run-1" if source == "mlflow" else ""
     fresh = plugin.Ml41MeatCuringMachineryAcousticAnomalyPlugin()
     fresh.load()
+    # The served base model keeps its original calibration.
+    assert fresh.predict_inline(features=FEATURES).threshold_used == THRESHOLDS[COMBINATION]
+    run_id = "run-1"
     with pytest.raises(UnsupportedMachineConfigurationError, match="no calibrated"):
         fresh.predict_inline(features=FEATURES, mlflow_run_id=run_id)
     batch = fresh.predict_batch(data_path=str(runtime.batch), mlflow_run_id=run_id)

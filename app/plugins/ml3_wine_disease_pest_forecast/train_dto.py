@@ -1,6 +1,8 @@
 """Pydantic DTOs for the ml3 wine disease/pest /train endpoint."""
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.application.dto.train_dto import MlflowRunId
+
 
 class TrainRequest(BaseModel):
     """Retrain request: labeled raw CSV/parquet with the full training contract columns."""
@@ -17,7 +19,7 @@ class TrainRequest(BaseModel):
             "BiGRU) desde cero y devuelve las métricas de test hold-out."
         ),
     )
-    mlflow_run_id: str
+    mlflow_run_id: MlflowRunId
 
 
 class TrainResponse(BaseModel):
@@ -42,6 +44,6 @@ class TrainResponse(BaseModel):
     upload_warning: str | None = Field(
         default=None,
         description=(
-            "Informativo si los artefactos se guardaron en local pero falló el upload a MLflow"
+            "Aviso si el reentrenamiento terminó pero el modelo no se ha podido guardar en MLflow"
         ),
     )

@@ -103,3 +103,19 @@ class UnsupportedMachineConfigurationError(ValueError):
 
 class InvalidAudioError(ValueError):
     """Raised when the uploaded audio cannot be decoded as a valid WAV file (ml41)."""
+
+
+class UserModelUnavailableError(RuntimeError):
+    """Raised when predict/stats is asked for a user-retrained model (mlflow_run_id) that
+    cannot be loaded from MLflow: the run has no complete model or MLflow is unreachable.
+
+    Never fall back silently to the base model — the caller asked for its own model (→ 422).
+    """
+
+
+class ModelPersistenceError(RuntimeError):
+    """Raised when a retrained model cannot be saved to its MLflow run.
+
+    The retrained model only lives in MLflow, so if the upload fails the training result
+    is lost and the request must fail instead of answering 200 (→ 502).
+    """

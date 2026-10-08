@@ -1,6 +1,8 @@
 """Train DTOs for ml34 dairy pasteurization MLP fine-tuning."""
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.application.dto.train_dto import MlflowRunId
+
 
 class TrainRequest(BaseModel):
     """Fine-tuning request: CSV path with the 5 features + 2 targets."""
@@ -13,7 +15,7 @@ class TrainRequest(BaseModel):
             "+ targets E_consumo, T_out_leche"
         ),
     )
-    mlflow_run_id: str
+    mlflow_run_id: MlflowRunId
 
 
 class TrainResponse(BaseModel):

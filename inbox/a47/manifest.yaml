@@ -91,6 +91,31 @@ outputs:
 # ── Entrenamiento (fine-tune / re-entrenamiento por usuario) ─────────────────
 training:
   supported: true
+  # [CORREGIDO 2026-10-07] /train reescrito como port fiel de los DOS procedimientos del código
+  # entregado, elegidos con `mode` (opcional; por defecto fine_tune):
+  #   - fine_tune (por defecto): src/fine_tuning/fine_tuner.py — backbone CNN congelado, solo las 4
+  #     cabezas, CrossEntropy, LR = learning_rate/10, 50 épocas, paciencia 7, batch 32; reutiliza el
+  #     scaler y feature_columns del modelo servido. Camino previsto para datos de planta.
+  #   - full: src/training/trainer.py + preprocess.py — desde cero, hiperparámetros de Optuna
+  #     (abajo), Physics-Guided Loss con curriculum de lambda, augmentation con ruido 0.2·std, scaler
+  #     ajustado en train aumentado, gemelo térmico solo si APPLY_DIGITAL_TWIN (el original lo aplica
+  #     siempre porque sus datos son de laboratorio).
+  # Ambos: un único CSV separado 70/15/15 por Cycle_ID (split_data, random_state 42) y métricas del
+  # 15% de test con las fórmulas de la Tabla 6 (exact_match, accuracy = media por componente,
+  # precision/recall/f1_macro = media de componente×clase). Etiquetas Target_* (también se aceptan
+  # los nombres cortos anteriores). Verificado con datos reales 2026-10-07: split idéntico a
+  # cycle_splits.json, features con diff máx 2.8e-7, modelo base evaluado = 0.9879/0.9970/0.9970
+  # exactos; full real en GPU = 0.9940/0.9985/0.9986 (78 épocas); fine_tune real sobre val_split
+  # = 0.94→0.96 exact match en sus 50 ciclos de test, backbone intacto.
+  # [CORREGIDO 2026-10-07] Reanálisis con el código original completo: el modelo se cargaba con
+  # dropout 0.5 (no 0.2022) y fine_tune entrenaba dropout_final con él; los tensores no seguían el
+  # orden por Cycle_ID del original. Corregido: full real en GPU reproduce ahora EXACTAMENTE las
+  # métricas del modelo entregado (0.9879/0.9970/0.9969/0.9972/0.9970, 89 épocas); fine_tune
+  # real = 0.96 exact match. Las cifras de full de arriba (0.9940, 78 épocas) son del código previo.
+  # Comprobado también: fine_tuner.py original usa model.train() sobre todo el modelo (BatchNorm
+  # del backbone actualiza estadísticas, igual que el plugin) y fluid_density/cp solo se registran.
+  # El texto de abajo es histórico: el trainer anterior asignaba a todos los ciclos la etiqueta
+  # del primero, mezclaba ciclos en las medias móviles e ignoraba estos hiperparámetros.
   # El plugin implementa train() vía train_model_from_csv: reconstruye la CNN y la
   # entrena con PhysicsGuidedLoss + Early Stopping sobre los ciclos del CSV aportado.
   target_column: [Fouling, Valvula, Bomba, Acumulador]   # 4 targets (0/1/2) — nombres exigidos por el trainer del plugin
@@ -176,3 +201,5 @@ known_issues:
   - "El dataset es de laboratorio (banco hidráulico UCI, fluido = aceite), NO de pasteurizado lácteo real. Todas las métricas son optimistas respecto a producción; el modelo requiere reentrenamiento/calibración con datos de planta antes de desplegar."
   - "No existe outputs/a47/verification_report.md — el modelo aún no ha pasado el skill verification contra estos golden cases."
   - "[RESUELTO] outputs/a47/verification_report.md ya existe (15/15 golden cases reproducidos exactamente). La nota anterior quedó obsoleta tras esa ejecución del skill verification."
+  - "[CORREGIDO 2026-10-07] La nota de arriba sobre prediction_output.csv es incorrecta: ese fichero son las predicciones de main.py predict sobre data/raw/hydraulic_raw.csv (Cycle_ID 0..2204 del CSV bruto) con --apply_digital_twin. El plugin con APPLY_DIGITAL_TWIN=true lo reproduce (50 primeros ciclos: clases idénticas, confianza diff máx 1.2e-4)."
+  - "[CORREGIDO 2026-10-07] /predict batch fallaba (KeyError 'Time_Segundos') con CSV en formato bruto del banco (columna Time a 100 Hz); ahora se usa Time como en predictor.apply_digital_twin_inference."

@@ -25,6 +25,7 @@ from app.application.dto.stats_dto import InputField, OutputField, RuntimeStats,
 from app.domain.ports.model_plugin_port import ModelPluginPort
 from app.domain.services.exceptions import (
     ModelNotLoadedError,
+    ModelPersistenceError,
     ThermalSafetyViolationError,
 )
 from app.domain.services.mlflow_tracker import BaseMLflowTracker
@@ -121,6 +122,20 @@ class Ml34DairyPasteurizationEnergyGaPlugin(ModelPluginPort):
 
     # ── predict_inline ────────────────────────────────────────────────────────
 
+    def _resolve_model(self, mlflow_run_id: str) -> tuple[tuple, str | None]:
+        """Return ((model, scaler_X, scaler_y), temp_dir) to serve this request.
+
+        The user's retrained model (if mlflow_run_id) is returned, never assigned to self:
+        the plugin instance is shared by concurrent requests, so swapping it into self leaked
+        a user's model to other requests — and, with two overlapping runs, left it in place
+        as the "base" model. temp_dir is None for the base model.
+        """
+        if not mlflow_run_id:
+            self._require_loaded()
+            return (self._model, self._scaler_X, self._scaler_y), None
+        model, scaler_x, scaler_y, _config, user_temp_dir = download_user_model_from_mlflow(mlflow_run_id)
+        return (model, scaler_x, scaler_y), user_temp_dir
+
     def predict_inline(
         self,
         *,
@@ -130,30 +145,25 @@ class Ml34DairyPasteurizationEnergyGaPlugin(ModelPluginPort):
         mlflow_run_id: str = "",
     ) -> PredictInlineResponse | PredictOptimizeResponse:
         """Dispatch to MLP predict or GA optimize based on model_key."""
-        user_temp_dir = None
-        saved = (self._model, self._scaler_X, self._scaler_y, self._config)
         if mlflow_run_id:
             logger.info("predict_inline — using user model from MLflow run_id=%s", mlflow_run_id)
-            loaded = download_user_model_from_mlflow(mlflow_run_id)
-            if loaded:
-                self._model, self._scaler_X, self._scaler_y, self._config, user_temp_dir = loaded
+        ctx, user_temp_dir = self._resolve_model(mlflow_run_id)
         try:
-            self._require_loaded()
             if model_key == "optimize":
-                result = self._run_optimize(features)
+                result = self._run_optimize(features, ctx)
             else:
-                result = self._run_predict(features)
+                result = self._run_predict(features, ctx)
             self._record()
             return result
         finally:
             if user_temp_dir:
                 shutil.rmtree(user_temp_dir, ignore_errors=True)
-                self._model, self._scaler_X, self._scaler_y, self._config = saved
 
-    def _run_predict(self, features: dict) -> PredictInlineResponse:
+    def _run_predict(self, features: dict, ctx: tuple) -> PredictInlineResponse:
         """MLP surrogate single-sample inference in real units."""
+        model, scaler_X, scaler_y = ctx
         e_consumo, t_out = predict_scenario(
-            self._model, self._scaler_X, self._scaler_y,
+            model, scaler_X, scaler_y,
             float(features["T_in_leche"]), float(features["F_flow"]),
             float(features["T_servicio"]), float(features["t_ciclo"]),
             float(features["Delta_P"]),
@@ -164,8 +174,9 @@ class Ml34DairyPasteurizationEnergyGaPlugin(ModelPluginPort):
             T_out_pred=round(t_out, 4),
         )
 
-    def _run_optimize(self, features: dict) -> PredictOptimizeResponse:
+    def _run_optimize(self, features: dict, ctx: tuple) -> PredictOptimizeResponse:
         """Run the single-objective GA for one scenario (deterministic per seed)."""
+        model, scaler_X, scaler_y = ctx
         t_in = float(features["T_in_leche"])
         delta_p = float(features["Delta_P"])
         t_ciclo = float(features["t_ciclo"])
@@ -174,14 +185,14 @@ class Ml34DairyPasteurizationEnergyGaPlugin(ModelPluginPort):
         toolbox = setup_ga_toolbox()
         hof = run_ga_single(
             toolbox, T_in_leche=t_in, t_ciclo=t_ciclo, Delta_P=delta_p,
-            model=self._model, scaler_X=self._scaler_X, scaler_y=self._scaler_y,
+            model=model, scaler_X=scaler_X, scaler_y=scaler_y,
             seed=seed,
         )
 
         best = hof[0]
         f_flow, t_servicio = float(best[0]), float(best[1])
         e_consumo, t_out = predict_scenario(
-            self._model, self._scaler_X, self._scaler_y,
+            model, scaler_X, scaler_y,
             t_in, f_flow, t_servicio, t_ciclo, delta_p,
         )
         specific = e_consumo / max(f_flow, 1.0)
@@ -222,22 +233,17 @@ class Ml34DairyPasteurizationEnergyGaPlugin(ModelPluginPort):
         runs one GA search per CSV row (reusing _run_optimize, the same code path
         the inline endpoint uses), anything else runs the MLP surrogate.
         """
-        user_temp_dir = None
-        saved = (self._model, self._scaler_X, self._scaler_y, self._config)
         if mlflow_run_id:
             logger.info("predict_batch — using user model from MLflow run_id=%s", mlflow_run_id)
-            loaded = download_user_model_from_mlflow(mlflow_run_id)
-            if loaded:
-                self._model, self._scaler_X, self._scaler_y, self._config, user_temp_dir = loaded
+        ctx, user_temp_dir = self._resolve_model(mlflow_run_id)
         try:
-            self._require_loaded()
             with local_file_path(data_path) as local_path:
                 df = pd.read_csv(local_path)
 
             if model_key == "optimize":
-                predictions = self._predict_batch_optimize(df)
+                predictions = self._predict_batch_optimize(df, ctx)
             else:
-                predictions = self._predict_batch_estimate(df)
+                predictions = self._predict_batch_estimate(df, ctx)
 
             self._record()
             logger.info(
@@ -248,9 +254,8 @@ class Ml34DairyPasteurizationEnergyGaPlugin(ModelPluginPort):
         finally:
             if user_temp_dir:
                 shutil.rmtree(user_temp_dir, ignore_errors=True)
-                self._model, self._scaler_X, self._scaler_y, self._config = saved
 
-    def _predict_batch_estimate(self, df: pd.DataFrame) -> list[dict]:
+    def _predict_batch_estimate(self, df: pd.DataFrame, ctx: tuple) -> list[dict]:
         """MLP surrogate inference, one row of the CSV = one scenario."""
         missing = [c for c in FEATURES if c not in df.columns]
         if missing:
@@ -259,7 +264,7 @@ class Ml34DairyPasteurizationEnergyGaPlugin(ModelPluginPort):
         for idx, row in df.iterrows():
             try:
                 row_dict = row.to_dict()
-                pred = self._run_predict(row_dict)
+                pred = self._run_predict(row_dict, ctx)
                 predictions.append({
                     "row": int(idx),
                     "E_consumo_pred": pred.E_consumo_pred,
@@ -271,7 +276,7 @@ class Ml34DairyPasteurizationEnergyGaPlugin(ModelPluginPort):
                 predictions.append({"row": int(idx), "error": str(exc)})
         return predictions
 
-    def _predict_batch_optimize(self, df: pd.DataFrame) -> list[dict]:
+    def _predict_batch_optimize(self, df: pd.DataFrame, ctx: tuple) -> list[dict]:
         """GA per scenario row — same per-row loop as the delivered
         src/main.py::optimize(), reusing _run_optimize (the inline GA path) per row.
 
@@ -298,7 +303,7 @@ class Ml34DairyPasteurizationEnergyGaPlugin(ModelPluginPort):
                 t_in, delta_p, t_ciclo = float(row["T_in_leche"]), float(row["Delta_P"]), float(row["t_ciclo"])
                 seed = int(row["seed"]) if has_seed_col and pd.notna(row["seed"]) else 1 + int(idx)
                 features = {"T_in_leche": t_in, "Delta_P": delta_p, "t_ciclo": t_ciclo, "seed": seed}
-                pred = self._run_optimize(features).model_dump()
+                pred = self._run_optimize(features, ctx).model_dump()
                 pred.update({"row": int(idx), "T_in_leche": t_in, "Delta_P": delta_p, "t_ciclo": t_ciclo})
                 predictions.append(pred)
             except Exception as exc:  # pylint: disable=broad-exception-caught
@@ -420,7 +425,7 @@ class Ml34DairyPasteurizationEnergyGaPlugin(ModelPluginPort):
         # mlflow_run_id); the served base model and its local artifacts are never replaced.
         upload_warning = None
         if not tracker:
-            upload_warning = "Sin run de MLflow: el modelo reentrenado no se ha guardado."
+            raise ModelPersistenceError("Sin run de MLflow: el modelo reentrenado no se ha guardado.")
         if tracker:
             tracker.log_metrics({**metrics, "n_samples": len(df)})
             try:
@@ -434,7 +439,7 @@ class Ml34DairyPasteurizationEnergyGaPlugin(ModelPluginPort):
                 shutil.rmtree(mlflow_tmp, ignore_errors=True)
             except Exception as exc:  # pylint: disable=broad-exception-caught
                 logger.error("MLflow artifact upload failed: %s", exc)
-                upload_warning = f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}"
+                raise ModelPersistenceError(f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}") from exc
 
         logger.info(
             "train() done — mae_E=%.2f r2_E=%.4f n=%d epochs=%d mlflow=%s",

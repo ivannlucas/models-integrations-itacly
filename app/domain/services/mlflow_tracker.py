@@ -1,9 +1,62 @@
 from __future__ import annotations
 
+import functools
 import logging
 import os
+import pickle
+from typing import Any, Callable
+
+from app.domain.services.exceptions import UserModelUnavailableError
 
 logger = logging.getLogger(__name__)
+
+
+# What the loaders raise when the run's artifacts are missing, truncated, corrupt or belong to
+# another architecture (checked against joblib, pickle, torch, numpy, json, keras and YOLO):
+# FileNotFoundError/OSError, ValueError (incl. JSONDecodeError, keras), EOFError (empty pickle),
+# UnpicklingError, RuntimeError (load_state_dict size/key mismatch) and KeyError (bundle lookups).
+# Anything else (AttributeError, TypeError, NameError…) is a bug in our loader, not a bad run:
+# it must surface as a 500 so it is retried and alerted, not as a client error.
+ARTIFACT_LOAD_ERRORS: tuple[type[BaseException], ...] = (
+    OSError, ValueError, KeyError, EOFError, pickle.UnpicklingError, RuntimeError,
+)
+
+
+def require_user_model(download: Callable[..., Any]) -> Callable[..., Any]:
+    """Make a plugin's ``download_user_*_from_mlflow(run_id, ...)`` fail loudly.
+
+    The wrapped helpers return ``None`` when the run has no complete model or MLflow is
+    unreachable. Returning that ``None`` let callers fall back silently to the base model,
+    so a user asking for their retrained model got the base one's predictions. With this
+    decorator a ``None`` for a non-empty ``run_id`` raises ``UserModelUnavailableError``, and
+    so does an ``ARTIFACT_LOAD_ERRORS`` raised while loading the run's files. Other exceptions
+    propagate unchanged.
+    """
+    @functools.wraps(download)
+    def wrapper(run_id: str, *args: Any, **kwargs: Any) -> Any:
+        try:
+            result = download(run_id, *args, **kwargs)
+        except UserModelUnavailableError:
+            raise
+        except ARTIFACT_LOAD_ERRORS as exc:
+            if not run_id:
+                raise
+            # A run that exists but holds a partial/foreign model (e.g. a training that failed
+            # after the platform created the run) is still "this run has no loadable model"
+            # (→ 422), not a 500.
+            logger.exception("Could not load the user model of MLflow run '%s'", run_id)
+            raise UserModelUnavailableError(
+                f"No se ha podido cargar el modelo reentrenado del run de MLflow '{run_id}': "
+                f"{type(exc).__name__}: {exc}. No se usa el modelo base en su lugar."
+            ) from exc
+        if result is None and run_id:
+            raise UserModelUnavailableError(
+                f"No se ha podido cargar el modelo reentrenado del run de MLflow '{run_id}': "
+                "el run no contiene un modelo completo o MLflow no es accesible. No se usa el "
+                "modelo base en su lugar."
+            )
+        return result
+    return wrapper
 
 
 class BaseMLflowTracker:

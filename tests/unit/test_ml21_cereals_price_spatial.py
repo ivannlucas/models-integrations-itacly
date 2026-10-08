@@ -52,7 +52,7 @@ def test_train_returns_501(client):
 
 def test_train_returns_metrics(client):
     resp = client.post(
-        f"{PREFIX}/train", json={"data_path": "/tmp/x.csv", "mlflow_run_id": ""}
+        f"{PREFIX}/train", json={"data_path": "/tmp/x.csv", "mlflow_run_id": "test-run-id"}
     )
     assert resp.status_code == 200
     body = resp.json()

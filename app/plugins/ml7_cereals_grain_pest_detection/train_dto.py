@@ -1,6 +1,8 @@
 """Train DTOs for ml7 grain pest-detection YOLO fine-tuning."""
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.application.dto.train_dto import MlflowRunId
+
 
 class TrainRequest(BaseModel):
     """Fine-tune the YOLO detector on a new annotated image dataset.
@@ -20,7 +22,7 @@ class TrainRequest(BaseModel):
             "labels/{train,val,test} + dataset.yaml), or directly to a dataset.yaml file."
         ),
     )
-    mlflow_run_id: str = Field(
+    mlflow_run_id: MlflowRunId = Field(
         ..., description="MLflow run ID to persist the fine-tuned checkpoint to (required)."
     )
 

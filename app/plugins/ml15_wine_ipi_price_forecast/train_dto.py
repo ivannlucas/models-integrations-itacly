@@ -1,6 +1,8 @@
 """Pydantic request/response DTOs for the ml15 /train endpoint."""
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.application.dto.train_dto import MlflowRunId
+
 
 class TrainRequest(BaseModel):
     """Retrain request: a CSV with the 16 feature_columns + target, optionally 'date'."""
@@ -18,7 +20,13 @@ class TrainRequest(BaseModel):
             "equipo de IA (inbox/a15/manifest.yaml), nunca elegidos por el agente."
         ),
     )
-    mlflow_run_id: str = ""
+    mlflow_run_id: MlflowRunId = Field(
+        ...,
+        description=(
+            "Run de MLflow donde se persiste el modelo reentrenado. Obligatorio: el artefacto "
+            "base nunca se sobrescribe."
+        ),
+    )
 
 
 class TrainResponse(BaseModel):

@@ -1,6 +1,8 @@
 """Train DTOs for ml17 — Ridge pork price forecast retraining."""
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.application.dto.train_dto import MlflowRunId
+
 
 class TrainRequest(BaseModel):
     """Retrain request: CSV with the 8 official_v1_4 columns + mandatory MLflow run."""
@@ -16,7 +18,7 @@ class TrainRequest(BaseModel):
             "cronológicamente, mínimo 2 filas (supervisión one-step-ahead t -> t+1)."
         ),
     )
-    mlflow_run_id: str = Field(
+    mlflow_run_id: MlflowRunId = Field(
         ...,
         description=(
             "Run de MLflow donde se persiste el modelo reentrenado. Obligatorio: el "

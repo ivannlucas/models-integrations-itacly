@@ -14,10 +14,29 @@ from app.plugins.ml47_dairy_dnsl_pasteurization_fault_detection.constants import
     MODEL_FILENAME,
     N_CLASSES,
     SCALER_FILENAME,
+    TRAIN_HYPERPARAMS,
     TS1_MEAN_FILENAME,
 )
 
 logger = logging.getLogger(__name__)
+
+
+def safe_device() -> torch.device:
+    """Return CUDA only if it can actually run a conv op (same self-test as ml2/ml4/ml8).
+
+    torch.cuda.is_available() alone is not enough: a visible but incompatible GPU passes it
+    and then fails on the first real operation.
+    """
+    if not torch.cuda.is_available():
+        return torch.device("cpu")
+    try:
+        probe = torch.nn.Conv1d(1, 1, 1).cuda()
+        probe(torch.zeros(1, 1, 4).cuda())
+        return torch.device("cuda")
+    except Exception:  # pylint: disable=broad-exception-caught
+        logger.warning("CUDA detectada pero no funcional — usando CPU.")
+        return torch.device("cpu")
+
 
 sys.modules.setdefault("src", types.ModuleType("src"))
 sys.modules.setdefault("src.training", types.ModuleType("src.training"))
@@ -114,7 +133,10 @@ def load_artifacts_from_dir(artifact_dir: Path):
     ts1_mean_train = joblib.load(artifact_dir / TS1_MEAN_FILENAME)
     n_sensors = len(feature_cols)
     state_dict = torch.load(artifact_dir / MODEL_FILENAME, map_location="cpu", weights_only=True)
-    model = CNN_Pasteurizer(n_sensors=n_sensors, n_classes=N_CLASSES, dropout_prob=0.5)
+    # config.yaml training.dropout_rate, as predictor.load_artifacts and fine_tuner.run_fine_tuning
+    # build it. Inert in eval mode, but fine_tune trains dropout_final from this copy.
+    model = CNN_Pasteurizer(n_sensors=n_sensors, n_classes=N_CLASSES,
+                            dropout_prob=TRAIN_HYPERPARAMS["dropout_rate"])
     model.load_state_dict(state_dict)
     model.eval()
     logger.info("Ml47 artifacts loaded from %s — n_sensors=%d", artifact_dir, n_sensors)

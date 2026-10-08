@@ -1,6 +1,8 @@
 """Pydantic request/response DTOs for the ml16 /train endpoint."""
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.application.dto.train_dto import MlflowRunId
+
 
 class TrainRequest(BaseModel):
     """Retrain request: labeled CSV shaped like dataset_clasificacion_base.csv."""
@@ -17,7 +19,7 @@ class TrainRequest(BaseModel):
             "(walk-forward CV + búsqueda de umbral + bagging bootstrap)."
         ),
     )
-    mlflow_run_id: str
+    mlflow_run_id: MlflowRunId
 
 
 class TrainResponse(BaseModel):

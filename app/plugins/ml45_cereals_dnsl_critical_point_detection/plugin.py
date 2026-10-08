@@ -19,7 +19,7 @@ from sklearn.preprocessing import StandardScaler
 
 from app.application.dto.stats_dto import InputField, OutputField, RuntimeStats, StatsResponse
 from app.domain.ports.model_plugin_port import ModelPluginPort
-from app.domain.services.exceptions import ModelNotLoadedError
+from app.domain.services.exceptions import ModelNotLoadedError, ModelPersistenceError
 from app.domain.services.mlflow_tracker import BaseMLflowTracker
 from app.infrastructure.artifact_store import local_file_path
 from app.plugins.ml45_cereals_dnsl_critical_point_detection._vendor.loss import DNFLoss
@@ -169,10 +169,6 @@ class Ml45CerealsDnslCriticalPointDetectionPlugin(ModelPluginPort):
             return None
         logger.info("Using user-trained model from MLflow run_id=%s", mlflow_run_id)
         loaded = download_user_model_from_mlflow(mlflow_run_id)
-        if loaded is None:
-            logger.warning("MLflow download failed for %s, falling back to standard model", mlflow_run_id)
-            self._require_loaded()
-            return None
         model, model_cfg, scaler_x, scaler_num, xai_background, threshold, temp_dir = loaded
         return {
             "model": model,
@@ -562,7 +558,7 @@ class Ml45CerealsDnslCriticalPointDetectionPlugin(ModelPluginPort):
                 logger.info("Training complete. MLflow run_id=%s", new_run_id)
             except Exception as exc:  # pylint: disable=broad-exception-caught
                 logger.error("MLflow artifact upload failed (model trained but not persisted): %s", exc)
-                upload_warning = f"Entrenamiento completado, pero falló la subida a MLflow: {exc}"
+                raise ModelPersistenceError(f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}") from exc
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
 

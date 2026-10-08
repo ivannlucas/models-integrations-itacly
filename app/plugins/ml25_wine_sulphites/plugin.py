@@ -12,7 +12,7 @@ import pandas as pd
 
 from app.application.dto.stats_dto import InputField, OutputField, RuntimeStats, StatsResponse
 from app.domain.ports.model_plugin_port import ModelPluginPort
-from app.domain.services.exceptions import NoValidSimulationPointError
+from app.domain.services.exceptions import ModelPersistenceError, NoValidSimulationPointError
 from app.domain.services.mlflow_tracker import BaseMLflowTracker
 from app.plugins.ml25_wine_sulphites.constants import BASE_FREE_SO2_P99, MODEL_ID, VERSION
 from app.plugins.ml25_wine_sulphites.model_loader import load_artifacts
@@ -71,16 +71,17 @@ class Ml25WineSulphitesPlugin(ModelPluginPort):
         """Return True if both models and metadata have been loaded."""
         return self._loaded
 
-    def _run_inference(self, features: dict) -> dict:
+    def _run_inference(self, features: dict, ctx: tuple) -> dict:
         """Run the full dual-model simulation pipeline for *features* and return raw results."""
+        model_qual, model_bound, metadata = ctx
         mae_quality: float = (
-            self._metadata.get("metrics", {}).get("quality_cv", {}).get("mae_mean", 0.427)
+            metadata.get("metrics", {}).get("quality_cv", {}).get("mae_mean", 0.427)
         )
         mae_bound: float = (
-            self._metadata.get("metrics", {}).get("bound_cv", {}).get("mae_mean", 14.5)
+            metadata.get("metrics", {}).get("bound_cv", {}).get("mae_mean", 14.5)
         )
 
-        free_so2_p99 = self._metadata.get("simulation", {}).get(
+        free_so2_p99 = metadata.get("simulation", {}).get(
             "free_so2_p99", BASE_FREE_SO2_P99
         )
 
@@ -90,14 +91,14 @@ class Ml25WineSulphitesPlugin(ModelPluginPort):
             base_wine, features["delta_max"], free_so2_p99=free_so2_p99
         )
 
-        raw_bound_pred = self._model_bound.predict(bound_rows)
+        raw_bound_pred = model_bound.predict(bound_rows)
         pred_bounds = decode_bound_predictions(raw_bound_pred, free_targets)
 
         pred_totals = np.maximum(free_targets + pred_bounds, free_targets)
         qual_rows = qual_rows.copy()
         qual_rows["total sulfur dioxide"] = pred_totals
 
-        pred_qualities = self._model_qual.predict(qual_rows[FEATURES_QUAL])
+        pred_qualities = model_qual.predict(qual_rows[FEATURES_QUAL])
         molecular_so2 = compute_molecular_so2(free_targets, base_wine["pH"])
 
         baseline_idx = int(np.argmin(np.abs(free_targets - base_wine["free sulfur dioxide"])))
@@ -142,6 +143,19 @@ class Ml25WineSulphitesPlugin(ModelPluginPort):
             "intervention": intervention,
         }
 
+    def _resolve_model(self, mlflow_run_id: str) -> tuple[tuple, str | None]:
+        """Return ((model_qual, model_bound, metadata), temp_dir) to serve this request.
+
+        The user's retrained models (if mlflow_run_id) are returned, never assigned to self:
+        the plugin instance is shared by concurrent requests, so swapping them into self leaked
+        a user's model to other requests — and, with two overlapping runs, left it in place
+        as the "base" model. temp_dir is None for the base model.
+        """
+        if not mlflow_run_id:
+            return (self._model_qual, self._model_bound, self._metadata), None
+        model_qual, model_bound, metadata, user_temp_dir = download_user_predictor_from_mlflow(mlflow_run_id)
+        return (model_qual, model_bound, metadata), user_temp_dir
+
     def predict_batch(self, *, data_path: str, mlflow_run_id: str = "") -> PredictBatchResponse:
         """Run inference on every row of the CSV at *data_path* and return all predictions."""
         import os
@@ -150,16 +164,10 @@ class Ml25WineSulphitesPlugin(ModelPluginPort):
         _tmp_csv: str | None = None
         local_data_path = data_path
 
-        # ── MLflow: swap to user-trained model if requested ────────────────
-        user_temp_dir = None
-        saved_qual = self._model_qual
-        saved_bound = self._model_bound
-        saved_meta = self._metadata
+        # ── MLflow: user-trained model for this request only (never assigned to self) ──
         if mlflow_run_id:
             logger.info("predict_batch — using user-trained model from MLflow run_id=%s", mlflow_run_id)
-            loaded = download_user_predictor_from_mlflow(mlflow_run_id)
-            if loaded:
-                self._model_qual, self._model_bound, self._metadata, user_temp_dir = loaded
+        ctx, user_temp_dir = self._resolve_model(mlflow_run_id)
 
         if data_path.startswith("s3://"):
             import boto3
@@ -192,7 +200,7 @@ class Ml25WineSulphitesPlugin(ModelPluginPort):
                 row_dict.setdefault("max_total", 200.0)
                 row_dict.setdefault("delta_max", 40.0)
                 try:
-                    res = self._run_inference(row_dict)
+                    res = self._run_inference(row_dict, ctx)
                     i = res["rec_idx"]
                     prediction_row = {
                         "row": int(idx),
@@ -245,9 +253,6 @@ class Ml25WineSulphitesPlugin(ModelPluginPort):
                 os.unlink(_tmp_csv)
             if user_temp_dir:
                 shutil.rmtree(user_temp_dir, ignore_errors=True)
-                self._model_qual = saved_qual
-                self._model_bound = saved_bound
-                self._metadata = saved_meta
 
     def predict_inline(
         self,
@@ -258,18 +263,12 @@ class Ml25WineSulphitesPlugin(ModelPluginPort):
         mlflow_run_id: str = "",
     ) -> PredictInlineResponse:
         """Run a single-sample inference and return the sulphite recommendation."""
-        user_temp_dir = None
         if mlflow_run_id:
             logger.info("predict_inline — using user-trained model from MLflow run_id=%s", mlflow_run_id)
-            loaded = download_user_predictor_from_mlflow(mlflow_run_id)
-            if loaded:
-                saved_qual = self._model_qual
-                saved_bound = self._model_bound
-                saved_meta = self._metadata
-                self._model_qual, self._model_bound, self._metadata, user_temp_dir = loaded
+        ctx, user_temp_dir = self._resolve_model(mlflow_run_id)
         try:
             t0 = time.perf_counter()
-            res = self._run_inference(features)
+            res = self._run_inference(features, ctx)
             self._total_latency_ms += (time.perf_counter() - t0) * 1000
             i = res["rec_idx"]
 
@@ -328,9 +327,6 @@ class Ml25WineSulphitesPlugin(ModelPluginPort):
         finally:
             if user_temp_dir:
                 shutil.rmtree(user_temp_dir, ignore_errors=True)
-                self._model_qual = saved_qual
-                self._model_bound = saved_bound
-                self._metadata = saved_meta
 
     def train(self, *, data_path: str, mlflow_run_id: str) -> TrainResponse:  # pylint: disable=too-many-locals
         """Train dual RandomForest models from the CSV at *data_path* and upload them to MLflow."""
@@ -505,7 +501,7 @@ class Ml25WineSulphitesPlugin(ModelPluginPort):
         # mlflow_run_id); the served base model and its local artifacts are never replaced.
         upload_warning = None
         if not tracker:
-            upload_warning = "Sin run de MLflow: el modelo reentrenado no se ha guardado."
+            raise ModelPersistenceError("Sin run de MLflow: el modelo reentrenado no se ha guardado.")
         if tracker:
             tracker.log_metrics({
                 "mae_quality": mae_qual,
@@ -523,7 +519,7 @@ class Ml25WineSulphitesPlugin(ModelPluginPort):
                 shutil.rmtree(mlflow_tmp, ignore_errors=True)
             except Exception as exc:
                 logger.error("MLflow artifact upload failed: %s", exc)
-                upload_warning = f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}"
+                raise ModelPersistenceError(f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}") from exc
 
         elapsed = time.perf_counter() - t0
         logger.info("train() done — mae_qual=%.4f mae_bound=%.4f elapsed=%.1fs mlflow=%s",

@@ -15,7 +15,7 @@ import torch
 
 from app.application.dto.stats_dto import InputField, OutputField, RuntimeStats, StatsResponse
 from app.domain.ports.model_plugin_port import ModelPluginPort
-from app.domain.services.exceptions import InvalidImageError, ModelNotLoadedError
+from app.domain.services.exceptions import InvalidImageError, ModelNotLoadedError, ModelPersistenceError
 from app.domain.services.mlflow_tracker import BaseMLflowTracker
 from app.plugins.ml8_cereals_img_anomaly_detector.constants import (
     CATEGORY_NAMES,
@@ -210,6 +210,18 @@ class Ml8CerealsImgAnomalyDetectorPlugin(ModelPluginPort):
             raise ModelNotLoadedError("El modelo no está cargado.")
         return self._bundle
 
+    def _resolve_bundle(self, mlflow_run_id: str) -> tuple[dict, str | None]:
+        """Return (bundle, temp_dir) to serve this request.
+
+        The user's retrained bundle (if mlflow_run_id) is returned, never assigned to
+        self._bundle: the plugin instance is shared by concurrent requests, so swapping it
+        into self leaked a user's model to other requests — and, with two overlapping runs,
+        left it in place as the "base" model. temp_dir is None for the base model.
+        """
+        if not mlflow_run_id:
+            return self._require_bundle(), None
+        return download_user_model_from_mlflow(mlflow_run_id)
+
     def predict_inline(
         self,
         *,
@@ -218,15 +230,10 @@ class Ml8CerealsImgAnomalyDetectorPlugin(ModelPluginPort):
         threshold: float | None = None,
         mlflow_run_id: str = "",
     ) -> PredictInlineResponse:
-        user_temp_dir = None
-        saved_bundle = self._bundle
         if mlflow_run_id:
             logger.info("predict_inline — using user-trained model from MLflow run_id=%s", mlflow_run_id)
-            loaded = download_user_model_from_mlflow(mlflow_run_id)
-            if loaded:
-                self._bundle, user_temp_dir = loaded
+        bundle, user_temp_dir = self._resolve_bundle(mlflow_run_id)
         try:
-            bundle = self._require_bundle()
             tensor = image_base64_to_tensor(
                 features["image_base64"], image_size=bundle["image_size"]
             ).to(bundle["device"])
@@ -249,18 +256,12 @@ class Ml8CerealsImgAnomalyDetectorPlugin(ModelPluginPort):
         finally:
             if user_temp_dir:
                 shutil.rmtree(user_temp_dir, ignore_errors=True)
-                self._bundle = saved_bundle
 
     def predict_batch(self, *, data_path: str, mlflow_run_id: str = "") -> PredictBatchResponse:
-        user_temp_dir = None
-        saved_bundle = self._bundle
         if mlflow_run_id:
             logger.info("predict_batch — using user-trained model from MLflow run_id=%s", mlflow_run_id)
-            loaded = download_user_model_from_mlflow(mlflow_run_id)
-            if loaded:
-                self._bundle, user_temp_dir = loaded
+        bundle, user_temp_dir = self._resolve_bundle(mlflow_run_id)
         try:
-            bundle = self._require_bundle()
             model = bundle["model"]
             device: torch.device = bundle["device"]
             image_size: int = bundle["image_size"]
@@ -332,7 +333,6 @@ class Ml8CerealsImgAnomalyDetectorPlugin(ModelPluginPort):
         finally:
             if user_temp_dir:
                 shutil.rmtree(user_temp_dir, ignore_errors=True)
-                self._bundle = saved_bundle
 
     def stats(self, mlflow_run_id: str = "") -> StatsResponse:
         arch = self._bundle["arch"] if self._bundle is not None else "unknown"
@@ -617,7 +617,7 @@ class Ml8CerealsImgAnomalyDetectorPlugin(ModelPluginPort):
             }
             upload_warning = None
             if not mlflow_run_id:
-                upload_warning = "Sin run de MLflow: el modelo reentrenado no se ha guardado."
+                raise ModelPersistenceError("Sin run de MLflow: el modelo reentrenado no se ha guardado.")
             if mlflow_run_id:
                 combined_cat_m = h2["val_acc_cat"] or h1["val_acc_cat"]
                 combined_cer_m = h2["val_acc_cer"] or h1["val_acc_cer"]
@@ -634,7 +634,7 @@ class Ml8CerealsImgAnomalyDetectorPlugin(ModelPluginPort):
                     shutil.rmtree(mlflow_tmp, ignore_errors=True)
                 except Exception as exc:
                     logger.error("MLflow artifact upload failed: %s", exc)
-                    upload_warning = f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}"
+                    raise ModelPersistenceError(f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}") from exc
 
             combined_cat = h2["val_acc_cat"] or h1["val_acc_cat"]
             combined_cer = h2["val_acc_cer"] or h1["val_acc_cer"]

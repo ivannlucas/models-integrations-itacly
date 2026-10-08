@@ -1,6 +1,8 @@
 """Pydantic DTOs for the ml46 (DNSL fouling/clog) /train endpoint."""
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.application.dto.train_dto import MlflowRunId
+
 
 class TrainRequest(BaseModel):
     """Fine-tune request: CSV with timestamp, asset_id, Rf_m2K_W plus the raw contract columns."""
@@ -15,7 +17,7 @@ class TrainRequest(BaseModel):
             "para que la ingeniería de características no dependa de valores por defecto."
         ),
     )
-    mlflow_run_id: str
+    mlflow_run_id: MlflowRunId
 
 
 class TrainResponse(BaseModel):

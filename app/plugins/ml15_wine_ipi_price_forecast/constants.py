@@ -80,9 +80,6 @@ FINANCIAL_RAW_COLUMNS = ("chem_sector_avg", "copper_avg", "oil_brent_avg", "eur_
 # order, when a caller supplies a simple monthly IPI value instead of the full feature set.
 SIMPLE_IPI_VALUE_CANDIDATES = ("ipi_national_current", "spain", "ipi", "value", "y")
 
-# Filenames used for user-retrained artifacts (never overwrite the fixed S3 artifact above)
-USER_MODEL_FILENAME = f"user_{MODEL_FILENAME}"
-
 # Default chronological holdout fraction used by train() to report test metrics when the
 # generic retraining CSV doesn't carry the AI team's original fixed train/val/test date cuts
 # (2016-06/2023-12/2024-12/2026-01). ~15% is close to the original test proportion (13/116 ≈

@@ -18,7 +18,7 @@ import pandas as pd
 
 from app.application.dto.stats_dto import InputField, OutputField, RuntimeStats, StatsResponse
 from app.domain.ports.model_plugin_port import ModelPluginPort
-from app.domain.services.exceptions import ModelNotLoadedError
+from app.domain.services.exceptions import ModelNotLoadedError, ModelPersistenceError
 from app.domain.services.mlflow_tracker import BaseMLflowTracker
 from app.infrastructure.artifact_store import local_file_path
 from app.plugins.ml21_cereals_price_spatial.constants import (
@@ -313,6 +313,19 @@ class Ml21CerealsPriceSpatialPlugin(ModelPluginPort):
 
         return predictions
 
+    def _resolve_model(self, mlflow_run_id: str) -> tuple[dict, dict, str | None]:
+        """Return (models, metadata, temp_dir) to serve this request.
+
+        The user's retrained model (if mlflow_run_id) is returned, never assigned to self:
+        the plugin instance is shared by concurrent requests, so swapping it into self leaked
+        a user's model to other requests — and, with two overlapping runs, left it in place
+        as the "base" model. temp_dir is None for the base model.
+        """
+        if not mlflow_run_id:
+            self._require_loaded()
+            return self._models, self._metadata, None
+        return download_user_model_from_mlflow(mlflow_run_id)
+
     def predict_inline(
         self,
         *,
@@ -322,19 +335,11 @@ class Ml21CerealsPriceSpatialPlugin(ModelPluginPort):
         mlflow_run_id: str = "",
     ) -> Any:
         """Single-row inference: province + cereal + month → 3-horizon predictions."""
-        user_temp_dir = None
-        saved_models = self._models
-        saved_metadata = self._metadata
-
         if mlflow_run_id:
             logger.info("predict_inline — using user model from MLflow run_id=%s", mlflow_run_id)
-            loaded = download_user_model_from_mlflow(mlflow_run_id)
-            if loaded:
-                self._models, self._metadata, user_temp_dir = loaded
-
+        models, metadata, user_temp_dir = self._resolve_model(mlflow_run_id)
         try:
-            self._require_loaded()
-            assert self._models is not None and self._metadata is not None
+            assert models is not None and metadata is not None
 
             t0 = time.perf_counter()
 
@@ -355,23 +360,23 @@ class Ml21CerealsPriceSpatialPlugin(ModelPluginPort):
             merged = {**panel_row, **{k: v for k, v in features.items() if v is not None}}
             raw_row = pd.DataFrame([merged])
 
-            predictions = self._predict_single(raw_row, self._metadata, self._models)
+            predictions = self._predict_single(raw_row, metadata, models)
 
             h1_ret = predictions[1]["expected_return"]
             h2_ret = predictions[2]["expected_return"]
             h3_ret = predictions[3]["expected_return"]
 
-            geo_risk = province in self._get_geo_risk_provinces(self._metadata)
+            geo_risk = province in self._get_geo_risk_provinces(metadata)
             coherence_msg = _coherence_message(
                 {h: predictions[h]["signal"] for h in VALID_HORIZONS}
             )
             timing_label = _timing_decision("comprador", h1_ret, h2_ret, h3_ret)
 
-            expected_r = get_selected_feature_columns(self._metadata, 3, "regresion")
+            expected_r = get_selected_feature_columns(metadata, 3, "regresion")
             if self._h3_feature_mean is not None and self._h3_feature_std is not None:
                 row_r_h3 = build_features_from_row(raw_row, expected_r)
                 h3_importance = (
-                    self._metadata.get("selected_models", {})
+                    metadata.get("selected_models", {})
                     .get("H3", {})
                     .get("regression", {})
                     .get("feature_importance", [])
@@ -428,25 +433,14 @@ class Ml21CerealsPriceSpatialPlugin(ModelPluginPort):
         finally:
             if user_temp_dir:
                 shutil.rmtree(user_temp_dir, ignore_errors=True)
-                self._models = saved_models
-                self._metadata = saved_metadata
 
     def predict_batch(
         self, *, data_path: str, mlflow_run_id: str = ""
     ) -> Any:
         """Batch inference: CSV with raw panel rows → predictions for all province×cereal."""
-        user_temp_dir = None
-        saved_models = self._models
-        saved_metadata = self._metadata
-
-        if mlflow_run_id:
-            loaded = download_user_model_from_mlflow(mlflow_run_id)
-            if loaded:
-                self._models, self._metadata, user_temp_dir = loaded
-
+        models, metadata, user_temp_dir = self._resolve_model(mlflow_run_id)
         try:
-            self._require_loaded()
-            assert self._models is not None and self._metadata is not None
+            assert models is not None and metadata is not None
 
             with local_file_path(data_path) as local_path:
                 df = pd.read_csv(local_path)
@@ -461,7 +455,7 @@ class Ml21CerealsPriceSpatialPlugin(ModelPluginPort):
                 try:
                     raw_row = row.to_frame().T
                     predictions = self._predict_single(
-                        raw_row, self._metadata, self._models
+                        raw_row, metadata, models
                     )
                     results.append({
                         "row": int(idx),
@@ -492,8 +486,6 @@ class Ml21CerealsPriceSpatialPlugin(ModelPluginPort):
         finally:
             if user_temp_dir:
                 shutil.rmtree(user_temp_dir, ignore_errors=True)
-                self._models = saved_models
-                self._metadata = saved_metadata
 
     def train(self, *, data_path: str = "", mlflow_run_id: str) -> Any:
         """Train 6 models (3 horizons × reg+clf) from a CSV and upload to MLflow.
@@ -686,7 +678,7 @@ class Ml21CerealsPriceSpatialPlugin(ModelPluginPort):
                     tracker.upload_artifacts(tmp_dir, artifact_path="model")
                 except Exception as exc:
                     logger.error("MLflow artifact upload failed: %s", exc)
-                    upload_warning = f"Artifacts no subidos a MLflow: {exc}"
+                    raise ModelPersistenceError(f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}") from exc
 
             elapsed = time.perf_counter() - t0
             logger.info(

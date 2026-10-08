@@ -23,7 +23,11 @@ from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_sc
 
 from app.application.dto.stats_dto import InputField, OutputField, RuntimeStats, StatsResponse
 from app.domain.ports.model_plugin_port import ModelPluginPort
-from app.domain.services.exceptions import InsufficientSensorWindowError, ModelNotLoadedError
+from app.domain.services.exceptions import (
+    InsufficientSensorWindowError,
+    ModelNotLoadedError,
+    ModelPersistenceError,
+)
 from app.domain.services.mlflow_tracker import BaseMLflowTracker
 from app.infrastructure.artifact_store import local_file_path
 from app.plugins.ml43_cereals_dnsl_anomaly_fault_detection import model_loader, postprocessing, preprocessing
@@ -154,10 +158,6 @@ class Ml43CerealsDnslAnomalyFaultDetectionPlugin(ModelPluginPort):
             return None
         logger.info("Using user-trained model from MLflow run_id=%s", mlflow_run_id)
         loaded = download_user_model_from_mlflow(mlflow_run_id)
-        if loaded is None:
-            logger.warning("MLflow download failed for %s, falling back to served model", mlflow_run_id)
-            self._require_loaded()
-            return None
         model, model_cfg, scaler_x, scaler_num, xai_background, explainer, temp_dir = loaded
         # The trained weights and the trained decision_threshold must travel together — a
         # run's probabilities are only meaningful against the cutoff it was calibrated
@@ -537,7 +537,7 @@ class Ml43CerealsDnslAnomalyFaultDetectionPlugin(ModelPluginPort):
                 logger.info("Training complete. MLflow run_id=%s", new_run_id)
             except Exception as exc:  # pylint: disable=broad-exception-caught
                 logger.error("MLflow artifact upload failed (model trained but not persisted): %s", exc)
-                upload_warning = f"Entrenamiento completado, pero falló la subida a MLflow: {exc}"
+                raise ModelPersistenceError(f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}") from exc
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
 

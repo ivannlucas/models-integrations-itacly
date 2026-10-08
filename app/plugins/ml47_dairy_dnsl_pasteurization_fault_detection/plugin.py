@@ -11,20 +11,16 @@ import torch
 
 from app.application.dto.stats_dto import InputField, OutputField, RuntimeStats, StatsResponse
 from app.domain.ports.model_plugin_port import ModelPluginPort
-from app.domain.services.exceptions import ModelNotLoadedError
+from app.domain.services.exceptions import ModelNotLoadedError, ModelPersistenceError
 from app.domain.services.mlflow_tracker import BaseMLflowTracker
 from app.infrastructure.artifact_store import ARTIFACTS_ROOT, local_file_path
 from app.plugins.ml47_dairy_dnsl_pasteurization_fault_detection.constants import (
     APPLY_DIGITAL_TWIN,
     ARTIFACT_FOLDER_NAME,
     COMPONENT_NAMES,
-    FEATURE_COLUMNS_FILENAME,
     FRAMEWORK,
-    MODEL_FILENAME,
     MODEL_ID,
-    SCALER_FILENAME,
     SENSOR_COLUMNS,
-    TS1_MEAN_FILENAME,
     VERSION,
 )
 from app.plugins.ml47_dairy_dnsl_pasteurization_fault_detection.mlflow_utils import (
@@ -33,6 +29,7 @@ from app.plugins.ml47_dairy_dnsl_pasteurization_fault_detection.mlflow_utils imp
 )
 from app.plugins.ml47_dairy_dnsl_pasteurization_fault_detection.model_loader import (
     load_artifacts_from_dir,
+    safe_device,
 )
 from app.plugins.ml47_dairy_dnsl_pasteurization_fault_detection.postprocessing import (
     format_batch_row,
@@ -49,21 +46,14 @@ from app.plugins.ml47_dairy_dnsl_pasteurization_fault_detection.preprocessing im
 )
 from app.plugins.ml47_dairy_dnsl_pasteurization_fault_detection.train_dto import TrainResponse
 from app.plugins.ml47_dairy_dnsl_pasteurization_fault_detection.trainer import (
+    fine_tune,
     save_training_artifacts,
-    train_model_from_csv,
+    train_full,
 )
 
 logger = logging.getLogger(__name__)
 
 _ARTIFACT_DIR = ARTIFACTS_ROOT / ARTIFACT_FOLDER_NAME
-
-
-def _cleanup_artifact_files():
-    for fname in [MODEL_FILENAME, SCALER_FILENAME, FEATURE_COLUMNS_FILENAME, TS1_MEAN_FILENAME]:
-        p = _ARTIFACT_DIR / fname
-        if p.exists():
-            p.unlink()
-            logger.debug("Deleted artifact file: %s", p)
 
 
 class Ml47DairyDnslPasteurizationFaultDetectionPlugin(ModelPluginPort):
@@ -84,7 +74,7 @@ class Ml47DairyDnslPasteurizationFaultDetectionPlugin(ModelPluginPort):
             store = ArtifactStore(ARTIFACT_FOLDER_NAME)
             store.download_all_if_needed()
 
-        self._device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self._device = safe_device()
         model, scaler, feature_cols, ts1_mean_train = load_artifacts_from_dir(_ARTIFACT_DIR)
         self._model = model.to(self._device)
         self._scaler = scaler
@@ -112,10 +102,6 @@ class Ml47DairyDnslPasteurizationFaultDetectionPlugin(ModelPluginPort):
             return None
         logger.info("Using user-trained model from MLflow run_id=%s", mlflow_run_id)
         loaded = download_user_model_from_mlflow(mlflow_run_id)
-        if loaded is None:
-            logger.warning("MLflow download failed for %s, falling back to standard model", mlflow_run_id)
-            self._require_loaded()
-            return None
         model, scaler, feature_cols, ts1_mean_train, user_temp_dir = loaded
         model = model.to(self._device)
         return {
@@ -228,27 +214,58 @@ class Ml47DairyDnslPasteurizationFaultDetectionPlugin(ModelPluginPort):
             if mlflow_ctx and mlflow_ctx["temp_dir"]:
                 shutil.rmtree(mlflow_ctx["temp_dir"], ignore_errors=True)
 
-    def train(self, *, data_path: str, mlflow_run_id: str) -> TrainResponse:
-        logger.info("Training m47 model from data_path=%s, mlflow_run_id=%s", data_path, mlflow_run_id)
-        with local_file_path(data_path) as local_path:
-            model, scaler, feature_cols, ts1_mean_train, metrics = train_model_from_csv(local_path)
+    def train(self, *, data_path: str, mlflow_run_id: str, mode: str = "fine_tune") -> TrainResponse:
+        """Retrain with one of the AI team's two procedures (see trainer.py).
 
-        temp_dir = Path(tempfile.mkdtemp(prefix="m47_train_"))
+        fine_tune (default — the platform sends a few hundred plant cycles at most) recalibrates a
+        copy of the served model; full trains a new CNN from scratch. Either way the result lives
+        only in its MLflow run — the served model and its artifacts are never touched.
+        """
+        logger.info("ml47 train mode=%s data_path=%s mlflow_run_id=%s", mode, data_path, mlflow_run_id)
+        with local_file_path(data_path) as local_path:
+            if mode == "full":
+                result = train_full(local_path)
+            else:
+                self._require_loaded()
+                result = fine_tune(
+                    local_path, base_model=self._model, scaler=self._scaler,
+                    feature_cols=self._feature_columns, ts1_mean_train=self._ts1_mean_train,
+                )
+        metrics = result.metrics
+
+        temp_dir = Path(tempfile.mkdtemp(prefix="ml47_train_"))
         try:
-            save_training_artifacts(temp_dir, model, scaler, feature_cols, ts1_mean_train)
-            new_run_id = upload_artifacts_to_mlflow(str(temp_dir), mlflow_run_id=mlflow_run_id, metrics=metrics)
+            save_training_artifacts(temp_dir, result)
+            try:
+                new_run_id = upload_artifacts_to_mlflow(
+                    str(temp_dir), mlflow_run_id=mlflow_run_id, metrics={**metrics, "mode_full": float(mode == "full")},
+                )
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                logger.error("MLflow artifact upload failed: %s", exc)
+                raise ModelPersistenceError(f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}") from exc
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
 
-        logger.info("Training complete. MLflow run_id=%s", new_run_id)
+        logger.info("ml47 training complete (mode=%s). MLflow run_id=%s", mode, new_run_id)
+        detail = (
+            "Reentrenamiento completo desde cero (procedimiento train del equipo de IA)."
+            if mode == "full" else
+            "Calibración a planta de las 4 cabezas del modelo servido (procedimiento fine_tune del equipo de IA)."
+        )
         return TrainResponse(
-            detail="Entrenamiento completado exitosamente",
+            detail=detail,
+            mode=mode,
             exact_match=metrics["exact_match"],
             accuracy=metrics["accuracy"],
+            precision_macro=metrics["precision_macro"],
+            recall_macro=metrics["recall_macro"],
             f1_macro=metrics["f1_macro"],
             n_train=metrics["n_train"],
+            n_val=metrics["n_val"],
             n_test=metrics["n_test"],
+            epochs_run=metrics["epochs_run"],
             training_time_s=metrics["training_time_s"],
+            mlflow_run_id=new_run_id or mlflow_run_id,
             upload_warning=None,
         )
 

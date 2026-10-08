@@ -123,13 +123,21 @@ sin motivo. Antes de fijar `training.supported`:
 
 ### Reglas de contrato (todas obligatorias)
 
-- ⚠ **`mlflow_run_id` es obligatorio**: `TrainRequest.mlflow_run_id: str = Field(...)`, sin
+- ⚠ **`mlflow_run_id` es obligatorio y no vacío**: `TrainRequest.mlflow_run_id: MlflowRunId`
+  (tipo común de `app.application.dto.train_dto`, `min_length=1` tras quitar espacios), sin
   valor por defecto, y `train(self, *, data_path, mlflow_run_id)` sin `= ""`. `/train` sin
-  `mlflow_run_id` debe devolver 422. Lo exigen los 22 plugins entrenables.
+  `mlflow_run_id`, o con `""`, devuelve 422. Con `str` a secas, `""` pasaba la validación: se
+  entrenaba y el modelo se descartaba. Lo exigen los 23 plugins entrenables.
 - ⚠ **El modelo reentrenado se guarda SOLO en MLflow** (directorio temporal →
   `upload_artifacts` → `rmtree`). Nunca se escribe en `artifacts/<ARTIFACT_FOLDER_NAME>/` ni en
-  S3. En ml25, un `train()` antiguo generó el artefacto que acabó sirviéndose como "base", con
-  un protocolo distinto del del equipo de IA.
+  S3, y el ajuste fino parte siempre del modelo base, nunca de un reentrenamiento anterior. En
+  ml25, un `train()` antiguo generó el artefacto que acabó sirviéndose como "base", con un
+  protocolo distinto del del equipo de IA; ml41 sobrescribía el checkpoint base local y
+  ml15/16/3/40/9 dejaban copias `user_*` en local.
+- ⚠ **Si no se puede guardar en MLflow, `/train` falla**: el `except` de la subida hace
+  `raise ModelPersistenceError(...) from exc` (→ 502). Nunca se responde 200 con un aviso: como
+  el modelo solo vive en MLflow, el resultado del entrenamiento se habría perdido sin que la
+  plataforma lo supiera.
 - **No mutar `self._model`**: se entrena sobre una instancia nueva (`copy.deepcopy`, un
   `YOLO(path)` fresco o `load_*()`). Una petición de predict concurrente nunca debe ver un
   modelo a medio entrenar.
@@ -160,16 +168,17 @@ sin motivo. Antes de fijar `training.supported`:
 
 `TrainResponse` lleva `detail`, las métricas de `training.metrics_returned` (las mismas que
 reporta la memoria, para poder compararlas), los conteos (`n_train`/`n_test`),
-`training_time_s` y `upload_warning: str | None` (aviso si falla la subida a MLflow; la
-respuesta no falla por ello). Si el plugin no tiene DTO propio, usa el genérico
-`app.application.dto.train_dto.TrainResponse`.
+`training_time_s` y `upload_warning: str | None`. `upload_warning` se mantiene solo por
+compatibilidad con la plataforma (`train-task-manager.ts` lo lee) y siempre vale `None`: un
+fallo de subida es un `ModelPersistenceError`, no un aviso. Si el plugin no tiene DTO propio,
+usa el genérico `app.application.dto.train_dto.TrainResponse`.
 
 ```python
 class TrainRequest(BaseModel):
     model_config = ConfigDict(protected_namespaces=())
     data_path: str = Field(..., description="Ruta (local o s3://) a <contrato real del dataset>")
-    mlflow_run_id: str = Field(..., description="Run de MLflow donde se persiste el modelo "
-                               "reentrenado. Obligatorio: el artefacto base nunca se sobrescribe.")
+    mlflow_run_id: MlflowRunId = Field(..., description="Run de MLflow donde se persiste el modelo "
+                                       "reentrenado. Obligatorio: el artefacto base nunca se sobrescribe.")
 ```
 
 ### Si `training.supported: false`
@@ -185,22 +194,28 @@ Plantilla real, con la misma API que usan todos los plugins
 (`app/domain/services/mlflow_tracker.py`):
 
 ```python
-import logging, os, tempfile
-from app.domain.services.mlflow_tracker import BaseMLflowTracker
+import logging, os, shutil, tempfile
+from app.domain.services.mlflow_tracker import BaseMLflowTracker, require_user_model
 from app.plugins.<nombre>.constants import ARTIFACT_FOLDER_NAME, MODEL_FILENAME
 
 logger = logging.getLogger(__name__)
 
 
+@require_user_model   # None o error de artefacto al cargar, con run_id → UserModelUnavailableError (→ 422)
 def download_user_model_from_mlflow(run_id: str):
-    """Return (model, ..., temp_dir) or None. Caller MUST shutil.rmtree(temp_dir) in finally."""
+    """Return (model, ..., temp_dir). Caller MUST shutil.rmtree(temp_dir) in finally."""
     tmp = tempfile.mkdtemp(prefix="mlflow_<nombre>_")
-    local_path = BaseMLflowTracker(run_id).download_artifacts(tmp, artifact_path="model")
-    if not local_path or not os.path.exists(os.path.join(local_path, MODEL_FILENAME)):
-        logger.warning("MLflow run_id=%s sin artefacto completo en 'model'", run_id)
-        return None
-    model = ...  # reconstruir desde los metadatos descargados (nº de clases, feature_cols, scaler…)
-    return model, tmp
+    try:
+        local_path = BaseMLflowTracker(run_id).download_artifacts(tmp, artifact_path="model")
+        if not local_path or not os.path.exists(os.path.join(local_path, MODEL_FILENAME)):
+            logger.warning("MLflow run_id=%s sin artefacto completo en 'model'", run_id)
+            shutil.rmtree(tmp, ignore_errors=True)
+            return None
+        model = ...  # reconstruir desde los metadatos descargados (nº de clases, feature_cols, scaler…)
+        return model, tmp
+    except BaseException:   # p. ej. falta un fichero secundario: no dejar el temporal huérfano
+        shutil.rmtree(tmp, ignore_errors=True)
+        raise
 
 
 def upload_artifacts_to_mlflow(artifact_dir: str, mlflow_run_id: str, metrics: dict | None = None):
@@ -214,16 +229,25 @@ def upload_artifacts_to_mlflow(artifact_dir: str, mlflow_run_id: str, metrics: d
 
 ⚠ **`predict_inline`, `predict_batch` y `stats` deben usar `mlflow_run_id`**, no descartarlo
 con `_ = mlflow_run_id`. En ml2, ml4, ml7, ml17 y ml23 se aceptaba y se ignoraba: el usuario
-creía estar usando su modelo y recibía el base. Patrón:
+creía estar usando su modelo y recibía el base. ⚠ Por lo mismo, **si el modelo del run no se
+puede cargar, la petición falla** con `UserModelUnavailableError` (→ 422) gracias a
+`@require_user_model`: nunca se cae en silencio al modelo base. La plataforma guarda el run en
+el modelo del usuario antes de entrenar, así que un entrenamiento fallido deja un run vacío, y
+predecir con él debe dar error, no las predicciones del base. El decorador solo convierte en 422
+los errores de **artefacto** (`ARTIFACT_LOAD_ERRORS` en `mlflow_tracker.py`: `OSError`,
+`ValueError`, `KeyError`, `EOFError`, `UnpicklingError`, `RuntimeError` de `load_state_dict`),
+que se han comprobado contra joblib, pickle, torch, numpy, json, Keras y YOLO con ficheros
+ausentes, truncados, corruptos o de otra arquitectura. Un `AttributeError`, `TypeError` o
+`NameError` es un bug del loader y sale como **500**, para que se reintente y salte la alerta.
+Si tu loader necesita otra excepción de artefacto, añádela a esa tupla con su prueba, no captures
+`Exception`. Los no entrenables (ml28, ml31,
+ml33) sí ignoran el run: el base es su único modelo posible. Patrón:
 
 ```python
 def _resolve_for_predict(self, mlflow_run_id):
     if not mlflow_run_id:
         return self._model, None
-    loaded = download_user_model_from_mlflow(mlflow_run_id)
-    if loaded is None:            # fallback documentado al modelo base
-        return self._model, None
-    return loaded                 # (model, temp_dir)
+    return download_user_model_from_mlflow(mlflow_run_id)   # (model, temp_dir) o excepción
 
 model, tmp = self._resolve_for_predict(mlflow_run_id)
 try:
@@ -286,9 +310,11 @@ aunque la suite pasaba en verde.
 |---|---|---|
 | todos | Body inválido según el DTO (p. ej. falta `mlflow_run_id` en `/train`) | 422 |
 | `/predict` | Excepción listada en `extra_predict_exceptions` | 422 |
+| `/predict`, `/stats` | `UserModelUnavailableError` (el run pedido no tiene un modelo cargable: sin artefacto, o error de `ARTIFACT_LOAD_ERRORS` al cargarlo) | 422 |
 | `/predict` | Cualquier otra excepción | 500 |
 | `/train` | `TrainingNotSupportedError` | 501 |
 | `/train` | `ValueError` o `FileNotFoundError` (datos inválidos o ausentes) | 400 |
+| `/train` | `ModelPersistenceError` (no se pudo guardar el modelo en MLflow) | 502 |
 | `/train` | Cualquier otra excepción | 500 |
 | `/health` | Modelo sin cargar | 503 |
 
@@ -330,6 +356,22 @@ Por eso, antes de dar el plugin por integrado:
 - `BaseMLflowTracker` **no tiene timeout de conexión**. En los tests que ejecuten el `train()`
   real, haz `patch(...BaseMLflowTracker)`, o la suite se bloquea minutos contra un MLflow
   inalcanzable. Para probar `train()` de verdad fuera del clúster, sustitúyelo por un stub.
+- Hay dos tests de regresión que se aplican **solos** a todo plugin nuevo, sin registrarlo en
+  ninguna lista (`tests/unit/test_user_model_download_hygiene.py`):
+  - ningún `predict*`/`stats` asigna atributos de modelo en `self`, ni tampoco los métodos de
+    la misma clase a los que llama con `self.X(...)` (se siguen de forma transitiva). **No ve**
+    funciones de módulo que reciban el plugin como argumento, escrituras con `setattr`/`__dict__`
+    ni métodos heredados de otro fichero. La regla de fondo es otra: los helpers que resuelven
+    el modelo del usuario lo **devuelven**, nunca lo guardan;
+  - todo `download_*_from_mlflow` borra su temporal cuando el run no trae un modelo cargable
+    y responde con `UserModelUnavailableError`.
+
+  Si un plugin nuevo los rompe, no los relajes: corrige el plugin. El aislamiento entre
+  peticiones concurrentes se prueba además con `test_user_model_isolation.py`; añade ahí el
+  plugin si es entrenable.
+- Los tests que entrenan de verdad y comparan dos ejecuciones deben fijar el dispositivo a CPU
+  (`monkeypatch` de la función de dispositivo): en GPU, cuDNN no es determinista y el test
+  pasaría o fallaría según la máquina.
 
 La correctitud numérica se valida después, en el skill `verification`, contra el golden dataset.
 

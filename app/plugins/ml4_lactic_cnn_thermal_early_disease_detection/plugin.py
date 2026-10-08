@@ -20,6 +20,7 @@ import zipfile
 from datetime import datetime, timezone
 
 import torch
+from typing import Any
 from PIL import Image
 from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score, roc_auc_score
 from sklearn.model_selection import train_test_split
@@ -31,6 +32,7 @@ from app.domain.ports.model_plugin_port import ModelPluginPort
 from app.domain.services.exceptions import (
     InvalidImageError,
     ModelNotLoadedError,
+    ModelPersistenceError,
 )
 from app.domain.services.mlflow_tracker import BaseMLflowTracker
 from app.infrastructure.artifact_store import local_file_path
@@ -152,6 +154,19 @@ class Ml4LacticCnnThermalEarlyDiseaseDetectionPlugin(ModelPluginPort):
         self._predict_count += 1
         self._last_predict_at = datetime.now(tz=timezone.utc).isoformat()
 
+    def _resolve_model(self, mlflow_run_id: str) -> tuple[Any, Any, str | None]:
+        """Return (model, device, temp_dir) to serve this request.
+
+        The user's retrained model (if mlflow_run_id) is returned, never assigned to self:
+        the plugin instance is shared by concurrent requests, so swapping it into self leaked
+        a user's model to other requests — and, with two overlapping runs, left it in place
+        as the "base" model. temp_dir is None for the base model.
+        """
+        if not mlflow_run_id:
+            self._require_loaded()
+            return self._model, self._device, None
+        return download_user_model_from_mlflow(mlflow_run_id)
+
     def predict_inline(  # pylint: disable=too-many-locals
         self,
         *,
@@ -161,15 +176,10 @@ class Ml4LacticCnnThermalEarlyDiseaseDetectionPlugin(ModelPluginPort):
         mlflow_run_id: str = "",
     ) -> PredictInlineResponse:
         """Classify a single thermal image (base64 or path)."""
-        user_temp_dir = None
-        saved_model, saved_device = self._model, self._device
         if mlflow_run_id:
             logger.info("predict_inline — using MLflow user model run_id=%s", mlflow_run_id)
-            loaded = download_user_model_from_mlflow(mlflow_run_id)
-            if loaded:
-                self._model, self._device, user_temp_dir = loaded
+        model, device, user_temp_dir = self._resolve_model(mlflow_run_id)
         try:
-            self._require_loaded()
             if features.get("image_path"):
                 path = features["image_path"]
                 if os.path.splitext(path)[1].lower() not in IMAGE_EXTENSIONS:
@@ -185,15 +195,15 @@ class Ml4LacticCnnThermalEarlyDiseaseDetectionPlugin(ModelPluginPort):
             else:
                 raise InvalidImageError("features debe contener 'image_path' o 'image_base64'")
 
-            tensor = preprocess_image(image_bytes).to(self._device)
+            tensor = preprocess_image(image_bytes).to(device)
             with torch.no_grad():
-                logits, feature_map = self._model(tensor, return_features=True)
+                logits, feature_map = model(tensor, return_features=True)
             result = decode_logits(logits)
             heatmap_url = None
             try:
                 source_image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
                 heatmap_url = compute_and_encode_cam(
-                    feature_map, self._model.classifier[1].weight,
+                    feature_map, model.classifier[1].weight,
                     result["predicted_class_index"], source_image,
                 )
             except Exception as exc:  # heatmap is auxiliary: never fail the prediction for it
@@ -206,21 +216,15 @@ class Ml4LacticCnnThermalEarlyDiseaseDetectionPlugin(ModelPluginPort):
         finally:
             if user_temp_dir:
                 shutil.rmtree(user_temp_dir, ignore_errors=True)
-                self._model, self._device = saved_model, saved_device
 
     def predict_batch(  # pylint: disable=too-many-locals
         self, *, data_path: str, mlflow_run_id: str = "",
     ) -> PredictBatchResponse:
         """Classify every thermal image in a directory or ZIP (local path or ``s3://`` URI)."""
-        user_temp_dir = None
-        saved_model, saved_device = self._model, self._device
         if mlflow_run_id:
             logger.info("predict_batch — using MLflow user model run_id=%s", mlflow_run_id)
-            loaded = download_user_model_from_mlflow(mlflow_run_id)
-            if loaded:
-                self._model, self._device, user_temp_dir = loaded
+        model, device, user_temp_dir = self._resolve_model(mlflow_run_id)
         try:
-            self._require_loaded()
             temp_dir: str | None = None
             predictions: list[dict] = []
             with local_file_path(data_path) as local_data_path:
@@ -246,14 +250,14 @@ class Ml4LacticCnnThermalEarlyDiseaseDetectionPlugin(ModelPluginPort):
                         try:
                             with open(os.path.join(root, fname), "rb") as fh:
                                 image_bytes = fh.read()
-                            tensor = preprocess_image(image_bytes).to(self._device)
+                            tensor = preprocess_image(image_bytes).to(device)
                             with torch.no_grad():
-                                logits, feature_map = self._model(tensor, return_features=True)
+                                logits, feature_map = model(tensor, return_features=True)
                             result = decode_logits(logits)
                             row = {"filename": fname, **result}
                             image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
                             row["heatmap_url"] = compute_and_encode_cam(
-                                feature_map, self._model.classifier[1].weight,
+                                feature_map, model.classifier[1].weight,
                                 result["predicted_class_index"], image,
                             )
                             if idx == 0 or result["predicted_class_index"] != 0:
@@ -278,7 +282,6 @@ class Ml4LacticCnnThermalEarlyDiseaseDetectionPlugin(ModelPluginPort):
         finally:
             if user_temp_dir:
                 shutil.rmtree(user_temp_dir, ignore_errors=True)
-                self._model, self._device = saved_model, saved_device
 
     def train(  # pylint: disable=too-many-locals,too-many-branches,too-many-statements
         self, *, data_path: str, mlflow_run_id: str,
@@ -455,7 +458,7 @@ class Ml4LacticCnnThermalEarlyDiseaseDetectionPlugin(ModelPluginPort):
                 tracker.upload_artifacts(mlflow_tmp, artifact_path="model")
             except Exception as exc:
                 logger.error("ml4 train(): MLflow artifact upload failed: %s", exc)
-                upload_warning = f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}"
+                raise ModelPersistenceError(f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}") from exc
             finally:
                 shutil.rmtree(mlflow_tmp, ignore_errors=True)
 

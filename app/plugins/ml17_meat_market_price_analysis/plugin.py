@@ -19,7 +19,7 @@ import pandas as pd
 
 from app.application.dto.stats_dto import InputField, OutputField, RuntimeStats, StatsResponse
 from app.domain.ports.model_plugin_port import ModelPluginPort
-from app.domain.services.exceptions import ModelNotLoadedError
+from app.domain.services.exceptions import ModelNotLoadedError, ModelPersistenceError
 from app.domain.services.mlflow_tracker import BaseMLflowTracker
 from app.infrastructure.artifact_store import local_file_path
 from app.plugins.ml17_meat_market_price_analysis.constants import (
@@ -166,6 +166,19 @@ class Ml17MeatMarketPriceAnalysisPlugin(ModelPluginPort):
         self._total_latency_ms += elapsed_ms
         self._last_predict_at = datetime.now(tz=timezone.utc).isoformat()
 
+    def _resolve_model(self, mlflow_run_id: str) -> tuple[Any, str | None]:
+        """Return (model, temp_dir) to serve this request.
+
+        The user's retrained model (if mlflow_run_id) is returned, never assigned to self:
+        the plugin instance is shared by concurrent requests, so swapping it into self leaked
+        a user's model to other requests — and, with two overlapping runs, left it in place
+        as the "base" model. temp_dir is None for the base model.
+        """
+        if not mlflow_run_id:
+            self._require_loaded()
+            return self._model, None
+        return download_user_model_from_mlflow(mlflow_run_id)
+
     def predict_inline(
         self,
         *,
@@ -176,19 +189,13 @@ class Ml17MeatMarketPriceAnalysisPlugin(ModelPluginPort):
     ) -> PredictInlineResponse:
         """Predict pork price t+1 from a single feature dict."""
         _ = model_key, threshold
-        user_temp_dir = None
-        saved_model = self._model
-        if mlflow_run_id:
-            loaded = download_user_model_from_mlflow(mlflow_run_id)
-            if loaded:
-                self._model, user_temp_dir = loaded
+        model, user_temp_dir = self._resolve_model(mlflow_run_id)
         try:
-            self._require_loaded()
 
             date_str = features.get("date", "")
             t0 = time.perf_counter()
             X = self._build_frame(features)
-            y_pred = float(self._model.predict(X)[0])
+            y_pred = float(model.predict(X)[0])
             self._record((time.perf_counter() - t0) * 1000)
 
             xai_fv = {col: float(X.iloc[0][col]) for col in FEATURE_COLUMNS}
@@ -208,20 +215,13 @@ class Ml17MeatMarketPriceAnalysisPlugin(ModelPluginPort):
         finally:
             if user_temp_dir:
                 shutil.rmtree(user_temp_dir, ignore_errors=True)
-                self._model = saved_model
 
     def predict_batch(
         self, *, data_path: str, mlflow_run_id: str = ""
     ) -> PredictBatchResponse:
         """Predict pork price t+1 for every row in a CSV."""
-        user_temp_dir = None
-        saved_model = self._model
-        if mlflow_run_id:
-            loaded = download_user_model_from_mlflow(mlflow_run_id)
-            if loaded:
-                self._model, user_temp_dir = loaded
+        model, user_temp_dir = self._resolve_model(mlflow_run_id)
         try:
-            self._require_loaded()
 
             with local_file_path(data_path) as local_path:
                 df = pd.read_csv(local_path)
@@ -232,7 +232,7 @@ class Ml17MeatMarketPriceAnalysisPlugin(ModelPluginPort):
                 date_val = _find_date(row_dict)
                 try:
                     X = self._build_frame(row_dict)
-                    y_pred = float(self._model.predict(X)[0])
+                    y_pred = float(model.predict(X)[0])
                     predictions.append({
                         "row": int(idx),
                         "date": _iso_date(date_val) if date_val is not None else "",
@@ -259,7 +259,6 @@ class Ml17MeatMarketPriceAnalysisPlugin(ModelPluginPort):
         finally:
             if user_temp_dir:
                 shutil.rmtree(user_temp_dir, ignore_errors=True)
-                self._model = saved_model
 
     def train(self, *, data_path: str, mlflow_run_id: str) -> TrainResponse:
         """Refit the Ridge pipeline on a user CSV (one-step-ahead t -> t+1 supervision).
@@ -357,7 +356,7 @@ class Ml17MeatMarketPriceAnalysisPlugin(ModelPluginPort):
             shutil.rmtree(mlflow_tmp, ignore_errors=True)
         except Exception as exc:  # pylint: disable=broad-exception-caught
             logger.error("MLflow artifact upload failed: %s", exc)
-            upload_warning = f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}"
+            raise ModelPersistenceError(f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}") from exc
 
         logger.info(
             "train() done — mae=%.4f rmse=%.4f n=%d mlflow_run_id=%s",

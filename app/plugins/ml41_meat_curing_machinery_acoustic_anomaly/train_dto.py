@@ -1,5 +1,7 @@
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.application.dto.train_dto import MlflowRunId
+
 
 class TrainRequest(BaseModel):
     model_config = ConfigDict(protected_namespaces=())
@@ -14,7 +16,7 @@ class TrainRequest(BaseModel):
             "prediction requires an explicit threshold override or training with both classes."
         ),
     )
-    mlflow_run_id: str
+    mlflow_run_id: MlflowRunId
 
 
 class CombinationTrainMetrics(BaseModel):
@@ -40,5 +42,5 @@ class TrainResponse(BaseModel):
     per_combination: list[CombinationTrainMetrics]
     upload_warning: str | None = Field(
         default=None,
-        description="Informational if local save succeeded but the MLflow upload failed",
+        description="Aviso si el entrenamiento terminó pero el modelo no se ha podido guardar en MLflow",
     )
