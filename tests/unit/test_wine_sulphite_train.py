@@ -38,7 +38,7 @@ def wine_csv(tmp_path: Path) -> Path:
 
 
 def _train(csv_path: Path, artifacts_dir: Path) -> dict:
-    """Run WineSulphitePlugin.train() with reload mocked out."""
+    """Run WineSulphitePlugin.train() without MLflow."""
     plugin = WineSulphitePlugin()
     plugin.load = MagicMock()
     with patch(
@@ -46,6 +46,82 @@ def _train(csv_path: Path, artifacts_dir: Path) -> dict:
         return_value=artifacts_dir,
     ):
         return plugin.train(data_path=str(csv_path))
+
+
+# ── mlflow_run_id en la respuesta ─────────────────────────────────────────────
+
+def test_train_echoes_mlflow_run_id(wine_csv, tmp_path):
+    """La respuesta devuelve el run de MLflow al que se subieron los artefactos.
+
+    La plataforma lo toma como autoritativo (train-task-manager.ts,
+    confirmedRunId): sin el, si el run que pre-creo ella fallo, el run que de
+    verdad tiene el modelo queda huerfano y predict sigue resolviendo al
+    modelo servido en vez de al reentrenado.
+    """
+    plugin = WineSulphitePlugin()
+    plugin.load = MagicMock()
+    with patch(
+        "app.plugins.ml25_wine_sulphites.model_loader.get_artifacts_dir",
+        return_value=tmp_path,
+    ), patch("app.plugins.ml25_wine_sulphites.plugin.BaseMLflowTracker") as tracker_cls:
+        result = plugin.train(data_path=str(wine_csv), mlflow_run_id="run-abc123")
+
+    assert result.mlflow_run_id == "run-abc123"
+    tracker_cls.assert_called_once_with("run-abc123")
+
+
+def test_train_without_mlflow_returns_empty_run_id(wine_csv, tmp_path):
+    """Sin run de MLflow el campo viene vacio, no ausente."""
+    result = _train(wine_csv, tmp_path)
+    assert result.mlflow_run_id == ""
+
+
+# ── contrato de columnas del CSV de entrenamiento ─────────────────────────────
+
+@pytest.fixture()
+def wine_csv_underscores(wine_csv: Path, tmp_path: Path) -> Path:
+    """El mismo CSV con los nombres de columna que documenta la plataforma.
+
+    El esquema que la UI le ensena al usuario para modelo-25 usa guiones bajos
+    (fixed_acidity, free_sulfur_dioxide...), mientras que los artefactos y las
+    rutas de prediccion usan la convencion con espacios de FEATURES_QUAL.
+    """
+    df = pd.read_csv(wine_csv)
+    df.columns = [c.replace(" ", "_") for c in df.columns]
+    path = tmp_path / "wine_underscores.csv"
+    df.to_csv(path, index=False)
+    return path
+
+
+def test_train_accepts_platform_column_names(wine_csv_underscores, tmp_path):
+    """train() acepta el CSV con los nombres que documenta la plataforma."""
+    result = _train(wine_csv_underscores, tmp_path)
+    assert result.mae_quality >= 0
+    assert result.n_train + result.n_test == 30
+
+
+def test_train_accepts_canonical_column_names(wine_csv, tmp_path):
+    """train() sigue aceptando la convencion con espacios de los artefactos."""
+    result = _train(wine_csv, tmp_path)
+    assert result.mae_quality >= 0
+
+
+def test_train_missing_target_raises_value_error(wine_csv, tmp_path):
+    """Sin la columna 'quality' el error es un ValueError que la nombra (400, no 500)."""
+    df = pd.read_csv(wine_csv).drop(columns=["quality"])
+    path = tmp_path / "sin_target.csv"
+    df.to_csv(path, index=False)
+    with pytest.raises(ValueError, match="quality"):
+        _train(path, tmp_path)
+
+
+def test_train_missing_feature_raises_value_error(wine_csv, tmp_path):
+    """Si falta una feature, el error la nombra en vez de reventar con KeyError."""
+    df = pd.read_csv(wine_csv).drop(columns=["alcohol"])
+    path = tmp_path / "sin_feature.csv"
+    df.to_csv(path, index=False)
+    with pytest.raises(ValueError, match="alcohol"):
+        _train(path, tmp_path)
 
 
 # ── train() return value ───────────────────────────────────────────────────────
@@ -71,40 +147,55 @@ def test_train_mae_values_are_non_negative(wine_csv, tmp_path):
     assert result.mae_bound_so2 >= 0
 
 
-# ── Artifact files ─────────────────────────────────────────────────────────────
+# ── Artifact files: the retrained model lives only in its MLflow run ──────────
 
-def test_train_writes_pkl_files(wine_csv, tmp_path):
-    """train() writes quality_rf.pkl and bound_rf.pkl to the artifacts directory."""
-    _train(wine_csv, tmp_path)
-    assert (tmp_path / "quality_rf.pkl").exists()
-    assert (tmp_path / "bound_rf.pkl").exists()
-
-
-def test_train_writes_metadata_json(wine_csv, tmp_path):
-    """train() writes metadata.json with metrics, quality_cv, bound_cv, and mae_mean keys."""
-    _train(wine_csv, tmp_path)
-    metadata = json.loads((tmp_path / "metadata.json").read_text(encoding="utf-8"))
-    assert "metrics" in metadata
-    assert "quality_cv" in metadata["metrics"]
-    assert "bound_cv" in metadata["metrics"]
-    assert "mae_mean" in metadata["metrics"]["quality_cv"]
-
-
-# ── Hot reload ────────────────────────────────────────────────────────────────
-
-def test_train_calls_load_after_saving(wine_csv, tmp_path):
-    """train() invokes load() exactly once after persisting artifacts."""
+def _train_capturing_upload(csv_path: Path, artifacts_dir: Path):
+    """Run train() with MLflow mocked; return (plugin.load mock, uploaded file contents)."""
     plugin = WineSulphitePlugin()
-    mock_load = MagicMock()
-    plugin.load = mock_load
+    plugin.load = MagicMock()
+    uploaded: dict[str, bytes] = {}
+
+    def _capture(local_dir, artifact_path):  # pylint: disable=unused-argument
+        for f in Path(local_dir).iterdir():
+            uploaded[f.name] = f.read_bytes()
 
     with patch(
         "app.plugins.ml25_wine_sulphites.model_loader.get_artifacts_dir",
-        return_value=tmp_path,
-    ):
-        plugin.train(data_path=str(wine_csv))
+        return_value=artifacts_dir,
+    ), patch("app.plugins.ml25_wine_sulphites.plugin.BaseMLflowTracker") as tracker_cls:
+        tracker_cls.return_value.upload_artifacts.side_effect = _capture
+        result = plugin.train(data_path=str(csv_path), mlflow_run_id="run-abc123")
+    return plugin.load, uploaded, result
 
-    mock_load.assert_called_once()
+
+def test_train_never_writes_to_base_artifacts_dir(wine_csv, tmp_path):
+    """A retrain must not overwrite the served base model's local artifacts."""
+    base_dir = tmp_path / "base"
+    base_dir.mkdir()
+    _train_capturing_upload(wine_csv, base_dir)
+    assert list(base_dir.iterdir()) == []
+
+
+def test_train_uploads_models_and_metadata_to_mlflow(wine_csv, tmp_path):
+    """The retrained RFs and metadata.json (with metrics) go to the MLflow run."""
+    _, uploaded, result = _train_capturing_upload(wine_csv, tmp_path)
+    assert {"quality_rf.pkl", "bound_rf.pkl", "metadata.json"} <= set(uploaded)
+    metadata = json.loads(uploaded["metadata.json"])
+    assert "mae_mean" in metadata["metrics"]["quality_cv"]
+    assert "bound_cv" in metadata["metrics"]
+    assert result.upload_warning is None
+
+
+def test_train_does_not_reload_base_model(wine_csv, tmp_path):
+    """The served base model is not reloaded or replaced after a retrain."""
+    load_mock, _, _ = _train_capturing_upload(wine_csv, tmp_path)
+    load_mock.assert_not_called()
+
+
+def test_train_without_mlflow_warns_model_not_saved(wine_csv, tmp_path):
+    """Without an MLflow run there is nowhere to keep the retrained model: say so."""
+    result = _train(wine_csv, tmp_path)
+    assert result.upload_warning and "no se ha guardado" in result.upload_warning
 
 
 # ── model_loader helpers ──────────────────────────────────────────────────────

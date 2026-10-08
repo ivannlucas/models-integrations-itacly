@@ -24,8 +24,48 @@ FEATURES_PHYS = [
 FEATURES_QUAL = FEATURES_PHYS + ["free sulfur dioxide", "total sulfur dioxide"]
 FEATURES_BOUND = FEATURES_PHYS + ["free sulfur dioxide"]
 
+# Columna objetivo del entrenamiento.
+TARGET_QUAL = "quality"
+
+# El esquema de CSV que la plataforma le documenta al usuario usa guiones bajos
+# (fixed_acidity, free_sulfur_dioxide...), pero los artefactos se entrenaron con
+# los nombres separados por espacios de FEATURES_QUAL y las rutas de predicción
+# construyen los dicts con esos mismos nombres (map_request_to_wine_dict). La
+# convención con espacios es la canónica: un modelo reentrenado con otra tiene
+# feature_names_in_ distintos y deja de servir a predict.
+TRAIN_COLUMN_ALIASES = {c.replace(" ", "_"): c for c in FEATURES_QUAL if " " in c}
+
 # Dissociation constant for SO2 molecular calculation
 PKA_SO2 = 1.81
+
+
+def normalize_training_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Renombrar las columnas del CSV de entrenamiento a la convención canónica.
+
+    Acepta tanto los nombres con espacios de los artefactos como los que la
+    plataforma documenta con guiones bajos. Solo renombra el alias cuando la
+    columna canónica no viene ya en el fichero, así que un CSV que traiga las
+    dos formas conserva la canónica.
+    """
+    renames = {
+        alias: canonical
+        for alias, canonical in TRAIN_COLUMN_ALIASES.items()
+        if alias in df.columns and canonical not in df.columns
+    }
+    return df.rename(columns=renames) if renames else df
+
+
+def require_training_columns(df: pd.DataFrame) -> None:
+    """Fallar con un ValueError que nombre lo que falta, no con un KeyError."""
+    missing = [c for c in FEATURES_QUAL if c not in df.columns]
+    if TARGET_QUAL not in df.columns:
+        missing.append(TARGET_QUAL)
+    if missing:
+        raise ValueError(
+            "El CSV de entrenamiento no tiene las columnas: "
+            + ", ".join(missing)
+            + ". Se aceptan los nombres con espacios o con guiones bajos."
+        )
 
 
 def map_request_to_wine_dict(request: Any) -> dict:

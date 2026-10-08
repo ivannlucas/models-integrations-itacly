@@ -70,12 +70,20 @@ def explain_window(
     predicted_class = int(anomaly_probability >= threshold)
 
     row = {
-        "predicted_anomaly_class": predicted_class,
         "predicted_anomaly_label": "Fallo" if predicted_class == 1 else "No Fallo",
         "anomaly_probability": round(anomaly_probability, 4),
         "decision_threshold": float(threshold),
     }
-    row.update(result["final_report"])
+    # final_report (DNFLExplainer._build_final_report, vendored — not modified here) also
+    # carries "Probabilidad de anomalia"/"Umbral de detección de anomalias" (the same two
+    # values already set above under their canonical English names) and "Margen respecto al
+    # umbral" (anomaly_probability - decision_threshold, trivially derivable from the two
+    # fields already in `row`) — dropped here so the output has one column per real value
+    # instead of two names for the same number.
+    final_report = dict(result["final_report"])
+    for _redundant_key in ("Probabilidad de anomalia", "Umbral de detección de anomalias", "Margen respecto al umbral"):
+        final_report.pop(_redundant_key, None)
+    row.update(final_report)
     return row
 
 

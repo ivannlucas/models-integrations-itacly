@@ -64,15 +64,11 @@ class PredictInlineResponse(BaseModel):
     window_index: int = 1
     timestamp_init: str
     timestamp_end: str
-    predicted_anomaly_class: int
     predicted_anomaly_label: str
     anomaly_probability: float
     decision_threshold: float
     estado_interpretativo: str = Field(..., alias="Estado interpretativo")
     evidencia: str = Field(..., alias="Evidencia")
-    probabilidad_de_anomalia: float = Field(..., alias="Probabilidad de anomalia")
-    umbral_de_deteccion_de_anomalias: float = Field(..., alias="Umbral de detección de anomalias")
-    margen_respecto_al_umbral: float = Field(..., alias="Margen respecto al umbral")
     recomendacion: str = Field(..., alias="Recomendacion")
 
 

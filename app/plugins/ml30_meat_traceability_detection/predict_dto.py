@@ -1,5 +1,5 @@
 """Pydantic request/response DTOs for the meat-traceability /predict endpoint."""
-from typing import Annotated, Any, Literal, Union
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -20,6 +20,10 @@ class PredictBatchResponse(BaseModel):
     model_id: str
     predictions: list[dict[str, Any]]
     output_path: str | None = None
+    warnings: list[str] = Field(
+        default_factory=list,
+        description="Avisos no bloqueantes del contrato de datos (valores desconocidos o atípicos).",
+    )
 
 
 class PredictInlineRequest(BaseModel):
@@ -81,9 +85,11 @@ class PredictInlineResponse(BaseModel):
     )
 
 
-PredictRequest = Annotated[
-    Union[PredictBatchRequest, PredictInlineRequest],
-    Field(discriminator="mode"),
-]
+# Inline prediction removed for this model (product decision) — only PredictBatchRequest
+# is accepted on the /predict route now, so a "mode": "inline" request is rejected at
+# validation time (422) instead of reaching the plugin. PredictInlineRequest/Response are
+# kept above (ModelPluginPort still requires plugin.predict_inline to exist) but are no
+# longer reachable through the API.
+PredictRequest = PredictBatchRequest
 
-PredictResponse = Union[PredictBatchResponse, PredictInlineResponse]
+PredictResponse = PredictBatchResponse

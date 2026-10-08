@@ -27,16 +27,32 @@ from app.plugins.ml40_meat_refrigeration_aeration_fault_diagnosis.constants impo
 
 def detect_system(columns, system: str | None = None) -> str:
     """Return which subsystem an input belongs to, validating explicit choices too."""
-    if system is not None:
-        if system not in SYSTEMS:
-            raise UnknownDiagnosisSystemError(
-                f"Sistema '{system}' no reconocido; debe ser uno de {list(SYSTEMS)}."
-            )
-        return system
+    if system is not None and system not in SYSTEMS:
+        raise UnknownDiagnosisSystemError(
+            f"Sistema '{system}' no reconocido; debe ser uno de {list(SYSTEMS)}."
+        )
     cols = set(columns)
-    for candidate in SYSTEMS:
-        if SYSTEM_SIGNATURE[candidate] <= cols:
-            return candidate
+    matches = [candidate for candidate in SYSTEMS if SYSTEM_SIGNATURE[candidate] <= cols]
+    # The original pipeline only ever handles one subsystem per file (selected_system,
+    # {system}_final.csv / {system}_train.csv). A mixed CSV used to resolve silently to
+    # refrigeracion (aireado rows then vanish in the lag dropna), while the platform's
+    # column check routes the same CSV's drift to the aireado baseline.
+    if len(matches) > 1:
+        raise UnknownDiagnosisSystemError(
+            "El CSV contiene columnas de ambos subsistemas (refrigeracion y aireado); "
+            "envía un CSV por subsistema."
+        )
+    if system is not None:
+        if matches and matches[0] != system:
+            raise UnknownDiagnosisSystemError(
+                f"Has seleccionado el subsistema '{system}' pero los datos corresponden al "
+                f"subsistema '{matches[0]}'."
+            )
+        # No signature match at all: the missing-columns check that follows reports exactly
+        # which sensors of the chosen subsystem are absent.
+        return system
+    if len(matches) == 1:
+        return matches[0]
     raise UnknownDiagnosisSystemError(
         "Las columnas de entrada no corresponden a ningún subsistema conocido: se esperan "
         f"{sorted(SYSTEM_SIGNATURE['refrigeracion'])} (refrigeracion) o "

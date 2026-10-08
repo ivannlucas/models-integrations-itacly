@@ -83,6 +83,27 @@ def test_predict_batch(client):
     assert body["model_health"] in ("ESTABLE", "DEGRADADO")
 
 
+def test_predict_batch_accepts_system(client):
+    resp = client.post(
+        f"{PREFIX}/predict",
+        json={"mode": "batch", "data_path": "/tmp/aireado.csv", "system": "aireado"},
+    )
+    assert resp.status_code == 200
+
+
+def test_predict_batch_rejects_invalid_system(client):
+    resp = client.post(
+        f"{PREFIX}/predict",
+        json={"mode": "batch", "data_path": "/tmp/aireado.csv", "system": "otro"},
+    )
+    assert resp.status_code == 422
+
+
+def test_train_rejects_invalid_system(client):
+    resp = client.post(f"{PREFIX}/train", json={"data_path": "/tmp/aireado.csv", "system": "otro"})
+    assert resp.status_code == 422
+
+
 def test_train(client):
     resp = client.post(f"{PREFIX}/train", json={"data_path": "/tmp/dataset_aireado.csv"})
     assert resp.status_code == 200

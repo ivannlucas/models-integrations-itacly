@@ -18,7 +18,6 @@ from app.domain.ports.model_plugin_port import ModelPluginPort
 from app.domain.services.exceptions import InvalidImageError, ModelNotLoadedError
 from app.domain.services.mlflow_tracker import BaseMLflowTracker
 from app.plugins.ml8_cereals_img_anomaly_detector.constants import (
-    ARTIFACT_FOLDER_NAME,
     CATEGORY_NAMES,
     CEREAL_NAMES,
     IMAGE_EXTENSIONS,
@@ -336,7 +335,6 @@ class Ml8CerealsImgAnomalyDetectorPlugin(ModelPluginPort):
         from torch.utils.data import DataLoader, Dataset
         from torchvision import models, transforms
 
-        from app.infrastructure.artifact_store import ArtifactStore
         from app.plugins.ml8_cereals_img_anomaly_detector.model_loader import MultiTaskMobileNetV3Large
 
         if mlflow_run_id:
@@ -380,8 +378,6 @@ class Ml8CerealsImgAnomalyDetectorPlugin(ModelPluginPort):
 
         from app.plugins.ml8_cereals_img_anomaly_detector.model_loader import _safe_device
         device = _safe_device()
-        store = ArtifactStore(ARTIFACT_FOLDER_NAME)
-
         class_to_idx = {c: i for i, c in enumerate(CATEGORY_NAMES)}
         cereal_to_idx = {c: i for i, c in enumerate(CEREAL_NAMES)}
         idx_to_class = {v: k for k, v in class_to_idx.items()}
@@ -505,9 +501,8 @@ class Ml8CerealsImgAnomalyDetectorPlugin(ModelPluginPort):
                     }, step=ep)
             gc.collect()
 
-            # Guardar checkpoint
-            artifact_path = store.local_dir / MODEL_FILENAME
-            artifact_path.parent.mkdir(parents=True, exist_ok=True)
+            # The retrained checkpoint lives only in its own MLflow run (predict with that
+            # mlflow_run_id); the served base model and its local artifacts are never replaced.
             checkpoint = {
                 "model_name": "mobilenet_v3_large",
                 "model_state_dict": model.state_dict(),
@@ -518,10 +513,9 @@ class Ml8CerealsImgAnomalyDetectorPlugin(ModelPluginPort):
                 "idx_to_class": idx_to_class,
                 "idx_to_cereal": idx_to_cereal,
             }
-            torch.save(checkpoint, artifact_path)
-            logger.info("Checkpoint guardado en %s", artifact_path)
-
-            # ── MLflow: log metrics and upload artifacts ────────────────────
+            upload_warning = None
+            if not mlflow_run_id:
+                upload_warning = "Sin run de MLflow: el modelo reentrenado no se ha guardado."
             if mlflow_run_id:
                 combined_cat_m = h2["val_acc_cat"] or h1["val_acc_cat"]
                 combined_cer_m = h2["val_acc_cer"] or h1["val_acc_cer"]
@@ -538,8 +532,7 @@ class Ml8CerealsImgAnomalyDetectorPlugin(ModelPluginPort):
                     shutil.rmtree(mlflow_tmp, ignore_errors=True)
                 except Exception as exc:
                     logger.error("MLflow artifact upload failed: %s", exc)
-
-            self.load()
+                    upload_warning = f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}"
 
             combined_cat = h2["val_acc_cat"] or h1["val_acc_cat"]
             combined_cer = h2["val_acc_cer"] or h1["val_acc_cer"]
@@ -553,6 +546,8 @@ class Ml8CerealsImgAnomalyDetectorPlugin(ModelPluginPort):
                 fase2_time_min=round(t2 / 60, 1),
                 best_val_acc_cat=round(max(combined_cat), 1) if combined_cat else 0.0,
                 best_val_acc_cer=round(max(combined_cer), 1) if combined_cer else 0.0,
+                mlflow_run_id=mlflow_run_id,
+                upload_warning=upload_warning,
             )
         finally:
             shutil.rmtree(tmp_dir, ignore_errors=True)

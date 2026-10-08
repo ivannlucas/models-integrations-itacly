@@ -53,6 +53,11 @@ class UnknownDiagnosisSystemError(ValueError):
     """Raised when the input columns match neither refrigeracion nor aireado contracts (ml40)."""
 
 
+class DataContractError(ValueError):
+    """Raised when a CSV is clearly outside the fitted preprocessor's data contract (ml30):
+    a categorical column with no known value at all, or a numeric column on another scale."""
+
+
 class ThermalSafetyViolationError(ValueError):
     """Raised when the GA cannot find a feasible solution meeting T_out >= 72.3 °C (ml34)."""
 
@@ -74,7 +79,13 @@ class InsufficientWindowHistoryError(ValueError):
 
 class InsufficientSensorWindowError(ValueError):
     """Raised when required sensor columns/values are missing or invalid, nulls exceed the
-    allowed ratio, or too few rows survive to build a 180-row temporal window (ml43)."""
+    allowed ratio, or too few rows survive to build a 180-row temporal window
+    (modelo43-cereales)."""
+
+
+class MissingRequiredFeatureError(ValueError):
+    """Raised when a required model feature is missing from the input and cannot be derived
+    automatically from 'date'/'origin_date' (ml15)."""
 
 
 class InfeasibleOptimizationError(ValueError):
