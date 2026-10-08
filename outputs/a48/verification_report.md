@@ -239,3 +239,15 @@ Se intentó validar los puntos pendientes sin modificar código, requirements ni
 **REQUIERE REVISIÓN — ver detalle arriba.**
 
 El plugin es correcto en lo verificado con los artefactos **v1.3** (golden, XAI local y global, SHAP, wiring, HTTP) y no hay ninguna verificación fallida. Las discrepancias con el equipo de IA de la verificación inicial (Tablas 1/2, versión de shap, pandas 3, pesos) están resueltas en la v1.3. **No está cerrada la integración**: los artefactos v1.3 ya están subidos a S3 (6 ficheros, tamaños verificados por el usuario); queda abierto `/train` con MLflow real (BLOCKED por falta de acceso), y la carga real desde S3, el E2E con la plataforma, el reentrenamiento completo y la imagen Docker/wheel de producción (NOT VERIFIED). El scaler se regeneró con scikit-learn 1.5.2. La subida a S3 la realizó el usuario, no este equipo de verificación.
+
+---
+
+## Addendum — Rework patrón 43/44 (2026-10-08)
+
+Este addendum **prevalece** sobre las secciones anteriores cuando se contradicen.
+
+- a48 ya no es un modelo independiente: es la implementación XAI de **modelo-47** (clave funcional única; `modelo-48` no existe). Servido por el plugin `m48_dnsl_fallas_maquinaria_pasteurizado` (`MODEL=m48-dnsl-fallas-maquinaria-pasteurizado`).
+- **Contrato**: inline y batch devuelven la predicción y, **por ciclo**, `xai_result` (claves de modelo-43: `Estado_del_sistema.Estado_interpretativo`, `Bloques_principales`, `Variables_clave`, `Acciones_sugeridas` / `Mensaje_operativo`, más `Detalle_componentes`) o `xai_error`.
+- Batch: XAI Grad-CAM en **todos** los ciclos; SHAP opcional (`include_shap`) limitado a `n_samples`; un fallo de XAI en un ciclo no aborta el resto (cubierto por test unitario con fallo inyectado).
+- Se **elimina** el análisis global CCP/SHAP del batch y el campo `xai` de la respuesta; los resultados "Global, 50 ciclos" y el endpoint batch con CCP de las secciones anteriores describen el contrato antiguo y quedan como histórico (la XAI local del ciclo 123 se sigue verificando contra la referencia del equipo de IA).
+- Fichas regeneradas con el contrato nuevo y servidas desde `ml-files/modelo-47/a48_*`.

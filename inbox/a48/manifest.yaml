@@ -273,3 +273,16 @@ known_issues:
   - "Datos pesados (data/raw/hydraulic_raw.csv 1.7 GB y processed 101 MB) viven en codigo/ (ignorado por git); no copiar al repo ni a artifacts."
   - "Los notebooks usan esquemas alternativos de sensores; la memoria indica que no forman parte de la ejecucion reproducible."
   - "Artefactos v1.3 subidos a s3://xai/artifacts/fixed/a48_dnsl_fallas_maquinaria_pasteurizado/ el 2026-10-07 (6 ficheros, tamaños iguales a los locales; evidencia del usuario). Pendiente (acceso): carga real desde S3, /train con MLflow real, Docker real y entrenamiento completo: ver outputs/a48/verification_report.md."
+
+# ---------------------------------------------------------------------------
+# REWORK 2026-10-08 (patron 43/44) - PREVALECE sobre lo anterior en este fichero
+# ---------------------------------------------------------------------------
+# a48 deja de existir como modelo independiente: es la implementacion XAI de modelo-47.
+# - Clave funcional unica: modelo-47 (modelo-48 no existe). Plugin: MODEL=m48-dnsl-fallas-maquinaria-pasteurizado.
+# - Contrato: predict (inline y batch) devuelve la deteccion + xai_result / xai_error POR CICLO
+#   (claves de modelo-43: Estado_del_sistema.Estado_interpretativo, Bloques_principales, Variables_clave,
+#   Acciones_sugeridas / Mensaje_operativo, + Detalle_componentes). Un fallo de XAI de un ciclo no aborta el resto.
+# - Grad-CAM siempre por ciclo; SHAP opcional (include_shap); en batch limitado a los primeros n_samples ciclos.
+# - Se elimina el analisis global CCP/SHAP del batch (xai_global_ccp / campo `xai` de la respuesta) y la
+#   deteccion de CCP global: ya no se expone. Las menciones a xai_global_ccp / CCP global arriba son historicas.
+# - ODD, plataforma y fichas (a48_* en ml-files/modelo-47/) se referencian solo bajo modelo-47.
