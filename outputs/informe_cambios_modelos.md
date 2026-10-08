@@ -372,11 +372,11 @@ errores de la propia auditoría y se indican como tales.
 
 | Problema | Corrección |
 |---|---|
-| Un run con artefactos **incompletos** (p. ej. un entrenamiento que falló después de que la plataforma creara el run) hacía que 12 plugins respondieran **500**, en lugar del 422 previsto | `require_user_model` convierte cualquier error de carga de un run pedido en `UserModelUnavailableError` (422) |
+| Un run con artefactos **incompletos** (p. ej. un entrenamiento que falló después de que la plataforma creara el run) hacía que 12 plugins respondieran **500**, en lugar del 422 previsto | `require_user_model` convierte en `UserModelUnavailableError` (422) los errores de artefacto al cargar un run pedido (`ARTIFACT_LOAD_ERRORS`: `OSError`, `ValueError`, `KeyError`, `EOFError`, `UnpicklingError`, `RuntimeError`, comprobados con ficheros ausentes, truncados, corruptos y de otra arquitectura). Cualquier otra excepción (`AttributeError`, `TypeError`…) es un bug del loader y sigue saliendo como 500 |
 | Los 23 `download_*_from_mlflow` dejaban su directorio temporal en disco cuando el run no tenía modelo o fallaba la carga. Con el nuevo 422, cada reintento de un usuario sumaba un directorio huérfano | Limpieza en todas las salidas de error (`try/except` + `rmtree`) |
 | `test_full_training_is_reproducible` (ml47) fallaba en máquinas con GPU: cuDNN no es determinista | El test fija la CPU |
 | ml47 elegía la GPU con `torch.cuda.is_available()` sin autotest, en inferencia y en entrenamiento | `safe_device()`, igual que ml2, ml4 y ml8 |
-| Nada impedía que un plugin nuevo repitiera la fuga entre peticiones o la de temporales | `tests/unit/test_user_model_download_hygiene.py`: test estructural sobre todos los plugins, más un test de limpieza para cada helper de descarga |
+| Nada impedía que un plugin nuevo repitiera la fuga entre peticiones o la de temporales | `tests/unit/test_user_model_download_hygiene.py`: test estructural sobre todos los plugins, que sigue también los métodos de la clase llamados desde `predict*`/`stats`, más un test de limpieza para cada helper de descarga. No cubre funciones de módulo, `setattr` ni métodos heredados de otro fichero |
 
 ### 8.4 ml47: reanálisis completo contra su código original
 

@@ -201,7 +201,7 @@ from app.plugins.<nombre>.constants import ARTIFACT_FOLDER_NAME, MODEL_FILENAME
 logger = logging.getLogger(__name__)
 
 
-@require_user_model   # None o excepción al cargar, con run_id → UserModelUnavailableError (→ 422)
+@require_user_model   # None o error de artefacto al cargar, con run_id → UserModelUnavailableError (→ 422)
 def download_user_model_from_mlflow(run_id: str):
     """Return (model, ..., temp_dir). Caller MUST shutil.rmtree(temp_dir) in finally."""
     tmp = tempfile.mkdtemp(prefix="mlflow_<nombre>_")
@@ -233,7 +233,14 @@ creía estar usando su modelo y recibía el base. ⚠ Por lo mismo, **si el mode
 puede cargar, la petición falla** con `UserModelUnavailableError` (→ 422) gracias a
 `@require_user_model`: nunca se cae en silencio al modelo base. La plataforma guarda el run en
 el modelo del usuario antes de entrenar, así que un entrenamiento fallido deja un run vacío, y
-predecir con él debe dar error, no las predicciones del base. Los no entrenables (ml28, ml31,
+predecir con él debe dar error, no las predicciones del base. El decorador solo convierte en 422
+los errores de **artefacto** (`ARTIFACT_LOAD_ERRORS` en `mlflow_tracker.py`: `OSError`,
+`ValueError`, `KeyError`, `EOFError`, `UnpicklingError`, `RuntimeError` de `load_state_dict`),
+que se han comprobado contra joblib, pickle, torch, numpy, json, Keras y YOLO con ficheros
+ausentes, truncados, corruptos o de otra arquitectura. Un `AttributeError`, `TypeError` o
+`NameError` es un bug del loader y sale como **500**, para que se reintente y salte la alerta.
+Si tu loader necesita otra excepción de artefacto, añádela a esa tupla con su prueba, no captures
+`Exception`. Los no entrenables (ml28, ml31,
 ml33) sí ignoran el run: el base es su único modelo posible. Patrón:
 
 ```python
@@ -303,7 +310,7 @@ aunque la suite pasaba en verde.
 |---|---|---|
 | todos | Body inválido según el DTO (p. ej. falta `mlflow_run_id` en `/train`) | 422 |
 | `/predict` | Excepción listada en `extra_predict_exceptions` | 422 |
-| `/predict`, `/stats` | `UserModelUnavailableError` (el run pedido no tiene un modelo cargable) | 422 |
+| `/predict`, `/stats` | `UserModelUnavailableError` (el run pedido no tiene un modelo cargable: sin artefacto, o error de `ARTIFACT_LOAD_ERRORS` al cargarlo) | 422 |
 | `/predict` | Cualquier otra excepción | 500 |
 | `/train` | `TrainingNotSupportedError` | 501 |
 | `/train` | `ValueError` o `FileNotFoundError` (datos inválidos o ausentes) | 400 |
@@ -351,7 +358,11 @@ Por eso, antes de dar el plugin por integrado:
   inalcanzable. Para probar `train()` de verdad fuera del clúster, sustitúyelo por un stub.
 - Hay dos tests de regresión que se aplican **solos** a todo plugin nuevo, sin registrarlo en
   ninguna lista (`tests/unit/test_user_model_download_hygiene.py`):
-  - ningún `predict*`/`stats` asigna atributos de modelo en `self`;
+  - ningún `predict*`/`stats` asigna atributos de modelo en `self`, ni tampoco los métodos de
+    la misma clase a los que llama con `self.X(...)` (se siguen de forma transitiva). **No ve**
+    funciones de módulo que reciban el plugin como argumento, escrituras con `setattr`/`__dict__`
+    ni métodos heredados de otro fichero. La regla de fondo es otra: los helpers que resuelven
+    el modelo del usuario lo **devuelven**, nunca lo guardan;
   - todo `download_*_from_mlflow` borra su temporal cuando el run no trae un modelo cargable
     y responde con `UserModelUnavailableError`.
 

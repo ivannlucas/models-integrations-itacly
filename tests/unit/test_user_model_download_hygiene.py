@@ -1,6 +1,7 @@
 """Regression tests for how plugins handle user models downloaded from MLflow.
 
-1. No predict*/stats method may assign attributes on ``self`` (the shared plugin instance).
+1. No predict*/stats method, nor any method of the same class it calls through ``self.X(...)``,
+   may assign attributes on ``self`` (the shared plugin instance).
    Swapping a user's model into ``self`` for the duration of a request leaks it to concurrent
    requests (see test_user_model_isolation.py). This structural check also covers plugins
    added in the future, which the behavioural isolation tests only cover once listed.
@@ -41,18 +42,61 @@ def _self_assignments(fn: ast.FunctionDef) -> list[str]:
     return found
 
 
+def _self_method_calls(fn: ast.FunctionDef) -> set[str]:
+    """Names X of every ``self.X(...)`` call inside fn."""
+    return {
+        node.func.attr for node in ast.walk(fn)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+        and isinstance(node.func.value, ast.Name) and node.func.value.id == "self"
+    }
+
+
+def _model_state_writes(source: str) -> list[str]:
+    """self-attribute writes reachable from predict*/stats of every class in source.
+
+    Follows every method of the same class reached via self.X(...), transitively (e.g. a
+    _resolve_model helper). Not covered: module-level functions that receive the plugin as an
+    argument, setattr/__dict__ writes and methods inherited from another file.
+    """
+    offenders = []
+    for cls in (n for n in ast.parse(source).body if isinstance(n, ast.ClassDef)):
+        methods = {n.name: n for n in cls.body if isinstance(n, ast.FunctionDef)}
+        for entry in (name for name in methods if name.startswith("predict") or name == "stats"):
+            seen, pending = set(), [(entry, entry)]
+            while pending:
+                name, path = pending.pop()
+                if name in seen:
+                    continue
+                seen.add(name)
+                offenders += [f"{path}: {a}" for a in _self_assignments(methods[name])]
+                pending += [(callee, f"{path} → {callee}")
+                            for callee in _self_method_calls(methods[name]) if callee in methods]
+    return offenders
+
+
 @pytest.mark.parametrize("plugin_file", sorted(PLUGINS_DIR.glob("*/plugin.py")), ids=lambda p: p.parent.name)
 def test_predict_and_stats_never_assign_model_state_on_self(plugin_file):
-    tree = ast.parse(plugin_file.read_text(encoding="utf-8"))
-    offenders = []
-    for cls in (n for n in tree.body if isinstance(n, ast.ClassDef)):
-        for fn in (n for n in cls.body if isinstance(n, ast.FunctionDef)):
-            if fn.name.startswith("predict") or fn.name == "stats":
-                offenders += [f"{fn.name}: {a}" for a in _self_assignments(fn)]
+    offenders = _model_state_writes(plugin_file.read_text(encoding="utf-8"))
     assert not offenders, (
-        "predict/stats must resolve the user's model into locals, never into self "
-        f"(shared across concurrent requests): {offenders}"
+        "predict/stats (and the helpers they call) must resolve the user's model into locals, "
+        f"never into self (shared across concurrent requests): {offenders}"
     )
+
+
+def test_model_state_check_follows_helpers_and_allows_counters():
+    source = """
+class Plugin:
+    def predict_batch(self, run_id):
+        self._predict_count += 1
+        return self._resolve(run_id)
+    def _resolve(self, run_id):
+        return self._swap(run_id)
+    def _swap(self, run_id):
+        self._model = load(run_id)
+    def load(self):
+        self._scaler = 1
+"""
+    assert _model_state_writes(source) == ["predict_batch → _resolve → _swap: self._model (línea 9)"]
 
 
 def _download_helpers():

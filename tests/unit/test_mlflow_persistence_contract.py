@@ -70,6 +70,26 @@ def test_require_user_model_raises_only_when_a_run_was_requested():
     assert require_user_model(lambda run_id: ("model", "/tmp/x"))("run-1") == ("model", "/tmp/x")
 
 
+@pytest.mark.parametrize("error", [
+    FileNotFoundError("model/scaler.pkl"), EOFError(), ValueError("truncated"),
+    RuntimeError("size mismatch for head.weight"), KeyError("target"),
+])
+def test_require_user_model_turns_bad_artifacts_into_422(error):
+    def download(run_id):
+        raise error
+    with pytest.raises(UserModelUnavailableError, match="run-1"):
+        require_user_model(download)("run-1")
+
+
+@pytest.mark.parametrize("error", [AttributeError("x"), TypeError("unexpected keyword"), NameError("y")])
+def test_require_user_model_lets_loader_bugs_surface_as_500(error):
+    # A bug in our own loader is not a client error: it must not be disguised as a 422.
+    def download(run_id):
+        raise error
+    with pytest.raises(type(error)):
+        require_user_model(download)("run-1")
+
+
 # ── Plugin real (ml15) ────────────────────────────────────────────────────────
 
 @pytest.fixture
