@@ -1,4 +1,4 @@
-"""MLflow helper for m21 ESP-CEREAL — download user-trained models from MLflow."""
+"""MLflow helper for ml21 ESP-CEREAL — download user-trained models from MLflow."""
 from __future__ import annotations
 
 import json
@@ -8,7 +8,7 @@ import os
 import joblib
 
 from app.domain.services.mlflow_tracker import BaseMLflowTracker
-from app.plugins.m21_cereal_price_spatial.constants import (
+from app.plugins.ml21_cereals_price_spatial.constants import (
     METADATA_FILENAME,
     MODEL_H1_CLF,
     MODEL_H1_REG,
@@ -28,7 +28,7 @@ def download_user_model_from_mlflow(run_id: str):
     Caller MUST shutil.rmtree(temp_dir) after inference — use try/finally.
     """
     import tempfile
-    tmp = tempfile.mkdtemp(prefix="mlflow_m21_")
+    tmp = tempfile.mkdtemp(prefix="mlflow_ml21_")
     local_path = BaseMLflowTracker(run_id).download_artifacts(tmp, artifact_path="model")
     if not local_path:
         return None

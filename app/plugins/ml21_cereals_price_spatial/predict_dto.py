@@ -1,4 +1,4 @@
-"""Pydantic DTOs for m21 (ESP-CEREAL spatial cereal price) /predict endpoint."""
+"""Pydantic DTOs for ml21 (ESP-CEREAL spatial cereal price) /predict endpoint."""
 from typing import Annotated, Any, Literal, Union
 
 from pydantic import BaseModel, ConfigDict, Field

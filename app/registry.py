@@ -235,10 +235,14 @@ from app.plugins.ml3_wine_disease_pest_forecast.train_dto import (
     TrainResponse as Ml3Wine_TrainResp,
 )
 
-from app.plugins.m21_cereal_price_spatial.plugin import M21CerealPriceSpatialPlugin
-from app.plugins.m21_cereal_price_spatial.predict_dto import (
-    PredictRequest as M21_Request,
-    PredictResponse as M21_Response,
+from app.plugins.ml21_cereals_price_spatial.plugin import Ml21CerealsPriceSpatialPlugin
+from app.plugins.ml21_cereals_price_spatial.predict_dto import (
+    PredictRequest as Ml21Cereals_Request,
+    PredictResponse as Ml21Cereals_Response,
+)
+from app.plugins.ml21_cereals_price_spatial.train_dto import (
+    TrainRequest as Ml21Cereals_TrainReq,
+    TrainResponse as Ml21CerealsTrainResp,
 )
 
 from app.plugins.ml16_meat_raw_material_price_alert.plugin import Ml16MeatRawMaterialPriceAlertPlugin
@@ -249,6 +253,23 @@ from app.plugins.ml16_meat_raw_material_price_alert.predict_dto import (
 from app.plugins.ml16_meat_raw_material_price_alert.train_dto import (
     TrainRequest as Ml16_TrainReq,
     TrainResponse as Ml16_TrainResp,
+)
+
+from app.plugins.ml14_wine_phyto_price_forecast.plugin import Ml14WinePhytoPriceForecastPlugin
+from app.plugins.ml14_wine_phyto_price_forecast.predict_dto import (
+    PredictRequest as Ml14_Request,
+    PredictResponse as Ml14_Response,
+)
+
+from app.plugins.ml26_wine_sulfite_gru_pso_forecast.exceptions import InvalidWineryInputError
+from app.plugins.ml26_wine_sulfite_gru_pso_forecast.plugin import Ml26WineSulfiteGruPsoForecastPlugin
+from app.plugins.ml26_wine_sulfite_gru_pso_forecast.predict_dto import (
+    PredictRequest as Ml26_Request,
+    PredictResponse as Ml26_Response,
+)
+from app.plugins.ml26_wine_sulfite_gru_pso_forecast.train_dto import (
+    TrainRequest as Ml26_TrainReq,
+    TrainResponse as Ml26_TrainResp,
 )
 
 from app.plugins.ml15_wine_ipi_price_forecast.plugin import Ml15WineIpiPriceForecastPlugin
@@ -514,13 +535,15 @@ REGISTRY: list[ModelEntry] = [
         train_response_type=Ml3Wine_TrainResp,
     ),
     ModelEntry(
-        model_id="m21-cereal-price-spatial",
-        prefix="/models/m21-cereal-price-spatial",
+        model_id="ml21-cereals-price-spatial",
+        prefix="/models/ml21-cereals-price-spatial",
         version="1.0.0",
-        plugin_class=M21CerealPriceSpatialPlugin,
-        predict_request_type=M21_Request,
-        predict_response_type=M21_Response,
-        extra_predict_exceptions=(),
+        plugin_class=Ml21CerealsPriceSpatialPlugin,
+        predict_request_type=Ml21Cereals_Request,
+        predict_response_type=Ml21Cereals_Response,
+        train_request_type=Ml21Cereals_TrainReq,
+        train_response_type=Ml21CerealsTrainResp,
+        extra_predict_exceptions=(DataContractError,),
     ),
     ModelEntry(
         model_id="ml16-meat-raw-material-price-alert",
@@ -568,5 +591,27 @@ REGISTRY: list[ModelEntry] = [
         extra_predict_exceptions=(InsufficientDataError, DataContractError),
         train_request_type=Ml13_TrainReq,
         train_response_type=Ml13_TrainResp,
+    ),
+    ModelEntry(
+        model_id="ml14-wine-phyto-price-forecast",
+        prefix="/models/ml14-wine-phyto-price-forecast",
+        version="1.0.0",
+        plugin_class=Ml14WinePhytoPriceForecastPlugin,
+        predict_request_type=Ml14_Request,
+        predict_response_type=Ml14_Response,
+        extra_predict_exceptions=(InsufficientDataError,),
+        # train_request_type/train_response_type omitidos: training.supported=false — ver
+        # inbox/a14/manifest.yaml::training. train() lanza TrainingNotSupportedError (501).
+    ),
+    ModelEntry(
+        model_id="ml26-wine-sulfite-gru-pso-forecast",
+        prefix="/models/ml26-wine-sulfite-gru-pso-forecast",
+        version="1.0.0",
+        plugin_class=Ml26WineSulfiteGruPsoForecastPlugin,
+        predict_request_type=Ml26_Request,
+        predict_response_type=Ml26_Response,
+        extra_predict_exceptions=(InsufficientSequenceHistoryError, InvalidWineryInputError),
+        train_request_type=Ml26_TrainReq,
+        train_response_type=Ml26_TrainResp,
     ),
 ]
