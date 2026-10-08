@@ -282,6 +282,18 @@ from app.plugins.ml15_wine_ipi_price_forecast.train_dto import (
     TrainResponse as Ml15_TrainResp,
 )
 
+from app.plugins.ml13_wine_price_fluctuation_prediction.plugin import (
+    Ml13WinePriceFluctuationPredictionPlugin,
+)
+from app.plugins.ml13_wine_price_fluctuation_prediction.predict_dto import (
+    PredictRequest as Ml13_Request,
+    PredictResponse as Ml13_Response,
+)
+from app.plugins.ml13_wine_price_fluctuation_prediction.train_dto import (
+    TrainRequest as Ml13_TrainReq,
+    TrainResponse as Ml13_TrainResp,
+)
+
 
 # ── Registry entry dataclass ──────────────────────────────────────────────────
 
@@ -568,6 +580,17 @@ REGISTRY: list[ModelEntry] = [
         ),
         train_request_type=Ml41_TrainReq,
         train_response_type=Ml41_TrainResp,
+    ),
+    ModelEntry(
+        model_id="ml13-wine-price-fluctuation-prediction",
+        prefix="/models/ml13-wine-price-fluctuation-prediction",
+        version="1.0.0",
+        plugin_class=Ml13WinePriceFluctuationPredictionPlugin,
+        predict_request_type=Ml13_Request,
+        predict_response_type=Ml13_Response,
+        extra_predict_exceptions=(InsufficientDataError, DataContractError),
+        train_request_type=Ml13_TrainReq,
+        train_response_type=Ml13_TrainResp,
     ),
     ModelEntry(
         model_id="ml14-wine-phyto-price-forecast",
