@@ -61,8 +61,14 @@ def add_own_price_feature(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def add_spatial_lags(df: pd.DataFrame) -> pd.DataFrame:
-    """Mean of neighboring CCAA's same-month values (see manifest known_issues on naming)."""
-    out = df.copy()
+    """Mean of neighboring CCAA's same-month values (see manifest known_issues on naming).
+
+    Idempotent like the original preprocess.py::add_spatial_lags: if the input already carries
+    LAG_CONSUMO_VECINOS/LAG_PRECIO_VECINOS (e.g. a client resubmitting an already-preprocessed
+    history), they are dropped first so the merge below doesn't collide into _x/_y suffixed
+    columns and the final fillna() doesn't KeyError on the plain column name.
+    """
+    out = df.copy().drop(columns=["LAG_CONSUMO_VECINOS", "LAG_PRECIO_VECINOS"], errors="ignore")
     base_cols = [DATE_COL, PRODUCTO_COL, CCAA_COL, "CONSUMO X CAPITA", TARGET_COL]
     base = out[base_cols].copy()
 
