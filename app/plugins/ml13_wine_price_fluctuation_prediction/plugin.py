@@ -23,7 +23,7 @@ import pandas as pd
 
 from app.application.dto.stats_dto import InputField, OutputField, RuntimeStats, StatsResponse
 from app.domain.ports.model_plugin_port import ModelPluginPort
-from app.domain.services.exceptions import ModelNotLoadedError
+from app.domain.services.exceptions import ModelNotLoadedError, ModelPersistenceError
 from app.domain.services.mlflow_tracker import BaseMLflowTracker
 from app.infrastructure.artifact_store import local_file_path
 from app.plugins.ml13_wine_price_fluctuation_prediction import model_loader, preprocessing, training
@@ -48,10 +48,6 @@ from app.plugins.ml13_wine_price_fluctuation_prediction.constants import (
     SCALER_FILENAME,
     TARGET_WINDOW,
     TEST_SIZE,
-    USER_FEATURE_SCHEMA_FILENAME,
-    USER_MODEL_CONFIG_FILENAME,
-    USER_MODEL_FILENAME,
-    USER_SCALER_FILENAME,
     VERSION,
     WEEK_COLUMN,
     XGB_PARAMS,
@@ -59,7 +55,6 @@ from app.plugins.ml13_wine_price_fluctuation_prediction.constants import (
 from app.plugins.ml13_wine_price_fluctuation_prediction.mlflow_utils import (
     download_user_model_from_mlflow,
 )
-from app.plugins.ml13_wine_price_fluctuation_prediction.model_loader import _store
 from app.plugins.ml13_wine_price_fluctuation_prediction.predict_dto import (
     PredictBatchResponse,
     PredictInlineResponse,
@@ -116,16 +111,11 @@ class Ml13WinePriceFluctuationPredictionPlugin(ModelPluginPort):
 
     def _resolve_bundle(self, mlflow_run_id: str) -> tuple[dict, str | None]:
         """Return (bundle, temp_dir). temp_dir is set only for an MLflow user bundle and the caller
-        must shutil.rmtree it in a finally block. Falls back to the fixed bundle on failure."""
+        must shutil.rmtree it in a finally block. A run without a loadable model raises
+        UserModelUnavailableError (→ 422): never fall back silently to the base model."""
         if mlflow_run_id:
             logger.info("Using user-retrained model from MLflow run_id=%s", mlflow_run_id)
-            loaded = download_user_model_from_mlflow(mlflow_run_id)
-            if loaded is not None:
-                return loaded
-            logger.warning(
-                "No se pudo recuperar el modelo de MLflow run_id=%s; se usa el artefacto fijo.",
-                mlflow_run_id,
-            )
+            return download_user_model_from_mlflow(mlflow_run_id)
         return self._bundle, None
 
     # ── shared inference core ─────────────────────────────────────────────────
@@ -222,14 +212,14 @@ class Ml13WinePriceFluctuationPredictionPlugin(ModelPluginPort):
 
     # ── train (original procedure, from scratch) ──────────────────────────────
 
-    def train(self, *, data_path: str, mlflow_run_id: str = "") -> TrainResponse:  # pylint: disable=too-many-locals
+    def train(self, *, data_path: str, mlflow_run_id: str) -> TrainResponse:  # pylint: disable=too-many-locals
         """Retrain with the AI team's original procedure on a raw weekly price CSV.
 
         Walk-forward CV (LogReg vs XGBoost) -> Smart Score selection -> final fit on train+val ->
         hold-out metrics on the last 24 weeks. Fresh objects are trained; the served fixed
-        artifacts are never mutated nor overwritten. User artifacts are saved locally under
-        user_* filenames and, when mlflow_run_id is given, uploaded to MLflow under
-        artifact_path="model" with the canonical filenames so mlflow_utils can rebuild the bundle.
+        artifacts are never mutated nor overwritten. The retrained bundle lives only in its MLflow
+        run (artifact_path="model", canonical filenames so mlflow_utils can rebuild it); if it
+        cannot be uploaded, ModelPersistenceError (→ 502).
         """
         self._require_loaded()
         with local_file_path(data_path) as local_path:
@@ -252,54 +242,43 @@ class Ml13WinePriceFluctuationPredictionPlugin(ModelPluginPort):
         schema["feature_columns"] = FEATURE_COLUMNS
         schema.setdefault("scaler", {})["fitted_on"] = "train+validation set (user retrain)"
 
-        # Persist locally under user_* names — the fixed S3 artifacts are never overwritten.
-        _store.local_dir.mkdir(parents=True, exist_ok=True)
-        joblib.dump(result["model"], _store.local_dir / USER_MODEL_FILENAME)
-        joblib.dump(result["scaler"], _store.local_dir / USER_SCALER_FILENAME)
-        with open(_store.local_dir / USER_FEATURE_SCHEMA_FILENAME, "w", encoding="utf-8") as fh:
-            json.dump(schema, fh, indent=2, ensure_ascii=False)
-        with open(_store.local_dir / USER_MODEL_CONFIG_FILENAME, "w", encoding="utf-8") as fh:
-            json.dump(model_config, fh, indent=2)
-
         cv_m = result["cv"]["metrics"]
         scores = result["cv"]["scores"]
         test_m = result["test_metrics"]
-        upload_warning = None
-        if mlflow_run_id:
-            tracker = BaseMLflowTracker(mlflow_run_id)
-            try:
-                tracker.log_params({
-                    "best_model_type": result["model_type"],
-                    "return_threshold": RETURN_THRESHOLD,
-                    "target_window": TARGET_WINDOW,
-                    "test_size": TEST_SIZE,
-                    "n_folds": N_FOLDS,
-                    "random_seed": RANDOM_SEED,
-                    **{f"logreg_{k}": v for k, v in LOGREG_PARAMS.items()},
-                    **{f"xgb_{k}": v for k, v in XGB_PARAMS.items()},
-                })
-                tracker.log_metrics({
-                    **{f"test_{k}": v for k, v in test_m.items()},
-                    **{f"cv_{name}_{k}": v for name, m in cv_m.items() for k, v in m.items()},
-                    **{f"smart_score_{k}": v for k, v in scores.items()},
-                    "n_trainval": result["n_trainval"],
-                    "n_test": result["n_test"],
-                })
-                mlflow_tmp = tempfile.mkdtemp(prefix="ml13_mlflow_")
-                try:
-                    joblib.dump(result["model"], f"{mlflow_tmp}/{MODEL_FILENAME}")
-                    joblib.dump(result["scaler"], f"{mlflow_tmp}/{SCALER_FILENAME}")
-                    schema_path = f"{mlflow_tmp}/{FEATURE_SCHEMA_FILENAME}"
-                    with open(schema_path, "w", encoding="utf-8") as fh:
-                        json.dump(schema, fh, indent=2, ensure_ascii=False)
-                    with open(f"{mlflow_tmp}/{MODEL_CONFIG_FILENAME}", "w", encoding="utf-8") as fh:
-                        json.dump(model_config, fh, indent=2)
-                    tracker.upload_artifacts(mlflow_tmp, artifact_path=MLFLOW_ARTIFACT_PATH)
-                finally:
-                    shutil.rmtree(mlflow_tmp, ignore_errors=True)
-            except Exception as exc:  # pylint: disable=broad-exception-caught
-                logger.error("MLflow artifact upload failed: %s", exc)
-                upload_warning = f"Modelo guardado localmente, pero falló la subida a MLflow: {exc}"
+        tracker = BaseMLflowTracker(mlflow_run_id)
+        mlflow_tmp = tempfile.mkdtemp(prefix="ml13_mlflow_")
+        try:
+            tracker.log_params({
+                "best_model_type": result["model_type"],
+                "return_threshold": RETURN_THRESHOLD,
+                "target_window": TARGET_WINDOW,
+                "test_size": TEST_SIZE,
+                "n_folds": N_FOLDS,
+                "random_seed": RANDOM_SEED,
+                **{f"logreg_{k}": v for k, v in LOGREG_PARAMS.items()},
+                **{f"xgb_{k}": v for k, v in XGB_PARAMS.items()},
+            })
+            tracker.log_metrics({
+                **{f"test_{k}": v for k, v in test_m.items()},
+                **{f"cv_{name}_{k}": v for name, m in cv_m.items() for k, v in m.items()},
+                **{f"smart_score_{k}": v for k, v in scores.items()},
+                "n_trainval": result["n_trainval"],
+                "n_test": result["n_test"],
+            })
+            joblib.dump(result["model"], f"{mlflow_tmp}/{MODEL_FILENAME}")
+            joblib.dump(result["scaler"], f"{mlflow_tmp}/{SCALER_FILENAME}")
+            with open(f"{mlflow_tmp}/{FEATURE_SCHEMA_FILENAME}", "w", encoding="utf-8") as fh:
+                json.dump(schema, fh, indent=2, ensure_ascii=False)
+            with open(f"{mlflow_tmp}/{MODEL_CONFIG_FILENAME}", "w", encoding="utf-8") as fh:
+                json.dump(model_config, fh, indent=2)
+            tracker.upload_artifacts(mlflow_tmp, artifact_path=MLFLOW_ARTIFACT_PATH)
+        except Exception as exc:
+            logger.error("MLflow artifact upload failed: %s", exc)
+            raise ModelPersistenceError(
+                f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}"
+            ) from exc
+        finally:
+            shutil.rmtree(mlflow_tmp, ignore_errors=True)
 
         return TrainResponse(
             detail=(
@@ -323,7 +302,7 @@ class Ml13WinePriceFluctuationPredictionPlugin(ModelPluginPort):
             cv_xgboost_f1_mean=cv_m["xgboost"]["f1_mean"],
             smart_score_logreg=scores["logreg"],
             smart_score_xgboost=scores["xgboost"],
-            upload_warning=upload_warning,
+            upload_warning=None,
         )
 
     # ── stats ─────────────────────────────────────────────────────────────────

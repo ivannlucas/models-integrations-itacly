@@ -493,3 +493,67 @@ Los tests nuevos de esta ronda llaman al código real:
 
 La correctitud de cada modelo sigue respaldada por su informe de verificación contra el servidor
 real.
+
+## 10. Anexo (8 de octubre de 2026): integración de ml13 y ml18 desde `main`
+
+### 10.1 ml13 (`ml13-wine-price-fluctuation-prediction`)
+
+La verificación original era sólida: inferencia idéntica al código del equipo de IA (diferencia
+máxima 1e-16) y reentrenamiento equivalente. Lo que faltaba era el contrato de reentrenamiento de
+esta rama.
+
+| Antes | Ahora |
+|---|---|
+| `mlflow_run_id` opcional | Obligatorio (422 si falta o va vacío) |
+| Modelo reentrenado guardado en `artifacts/` (`user_*`) y, opcionalmente, en MLflow | Solo en MLflow |
+| Fallo de subida → 200 con `upload_warning` | 502 (`ModelPersistenceError`) |
+| `/predict` con un run sin modelo → 200 con el modelo **base** | 422 (`UserModelUnavailableError`) |
+| Temporal de descarga sin limpiar si fallaba la carga | `@require_user_model` y limpieza en todas las salidas |
+
+Re-verificación con datos reales:
+
+- `/train` sobre `mapa_wine_prices_raw.csv`: AUC 0.8438, F1 0.5926, P 0.4211, R 1.0 y Acc 0.5417,
+  igual que antes.
+- Predicción base sin cambios (0.4621).
+
+Hay tests nuevos sobre el plugin real: solo se sube a MLflow, un fallo de subida da 502 y un run
+vacío da 422.
+
+### 10.2 ml18 (`ml18-meat-spatial-price-forecast`): verificado y `/train` habilitado
+
+La primera copia del código subida era la versión anterior (6 features, MAPE 12,15 %). Con la
+versión v4.2 (commit 5ceeeb7, 7 features), todo se ha comprobado con datos reales.
+
+**Inferencia.**
+- El plugin coincide con `predict --forecast` del original en las 400 combinaciones CCAA-Producto
+  (diferencia máxima 2e-6).
+- Los 4 golden cases dan 4/4.
+- El original reproduce las métricas de la memoria (test MAPE 9,932 %, R² 0,8114).
+
+**Reentrenamiento.** Antes no estaba disponible (501) porque el script lee una ruta fija. Con el
+criterio de `plugin-integration` eso no lo impide: el motor servido es una GRU con pesos
+aprendidos. Ahora `/train` funciona:
+
+- `training.py` es un port literal de `src/main.py::train()`.
+- Ejecutados con el mismo TensorFlow, el original y el plugin dan **las mismas métricas a 4
+  decimales**: test MAPE 9,9552 %, R² 0,8110, 17 épocas.
+- Tarda unos 2,5 min en CPU.
+- El modelo se guarda solo en MLflow y se usa con `mlflow_run_id`.
+- Los errores siguen el contrato común (422/502).
+
+**Otros cambios.**
+- Resolución de la columna de precio con cabeceras con variantes de codificación, como el original.
+- `/stats` incluye los datos del run.
+- Tests nuevos: `test_ml18_training.py`, con código real y TensorFlow.
+- ml13, ml18 y ml26 añadidos a `test_user_model_isolation.py`.
+- Fichas técnica y funcional regeneradas.
+
+**ml14** usa el mismo argumento para no permitir el reentrenamiento; queda pendiente de revisar.
+
+### 10.3 S3
+
+Ni ml13 ni ml18 tienen artefactos en `artifacts/fixed/<ARTIFACT_FOLDER_NAME>/`, así que en
+despliegue arrancarían con `loaded=false`. Los artefactos válidos son:
+
+- ml13: `inbox/a13/codigo/models/prod/`.
+- ml18: `inbox/a18/codigo/models/artifacts/best_gru_df_2008_con_renta/`.

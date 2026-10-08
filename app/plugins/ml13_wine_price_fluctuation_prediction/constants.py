@@ -19,10 +19,6 @@ FEATURE_SCHEMA_FILENAME = "feature_schema.json"
 MODEL_CONFIG_FILENAME = "model_config.json"
 
 # Filenames used for user-retrained artifacts (never overwrite the fixed S3 artifacts above)
-USER_MODEL_FILENAME = f"user_{MODEL_FILENAME}"
-USER_SCALER_FILENAME = f"user_{SCALER_FILENAME}"
-USER_FEATURE_SCHEMA_FILENAME = f"user_{FEATURE_SCHEMA_FILENAME}"
-USER_MODEL_CONFIG_FILENAME = f"user_{MODEL_CONFIG_FILENAME}"
 
 # MLflow artifact sub-folder for user-retrained bundles
 MLFLOW_ARTIFACT_PATH = "model"

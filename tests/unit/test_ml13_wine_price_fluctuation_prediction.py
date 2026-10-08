@@ -5,6 +5,7 @@ unit tests exercise the real plugin modules on small deterministic synthetic ser
 wiring and invariants, not correctness (golden cases live in inbox/a13/manifest.yaml and are
 checked by the verification skill).
 """
+import pathlib
 from datetime import date, timedelta
 
 import numpy as np
@@ -102,7 +103,7 @@ def test_predict_batch(client):
 
 
 def test_train(client):
-    resp = client.post(f"{PREFIX}/train", json={"data_path": "/tmp/wine_prices.csv"})
+    resp = client.post(f"{PREFIX}/train", json={"data_path": "/tmp/wine_prices.csv", "mlflow_run_id": "run-1"})
     assert resp.status_code == 200
     body = resp.json()
     assert body["best_model_type"] in ("logreg", "xgboost")
@@ -214,3 +215,70 @@ def test_train_models_end_to_end_on_synthetic_series():
     assert set(result["test_metrics"]) == {"auc", "accuracy", "f1", "precision", "recall"}
     proba = result["model"].predict_proba(result["scaler"].transform(np.zeros((1, len(FEATURE_COLUMNS)))))
     assert proba.shape == (1, 2)
+
+
+# ── real plugin: retraining contract (MLflow only, no silent fallback) ───────
+
+@pytest.fixture
+def real_plugin():
+    """The real plugin with a bundle trained on the synthetic series (fixed artifacts live in S3)."""
+    from app.plugins.ml13_wine_price_fluctuation_prediction.plugin import (
+        Ml13WinePriceFluctuationPredictionPlugin,
+    )
+    result = training.train_models(preprocessing.clean_and_index_data(pd.DataFrame(_rows(160, seed=3))))
+    plugin = Ml13WinePriceFluctuationPredictionPlugin()
+    plugin._bundle = {  # pylint: disable=protected-access
+        "model": result["model"], "scaler": result["scaler"],
+        "schema": {"feature_columns": FEATURE_COLUMNS}, "model_type": result["model_type"],
+    }
+    return plugin
+
+
+@pytest.fixture
+def train_csv(tmp_path):
+    path = tmp_path / "wine_prices.csv"
+    pd.DataFrame(_rows(160, seed=3)).to_csv(path, index=False)
+    return str(path)
+
+
+def test_real_train_uploads_only_to_mlflow(real_plugin, train_csv, monkeypatch):
+    from unittest.mock import MagicMock
+
+    from app.plugins.ml13_wine_price_fluctuation_prediction import model_loader
+    from app.plugins.ml13_wine_price_fluctuation_prediction import plugin as plugin_mod
+
+    local_dir = model_loader._store.local_dir  # pylint: disable=protected-access
+    before = set(local_dir.rglob("*")) if local_dir.exists() else set()
+    tracker = MagicMock()
+    monkeypatch.setattr(plugin_mod, "BaseMLflowTracker", MagicMock(return_value=tracker))
+    resp = real_plugin.train(data_path=train_csv, mlflow_run_id="run-1")
+    assert resp.n_test_rows == 24 and resp.upload_warning is None
+    uploaded_dir = tracker.upload_artifacts.call_args.args[0]
+    assert tracker.upload_artifacts.call_args.kwargs["artifact_path"] == "model"
+    assert not pathlib.Path(uploaded_dir).exists()  # temp dir removed after upload
+    after = set(local_dir.rglob("*")) if local_dir.exists() else set()
+    assert after == before  # nothing written under artifacts/
+
+
+def test_real_train_fails_when_mlflow_upload_fails(real_plugin, train_csv, monkeypatch):
+    from unittest.mock import MagicMock
+
+    from app.domain.services.exceptions import ModelPersistenceError
+    from app.plugins.ml13_wine_price_fluctuation_prediction import plugin as plugin_mod
+
+    tracker = MagicMock(upload_artifacts=MagicMock(side_effect=ConnectionError("mlflow caído")))
+    monkeypatch.setattr(plugin_mod, "BaseMLflowTracker", MagicMock(return_value=tracker))
+    with pytest.raises(ModelPersistenceError, match="mlflow caído"):
+        real_plugin.train(data_path=train_csv, mlflow_run_id="run-1")
+
+
+def test_real_predict_with_a_run_without_model_never_uses_the_base(real_plugin, monkeypatch):
+    from unittest.mock import MagicMock
+
+    from app.domain.services.exceptions import UserModelUnavailableError
+    from app.plugins.ml13_wine_price_fluctuation_prediction import mlflow_utils
+
+    monkeypatch.setattr(mlflow_utils, "BaseMLflowTracker",
+                        MagicMock(return_value=MagicMock(download_artifacts=MagicMock(return_value=""))))
+    with pytest.raises(UserModelUnavailableError, match="run-vacio"):
+        real_plugin.predict_inline(features={"rows": _rows(30)}, mlflow_run_id="run-vacio")

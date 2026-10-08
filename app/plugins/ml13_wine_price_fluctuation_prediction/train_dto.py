@@ -1,6 +1,8 @@
 """Pydantic request/response DTOs for the ml13 /train endpoint."""
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.application.dto.train_dto import MlflowRunId
+
 
 class TrainRequest(BaseModel):
     """Retrain request: raw weekly price CSV (the binary target is derived from the price)."""
@@ -18,7 +20,11 @@ class TrainRequest(BaseModel):
             "evaluación hold-out sobre esas 24."
         ),
     )
-    mlflow_run_id: str = ""
+    mlflow_run_id: MlflowRunId = Field(
+        ...,
+        description="Run de MLflow donde se persiste el modelo reentrenado. Obligatorio: el "
+        "artefacto base nunca se sobrescribe.",
+    )
 
 
 class TrainResponse(BaseModel):
@@ -43,4 +49,7 @@ class TrainResponse(BaseModel):
     cv_xgboost_f1_mean: float
     smart_score_logreg: float
     smart_score_xgboost: float
-    upload_warning: str | None = None
+    upload_warning: str | None = Field(
+        default=None,
+        description="Compatibilidad con la plataforma: siempre None (un fallo de subida es un 502)",
+    )
