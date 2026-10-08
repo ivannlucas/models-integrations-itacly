@@ -15,14 +15,14 @@ class PredictBatchRequest(BaseModel):
     mlflow_run_id: str = Field(default="", description="MLflow run ID for user-trained model")
     apply_digital_twin: bool | None = Field(default=None, description=_DT_DESC)
     include_xai: bool = Field(
-        default=False,
-        description="Añade el análisis global de puntos críticos de control (CCP, Grad-CAM promedio) sobre los ciclos del CSV.",
+        default=True,
+        description="XAI por ciclo (xai_result / xai_error en cada fila: Grad-CAM, riesgo y acciones). Se genera siempre salvo que se desactive.",
     )
     include_shap: bool = Field(
         default=False,
-        description="Con include_xai, calcula además SHAP (GradientExplainer). Coste alto en CPU (minutos).",
+        description="Con include_xai, añade SHAP (sensor más relevante) a los primeros n_samples ciclos. Coste alto en CPU (≈5-8 s por ciclo).",
     )
-    n_samples: int = Field(default=50, gt=0, description="Ciclos máximos del CSV usados en el análisis CCP (muestra aleatoria, seed 42)")
+    n_samples: int = Field(default=50, gt=0, description="Ciclos máximos con SHAP cuando include_shap=true (el resto lleva solo Grad-CAM)")
 
     @model_validator(mode="after")
     def _shap_requires_xai(self):
@@ -34,12 +34,10 @@ class PredictBatchRequest(BaseModel):
 class PredictBatchResponse(BaseModel):
     model_config = ConfigDict(protected_namespaces=())
     model_id: str
-    predictions: list[dict[str, Any]]
-    output_path: str | None = None
-    xai: dict[str, Any] | None = Field(
-        default=None,
-        description="{ccps: [...], shap: [...], summary: {...}} cuando include_xai=true. 'shap' vacío si no se pidió SHAP.",
+    predictions: list[dict[str, Any]] = Field(
+        ..., description="Una fila por ciclo: predicción + xai_result / xai_error (XAI por ciclo, contrato de modelo-43)",
     )
+    output_path: str | None = None
 
 
 class PredictInlineRequest(BaseModel):
@@ -91,10 +89,12 @@ class PredictInlineResponse(BaseModel):
     Confianza_Bomba: float = Field(..., description="Confidence for Pump prediction (0-1)")
     Confianza_Acumulador: float = Field(..., description="Confidence for Accumulator prediction (0-1)")
     model_name: str
-    xai: list[dict[str, Any]] | None = Field(
+    xai_result: dict[str, Any] | None = Field(
         default=None,
-        description="Informe local por componente (Fouling, Válvula, Bomba, Acumulador) cuando include_xai=true.",
+        description="XAI del ciclo con el contrato de modelo-43: Estado_del_sistema, Bloques_principales, Variables_clave, "
+                    "Acciones_sugeridas / Mensaje_operativo y Detalle_componentes.",
     )
+    xai_error: str | None = Field(default=None, description="Motivo si la XAI del ciclo falló (xai_result es null); null si fue correcta.")
 
 
 PredictRequest = Annotated[

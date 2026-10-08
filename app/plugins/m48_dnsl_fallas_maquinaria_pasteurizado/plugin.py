@@ -119,25 +119,6 @@ class M48DnsFallMaquinariaPasteurizadoPlugin(ModelPluginPort):
     def _digital_twin(flag: bool | None) -> bool:
         return APPLY_DIGITAL_TWIN if flag is None else flag
 
-    def _local_xai(self, ctx: dict, resultados: dict, cycle_id, include_shap: bool, include_cam: bool) -> list[dict]:
-        tensor = resultados["input_tensor"].to(self._device)
-        with xai.XAI_LOCK:
-            gradcam = xai.compute_gradcam_all_heads(ctx["model"], tensor)
-            shap_all = None
-            if include_shap:
-                bg = ctx["shap_background"]
-                if bg is None:
-                    logger.warning("No packaged SHAP background; using the request cycle as background (degenerate)")
-                    background = tensor.detach().cpu()
-                else:
-                    background = torch.tensor(bg, dtype=torch.float32)
-                xai.seed_xai()
-                shap_all = xai.compute_shap_all_heads(ctx["model"], background, tensor, ctx["feature_cols"])
-        return xai.build_local_report(
-            resultados["predicciones"], resultados["confianzas"], gradcam, shap_all,
-            cycle_id=cycle_id, include_cam=include_cam,
-        )
-
     def predict_inline(
         self,
         *,
@@ -183,15 +164,19 @@ class M48DnsFallMaquinariaPasteurizadoPlugin(ModelPluginPort):
             if resultados is None:
                 raise ValueError("Feature columns mismatch during inference")
 
-            report = None
+            xai_result, xai_error = None, None
             if features.get("include_xai", True):
-                report = self._local_xai(
-                    ctx, resultados, cycle_id,
+                xai_result, xai_error = xai.explain_cycle(
+                    ctx["model"], resultados["input_tensor"], resultados["predicciones"], resultados["confianzas"],
+                    ctx["feature_cols"], cycle_id=cycle_id,
                     include_shap=bool(features.get("include_shap", False)),
+                    shap_background=ctx["shap_background"],
                     include_cam=bool(features.get("include_cam", False)),
                 )
             self._record()
-            return PredictInlineResponse(**format_inline_response(MODEL_ID, resultados), xai=report)
+            return PredictInlineResponse(
+                **format_inline_response(MODEL_ID, resultados), xai_result=xai_result, xai_error=xai_error,
+            )
         finally:
             if ctx["temp_dir"]:
                 shutil.rmtree(ctx["temp_dir"], ignore_errors=True)
@@ -202,7 +187,7 @@ class M48DnsFallMaquinariaPasteurizadoPlugin(ModelPluginPort):
         data_path: str,
         mlflow_run_id: str = "",
         apply_digital_twin: bool | None = None,
-        include_xai: bool = False,
+        include_xai: bool = True,
         include_shap: bool = False,
         n_samples: int = 50,
     ) -> PredictBatchResponse:
@@ -219,30 +204,34 @@ class M48DnsFallMaquinariaPasteurizadoPlugin(ModelPluginPort):
                 cid = cycle_ids.iloc[0] if cycle_ids is not None and len(cycle_ids) else None
                 groups = [(cid, x_df.drop(columns=["Cycle_ID"], errors="ignore"))]
 
-            predictions, tensors, ids = [], [], []
+            predictions = []
+            shap_budget = max(int(n_samples), 0) if include_shap else 0
             for cid, cycle_df in groups:
                 if cycle_df.empty:
                     continue
                 label = f"Cycle_ID={cid}" if cid is not None else "single-cycle"
                 result = run_inference(ctx["model"], ctx["scaler"], ctx["feature_cols"], cycle_df, self._device, label=label)
-                if result:
-                    predictions.append(format_batch_row(result, cid))
-                    tensors.append(result["input_tensor"])
-                    ids.append(cid)
-
-            xai_payload = None
-            if include_xai and tensors:
-                X_all = torch.cat(tensors, dim=0)
-                with xai.XAI_LOCK:
-                    ccps, summary = xai.detect_critical_control_points(
-                        ctx["model"], X_all, ctx["feature_cols"],
-                        cycle_ids=ids if all(i is not None for i in ids) else None,
-                        n_samples=n_samples, include_shap=include_shap,
+                if not result:
+                    continue
+                row = format_batch_row(result, cid)
+                # XAI por ciclo (contrato de 43/44): xai_result / xai_error en cada fila. Un fallo de XAI de un ciclo
+                # se queda en su fila y no afecta a la prediccion ni a la XAI del resto del lote.
+                xai_result, xai_error = None, None
+                if include_xai:
+                    with_shap = shap_budget > 0
+                    xai_result, xai_error = xai.explain_cycle(
+                        ctx["model"], result["input_tensor"], result["predicciones"], result["confianzas"],
+                        ctx["feature_cols"], cycle_id=cid, include_shap=with_shap,
+                        shap_background=ctx["shap_background"],
                     )
-                xai_payload = {"ccps": ccps, "shap": summary.pop("shap"), "summary": summary}
+                    if with_shap:
+                        shap_budget -= 1
+                row["xai_result"] = xai_result
+                row["xai_error"] = xai_error
+                predictions.append(row)
 
             self._record()
-            return PredictBatchResponse(model_id=MODEL_ID, predictions=predictions, output_path=None, xai=xai_payload)
+            return PredictBatchResponse(model_id=MODEL_ID, predictions=predictions, output_path=None)
         finally:
             if ctx["temp_dir"]:
                 shutil.rmtree(ctx["temp_dir"], ignore_errors=True)
@@ -277,8 +266,14 @@ class M48DnsFallMaquinariaPasteurizadoPlugin(ModelPluginPort):
         outputs += [OutputField(name=f"Confianza_{c}", type="float", description="Confidence 0-1")
                     for c in ["Fouling", "Valvula", "Bomba", "Acumulador"]]
         outputs.append(OutputField(
-            name="xai", type="list[object]",
-            description="Por componente: ventana crítica Grad-CAM (s), riesgo, acción prescriptiva; SHAP opcional.",
+            name="xai_result", type="object",
+            description=(
+                "XAI del ciclo (contrato de modelo-43): Estado_del_sistema, Bloques_principales, Variables_clave, "
+                "Acciones_sugeridas / Mensaje_operativo y Detalle_componentes (ventana crítica Grad-CAM, riesgo, acción)."
+            ),
+        ))
+        outputs.append(OutputField(
+            name="xai_error", type="string", description="Motivo si la XAI de este ciclo falló; null si fue correcta.",
         ))
 
         base = StatsResponse(

@@ -1012,38 +1012,45 @@ def _m47_batch(plugin: FakePlugin, *, data_path: str) -> M47BatchResp:
     )
 
 
+def _m48_xai_result(state: str = "Normal") -> dict:
+    """xai_result fake con el contrato de modelo-43 (claves del final_report)."""
+    result: dict = {"Estado_del_sistema": {"Estado_interpretativo": state}}
+    if state == "Normal":
+        result["Mensaje_operativo"] = ["Todos los componentes en estado Sano: no se requiere intervención."]
+    else:
+        result["Bloques_principales"] = ["Fouling"]
+        result["Variables_clave"] = ["TS1", "TS2", "FS1"]
+        result["Acciones_sugeridas"] = ["Fouling: Detener producción y ejecutar limpieza CIP inmediata"]
+    result["Detalle_componentes"] = [{"componente": "Fouling", "prediccion": "Crítico" if state != "Normal" else "Sano"}]
+    return result
+
+
 def _m48_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> M48InlineResp:
-    """Fake inline response for the m48 DNSL + XAI model."""
-    xai = None
-    if features.get("include_xai", True):
-        xai = [{
-            "cycle_id": features.get("Cycle_ID"), "componente": head, "prediccion": "Sano", "confianza": 0.99,
-            "sensor_mas_relevante": "PS3" if features.get("include_shap") else None,
-            "importancia_sensor": 0.4 if features.get("include_shap") else None,
-            "ventana_critica_inicio_s": 9.1, "ventana_critica_fin_s": 11.0, "intensidad_ventana": 0.86,
-            "accion": "Sin acción requerida", "urgencia": "Ninguna", "intervalo_ciclos": None,
-            "riesgo_score": 0.0, "riesgo_nivel": "NORMAL", "riesgo_incluye_shap": bool(features.get("include_shap")),
-        } for head in ("Fouling", "Válvula", "Bomba", "Acumulador")]
+    """Fake inline response for the m48 DNSL + XAI model (xai_result / xai_error, contrato de modelo-43)."""
+    with_xai = features.get("include_xai", True)
     return M48InlineResp(
         model_id="m48-dnsl-fallas-maquinaria-pasteurizado",
         Enfriador_Fouling=0, Valvula_Switch=0, Bomba_Leakage=0, Acumulador_Gas=0,
         Confianza_Fouling=0.99, Confianza_Valvula=0.98, Confianza_Bomba=0.97, Confianza_Acumulador=0.96,
         model_name="m48-dnsl-fallas-maquinaria-pasteurizado",
-        xai=xai,
+        xai_result=_m48_xai_result("Normal") if with_xai else None,
+        xai_error=None,
     )
 
 
 def _m48_batch(plugin: FakePlugin, *, data_path: str) -> M48BatchResp:
-    """Fake batch response for the m48 DNSL + XAI model."""
-    return M48BatchResp(
-        model_id="m48-dnsl-fallas-maquinaria-pasteurizado",
-        predictions=[{
-            "Cycle_ID": 1, "Enfriador_Fouling": 0, "Valvula_Switch": 0, "Bomba_Leakage": 0, "Acumulador_Gas": 0,
+    """Fake batch response for m48: XAI por ciclo, con el ciclo 2 con xai_error (error parcial)."""
+    rows = []
+    for cid in (1, 2, 3):
+        failed = cid == 2
+        rows.append({
+            "Cycle_ID": cid, "Enfriador_Fouling": 0, "Valvula_Switch": 0, "Bomba_Leakage": 0, "Acumulador_Gas": 0,
             "Confianza_Fouling": 0.99, "Confianza_Valvula": 0.98, "Confianza_Bomba": 0.97, "Confianza_Acumulador": 0.96,
             "model_name": "m48-dnsl-fallas-maquinaria-pasteurizado",
-        }],
-        output_path=None,
-    )
+            "xai_result": None if failed else _m48_xai_result("Normal"),
+            "xai_error": "boom" if failed else None,
+        })
+    return M48BatchResp(model_id="m48-dnsl-fallas-maquinaria-pasteurizado", predictions=rows, output_path=None)
 
 
 def _m48_train(plugin: FakePlugin, *, data_path: str) -> M48TrainResp:
