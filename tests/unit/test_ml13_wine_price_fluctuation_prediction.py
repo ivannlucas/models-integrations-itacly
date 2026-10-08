@@ -11,7 +11,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from app.domain.services.exceptions import InsufficientDataError
+from app.domain.services.exceptions import DataContractError, InsufficientDataError
 from app.plugins.ml13_wine_price_fluctuation_prediction import preprocessing, training
 from app.plugins.ml13_wine_price_fluctuation_prediction.constants import FEATURE_COLUMNS
 
@@ -153,6 +153,32 @@ def test_fewer_than_20_weeks_raises_domain_error():
     rows[3]["price_red"] = None  # dropped by cleaning -> 19 valid weeks
     with pytest.raises(InsufficientDataError):
         preprocessing.prepare_inference_frame(pd.DataFrame(rows))
+
+
+@pytest.mark.parametrize("bad_price", [0.0, -5.0, float("inf"), "n/d"])
+@pytest.mark.parametrize("position", [3, 15, -1])
+def test_invalid_price_is_rejected_not_silently_used(bad_price, position):
+    """PR review: a 0 price gave logret=-inf that dropna() does not filter; a negative/inf price
+    silently dropped the latest week. Any informed price must be finite and > 0."""
+    rows = _rows(30)
+    rows[position]["price_red"] = bad_price
+    with pytest.raises(DataContractError, match="price_red"):
+        preprocessing.prepare_inference_frame(pd.DataFrame(rows))
+
+
+def test_missing_price_is_still_skipped_like_original_etl():
+    rows = _rows(30)
+    rows[10]["price_red"] = None
+    _, feats, _ = preprocessing.prepare_inference_frame(pd.DataFrame(rows))
+    assert np.isfinite(feats[FEATURE_COLUMNS].to_numpy()).all()
+    assert len(feats) == 29 - 19
+
+
+def test_invalid_price_maps_to_422(client, fake_plugins):
+    fake_plugins[MODEL_ID].raise_on_inline = DataContractError("'price_red' debe ser un número finito y mayor que 0")
+    resp = client.post(f"{PREFIX}/predict", json=INLINE_PAYLOAD)
+    assert resp.status_code == 422
+    assert "price_red" in resp.json()["detail"]
 
 
 def test_target_definition():

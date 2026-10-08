@@ -113,6 +113,24 @@ Casos afectados: `caso_2025-06-23`, `07-07`, `07-14`, `07-21`, `07-28`, `08-18`,
 | XGBoost en CV (alternativa) | F1 = 0 en los 5 folds: con umbral 0,5 nunca predice la clase positiva. La memoria no lo menciona |
 | Fold 1 de la CV | Entrena con un único positivo (AUC 0.274). La memoria lo reconoce como "estructural" |
 
+## Cambios tras la revisión del PR (2026-10-08)
+
+**Hallazgo del revisor:** no se validaba `price > 0` ni la finitud de los precios. Un precio 0 genera `logret = -inf`, que `dropna()` no filtra.
+
+**Reproducción antes del cambio:**
+- Precio 0 en las últimas semanas: 500 (el `StandardScaler` rechaza el `inf`).
+- Precio 0 a mitad de la serie: 200 silencioso, con indicadores corruptos (RSI 89,6 frente a 58,3).
+- Precio negativo o `inf` en la última semana: 200 silencioso, devolviendo la predicción de la semana anterior.
+
+El código original del equipo de IA se comporta igual.
+
+**Cambio:** `preprocessing.validate_prices()` rechaza la serie completa si algún precio informado no es numérico, finito y mayor que 0. Responde **422** en `/predict` y 400 en `/train`, con `DataContractError` y un mensaje que indica las semanas afectadas. Los precios vacíos se siguen omitiendo, como en el ETL original. Además hay una comprobación `isfinite` de las features antes del escalado.
+
+**Re-verificación:**
+- flake8: 0 errores · pylint: 10/10 · pytest: **561/561** (14 tests nuevos de regresión).
+- Golden: probabilidades idénticas a las de antes del cambio (diferencia 0,0), mismas etiquetas y Tabla 6 reproducida.
+- Endpoints: los mismos códigos HTTP que antes.
+
 ## Estado final
 
 **LISTO PARA PR.** El wiring está verificado y es reproducible, y el checklist técnico está en verde.

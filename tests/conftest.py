@@ -1957,7 +1957,7 @@ TEST_REGISTRY: list[ModelEntry] = [
         plugin_class=FakePlugin,
         predict_request_type=Ml13_Request,
         predict_response_type=Ml13_Response,
-        extra_predict_exceptions=(InsufficientDataError,),
+        extra_predict_exceptions=(InsufficientDataError, DataContractError),
         train_request_type=Ml13_TrainReq,
         train_response_type=Ml13TrainResp,
     ),

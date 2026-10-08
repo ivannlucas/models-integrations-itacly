@@ -400,6 +400,12 @@ known_issues:
       entregado no tiene huecos (verificado: 174 semanas consecutivas 2022-08-01..2025-11-24, una
       sin price_red -> 173 válidas, cuadra con la memoria). El plugin replica el comportamiento
       original y no añade validación nueva (sería cambiar el contrato del modelo).
+  - id: validacion_precio_anadida
+    detail: >
+      (Revisión PR 2026-10-08) El código original no valida que el precio sea > 0 y finito: un 0
+      produce logret=-inf que dropna() no filtra, y un negativo/inf descarta en silencio la última
+      semana. El plugin añade validate_prices(): cualquier precio informado no numérico, <= 0 o
+      no finito -> DataContractError (422). Precios vacíos se siguen omitiendo como en el original.
   - id: dataset_raw_vs_memoria
     detail: >
       La memoria dice 173 semanas; el CSV crudo tiene 174 filas, una sin precio (SEMANA 31/2023 =

@@ -12,7 +12,7 @@ from datetime import datetime
 import numpy as np
 import pandas as pd
 
-from app.domain.services.exceptions import InsufficientDataError
+from app.domain.services.exceptions import DataContractError, InsufficientDataError
 from app.plugins.ml13_wine_price_fluctuation_prediction.constants import (
     BOLLINGER_WINDOW,
     BULLETIN_COLUMN,
@@ -93,10 +93,38 @@ def normalize_time_keys(df: pd.DataFrame) -> pd.DataFrame:
     )
 
 
+def validate_prices(df: pd.DataFrame, price_col: str) -> pd.Series:
+    """Return the price column as float, rejecting any informed price that is not finite and > 0.
+
+    Added on top of the original ETL (PR review): log returns and distsma12 divide by / take
+    the log of the price, so a 0, negative, inf or non-numeric value would silently corrupt the
+    indicators of every week in its rolling windows (or drop the latest week without warning).
+    Missing prices (NaN/empty) keep the original behaviour: the week is simply skipped.
+    """
+    raw = df[price_col]
+    numeric = pd.to_numeric(raw, errors="coerce")
+    invalid = raw.notna() & ~(np.isfinite(numeric) & (numeric > 0))
+    if invalid.any():
+        labels = []
+        for _, r in df[invalid].head(5).iterrows():
+            bulletin = r.get(BULLETIN_COLUMN)
+            where = bulletin if isinstance(bulletin, str) else (
+                f"{r.get(CAMPAIGN_COLUMN)} semana {r.get(WEEK_COLUMN)}"
+            )
+            labels.append(f"{where} ({r[price_col]!r})")
+        raise DataContractError(
+            f"'{price_col}' debe ser un número finito y mayor que 0 en todas las semanas "
+            f"informadas; {int(invalid.sum())} fila(s) no válidas, p. ej.: {', '.join(labels)}. "
+            "Deja la celda vacía si no hay precio esa semana."
+        )
+    return numeric
+
+
 def clean_and_index_data(df_raw: pd.DataFrame) -> pd.DataFrame:
     """data.py::clean_and_index_data — date-indexed frame with a single 'price' column."""
     df = df_raw.copy()
     price_col = detect_price_column(df)
+    df[price_col] = validate_prices(df, price_col)
     df["fecha"] = df.apply(parse_campaign_date, axis=1)
     df = df.dropna(subset=["fecha", price_col])
     df = df.sort_values("fecha").set_index("fecha")
@@ -141,6 +169,14 @@ def generate_technical_features_inference(df_price: pd.DataFrame) -> pd.DataFram
         raise InsufficientDataError(
             "No valid rows remain after feature generation (e.g. constant price over the "
             f"{BOLLINGER_WINDOW}-week Bollinger window)."
+        )
+    # Safety net: never let a non-finite feature reach the scaler/model silently.
+    finite = np.isfinite(df_clean[FEATURE_COLUMNS].to_numpy(dtype=float))
+    if not finite.all():
+        bad = df_clean.index[~finite.all(axis=1)]
+        raise DataContractError(
+            f"Indicadores no finitos en {len(bad)} semana(s) (p. ej. {bad[0].date()}); "
+            "revisa los precios de la serie."
         )
     return df_clean
 
