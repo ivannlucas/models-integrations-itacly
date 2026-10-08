@@ -33,6 +33,7 @@ from app.domain.ports.model_plugin_port import ModelPluginPort
 from app.domain.services.exceptions import (
     InfeasibleOptimizationError,
     InsufficientCycleHistoryError,
+    InsufficientDataError,
     InsufficientFramesError,
     InsufficientRowsError,
     InsufficientSequenceHistoryError,
@@ -270,6 +271,12 @@ from app.plugins.ml16_meat_raw_material_price_alert.predict_dto import (
 from app.plugins.ml16_meat_raw_material_price_alert.train_dto import (
     TrainRequest as Ml16_TrainReq,
     TrainResponse as Ml16TrainResp,
+)
+from app.plugins.ml14_wine_phyto_price_forecast.predict_dto import (
+    PredictBatchResponse as Ml14BatchResp,
+    PredictInlineResponse as Ml14InlineResp,
+    PredictRequest as Ml14_Request,
+    PredictResponse as Ml14_Response,
 )
 from app.plugins.ml15_wine_ipi_price_forecast.predict_dto import (
     PredictBatchResponse as Ml15BatchResp,
@@ -1547,6 +1554,44 @@ def _ml16_train(plugin: FakePlugin, *, data_path: str) -> Ml16TrainResp:
     )
 
 
+def _ml14_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> Ml14InlineResp:
+    """Fake inline response for the ml14 GRU wine phytosanitary price forecast model."""
+    return Ml14InlineResp(
+        model_id="ml14-wine-phyto-price-forecast",
+        predicted_price=121.394124,
+        current_price=125.035925,
+        drift_baseline=117.656436,
+        horizon_weeks=16,
+        last_observed_date="2025-10-26",
+        prediction_date="2026-02-15",
+        model_used="GRU",
+        gap_warning=None,
+        n_rows_used=len(features.get("rows", [])),
+        xai_feature_values={"PROTECCION_FITO": 125.035925},
+    )
+
+
+def _ml14_batch(plugin: FakePlugin, *, data_path: str) -> Ml14BatchResp:
+    """Fake batch response for the ml14 GRU wine phytosanitary price forecast model."""
+    return Ml14BatchResp(
+        model_id="ml14-wine-phyto-price-forecast",
+        predictions=[
+            {
+                "predicted_price": 121.394124,
+                "current_price": 125.035925,
+                "drift_baseline": 117.656436,
+                "horizon_weeks": 16,
+                "last_observed_date": "2025-10-26",
+                "prediction_date": "2026-02-15",
+                "model_id": "ml14-wine-phyto-price-forecast",
+                "model_used": "GRU",
+            }
+        ],
+        n_predictions=1,
+        output_path=None,
+    )
+
+
 def _ml15_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> Ml15InlineResp:
     """Fake inline response for the ml15 national phytosanitary IPI (Ridge) forecast model."""
     return Ml15InlineResp(
@@ -1623,6 +1668,7 @@ FAKE_FACTORIES: dict[str, tuple[Callable, Callable]] = {
     "ml3-wine-disease-pest-forecast": (_ml3_wine_inline, _ml3_wine_batch),
     "modelo43-cereales": (_modelo43_inline, _modelo43_batch),
     "ml41-meat-curing-machinery-acoustic-anomaly": (_ml41_inline, _ml41_batch),
+    "ml14-wine-phyto-price-forecast": (_ml14_inline, _ml14_batch),
     "ml26-wine-sulfite-gru-pso-forecast": (_ml26_inline, _ml26_batch),
     "ml9-cereals-infestation-sequence-classifier": (_ml9_cereals_inline, _ml9_cereals_batch),
     "ml21-cereals-price-spatial": (_ml21_inline, _ml21_batch),
@@ -1927,6 +1973,15 @@ TEST_REGISTRY: list[ModelEntry] = [
         extra_predict_exceptions=(InsufficientSequenceHistoryError, InvalidWineryInputError),
         train_request_type=Ml26_TrainReq,
         train_response_type=Ml26TrainResp,
+    ),
+    ModelEntry(
+        model_id="ml14-wine-phyto-price-forecast",
+        prefix="/models/ml14-wine-phyto-price-forecast",
+        version="1.0.0",
+        plugin_class=FakePlugin,
+        predict_request_type=Ml14_Request,
+        predict_response_type=Ml14_Response,
+        extra_predict_exceptions=(InsufficientDataError,),
     ),
 ]
 
