@@ -61,6 +61,13 @@ def test_train_publishes_and_serves_the_new_base_with_a_fresh_instance(container
     assert container.stats_use_case.execute().base_version.version == "v1"
 
 
+def test_reloading_the_base_keeps_the_async_training_wiring(container):
+    submit, get = container.submit_train_job_use_case, container.get_train_job_use_case
+    container.train_use_case.execute(TinyTrainRequest(data_path="datos-1"))
+    assert container.submit_train_job_use_case is submit
+    assert container.get_train_job_use_case is get
+
+
 def test_two_trains_chain_versions(container):
     container.train_use_case.execute(TinyTrainRequest(data_path="a"))
     resp = container.train_use_case.execute(TinyTrainRequest(data_path="b"))

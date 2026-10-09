@@ -36,7 +36,7 @@ async def lifespan(app: FastAPI):
     app.state.load_errors = {}
     for entry in _active_entries:
         try:
-            container = ModelContainer(plugin=entry.plugin_class())
+            container = ModelContainer(plugin=entry.plugin_class(), model_id=entry.model_id)
             container.init()
             app.state.containers[entry.model_id] = container
             logger.info("Model '%s' loaded successfully.", entry.model_id)
