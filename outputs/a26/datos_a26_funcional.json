@@ -1,0 +1,110 @@
+{
+  "model_id": "a26",
+  "model_slug": "wine-sulfite-gru-pso-forecast",
+  "fecha": "Octubre 2026",
+  "model_key": "ml26-wine-sulfite-gru-pso-forecast",
+  "version": "1.0.0 (memoria v2.5)",
+  "que_no_responde": "No te dice qué dosis de sulfuroso añadir ni calcula costes: estima cuánto SO₂ libre tendrá cada depósito dentro de 3 días y lo prioriza por riesgo.",
+  "entradas_contexto": "Los datos son los que ya registra una bodega digitalizada: la ficha de cada depósito, las lecturas de sus sensores cada 2 horas, las analíticas de laboratorio cuando se hacen y las adiciones de sulfuroso.",
+  "kpis": [
+    {
+      "kpi": "Detectar los depósitos que estarán en riesgo alto dentro de 3 días",
+      "valor_umbral": "≥ 85 % detectados",
+      "descripcion": "CUMPLE en el entorno sintético: detecta el 92,5 %."
+    },
+    {
+      "kpi": "Que las alertas de riesgo alto sean fiables",
+      "valor_umbral": "≥ 85 % de alertas altas correctas",
+      "descripcion": "CUMPLE en el entorno sintético: el 93,9 % de las alertas altas lo eran."
+    },
+    {
+      "kpi": "Que la previsión de sulfuroso libre sea útil para corregir",
+      "valor_umbral": "≥ 85 % de previsiones a menos de 3 mg/L",
+      "descripcion": "CUMPLE en el entorno sintético: 87,6 %."
+    },
+    {
+      "kpi": "Que el score de riesgo sea preciso",
+      "valor_umbral": "error cuadrático ≤ 0,10 y error medio ≤ 0,06",
+      "descripcion": "CUMPLE en el entorno sintético: 0,064 y 0,043."
+    }
+  ],
+  "ejemplo_interpretacion": "Si para un depósito de tinto en almacenamiento el servicio devuelve 18 mg/L de sulfuroso libre a 72 h y un riesgo de 0,72 (banda alta), conviene revisarlo antes que los depósitos en banda media o baja: es probable que dentro de 3 días quede por debajo de su nivel de protección. Compara los 18 mg/L con el objetivo de la etapa para estimar cuánto falta, y confirma con una analítica antes de corregir.",
+  "margen_error": "En las pruebas con datos simulados, la previsión de sulfuroso libre se desvía de media unos 1,5 mg/L, y casi 9 de cada 10 previsiones quedan a menos de 3 mg/L del valor real. Una diferencia de 1 o 2 mg/L entre dos depósitos no es significativa. Con datos reales de bodega el error puede ser mayor.",
+  "revisar_manualmente": [
+    "Depósitos que acaban de cambiar de etapa o a los que se les acaba de añadir sulfuroso: son los momentos en que el modelo es menos fiable.",
+    "Depósitos en estabilización o almacenamiento con la última analítica de hace muchas horas: la previsión se apoya en un dato de laboratorio antiguo.",
+    "Situaciones que el simulador no contempla: paradas de fermentación, contaminaciones o intervenciones fuera de lo habitual.",
+    "Cualquier depósito marcado en riesgo alto antes de corregir: confirma con una analítica."
+  ],
+  "que_no_hace": [
+    "No recomienda la dosis de sulfuroso ni calcula el coste de la corrección.",
+    "No sustituye la analítica de laboratorio ni el criterio del enólogo.",
+    "No da predicción para un depósito con menos de 48 horas de lecturas ni si falta el avance de la etapa.",
+    "No sustituye automáticamente el modelo base al reentrenar: el modelo reentrenado solo se usa si se indica su ejecución de MLflow."
+  ],
+  "puede_equivocarse": "Sí. Todas las cifras de acierto se han medido con datos simulados, no con datos reales de bodega, y requieren validación con datos reales antes de usar el modelo en producción. En ese entorno detecta 9 de cada 10 depósitos de riesgo alto y se equivoca de media 1,5 mg/L en el sulfuroso libre, pero puede fallar en situaciones que el simulador no recoge. Úsalo para decidir qué depósitos revisar primero, nunca como única base para dosificar.",
+  "descripcion": "Herramienta que mira las últimas 48 horas de cada depósito de vino y anticipa cuánto sulfuroso libre tendrá dentro de 3 días y qué riesgo hay de que quede insuficientemente protegido. Te ayuda a decidir qué depósitos revisar primero.",
+  "objetivo": "Que el equipo de bodega se adelante a los depósitos que se van a quedar cortos de protección, en lugar de descubrirlo en la siguiente analítica. Con la previsión de sulfuroso puedes estimar cuánto falta respecto al objetivo de cada etapa, y con el nivel de riesgo puedes ordenar los depósitos por prioridad. Se mira a 3 días porque el sulfuroso añadido tarda en estabilizarse.",
+  "caso_uso": "Envías la ficha de cada depósito (tipo de vino, volumen, temperatura de la nave) y sus lecturas de las últimas 48 horas o más, una cada 2 horas, indicando en qué etapa está y cuánto ha avanzado. Si en alguna lectura hay analítica de laboratorio o una adición de sulfuroso, la incluyes en esa fila; entre analíticas, el sistema usa la última disponible. Recibes, por depósito, el sulfuroso libre previsto a 3 días, un nivel de riesgo de 0 a 1 y su banda (bajo, medio o alto). Empieza por los de riesgo alto.",
+  "inputs": [
+    {
+      "nombre": "Ficha del depósito",
+      "descripcion": "Identificador, tipo de vino (tinto, rosado o blanco), volumen en litros y temperatura ambiente de la nave."
+    },
+    {
+      "nombre": "Etapa y avance",
+      "descripcion": "Etapa en la que está el vino (mosto, fermentación, estabilización, almacenamiento o pre-embotellado) y cuánto ha avanzado esa etapa, de 0 a 1. El avance es imprescindible."
+    },
+    {
+      "nombre": "Lecturas de sensores cada 2 horas",
+      "descripcion": "Temperatura, oxígeno disuelto, densidad y CO₂ del vino. Hacen falta al menos 24 lecturas (48 horas)."
+    },
+    {
+      "nombre": "Analíticas de laboratorio",
+      "descripcion": "pH, sulfuroso libre y sulfuroso total, solo en las lecturas en que se hizo una analítica."
+    },
+    {
+      "nombre": "Adiciones de sulfuroso",
+      "descripcion": "Dosis añadida, en la lectura en que se añadió."
+    }
+  ],
+  "outputs": [
+    {
+      "nombre": "Sulfuroso libre a 3 días",
+      "descripcion": "Cuánto sulfuroso libre (mg/L) se espera que tenga el depósito dentro de 72 horas.",
+      "interpretacion": "Compáralo con el objetivo de la etapa: si queda por debajo, el depósito necesitará revisión o corrección."
+    },
+    {
+      "nombre": "Riesgo de infraprotección",
+      "descripcion": "Un valor de 0 a 1: cuanto más alto, más probable es que el depósito quede poco protegido.",
+      "interpretacion": "Sirve para ordenar depósitos, no es un porcentaje de probabilidad."
+    },
+    {
+      "nombre": "Banda de riesgo",
+      "descripcion": "Bajo (menos de 0,33), medio (0,33 a 0,66) o alto (0,66 o más).",
+      "interpretacion": "Revisa primero los depósitos en banda alta."
+    }
+  ],
+  "limitaciones": [
+    {
+      "tipo": "Entrenado con datos simulados",
+      "descripcion": "El modelo ha aprendido de una bodega simulada, no de datos reales. Sus cifras de acierto requieren validación con datos reales de bodega antes de usarlo en producción."
+    },
+    {
+      "tipo": "Necesita el avance de la etapa",
+      "descripcion": "Si no indicas cuánto ha avanzado la etapa en cada lectura, el servicio no da predicción: sin ese dato el error se triplica."
+    },
+    {
+      "tipo": "Analíticas espaciadas",
+      "descripcion": "Entre analíticas el sistema usa la última disponible. Si pasan muchas horas sin analítica, la previsión es menos fiable."
+    },
+    {
+      "tipo": "Mínimo de 48 horas de lecturas",
+      "descripcion": "Un depósito con menos de 24 lecturas no tiene predicción."
+    },
+    {
+      "tipo": "Reentrenamiento limitado",
+      "descripcion": "Se puede volver a entrenar el modelo con datos nuevos, pero esos datos tienen que llevar el sulfuroso libre medido de forma continua, como en el simulador, algo que una bodega normalmente no tiene. El modelo reentrenado no sustituye al original."
+    }
+  ]
+}

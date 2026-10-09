@@ -45,6 +45,7 @@ from app.plugins.ml26_wine_sulfite_gru_pso_forecast.constants import (
     TRAIN_HARD_REQUIRED_COLUMNS,
     VERSION,
     FRAMEWORK,
+    TRAINING_SEED,
 )
 from app.plugins.ml26_wine_sulfite_gru_pso_forecast.mlflow_utils import (
     download_user_model_from_mlflow,
@@ -208,12 +209,15 @@ class Ml26WineSulfiteGruPsoForecastPlugin(ModelPluginPort):
             if user_tmp:
                 shutil.rmtree(user_tmp, ignore_errors=True)
 
-    # ── train (fine-tuning) ───────────────────────────────────────────────────
+    # ── train ─────────────────────────────────────────────────────────────────
 
     def train(  # pylint: disable=too-many-locals
         self, *, data_path: str, mlflow_run_id: str
     ) -> TrainResponse:
-        """Fine-tune a clone of the served GRU on a CSV in the AI team's sequential format.
+        """Retrain the GRU from scratch with the final PSO configuration (training.py).
+
+        Port of the AI team's final training (train_sequence_with_config, seed 7) on a CSV in their
+        sequential format; the PSO search that chose that configuration is not repeated.
 
         The retrained model lives only in its MLflow run (served later via
         predict(mlflow_run_id=...)); nothing is written to artifacts/ and the served model in
@@ -254,14 +258,14 @@ class Ml26WineSulfiteGruPsoForecastPlugin(ModelPluginPort):
                     "gradient_clip",
                 )
             }
-            | {"optimizer": "AdamW", "loss": "SmoothL1Loss", "mode": "fine_tuning_from_gru_pso"}
+            | {"optimizer": "AdamW", "loss": "SmoothL1Loss", "mode": "train_sequence_with_config", "seed": TRAINING_SEED}
         )
 
         def _on_epoch(epoch: int, train_loss: float, val_rmse: float) -> None:
             tracker.log_metrics({"train_loss": train_loss, "val_rmse": val_rmse}, step=epoch)
 
         data = training.prepare_training_data(raw_df, self._model)
-        result = training.fine_tune(self._model, data, hyperparams, on_epoch=_on_epoch)
+        result = training.train_with_config(self._model, data, hyperparams, on_epoch=_on_epoch)
         val, test = result.val_report, result.test_report or {}
 
         metrics = {
@@ -300,8 +304,8 @@ class Ml26WineSulfiteGruPsoForecastPlugin(ModelPluginPort):
         )
         return TrainResponse(
             detail=(
-                "Fine-tuning completado a partir de gru_pso (sin nueva búsqueda PSO — ver "
-                "manifest KI-04)."
+                "GRU reentrenada desde cero con la configuración final de gru_pso (procedimiento "
+                "train_sequence_with_config del equipo de IA, sin repetir la búsqueda PSO)."
             ),
             n_lots_train=result.n_lots["train"],
             n_lots_val=result.n_lots["val"],

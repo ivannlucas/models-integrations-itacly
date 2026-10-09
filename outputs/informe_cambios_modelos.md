@@ -494,7 +494,7 @@ Los tests nuevos de esta ronda llaman al código real:
 La correctitud de cada modelo sigue respaldada por su informe de verificación contra el servidor
 real.
 
-## 10. Anexo (8 de octubre de 2026): ml13, ml14 y ml18 (integrados desde `main`)
+## 10. Anexo (8-9 de octubre de 2026): ml13, ml14, ml18 y ml26 (integrados desde `main`)
 
 ### 10.1 ml13 (`ml13-wine-price-fluctuation-prediction`)
 
@@ -581,11 +581,41 @@ del dataset. `training.py` porta la parte GRU de `compare_models.py`:
 - ml14 añadido a `test_user_model_isolation.py`.
 - Fichas regeneradas.
 
-### 10.4 S3
+### 10.4 ml26 (`ml26-wine-sulfite-gru-pso-forecast`): `/train` corregido, verificado y documentado
 
-Ni ml13, ni ml14, ni ml18 tienen artefactos en `artifacts/fixed/<ARTIFACT_FOLDER_NAME>/`, así que en
+Con el código original ya en `inbox/a26/codigo/` (commit 62862cc, memoria v2.5):
+
+**`/train` no era el procedimiento del equipo de IA.**
+
+- **Antes:** hacía un ajuste fino de los pesos servidos y conservaba la normalización servida. El
+  equipo de IA nunca definió ese procedimiento, y KI-04 lo describía de otra forma.
+- **Ahora:** `training.py` porta literalmente `train_sequence_with_config`. Crea un modelo nuevo con
+  la configuración final de PSO, fija la semilla 7 justo antes de entrenar, como el original, y
+  ajusta el z-score sobre el train del usuario. La búsqueda PSO no se repite.
+- **Resultado:** con los datos entregados, el plugin y el original ejecutado aislado dan pesos
+  idénticos (diferencia 0). El reentrenamiento tarda unos 4 minutos en CPU.
+- **Hallazgo del port:** las ventanas deben ser C-contiguas. Si no, la media float32 del z-score
+  cambia en el último bit y el modelo diverge tras 25 épocas.
+
+**Inferencia verificada frente al original.**
+
+- La preparación de datos coincide con los `.npy` de los splits (diferencia 0).
+- Las 3.096 ventanas de test coinciden con `gru_pso_test_predictions.csv` (diferencia máxima 4e-6).
+- 30 lotes en modo operativo coinciden con `raw_inputs.py` (diferencia máxima 1,7e-5).
+- Los 18 golden cases pasan en los dos modos contra el servidor real. Sin `stage_progress` la
+  petición se rechaza con 422.
+
+**Documentación.** Primer `outputs/a26/verification_report.md` del repo; el manifest lo citaba, pero
+nunca se commiteó. También se han generado `datos_a26.json`, `datos_a26_funcional.json`, las fichas
+técnica y funcional (plantilla paramétrica) y `a26_metadatos.docx` (plantilla corporativa). En el
+manifest se corrige KI-04 y se añade KI-13 (artefactos ausentes en S3).
+
+### 10.5 S3
+
+Ni ml13, ni ml14, ni ml18, ni ml26 tienen artefactos en `artifacts/fixed/<ARTIFACT_FOLDER_NAME>/`, así que en
 despliegue arrancarían con `loaded=false`. Los artefactos válidos son:
 
 - ml13: `inbox/a13/codigo/models/prod/`.
 - ml14: `inbox/a14/codigo/models/artifacts/gru_model.pt` y `data/processed/final_dataset_for_modeling.csv`.
 - ml18: `inbox/a18/codigo/models/artifacts/best_gru_df_2008_con_renta/`.
+- ml26: `inbox/a26/codigo/models/artifacts/gru_pso.pkl` y `best_model.json`.

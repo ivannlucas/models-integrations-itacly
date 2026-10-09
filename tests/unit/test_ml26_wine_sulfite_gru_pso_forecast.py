@@ -289,29 +289,43 @@ def _sequential_training_frame(n_lots: int = 8, steps: int = 70) -> pd.DataFrame
     return pd.DataFrame(rows)
 
 
-def test_fine_tune_does_not_mutate_served_model():
+def test_training_starts_from_scratch_with_the_users_normalization():
+    """Port of train_sequence_with_config: a NEW model (seed 7) and z-score stats of the user's
+    train split, not the served model's weights or normalization (the old fine-tuning did that)."""
     torch = pytest.importorskip("torch")
     from app.plugins.ml26_wine_sulfite_gru_pso_forecast import training
+    from app.plugins.ml26_wine_sulfite_gru_pso_forecast._vendor.gru_model import build_gru_from_config
 
     base = _tiny_loaded_model()
     before = {k: v.clone() for k, v in base.network.state_dict().items()}
     data = training.prepare_training_data(_sequential_training_frame(), base)
-    assert data["train"][0].shape[1:] == (24, 22)
-    result = training.fine_tune(base, data, base.config)
-    assert result.epochs_run >= 1 and result.n_lots["train"] == 5
-    assert set(result.val_report) >= {"future_free_sulfite_72h", "underprotection_risk_72h", "overall_rmse"}
+    x_train, y_train, _ = data["train"]
+    assert x_train.shape[1:] == (24, 22) and x_train.flags.c_contiguous
+    cfg = {**base.config, "epochs": 1}
+    result = training.train_with_config(base, data, cfg)
+
+    assert result.epochs_run == 1 and result.n_lots["train"] == 5
+    assert set(result.val_report[base.target_names[0]]) == {"mae", "rmse", "mape"}
+    np.testing.assert_allclose(result.model.mean, x_train.mean(axis=(0, 1), keepdims=True).squeeze(0), rtol=1e-6)
+    np.testing.assert_allclose(result.model.y_mean, y_train.mean(axis=0), rtol=1e-6)
     for key, value in base.network.state_dict().items():
-        assert torch.equal(value, before[key])
+        assert torch.equal(value, before[key])          # the served model is never touched
+
+    training.set_global_seed(7)
+    fresh = build_gru_from_config(cfg, 22, 2).state_dict()
+    one_epoch = training.train_with_config(base, data, {**cfg, "patience": 1}).model.network.state_dict()
+    assert any(not torch.equal(fresh[k], one_epoch[k]) for k in fresh)
+    assert all(fresh[k].shape == one_epoch[k].shape for k in fresh)
 
 
-def test_fine_tune_requires_validation_lots():
+def test_training_requires_validation_lots():
     pytest.importorskip("torch")
     from app.plugins.ml26_wine_sulfite_gru_pso_forecast import training
 
     base = _tiny_loaded_model()
     data = training.prepare_training_data(_sequential_training_frame(n_lots=3), base)
     with pytest.raises(ValueError):
-        training.fine_tune(base, data, base.config)
+        training.train_with_config(base, data, base.config)
 
 
 # ── Real plugin class with an injected tiny model (no artifacts, MLflow mocked) ─
