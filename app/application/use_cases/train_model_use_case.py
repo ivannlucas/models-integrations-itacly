@@ -7,6 +7,18 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+def build_train_kwargs(plugin: Any, request: Any) -> dict[str, Any]:
+    """Map a TrainRequest to ``plugin.train`` kwargs (shared by the sync and the async paths)."""
+    kwargs: dict[str, Any] = {
+        "data_path": getattr(request, "data_path", ""),
+        "mlflow_run_id": getattr(request, "mlflow_run_id", ""),
+    }
+    # Only ml40's train declares system (refrigeracion/aireado chosen by the user).
+    if "system" in inspect.signature(plugin.train).parameters:
+        kwargs["system"] = getattr(request, "system", None)
+    return kwargs
+
+
 class TrainModelUseCase:
     """Generic train use case."""
 
@@ -16,11 +28,6 @@ class TrainModelUseCase:
 
     def execute(self, request: Any) -> dict:
         """Executes the training process."""
-        data_path = getattr(request, "data_path", "")
-        mlflow_run_id = getattr(request, "mlflow_run_id", "")
-        logger.info("Executing training, data_path=%s, mlflow_run_id=%s", data_path, mlflow_run_id)
-        kwargs: dict[str, Any] = {"data_path": data_path, "mlflow_run_id": mlflow_run_id}
-        # Only ml40's train declares system (refrigeracion/aireado chosen by the user).
-        if "system" in inspect.signature(self._plugin.train).parameters:
-            kwargs["system"] = getattr(request, "system", None)
+        kwargs = build_train_kwargs(self._plugin, request)
+        logger.info("Executing training, data_path=%s, mlflow_run_id=%s", kwargs["data_path"], kwargs["mlflow_run_id"])
         return self._plugin.train(**kwargs)

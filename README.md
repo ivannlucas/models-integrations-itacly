@@ -167,6 +167,41 @@ Available endpoints (from current implementation):
 
 - `GET /` → returns a JSON welcome message.
 
+## Entrenamiento asíncrono
+
+`POST /models/<model-id>/train?wait=false` lanza el entrenamiento en un proceso aparte y responde `202`
+con el estado del trabajo. El `job_id` es el `mlflow_run_id` del cuerpo (obligatorio). Sin `wait`, o con
+`wait=true`, `/train` sigue siendo síncrono como hasta ahora.
+
+```bash
+curl -s -X POST "$BASE/models/<model-id>/train?wait=false" \
+  -H 'Content-Type: application/json' \
+  -d '{"data_path": "s3://<bucket>/<dataset>.csv", "mlflow_run_id": "<run_id>"}'
+# 202 {"job_id": "<run_id>", "status": "queued", ...}
+
+curl -s "$BASE/models/<model-id>/train/<run_id>"
+# 200 {"status": "running" | "succeeded" | "failed", "result": {...}, "error": ..., "error_type": ...}
+```
+
+| Código | Significado |
+|---|---|
+| 202 | Trabajo creado o ya existente para ese `job_id` (reintentar el POST es seguro) |
+| 400 | `mlflow_run_id` vacío, o el run no existe en MLflow |
+| 409 | Ya hay otro entrenamiento de ese modelo en curso en el pod |
+| 404 | (GET) No hay trabajo con ese `job_id` para este modelo |
+| 503 | MLflow no accesible (reintentable) |
+| 500 | Error inesperado del servicio |
+
+El estado de un trabajo nunca cambia una vez terminal. Reenviar el mismo `job_id` devuelve el trabajo
+existente, también si falló: para reintentar hay que crear un run nuevo en MLflow y usar su id.
+
+El estado vive en el run de MLflow (etiquetas `async_train.*` y artefacto `async_train/result.json`).
+Si el proceso deja de dar señales más de `TRAIN_JOB_STALE_AFTER_S` segundos (600 por defecto; latido cada
+`TRAIN_JOB_HEARTBEAT_S`, 60), el GET lo devuelve como `failed` con `error_type: "TrainJobLost"`.
+
+Requisito por modelo: su `train()` no debe sobrescribir el artefacto fijo en disco (se comparte con el
+proceso que sirve predicciones).
+
 ## Tests
 
 **Use one test file for each module. It should be named test_your_module_name.**

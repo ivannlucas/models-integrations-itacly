@@ -103,3 +103,15 @@ class UnsupportedMachineConfigurationError(ValueError):
 
 class InvalidAudioError(ValueError):
     """Raised when the uploaded audio cannot be decoded as a valid WAV file (ml41)."""
+
+
+class TrainJobBusyError(Exception):
+    """Raised when an async training is requested while another one of the same model is still running (409)."""
+
+
+class TrainJobRunNotFoundError(ValueError):
+    """Raised when the MLflow run used as job_id does not exist (client error, 400 — retrying won't help)."""
+
+
+class TrainJobStoreUnavailableError(Exception):
+    """Raised when the async training state store (MLflow) cannot be reached or fails (503, retryable)."""

@@ -7,7 +7,12 @@ from fastapi.responses import JSONResponse
 
 from app.application.dto.stats_dto import StatsResponse
 from app.application.dto.train_dto import TrainRequest as _DefaultTrainRequest, TrainResponse as _DefaultTrainResponse
-from app.domain.services.exceptions import TrainingNotSupportedError
+from app.application.dto.train_job_dto import TrainJobResponse
+from app.domain.services.exceptions import (
+    TrainingNotSupportedError,
+    TrainJobBusyError,
+    TrainJobStoreUnavailableError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -97,10 +102,32 @@ def make_model_router(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)
             ) from exc
 
-    @router.post("/train")
-    def train(request: Request, body: _train_req) -> _train_resp:
-        """Trigger model training with the provided data."""
+    @router.post("/train", responses={202: {"model": TrainJobResponse}})
+    def train(request: Request, body: _train_req, wait: bool = True) -> _train_resp:
+        """Train the model. ``wait=false`` starts it in the background and returns 202 + the job state."""
         container = _get_container(request)
+        if not wait:
+            try:
+                record = container.submit_train_job_use_case.execute(body)
+            except ValueError as exc:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+            except TrainJobBusyError as exc:
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+            except TrainJobStoreUnavailableError as exc:
+                logger.exception("Could not register async training for model '%s'", model_id)
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail=f"No se pudo registrar el entrenamiento: {exc}",
+                ) from exc
+            except Exception as exc:
+                logger.exception("Unexpected error registering async training for model '%s'", model_id)
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)
+                ) from exc
+            return JSONResponse(
+                status_code=status.HTTP_202_ACCEPTED,
+                content=TrainJobResponse.from_record(record).model_dump(mode="json"),
+            )
         try:
             return container.train_use_case.execute(body)
         except TrainingNotSupportedError as exc:
@@ -116,5 +143,29 @@ def make_model_router(
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)
             ) from exc
+
+    @router.get("/train/{job_id}")
+    def train_status(request: Request, job_id: str) -> TrainJobResponse:
+        """State of an async training job started with POST /train?wait=false."""
+        container = _get_container(request)
+        try:
+            record = container.get_train_job_use_case.execute(job_id)
+        except TrainJobStoreUnavailableError as exc:
+            logger.exception("Could not read training job %s for model '%s'", job_id, model_id)
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=f"No se pudo consultar el entrenamiento: {exc}",
+            ) from exc
+        except Exception as exc:
+            logger.exception("Unexpected error reading training job %s for model '%s'", job_id, model_id)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)
+            ) from exc
+        if record is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"No hay entrenamiento {job_id} para el modelo {model_id}",
+            )
+        return TrainJobResponse.from_record(record)
 
     return router
