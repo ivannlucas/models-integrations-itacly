@@ -222,6 +222,16 @@ from app.plugins.ml18_meat_spatial_price_forecast.train_dto import (
     TrainRequest as Ml18_TrainReq,
     TrainResponse as Ml18TrainResp,
 )
+from app.plugins.ml19_cereals_cost_forecast.predict_dto import (
+    BatchPrediction as Ml19BatchPred,
+    HorizonResult as Ml19Horizon,
+    PredictBatchResponse as Ml19BatchResp,
+    PredictInlineResponse as Ml19InlineResp,
+    PredictRequest as Ml19_Request,
+    PredictResponse as Ml19_Response,
+    RegResult as Ml19Reg,
+    ClfResult as Ml19Clf,
+)
 from app.plugins.ml47_dairy_dnsl_pasteurization_fault_detection.train_dto import (
     TrainRequest as Ml47Dairy_TrainReq,
     TrainResponse as Ml47DairyTrainResp,
@@ -1871,8 +1881,51 @@ def _ml18_batch(plugin: FakePlugin, *, data_path: str) -> Ml18BatchResp:
     )
 
 
+def _ml19_horizons() -> list[Ml19Horizon]:
+    """Shared fake multi-horizon payload for ml19 inline/batch fakes."""
+    return [
+        Ml19Horizon(
+            horizon=1, predicted_for="2020-02",
+            reg=Ml19Reg(model_name="Ridge", pred=1.024653, signal=1, signal_str="LONG"),
+            clf=Ml19Clf(model_name="LogReg", prob_up=0.545627, pred_class=1, signal=1, signal_str="LONG"),
+            ensemble_signal=1, ensemble_str="LONG", confidence="ALTA",
+        ),
+    ]
+
+
+def _ml19_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> Ml19InlineResp:
+    """Fake inline response for the ml19 cereals cost forecast model."""
+    date_label = (features or {}).get("date") or "2020-01"
+    return Ml19InlineResp(
+        model_id="ml19-cereals-cost-forecast",
+        date_label=date_label,
+        mapa_month_used="2019-10",
+        train_cutoff="2019-12-31",
+        horizons=_ml19_horizons(),
+    )
+
+
+def _ml19_batch(plugin: FakePlugin, *, data_path: str) -> Ml19BatchResp:
+    """Fake batch response for the ml19 cereals cost forecast model."""
+    preds = [
+        Ml19BatchPred(
+            date_requested="2020-01", date_label="2020-01",
+            mapa_month_used="2019-10", horizons=_ml19_horizons(),
+        )
+    ]
+    return Ml19BatchResp(
+        model_id="ml19-cereals-cost-forecast",
+        train_cutoff="2019-12-31",
+        predictions=preds,
+        n_rows=len(preds),
+        n_predictions=len(preds),
+        output_path=None,
+    )
+
+
 FAKE_FACTORIES: dict[str, tuple[Callable, Callable]] = {
     "ml18-meat-spatial-price-forecast": (_ml18_inline, _ml18_batch),
+    "ml19-cereals-cost-forecast": (_ml19_inline, _ml19_batch),
     "ml46-dairy-fouling-clog-detection": (_ml46_dairy_inline, _ml46_dairy_batch),
     "ml40-meat-refrigeration-aeration-fault-diagnosis": (_ml40_meat_inline, _ml40_meat_batch),
     "ml35-dairy-ann-cleaning-cost": (_ml35_dairy_inline, _ml35_dairy_batch),
@@ -2207,6 +2260,15 @@ TEST_REGISTRY: list[ModelEntry] = [
         extra_predict_exceptions=(InsufficientRowsError,),
         train_request_type=Ml18_TrainReq,
         train_response_type=Ml18TrainResp,
+    ),
+    ModelEntry(
+        model_id="ml19-cereals-cost-forecast",
+        prefix="/models/ml19-cereals-cost-forecast",
+        version="1.0.0",
+        plugin_class=FakePlugin,
+        predict_request_type=Ml19_Request,
+        predict_response_type=Ml19_Response,
+        extra_predict_exceptions=(DataContractError,),
     ),
     ModelEntry(
         model_id="ml9-cereals-infestation-sequence-classifier",
