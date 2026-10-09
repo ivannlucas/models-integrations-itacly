@@ -4,6 +4,35 @@ Fecha: 2026-10-02
 Plugin: `app/plugins/ml18_meat_spatial_price_forecast/`
 Manifest: `inbox/a18/manifest.yaml`
 
+> **[CORREGIDO 2026-10-08] Reanálisis con el código v4.2 y `/train` habilitado.**
+> Una primera copia del código subida el 2026-10-08 era la versión anterior (6 features, MAPE 12,15 %).
+> Con la versión v4.2 (commit 5ceeeb7, 7 features), comprobado con datos reales:
+>
+> | Comprobación | Resultado |
+> |---|---|
+> | Original `predict --forecast` sobre `dataset_modelado_desde_2008.csv` | Test MAPE 9,932 % · R² 0,8114 (= memoria) |
+> | Plugin frente al original, forecast de las 400 combinaciones CCAA-Producto | 400/400 · diferencia máxima 2e-6 (redondeo a 6 decimales) |
+> | 4 golden cases reconstruidos del dataset real | 4/4 (diferencia ≤ 1e-6) |
+> | `/train` del plugin frente a `train()` original, mismo TF 2.21 en CPU | **Idénticos a 4 decimales**: test MAPE 9,9552 % · R² 0,8110 · 17 épocas (mejor la 9) · 48.768/11.568/11.600 ventanas |
+> | Modelo reentrenado servido con `mlflow_run_id` | Carga y predice |
+> | Servidor real | `/health` loaded, `/predict` batch 200 (400 forecasts), `/train` sin run 422 |
+>
+> La diferencia de 0,02 puntos de MAPE frente al artefacto entregado viene del entorno (TF 2.20 frente
+> a 2.21, otro hardware), no del port.
+>
+> **Cambios en el plugin:**
+> - `training.py`: port literal de `train()`.
+> - `/train` habilitado y persistido solo en MLflow; un fallo de subida da 502.
+> - `/predict` y `/stats` con `mlflow_run_id`; un run sin modelo da 422.
+> - Se resuelve la columna de precio aunque la cabecera traiga variantes de codificación, como
+>   `resolve_target_column` del original.
+>
+> Las fichas técnica y funcional se han regenerado. Las líneas de abajo que dicen "`/train` → 501"
+> son del estado anterior.
+>
+> **Pendiente (acción humana):** subir los artefactos de `inbox/a18/codigo/models/artifacts/best_gru_df_2008_con_renta/`
+> a `artifacts/fixed/ml18_meat_spatial_price_forecast/` en S3.
+
 ## Estado de aceptación del modelo
 
 GRU (seleccionado por el propio equipo de IA tras comparar LSTM/GRU/baselines) obtiene MAPE de

@@ -1,5 +1,7 @@
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.application.dto.train_dto import MlflowRunId
+
 
 class TrainRequest(BaseModel):
     model_config = ConfigDict(protected_namespaces=())
@@ -10,7 +12,7 @@ class TrainRequest(BaseModel):
             "(ground truth, binarized internally via normal_tokens)."
         ),
     )
-    mlflow_run_id: str = ""
+    mlflow_run_id: MlflowRunId
 
 
 class TrainResponse(BaseModel):
@@ -21,7 +23,7 @@ class TrainResponse(BaseModel):
     fallo_precision: float
     fallo_recall: float
     """accuracy/AUC/precision/recall (binary, "Fallo" positive class) on the TEST split —
-    key names unified with modelo43_cereales (both real training repos,
+    key names unified with ml43_cereals_dnsl_anomaly_fault_detection (both real training repos,
     a43-44-neurofuzzy-anomalias-fallas and a45-dnsl-cereals-deteccion-puntos-criticos,
     already use this exact naming in their own results.json). Renamed from the previous
     bare accuracy/f1/auc fields, which used to leak into the platform's generic

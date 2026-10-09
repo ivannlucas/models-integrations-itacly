@@ -1,0 +1,212 @@
+{
+  "model_id": "a26",
+  "model_slug": "wine-sulfite-gru-pso-forecast",
+  "fecha": "Octubre 2026",
+  "model_key": "ml26-wine-sulfite-gru-pso-forecast",
+  "version": "1.0.0 (memoria v2.5)",
+  "descripcion": "GRU bidireccional multitarea (2 capas, hidden_dim 96, AttentionPooling y cabeza MLP) cuyos hiperparámetros se optimizaron con PSO. Predice, para cada depósito, el SO₂ libre y un score de riesgo de infraprotección a 72 h vista a partir de las últimas 24 lecturas (48 h). Herramienta de apoyo para priorizar revisiones y correcciones de sulfuroso en bodega.",
+  "task_type": "Regresión multitarea de serie temporal (2 salidas continuas a horizonte fijo de 72 h)",
+  "framework": "PyTorch (GRUMultiTaskRegressor: GRU bidireccional → AttentionPooling → LayerNorm → Linear → ReLU → Dropout → Linear(2)); pandas / numpy para el preprocesado. PSO solo en entrenamiento (búsqueda de hiperparámetros)",
+  "artefacto": "gru_pso.pkl (SequenceBundle: state_dict, 22 features, 2 targets, medias y desviaciones de normalización, configuración final) + best_model.json (registro de selección por RMSE de validación)",
+  "objetivo": "Anticipar qué depósitos pueden quedar insuficientemente protegidos frente a la oxidación y los microorganismos en los próximos 3 días, para priorizar analíticas, revisiones y correcciones de SO₂. Se formula como regresión multitarea: el SO₂ libre futuro (mg/L) permite estimar el déficit frente al objetivo de cada lote, y el score de riesgo [0, 1] permite ordenar los depósitos de forma gradual en lugar de con una alerta binaria. El horizonte de 72 h recoge la combinación química del SO₂ tras una dosificación, que puede prolongarse 48 h o más.",
+  "caso_uso": "Modo operativo: por cada depósito se envía el lote (lot_id, wine_type, volume_l, ambient_temp_c) y sus lecturas cada 2 h (mínimo 24, con stage_progress), en JSON (predict inline) o en un CSV de lecturas con las columnas del lote repetidas (predict batch, una predicción por lote). El servicio arrastra la última analítica disponible, calcula las 22 variables (antigüedad de analíticas y adiciones, one-hot de tipo de vino y etapa), construye la ventana de 24 pasos y devuelve el SO₂ libre y el riesgo a 72 h con su banda (bajo < 0,33 ≤ medio < 0,66 ≤ alto). Modo reproducibilidad: ventana ya procesada (24 × 22). Reentrenamiento (/train): repite el entrenamiento final del equipo de IA (modelo nuevo con la configuración PSO final, semilla 7) sobre un CSV en el formato del simulador; el resultado se guarda solo en MLflow y el modelo base no cambia.",
+  "inputs": [
+    {
+      "nombre": "lot_id",
+      "tipo": "string",
+      "descripcion": "Identificador del lote o depósito; relaciona el lote con sus lecturas",
+      "obligatorio": "Sí",
+      "valor_defecto": "-"
+    },
+    {
+      "nombre": "wine_type",
+      "tipo": "categórica (red, rose, white)",
+      "descripcion": "Tipo de vino del depósito",
+      "obligatorio": "Sí",
+      "valor_defecto": "-"
+    },
+    {
+      "nombre": "volume_l",
+      "tipo": "float (L)",
+      "descripcion": "Volumen del depósito (rango de entrenamiento 2.512-14.983 L)",
+      "obligatorio": "Sí",
+      "valor_defecto": "-"
+    },
+    {
+      "nombre": "ambient_temp_c",
+      "tipo": "float (°C)",
+      "descripcion": "Temperatura ambiente de la bodega (rango de entrenamiento 10-28 °C)",
+      "obligatorio": "Sí",
+      "valor_defecto": "-"
+    },
+    {
+      "nombre": "timestamp",
+      "tipo": "datetime ISO 8601",
+      "descripcion": "Instante de la lectura; paso nominal de 2 h. Si falta se usa el orden de las filas",
+      "obligatorio": "Recomendado",
+      "valor_defecto": "orden de llegada"
+    },
+    {
+      "nombre": "stage",
+      "tipo": "categórica (must, fermentation, stabilization, storage, pre_bottling)",
+      "descripcion": "Etapa del proceso en la lectura",
+      "obligatorio": "Sí",
+      "valor_defecto": "-"
+    },
+    {
+      "nombre": "stage_progress",
+      "tipo": "float [0, 1]",
+      "descripcion": "Avance de la etapa en curso (0 = inicio, 1 = fin). El modelo se entrenó con él; sin él el error se triplica (KI-01)",
+      "obligatorio": "Sí, en todas las lecturas",
+      "valor_defecto": "-"
+    },
+    {
+      "nombre": "temperature_c, dissolved_oxygen_mg_l, density_g_ml, co2_g_l",
+      "tipo": "float (°C, mg/L, g/mL, g/L)",
+      "descripcion": "Sensórica de proceso del vino o mosto en cada lectura",
+      "obligatorio": "Sí",
+      "valor_defecto": "-"
+    },
+    {
+      "nombre": "ph_lab, free_sulfite_lab, total_sulfite_lab",
+      "tipo": "float (pH, mg/L, mg/L)",
+      "descripcion": "Analítica de laboratorio, solo en las lecturas donde hay nueva muestra; el servicio arrastra el último valor entre muestras",
+      "obligatorio": "No",
+      "valor_defecto": "último valor disponible del lote"
+    },
+    {
+      "nombre": "dose_mg_l (o actual_dose_mg_l)",
+      "tipo": "float (mg/L)",
+      "descripcion": "Dosis de SO₂ aplicada en esa lectura; alimenta la trazabilidad de adiciones",
+      "obligatorio": "No",
+      "valor_defecto": "0 (sin adición)"
+    },
+    {
+      "nombre": "22 variables del modelo",
+      "tipo": "float",
+      "descripcion": "Sensórica, analítica arrastrada, antigüedad de la analítica y de la última adición, contexto del lote y one-hot de tipo de vino y etapa; se calculan siempre en el servicio",
+      "obligatorio": "No — derivadas",
+      "valor_defecto": "derivadas del lote y las lecturas"
+    }
+  ],
+  "outputs": [
+    {
+      "nombre": "future_free_sulfite_72h",
+      "tipo": "float (mg/L)",
+      "descripcion": "SO₂ libre previsto del depósito 72 h después de la última lectura",
+      "rango": "continuo; media del target ≈ 23 mg/L",
+      "interpretacion": "compararlo con el SO₂ libre objetivo de la etapa para estimar el déficit y la corrección"
+    },
+    {
+      "nombre": "underprotection_risk_72h",
+      "tipo": "float [0, 1]",
+      "descripcion": "Score sintético de riesgo de infraprotección a 72 h (recortado a [0, 1])",
+      "rango": "0-1",
+      "interpretacion": "cuanto más cerca de 1, mayor prioridad de revisión; no es una probabilidad calibrada"
+    },
+    {
+      "nombre": "risk_band",
+      "tipo": "categórica (bajo, medio, alto)",
+      "descripcion": "Banda del score de riesgo: bajo < 0,33 ≤ medio < 0,66 ≤ alto (memoria §7.1)",
+      "rango": "bajo / medio / alto",
+      "interpretacion": "alto = depósito a revisar primero"
+    }
+  ],
+  "metricas": [
+    {
+      "nombre": "Test hold-out (90 lotes sintéticos, 3.096 ventanas) — SO₂ libre a 72 h",
+      "valor": "RMSE 1,977 mg/L; MAE 1,508 mg/L",
+      "descripcion": "Memoria v2.5, Tabla 17 (= models/metrics/gru_pso.json)",
+      "interpretacion": "el SO₂ previsto se desvía de media 1,5 mg/L sobre una media de unos 23 mg/L"
+    },
+    {
+      "nombre": "Test hold-out — riesgo de infraprotección a 72 h",
+      "valor": "RMSE 0,064; MAE 0,043",
+      "descripcion": "Memoria v2.5, Tabla 17",
+      "interpretacion": "error medio de 0,04 puntos en una escala 0-1"
+    },
+    {
+      "nombre": "Test hold-out — global y validación",
+      "valor": "Test: RMSE 1,398, MAE 0,776. Validación: RMSE 1,565, MAE 0,827",
+      "descripcion": "Mejor RMSE de validación de los 9 modelos comparados (GRU, LSTM, MLP, RF, GB, regresión lineal y variantes PSO)",
+      "interpretacion": "seleccionado por validación; GRU sin PSO tiene un RMSE de test casi igual (1,392)"
+    },
+    {
+      "nombre": "Métricas operativas en test",
+      "valor": "Recall riesgo alto 92,5 %; precisión riesgo alto 93,9 %; SO₂ dentro de ±3 mg/L 87,6 % (±2 mg/L 71,6 %); riesgo dentro de ±0,15 95,5 %",
+      "descripcion": "Memoria v2.5, Tabla 18",
+      "interpretacion": "detecta 9 de cada 10 depósitos de riesgo alto y casi todas sus alertas altas son correctas, en el entorno sintético"
+    },
+    {
+      "nombre": "Verificación tras la integración (2026-10-09)",
+      "valor": "18/18 golden cases en ventana procesada y en modo operativo (diferencia ≤ 4e-6); 3.096 ventanas de test y 30 lotes en modo operativo idénticos al código original; reentrenamiento con pesos idénticos al original",
+      "descripcion": "outputs/a26/verification_report.md, contra el endpoint HTTP real",
+      "interpretacion": "el servicio reproduce exactamente el comportamiento del código entregado"
+    }
+  ],
+  "limitaciones": [
+    {
+      "tipo": "Datos sintéticos",
+      "descripcion": "Dataset, targets y métricas proceden del simulador del equipo de IA (600 lotes); no hay validación con históricos reales de bodega. El riesgo es un score derivado de reglas del simulador, no una probabilidad calibrada. Requiere validación con datos reales antes de cualquier uso productivo."
+    },
+    {
+      "tipo": "stage_progress obligatorio",
+      "descripcion": "El modelo se entrenó con el avance de etapa del simulador. Si falta, el cálculo de respaldo del código original triplica el error (MAE de SO₂ 4,82 frente a 1,51 mg/L) e incumple 3 de los 4 criterios de éxito, por lo que el servicio rechaza la petición (HTTP 422)."
+    },
+    {
+      "tipo": "Analítica arrastrada entre muestras",
+      "descripcion": "pH y SO₂ de laboratorio se arrastran hasta la siguiente muestra (hasta 22 h en estabilización y almacenamiento). Con cadencias más espaciadas o irregulares que las simuladas el error puede crecer; hay que monitorizarlo con datos reales."
+    },
+    {
+      "tipo": "Reentrenamiento",
+      "descripcion": "Repite el entrenamiento final del equipo de IA (unos 4 min en CPU con el dataset completo) pero no la búsqueda PSO de hiperparámetros, que la memoria recomienda repetir con datos reales. Necesita el SO₂ libre continuo del simulador (free_sulfite_mg_l), que una bodega real no mide; el modelo reentrenado solo se guarda en MLflow y el modelo base no cambia."
+    },
+    {
+      "tipo": "Mínimo de historial",
+      "descripcion": "Cada depósito necesita al menos 24 lecturas (48 h a paso de 2 h) para tener predicción."
+    }
+  ],
+  "fichero_nombre": "18 golden cases del split de test (data/splits/test_seq_X.npy y el historial crudo de esos lotes en data/raw/sequential.csv.gz)",
+  "fichero_registros": "18 ventanas de 18 lotes de test: 4 etapas (storage, stabilization, fermentation, pre_bottling), 3 tipos de vino y las 3 bandas de riesgo",
+  "fichero_resultado": "Predicción idéntica a la del código original (diferencia ≤ 4e-6) tanto con la ventana procesada como desde las lecturas crudas con stage_progress; sin stage_progress, HTTP 422",
+  "observaciones_tecnicas": "Inferencia en CPU (red pequeña, ventana 24 × 22). Entorno del equipo de IA: Python 3.12, torch 2.9.1, numpy 2.3.5, pandas 2.3.3, scikit-learn 1.8.0. El artefacto es un pickle de SequenceBundle que se carga con un Unpickler restringido. Reentrenamiento: unos 4 min en CPU con 600 lotes. Monitorización recomendada por la memoria §10: alerta si el RMSE de SO₂ supera 2,5 mg/L o el MAE 2,0 mg/L, si el RMSE de riesgo supera 0,10 o el MAE 0,06, o si el recall de riesgo alto baja del 85 % en dos ventanas consecutivas; PSI > 0,2 en free_sulfite_lab, total_sulfite_lab, dissolved_oxygen_mg_l, temperature_c u hours_since_last_lab.",
+  "que_no_responde": "No te dice qué dosis de sulfuroso añadir ni calcula costes: estima cuánto SO₂ libre tendrá cada depósito dentro de 3 días y lo prioriza por riesgo.",
+  "entradas_contexto": "Los datos son los que ya registra una bodega digitalizada: la ficha de cada depósito, las lecturas de sus sensores cada 2 horas, las analíticas de laboratorio cuando se hacen y las adiciones de sulfuroso.",
+  "kpis": [
+    {
+      "kpi": "Detectar los depósitos que estarán en riesgo alto dentro de 3 días",
+      "valor_umbral": "≥ 85 % detectados",
+      "descripcion": "CUMPLE en el entorno sintético: detecta el 92,5 %."
+    },
+    {
+      "kpi": "Que las alertas de riesgo alto sean fiables",
+      "valor_umbral": "≥ 85 % de alertas altas correctas",
+      "descripcion": "CUMPLE en el entorno sintético: el 93,9 % de las alertas altas lo eran."
+    },
+    {
+      "kpi": "Que la previsión de sulfuroso libre sea útil para corregir",
+      "valor_umbral": "≥ 85 % de previsiones a menos de 3 mg/L",
+      "descripcion": "CUMPLE en el entorno sintético: 87,6 %."
+    },
+    {
+      "kpi": "Que el score de riesgo sea preciso",
+      "valor_umbral": "error cuadrático ≤ 0,10 y error medio ≤ 0,06",
+      "descripcion": "CUMPLE en el entorno sintético: 0,064 y 0,043."
+    }
+  ],
+  "ejemplo_interpretacion": "Si para un depósito de tinto en almacenamiento el servicio devuelve 18 mg/L de sulfuroso libre a 72 h y un riesgo de 0,72 (banda alta), conviene revisarlo antes que los depósitos en banda media o baja: es probable que dentro de 3 días quede por debajo de su nivel de protección. Compara los 18 mg/L con el objetivo de la etapa para estimar cuánto falta, y confirma con una analítica antes de corregir.",
+  "margen_error": "En las pruebas con datos simulados, la previsión de sulfuroso libre se desvía de media unos 1,5 mg/L, y casi 9 de cada 10 previsiones quedan a menos de 3 mg/L del valor real. Una diferencia de 1 o 2 mg/L entre dos depósitos no es significativa. Con datos reales de bodega el error puede ser mayor.",
+  "revisar_manualmente": [
+    "Depósitos que acaban de cambiar de etapa o a los que se les acaba de añadir sulfuroso: son los momentos en que el modelo es menos fiable.",
+    "Depósitos en estabilización o almacenamiento con la última analítica de hace muchas horas: la previsión se apoya en un dato de laboratorio antiguo.",
+    "Situaciones que el simulador no contempla: paradas de fermentación, contaminaciones o intervenciones fuera de lo habitual.",
+    "Cualquier depósito marcado en riesgo alto antes de corregir: confirma con una analítica."
+  ],
+  "que_no_hace": [
+    "No recomienda la dosis de sulfuroso ni calcula el coste de la corrección.",
+    "No sustituye la analítica de laboratorio ni el criterio del enólogo.",
+    "No da predicción para un depósito con menos de 48 horas de lecturas ni si falta el avance de la etapa.",
+    "No sustituye automáticamente el modelo base al reentrenar: el modelo reentrenado solo se usa si se indica su ejecución de MLflow."
+  ],
+  "puede_equivocarse": "Sí. Todas las cifras de acierto se han medido con datos simulados, no con datos reales de bodega, y requieren validación con datos reales antes de usar el modelo en producción. En ese entorno detecta 9 de cada 10 depósitos de riesgo alto y se equivoca de media 1,5 mg/L en el sulfuroso libre, pero puede fallar en situaciones que el simulador no recoge. Úsalo para decidir qué depósitos revisar primero, nunca como única base para dosificar."
+}

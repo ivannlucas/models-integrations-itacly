@@ -8,6 +8,12 @@ FRAMEWORK = "sklearn"
 MODEL_FILENAME = "ridge_official_v1_4.pkl"
 LINE = "official_v1_4"
 
+# Hiperparámetros del Ridge pipeline — idénticos a los usados por el equipo de IA para
+# entrenar el artefacto fijo (config/official_v1_4.yaml: benchmark.tabular_models.ridge.alpha,
+# inbox/a17/manifest.yaml: training.hyperparams). Usados por train() para reentrenar.
+RIDGE_ALPHA = 1.0
+IMPUTER_STRATEGY = "median"
+
 FEATURE_COLUMNS = [
     "target_price_pigmeat_class_e_es",
     "eurostat_pigmeat_slaughter_tonnes_es",

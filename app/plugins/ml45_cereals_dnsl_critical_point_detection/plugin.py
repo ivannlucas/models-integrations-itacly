@@ -19,7 +19,7 @@ from sklearn.preprocessing import StandardScaler
 
 from app.application.dto.stats_dto import InputField, OutputField, RuntimeStats, StatsResponse
 from app.domain.ports.model_plugin_port import ModelPluginPort
-from app.domain.services.exceptions import ModelNotLoadedError
+from app.domain.services.exceptions import ModelNotLoadedError, ModelPersistenceError
 from app.domain.services.mlflow_tracker import BaseMLflowTracker
 from app.infrastructure.artifact_store import local_file_path
 from app.plugins.ml45_cereals_dnsl_critical_point_detection._vendor.loss import DNFLoss
@@ -100,7 +100,7 @@ def _validate_saved_artifact(path: Path, loader) -> None:
     torch.save/joblib.dump/np.save have no return value to check, so a process killed or a
     disk filled mid-write can silently leave a 0-byte or truncated file on disk — this is
     what previously let a fine-tuned model reach MLflow (and the platform's model listing)
-    as a 0-byte artifact with no visible error. Same pattern as modelo43_cereales's
+    as a 0-byte artifact with no visible error. Same pattern as ml43_cereals_dnsl_anomaly_fault_detection's
     plugin.py::_validate_saved_artifact.
     """
     if not path.exists() or path.stat().st_size == 0:
@@ -169,10 +169,6 @@ class Ml45CerealsDnslCriticalPointDetectionPlugin(ModelPluginPort):
             return None
         logger.info("Using user-trained model from MLflow run_id=%s", mlflow_run_id)
         loaded = download_user_model_from_mlflow(mlflow_run_id)
-        if loaded is None:
-            logger.warning("MLflow download failed for %s, falling back to standard model", mlflow_run_id)
-            self._require_loaded()
-            return None
         model, model_cfg, scaler_x, scaler_num, xai_background, threshold, temp_dir = loaded
         return {
             "model": model,
@@ -283,7 +279,7 @@ class Ml45CerealsDnslCriticalPointDetectionPlugin(ModelPluginPort):
             if mlflow_ctx and mlflow_ctx["temp_dir"]:
                 shutil.rmtree(mlflow_ctx["temp_dir"], ignore_errors=True)
 
-    def train(self, *, data_path: str, mlflow_run_id: str = "") -> TrainResponse:
+    def train(self, *, data_path: str, mlflow_run_id: str) -> TrainResponse:
         """Train a fresh model from a labeled CSV and upload it to MLflow.
 
         Does not replace the served checkpoint — pass the returned mlflow_run_id back to
@@ -303,7 +299,7 @@ class Ml45CerealsDnslCriticalPointDetectionPlugin(ModelPluginPort):
         fine-tuned the served checkpoint's weights for a fixed 30 epochs with no
         threshold recalibration — a simplification invented for this service; the real
         repo has no "fine-tune" concept at all, only scripts/train.py's full
-        from-scratch pipeline (confirmed near byte-identical to modelo43_cereales's own
+        from-scratch pipeline (confirmed near byte-identical to ml43_cereals_dnsl_anomaly_fault_detection's own
         trainer.py/metrics.py). This version reproduces the real repo's
         split-by-cycle-id, DNFLoss, Adam+CosineAnnealingLR, warmup +
         early-stopping-on-a-composite-monitor-score, and 101-point threshold search, so
@@ -532,7 +528,7 @@ class Ml45CerealsDnslCriticalPointDetectionPlugin(ModelPluginPort):
                 _validate_saved_artifact(temp_dir / XAI_BACKGROUND_FILENAME, np.load)
 
             try:
-                # Key names unified with modelo43_cereales and with both real training
+                # Key names unified with ml43_cereals_dnsl_anomaly_fault_detection and with both real training
                 # repos' own results.json (modelo 43-45 audit, metrics unification) — these
                 # ARE the final display names now, so stats() no longer needs a separate
                 # legacy-key alias map: it just copies these straight through. Also fixes the
@@ -562,7 +558,7 @@ class Ml45CerealsDnslCriticalPointDetectionPlugin(ModelPluginPort):
                 logger.info("Training complete. MLflow run_id=%s", new_run_id)
             except Exception as exc:  # pylint: disable=broad-exception-caught
                 logger.error("MLflow artifact upload failed (model trained but not persisted): %s", exc)
-                upload_warning = f"Entrenamiento completado, pero falló la subida a MLflow: {exc}"
+                raise ModelPersistenceError(f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}") from exc
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
 

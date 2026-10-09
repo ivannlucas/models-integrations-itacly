@@ -23,7 +23,7 @@ import pandas as pd
 
 from app.application.dto.stats_dto import InputField, OutputField, RuntimeStats, StatsResponse
 from app.domain.ports.model_plugin_port import ModelPluginPort
-from app.domain.services.exceptions import ModelNotLoadedError
+from app.domain.services.exceptions import ModelNotLoadedError, ModelPersistenceError
 from app.domain.services.mlflow_tracker import BaseMLflowTracker
 from app.infrastructure.artifact_store import local_file_path
 from app.plugins.ml26_wine_sulfite_gru_pso_forecast import (
@@ -45,6 +45,7 @@ from app.plugins.ml26_wine_sulfite_gru_pso_forecast.constants import (
     TRAIN_HARD_REQUIRED_COLUMNS,
     VERSION,
     FRAMEWORK,
+    TRAINING_SEED,
 )
 from app.plugins.ml26_wine_sulfite_gru_pso_forecast.mlflow_utils import (
     download_user_model_from_mlflow,
@@ -96,12 +97,9 @@ class Ml26WineSulfiteGruPsoForecastPlugin(ModelPluginPort):
         artifact.
         """
         if mlflow_run_id:
-            loaded = download_user_model_from_mlflow(mlflow_run_id)
-            if loaded is None:
-                raise ModelNotLoadedError(
-                    f"No se encontró un modelo reentrenado en MLflow para run_id={mlflow_run_id}"
-                )
-            return loaded
+            # @require_user_model raises UserModelUnavailableError (→ 422) when the run has no
+            # loadable model: never fall back to the base model.
+            return download_user_model_from_mlflow(mlflow_run_id)
         if self._model is None:
             raise ModelNotLoadedError("El modelo no está cargado.")
         return self._model, None
@@ -211,17 +209,19 @@ class Ml26WineSulfiteGruPsoForecastPlugin(ModelPluginPort):
             if user_tmp:
                 shutil.rmtree(user_tmp, ignore_errors=True)
 
-    # ── train (fine-tuning) ───────────────────────────────────────────────────
+    # ── train ─────────────────────────────────────────────────────────────────
 
     def train(  # pylint: disable=too-many-locals
-        self, *, data_path: str, mlflow_run_id: str = ""
+        self, *, data_path: str, mlflow_run_id: str
     ) -> TrainResponse:
-        """Fine-tune a clone of the served GRU on a CSV in the AI team's sequential format.
+        """Retrain the GRU from scratch with the final PSO configuration (training.py).
 
-        The fixed AI-team artifact is never overwritten: the result is saved under
-        artifacts/<folder>/user_trained/<run>/ and, with mlflow_run_id, uploaded to MLflow (served
-        later
-        via predict(mlflow_run_id=...)). The served model in memory is unchanged.
+        Port of the AI team's final training (train_sequence_with_config, seed 7) on a CSV in their
+        sequential format; the PSO search that chose that configuration is not repeated.
+
+        The retrained model lives only in its MLflow run (served later via
+        predict(mlflow_run_id=...)); nothing is written to artifacts/ and the served model in
+        memory is unchanged. If it cannot be uploaded, ModelPersistenceError (→ 502).
         """
         if self._model is None:
             raise ModelNotLoadedError("El modelo no está cargado.")
@@ -238,42 +238,35 @@ class Ml26WineSulfiteGruPsoForecastPlugin(ModelPluginPort):
             )
 
         hyperparams = dict(self._model.config)
-        tracker = BaseMLflowTracker(mlflow_run_id) if mlflow_run_id else None
-        if tracker:
-            tracker.log_params(
-                {
-                    k: hyperparams[k]
-                    for k in (
-                        "hidden_dim",
-                        "num_layers",
-                        "bidirectional",
-                        "dropout",
-                        "head_dropout",
-                        "batch_size",
-                        "learning_rate",
-                        "weight_decay",
-                        "epochs",
-                        "patience",
-                        "lr_patience",
-                        "lr_decay_factor",
-                        "gradient_clip",
-                    )
-                }
-                | {"optimizer": "AdamW", "loss": "SmoothL1Loss", "mode": "fine_tuning_from_gru_pso"}
-            )
+        tracker = BaseMLflowTracker(mlflow_run_id)
+        tracker.log_params(
+            {
+                k: hyperparams[k]
+                for k in (
+                    "hidden_dim",
+                    "num_layers",
+                    "bidirectional",
+                    "dropout",
+                    "head_dropout",
+                    "batch_size",
+                    "learning_rate",
+                    "weight_decay",
+                    "epochs",
+                    "patience",
+                    "lr_patience",
+                    "lr_decay_factor",
+                    "gradient_clip",
+                )
+            }
+            | {"optimizer": "AdamW", "loss": "SmoothL1Loss", "mode": "train_sequence_with_config", "seed": TRAINING_SEED}
+        )
 
         def _on_epoch(epoch: int, train_loss: float, val_rmse: float) -> None:
-            if tracker:
-                tracker.log_metrics({"train_loss": train_loss, "val_rmse": val_rmse}, step=epoch)
+            tracker.log_metrics({"train_loss": train_loss, "val_rmse": val_rmse}, step=epoch)
 
         data = training.prepare_training_data(raw_df, self._model)
-        result = training.fine_tune(self._model, data, hyperparams, on_epoch=_on_epoch)
+        result = training.train_with_config(self._model, data, hyperparams, on_epoch=_on_epoch)
         val, test = result.val_report, result.test_report or {}
-
-        run_name = mlflow_run_id or datetime.now(tz=timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-        local_dir = model_loader.save_user_model(
-            result.model, model_loader.user_trained_dir(run_name)
-        )
 
         metrics = {
             "val_rmse_future_free_sulfite_72h": val[TARGET_SO2]["rmse"],
@@ -289,32 +282,30 @@ class Ml26WineSulfiteGruPsoForecastPlugin(ModelPluginPort):
             "test_rmse_underprotection_risk_72h": test[TARGET_RISK]["rmse"] if test else None,
             "test_mae_underprotection_risk_72h": test[TARGET_RISK]["mae"] if test else None,
         }
-        upload_warning = None
-        if tracker:
-            mlflow_tmp = tempfile.mkdtemp(prefix="ml26_mlflow_")
-            try:
-                tracker.log_metrics(
-                    metrics | {k: v for k, v in test_metrics.items() if v is not None}
-                )
-                model_loader.save_user_model(result.model, mlflow_tmp)
-                tracker.upload_artifacts(mlflow_tmp, artifact_path=MLFLOW_ARTIFACT_PATH)
-            except Exception as exc:  # pylint: disable=broad-exception-caught
-                logger.error("MLflow upload failed for ml26: %s", exc)
-                upload_warning = f"Modelo guardado en local, pero falló la subida a MLflow: {exc}"
-            finally:
-                shutil.rmtree(mlflow_tmp, ignore_errors=True)
+        mlflow_tmp = tempfile.mkdtemp(prefix="ml26_mlflow_")
+        try:
+            tracker.log_metrics(metrics | {k: v for k, v in test_metrics.items() if v is not None})
+            model_loader.save_user_model(result.model, mlflow_tmp)
+            tracker.upload_artifacts(mlflow_tmp, artifact_path=MLFLOW_ARTIFACT_PATH)
+        except Exception as exc:
+            logger.error("MLflow upload failed for ml26: %s", exc)
+            raise ModelPersistenceError(
+                f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}"
+            ) from exc
+        finally:
+            shutil.rmtree(mlflow_tmp, ignore_errors=True)
 
         logger.info(
-            "ml26 train() done — epochs=%d best=%d val_overall_rmse=%.4f mlflow=%s",
+            "ml26 train() done — epochs=%d best=%d val_overall_rmse=%.4f run=%s",
             result.epochs_run,
             result.best_epoch,
             val["overall_rmse"],
-            bool(mlflow_run_id),
+            mlflow_run_id,
         )
         return TrainResponse(
             detail=(
-                "Fine-tuning completado a partir de gru_pso (sin nueva búsqueda PSO — ver "
-                "manifest KI-04)."
+                "GRU reentrenada desde cero con la configuración final de gru_pso (procedimiento "
+                "train_sequence_with_config del equipo de IA, sin repetir la búsqueda PSO)."
             ),
             n_lots_train=result.n_lots["train"],
             n_lots_val=result.n_lots["val"],
@@ -325,8 +316,8 @@ class Ml26WineSulfiteGruPsoForecastPlugin(ModelPluginPort):
             best_epoch=result.best_epoch,
             **metrics,
             **test_metrics,
-            local_artifact_dir=str(local_dir),
-            upload_warning=upload_warning,
+            mlflow_run_id=mlflow_run_id,
+            upload_warning=None,
         )
 
     # ── stats ─────────────────────────────────────────────────────────────────

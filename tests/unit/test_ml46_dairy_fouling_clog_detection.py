@@ -254,7 +254,7 @@ def test_stats_handles_missing_manifest_gracefully():
 
 
 def test_train(client):
-    resp = client.post(f"{PREFIX}/train", json={"data_path": "/tmp/train.csv", "mlflow_run_id": ""})
+    resp = client.post(f"{PREFIX}/train", json={"data_path": "/tmp/train.csv", "mlflow_run_id": "test-run-id"})
     assert resp.status_code == 200
     body = resp.json()
     assert body["detail"]

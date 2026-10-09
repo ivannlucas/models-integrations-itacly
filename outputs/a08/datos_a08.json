@@ -6,7 +6,7 @@
   "version": "1.0.0",
   "task_type": "image-classification (clasificación multitarea multi-clase: categoría sanitaria x tipo de cereal)",
   "framework": "PyTorch + torchvision (MobileNetV3-Large multitarea con dos cabezas lineales; alternativas soportadas en carga: EfficientNet-B0, ResNet18)",
-  "artefacto": "mobilenet_v3_large_cereales_multitask.pth (checkpoint con model_state_dict, class_to_idx, cereal_to_idx, idx_to_class, idx_to_cereal); servido desde artifacts/modelo8_cereales/ (local) o S3 (ARTIFACT_FOLDER_NAME=modelo8_cereales)",
+  "artefacto": "mobilenet_v3_large_cereales_multitask.pth (checkpoint con model_state_dict, class_to_idx, cereal_to_idx, idx_to_class, idx_to_cereal); servido desde artifacts/ml8_cereals_img_anomaly_detector/ (local) o S3 (ARTIFACT_FOLDER_NAME=ml8_cereals_img_anomaly_detector)",
 
   "descripcion": "Clasificador de imágenes multitarea basado en MobileNetV3-Large. A partir de una imagen RGB de grano/hoja de cereal predice simultáneamente la categoría sanitaria (sano, hongos, insectos, otros) y el tipo de cereal (trigo, maíz, arroz, sorgo) mediante dos cabezas de clasificación independientes que comparten un extractor de características preentrenado en ImageNet. Diseñado para apoyar el control de calidad y la detección temprana de anomalías en entornos de almacenamiento (silos, big bags) y cultivo cerealista.",
 

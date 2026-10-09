@@ -11,7 +11,8 @@ ARTIFACT_FOLDER_NAME = "ml9_cereals_infestation_sequence_classifier"
 MODEL_FILENAME = "final_winner.pt"                  # served checkpoint (GRU winner)
 SCALER_FILENAME = "sequence_scaler.pkl"
 BUNDLE_FILENAME = "model_bundle_metadata.json"
-# Written by /train — the fixed S3 artifacts above are never overwritten by a user retrain.
+# Filenames inside the user's MLflow run (artifact_path="model") written by /train. Never
+# written to the local artifacts folder; the fixed S3 artifacts above are never overwritten.
 USER_MODEL_FILENAME = "user_final_winner.pt"
 USER_BUNDLE_FILENAME = "user_model_bundle_metadata.json"
 USER_SCALER_FILENAME = "user_sequence_scaler.pkl"

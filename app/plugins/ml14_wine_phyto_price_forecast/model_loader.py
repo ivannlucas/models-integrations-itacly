@@ -8,6 +8,9 @@ plugin bundles the dataset instead of a frozen scaler artifact.
 """
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import torch
@@ -26,6 +29,7 @@ from app.plugins.ml14_wine_phyto_price_forecast.constants import (
     TARGET_SERIES_COL,
     DRIFT_COL,
     TEST_RATIO,
+    USER_SCALERS_FILENAME,
 )
 from app.plugins.ml14_wine_phyto_price_forecast.rnn_models import GRUModel
 
@@ -102,4 +106,39 @@ def load_artifact_bundle() -> dict:
         "input_scaler_scale": np.asarray(input_scaler.scale_, dtype=np.float32),
         "target_scaler_mean": float(target_scaler.mean_[0]),
         "target_scaler_scale": float(target_scaler.scale_[0]),
+    }
+
+
+def save_user_bundle(directory: Path, model, feature_columns: list[str], input_scaler, target_scaler) -> None:
+    """Write a retrained model in the format load_user_bundle reads (gru_model.pt + scalers.json).
+
+    Unlike the base model, a retrained one cannot refit its scalers from the bundled reference
+    dataset (it was trained on the user's data), so they travel with it.
+    """
+    directory.mkdir(parents=True, exist_ok=True)
+    torch.save(model.state_dict(), directory / MODEL_FILENAME)
+    with open(directory / USER_SCALERS_FILENAME, "w", encoding="utf-8") as fh:
+        json.dump({
+            "feature_columns": list(feature_columns),
+            "input_mean": input_scaler.mean_.tolist(), "input_scale": input_scaler.scale_.tolist(),
+            "target_mean": float(target_scaler.mean_[0]), "target_scale": float(target_scaler.scale_[0]),
+        }, fh, indent=2)
+
+
+def load_user_bundle(directory: str | Path) -> dict:
+    """Load a bundle written by save_user_bundle — same keys as load_artifact_bundle."""
+    base = Path(directory)
+    with open(base / USER_SCALERS_FILENAME, encoding="utf-8") as fh:
+        meta = json.load(fh)
+    model = GRUModel(input_size=len(meta["feature_columns"]), hidden_size=HIDDEN_SIZE,
+                     num_layers=NUM_LAYERS, dropout=DROPOUT)
+    model.load_state_dict(torch.load(base / MODEL_FILENAME, map_location="cpu", weights_only=True))
+    model.eval()
+    return {
+        "model": model,
+        "feature_columns": list(meta["feature_columns"]),
+        "input_scaler_mean": np.asarray(meta["input_mean"], dtype=np.float32),
+        "input_scaler_scale": np.asarray(meta["input_scale"], dtype=np.float32),
+        "target_scaler_mean": float(meta["target_mean"]),
+        "target_scaler_scale": float(meta["target_scale"]),
     }

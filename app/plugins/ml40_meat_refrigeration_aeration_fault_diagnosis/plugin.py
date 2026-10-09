@@ -21,7 +21,11 @@ import yaml
 
 from app.application.dto.stats_dto import InputField, OutputField, RuntimeStats, StatsResponse
 from app.domain.ports.model_plugin_port import ModelPluginPort
-from app.domain.services.exceptions import ModelNotLoadedError, UnknownDiagnosisSystemError
+from app.domain.services.exceptions import (
+    ModelNotLoadedError,
+    ModelPersistenceError,
+    UnknownDiagnosisSystemError,
+)
 from app.domain.services.mlflow_tracker import BaseMLflowTracker
 from app.infrastructure.artifact_store import local_file_path
 from app.plugins.ml40_meat_refrigeration_aeration_fault_diagnosis import (
@@ -44,15 +48,11 @@ from app.plugins.ml40_meat_refrigeration_aeration_fault_diagnosis.constants impo
     STATS_FILENAMES,
     TARGET_COLUMN,
     THRESHOLDS_FILENAMES,
-    USER_MODEL_FILENAMES,
-    USER_SCALER_FILENAMES,
-    USER_STATS_FILENAMES,
     VERSION,
 )
 from app.plugins.ml40_meat_refrigeration_aeration_fault_diagnosis.mlflow_utils import (
     download_user_model_from_mlflow,
 )
-from app.plugins.ml40_meat_refrigeration_aeration_fault_diagnosis.model_loader import _store
 from app.plugins.ml40_meat_refrigeration_aeration_fault_diagnosis.predict_dto import (
     PredictBatchResponse,
     PredictInlineResponse,
@@ -239,14 +239,14 @@ class Ml40MeatRefrigerationAerationFaultDiagnosisPlugin(ModelPluginPort):
 
     # ── train (retraining with the original procedure) ───────────────────────
 
-    def train(self, *, data_path: str, mlflow_run_id: str = "", system: str | None = None) -> TrainResponse:
+    def train(self, *, data_path: str, mlflow_run_id: str, system: str | None = None) -> TrainResponse:
         """Retrain one subsystem's RandomForest from a labeled raw CSV.
 
         Follows the AI team's original trainers exactly (hyperparams, split, weights,
-        scaler). Trains into fresh objects — the served fixed artifacts are never mutated
-        nor overwritten (user artifacts are saved under user_* filenames locally and, when
-        mlflow_run_id is given, uploaded to MLflow under artifact_path="model" with the
-        canonical filenames so mlflow_utils can rebuild the bundle).
+        scaler). Trains into fresh objects — the served fixed artifacts and their local copy
+        are never mutated nor overwritten. The retrained bundle lives only in its own MLflow
+        run (artifact_path="model", canonical filenames so mlflow_utils can rebuild it with
+        that mlflow_run_id).
         """
         self._require_loaded()
         with local_file_path(data_path) as local_path:
@@ -272,16 +272,10 @@ class Ml40MeatRefrigerationAerationFaultDiagnosisPlugin(ModelPluginPort):
         result = training.train_system(engineered, system, thresholds)
         metrics = result["metrics"]
 
-        # Persist locally under user_* names — the fixed S3 artifacts are never overwritten.
-        _store.local_dir.mkdir(parents=True, exist_ok=True)
-        joblib.dump(result["model"], _store.local_dir / USER_MODEL_FILENAMES[system])
-        if result["scaler"] is not None:
-            joblib.dump(result["scaler"], _store.local_dir / USER_SCALER_FILENAMES[system])
-        with open(_store.local_dir / USER_STATS_FILENAMES[system], "w", encoding="utf-8") as fh:
-            yaml.dump(result["stats"], fh)
-
         upload_warning = None
-        if mlflow_run_id:
+        if not mlflow_run_id:
+            raise ModelPersistenceError("Sin run de MLflow: el modelo reentrenado no se ha guardado.")
+        else:
             tracker = BaseMLflowTracker(mlflow_run_id)
             try:
                 tracker.log_params({"system": system, **MODEL_PARAMS[system]})
@@ -300,7 +294,7 @@ class Ml40MeatRefrigerationAerationFaultDiagnosisPlugin(ModelPluginPort):
                     shutil.rmtree(mlflow_tmp, ignore_errors=True)
             except Exception as exc:  # pylint: disable=broad-exception-caught
                 logger.error("MLflow artifact upload failed: %s", exc)
-                upload_warning = f"Modelo guardado localmente, pero falló la subida a MLflow: {exc}"
+                raise ModelPersistenceError(f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}") from exc
 
         logger.info(
             "ml40 train() done — system=%s n_samples=%d f1_macro=%.4f mlflow=%s",

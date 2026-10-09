@@ -23,7 +23,11 @@ import pandas as pd
 
 from app.application.dto.stats_dto import InputField, OutputField, RuntimeStats, StatsResponse
 from app.domain.ports.model_plugin_port import ModelPluginPort
-from app.domain.services.exceptions import MissingRequiredFeatureError, ModelNotLoadedError
+from app.domain.services.exceptions import (
+    MissingRequiredFeatureError,
+    ModelNotLoadedError,
+    ModelPersistenceError,
+)
 from app.domain.services.mlflow_tracker import BaseMLflowTracker
 from app.infrastructure.artifact_store import local_file_path
 from app.plugins.ml15_wine_ipi_price_forecast import history, model_loader, preprocessing, training
@@ -34,11 +38,9 @@ from app.plugins.ml15_wine_ipi_price_forecast.constants import (
     METRICS_REPORTED,
     MODEL_FILENAME,
     MODEL_ID,
-    USER_MODEL_FILENAME,
     VERSION,
 )
 from app.plugins.ml15_wine_ipi_price_forecast.mlflow_utils import download_user_model_from_mlflow
-from app.plugins.ml15_wine_ipi_price_forecast.model_loader import _store
 from app.plugins.ml15_wine_ipi_price_forecast.predict_dto import (
     PredictBatchResponse,
     PredictInlineResponse,
@@ -82,12 +84,6 @@ class Ml15WineIpiPriceForecastPlugin(ModelPluginPort):
             return self._payload, None
         logger.info("Using user-retrained model from MLflow run_id=%s", mlflow_run_id)
         loaded = download_user_model_from_mlflow(mlflow_run_id)
-        if loaded is None:
-            logger.warning(
-                "No se pudo recuperar el modelo de MLflow run_id=%s; se usa el artefacto fijo.",
-                mlflow_run_id,
-            )
-            return self._payload, None
         payload, tmp = loaded
         return payload, tmp
 
@@ -280,15 +276,14 @@ class Ml15WineIpiPriceForecastPlugin(ModelPluginPort):
 
     # ── train (retraining with the original procedure) ────────────────────────
 
-    def train(self, *, data_path: str, mlflow_run_id: str = "") -> TrainResponse:
+    def train(self, *, data_path: str, mlflow_run_id: str) -> TrainResponse:
         """Retrain a fresh Pipeline(StandardScaler + Ridge(alpha=25.0)) from a labeled CSV.
 
         Follows the AI team's original procedure exactly (same model_kind/alpha as
-        config.yaml::production_deployment — see manifest.training). Trains into a fresh
-        artifact — the served fixed artifact is never mutated nor overwritten; the user
-        artifact is saved locally under USER_MODEL_FILENAME and, when mlflow_run_id is given,
-        uploaded to MLflow under artifact_path="model" with the canonical filename so
-        mlflow_utils can reload it later.
+        config.yaml::production_deployment — see manifest.training). The retrained artifact
+        lives only in its own MLflow run (artifact_path="model", canonical filename so
+        mlflow_utils can reload it with that mlflow_run_id); the served fixed artifact and
+        its local copy are never mutated nor overwritten.
         """
         self._require_loaded()
         with local_file_path(data_path) as local_path:
@@ -306,12 +301,10 @@ class Ml15WineIpiPriceForecastPlugin(ModelPluginPort):
             "n_training_rows": result["n_train"],
         })
 
-        # Persist locally under user_* name — the fixed S3 artifact is never overwritten.
-        _store.local_dir.mkdir(parents=True, exist_ok=True)
-        joblib.dump(new_payload, _store.local_dir / USER_MODEL_FILENAME)
-
         upload_warning = None
-        if mlflow_run_id:
+        if not mlflow_run_id:
+            raise ModelPersistenceError("Sin run de MLflow: el modelo reentrenado no se ha guardado.")
+        else:
             tracker = BaseMLflowTracker(mlflow_run_id)
             mlflow_tmp = None
             try:
@@ -322,7 +315,7 @@ class Ml15WineIpiPriceForecastPlugin(ModelPluginPort):
                 tracker.upload_artifacts(mlflow_tmp, artifact_path="model")
             except Exception as exc:  # pylint: disable=broad-exception-caught
                 logger.error("MLflow artifact upload failed: %s", exc)
-                upload_warning = f"Modelo guardado localmente, pero falló la subida a MLflow: {exc}"
+                raise ModelPersistenceError(f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}") from exc
             finally:
                 if mlflow_tmp:
                     shutil.rmtree(mlflow_tmp, ignore_errors=True)

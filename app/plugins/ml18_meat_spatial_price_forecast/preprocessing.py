@@ -4,6 +4,9 @@ mode only — see inbox/a18/manifest.yaml known_issues) from the delivered code.
 """
 from __future__ import annotations
 
+import re
+import unicodedata
+
 import numpy as np
 import pandas as pd
 
@@ -21,6 +24,37 @@ from app.plugins.ml18_meat_spatial_price_forecast.constants import (
 )
 
 _CARRY_FORWARD_COLS = ("CONSUMO X CAPITA", "PENETRACION (%)", "Poblacion", "RentaHogar")
+
+
+def _normalize_col_name(name: str) -> str:
+    normalized = str(name).strip().upper()
+    normalized = "".join(c for c in unicodedata.normalize("NFKD", normalized) if not unicodedata.combining(c))
+    normalized = re.sub(r"[^A-Z0-9 ]+", " ", normalized)
+    return " ".join(normalized.split())
+
+
+def resolve_target_column(df: pd.DataFrame) -> bool:
+    """Port of src/data_processing/load_data.py::resolve_target_column.
+
+    CSV exports often carry the price header with encoding variants ("PRECIO MEDIO KG" with
+    mojibake). The original copies the best-populated matching column into TARGET_COL; without
+    this the price would be treated as missing and the own-price and neighbour-price features
+    would silently fall back to imputed values. Returns True if TARGET_COL now holds data.
+    """
+    if TARGET_COL in df.columns and df[TARGET_COL].notna().any():
+        return True
+    wanted = _normalize_col_name(TARGET_COL)
+    candidates = list(dict.fromkeys(
+        [c for c in df.columns if _normalize_col_name(c) == wanted]
+        + [c for c in df.columns if wanted in _normalize_col_name(c)]
+    ))
+    if not candidates:
+        return False
+    best = max(candidates, key=lambda c: int(pd.to_numeric(df[c], errors="coerce").notna().sum()))
+    if not pd.to_numeric(df[best], errors="coerce").notna().any():
+        return False
+    df[TARGET_COL] = pd.to_numeric(df[best], errors="coerce")
+    return True
 
 
 def build_raw_dataframe(rows: list[dict]) -> pd.DataFrame:
@@ -41,7 +75,7 @@ def build_raw_dataframe(rows: list[dict]) -> pd.DataFrame:
         raise InsufficientRowsError(
             f"La columna '{DATE_COL}' contiene {invalid} valores no parseables (formato esperado YYYY-MM-DD)."
         )
-    if TARGET_COL not in df.columns:
+    if not resolve_target_column(df):
         df[TARGET_COL] = np.nan
     return df
 

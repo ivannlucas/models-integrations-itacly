@@ -7,7 +7,12 @@ from fastapi.responses import JSONResponse
 
 from app.application.dto.stats_dto import StatsResponse
 from app.application.dto.train_dto import TrainRequest as _DefaultTrainRequest, TrainResponse as _DefaultTrainResponse
-from app.domain.services.exceptions import TrainingNotSupportedError
+from app.domain.services.exceptions import (
+    ArchiveLimitExceededError,
+    ModelPersistenceError,
+    TrainingNotSupportedError,
+    UserModelUnavailableError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -79,7 +84,13 @@ def make_model_router(
         """Return model metadata and runtime statistics."""
         if mlflow_run_id:
             logger.info("Stats requested with mlflow_run_id=%s for model '%s'", mlflow_run_id, model_id)
-        return _get_container(request).stats_use_case.execute(mlflow_run_id=mlflow_run_id)
+        container = _get_container(request)
+        try:
+            return container.stats_use_case.execute(mlflow_run_id=mlflow_run_id)
+        except UserModelUnavailableError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)
+            ) from exc
 
     @router.post("/predict")
     def predict(request: Request, body: predict_request_type) -> predict_response_type:
@@ -87,8 +98,14 @@ def make_model_router(
         container = _get_container(request)
         try:
             return container.predict_use_case.execute(body)
+        except ArchiveLimitExceededError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_413_CONTENT_TOO_LARGE, detail=str(exc)
+            ) from exc
         except Exception as exc:
-            if extra_predict_exceptions and isinstance(exc, extra_predict_exceptions):
+            if isinstance(exc, UserModelUnavailableError) or (
+                extra_predict_exceptions and isinstance(exc, extra_predict_exceptions)
+            ):
                 raise HTTPException(
                     status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)
                 ) from exc
@@ -107,9 +124,18 @@ def make_model_router(
             raise HTTPException(
                 status_code=status.HTTP_501_NOT_IMPLEMENTED, detail=str(exc)
             ) from exc
+        except ArchiveLimitExceededError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_413_CONTENT_TOO_LARGE, detail=str(exc)
+            ) from exc
         except (FileNotFoundError, ValueError) as exc:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+            ) from exc
+        except ModelPersistenceError as exc:
+            logger.error("Retrained model for '%s' could not be saved to MLflow: %s", model_id, exc)
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)
             ) from exc
         except Exception as exc:
             logger.exception("Unexpected error during training for model '%s'", model_id)

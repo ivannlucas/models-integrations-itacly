@@ -28,7 +28,6 @@ from app.plugins.ml26_wine_sulfite_gru_pso_forecast.constants import (
     TARGET_NAMES,
     USER_META_FILENAME,
     USER_STATE_FILENAME,
-    USER_TRAINED_SUBDIR,
     WINDOW,
 )
 
@@ -118,13 +117,6 @@ def load_artifacts() -> tuple[LoadedModel, dict]:
         WINDOW,
     )
     return model, registry
-
-
-def user_trained_dir(run_name: str) -> Path:
-    """Local folder for a user fine-tuned model — a sub-folder, so the fixed artifact is never
-    overwritten.
-    """
-    return _store.local_dir / USER_TRAINED_SUBDIR / run_name
 
 
 def save_user_model(model: LoadedModel, directory: str | Path) -> Path:

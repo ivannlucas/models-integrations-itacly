@@ -17,11 +17,14 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
-import torch
 
 from app.application.dto.stats_dto import InputField, OutputField, RuntimeStats, StatsResponse
 from app.domain.ports.model_plugin_port import ModelPluginPort
-from app.domain.services.exceptions import InsufficientSequenceHistoryError, ModelNotLoadedError
+from app.domain.services.exceptions import (
+    InsufficientSequenceHistoryError,
+    ModelNotLoadedError,
+    ModelPersistenceError,
+)
 from app.domain.services.mlflow_tracker import BaseMLflowTracker
 from app.infrastructure.artifact_store import local_file_path
 from app.plugins.ml9_cereals_infestation_sequence_classifier import model_loader, postprocessing, preprocessing
@@ -44,7 +47,6 @@ from app.plugins.ml9_cereals_infestation_sequence_classifier.constants import (
     LABEL_MODE,
     MODEL_ID,
     N_FEATURES,
-    SCALER_FILENAME,
     SENSOR_COLUMNS,
     STRIDE,
     SYNTHETIC_DATA_WARNING,
@@ -60,7 +62,6 @@ from app.plugins.ml9_cereals_infestation_sequence_classifier.constants import (
     WINDOW_SIZE,
 )
 from app.plugins.ml9_cereals_infestation_sequence_classifier.mlflow_utils import download_user_model_from_mlflow
-from app.plugins.ml9_cereals_infestation_sequence_classifier.model_loader import _store
 from app.plugins.ml9_cereals_infestation_sequence_classifier.predict_dto import (
     PredictBatchResponse,
     PredictInlineResponse,
@@ -102,29 +103,27 @@ class Ml9CerealsInfestationSequenceClassifierPlugin(ModelPluginPort):
         self._predict_count += 1
         self._last_predict_at = datetime.now(tz=timezone.utc).isoformat()
 
-    def _resolve_user_model(self, mlflow_run_id: str) -> str | None:
-        """Swap in a user fine-tuned model from MLflow. Returns the temp dir to clean up, if any."""
-        loaded = download_user_model_from_mlflow(mlflow_run_id)
-        if not loaded:
-            logger.warning(
-                "No se pudo recuperar el modelo de MLflow run_id=%s; se usa el artefacto fijo.",
-                mlflow_run_id,
-            )
-            return None
-        self._checkpoint, self._scaler, self._bundle, user_tmp = loaded
-        return user_tmp
+    def _resolve_model(self, mlflow_run_id: str) -> tuple[dict, Any, dict, str | None]:
+        """Return (checkpoint, scaler, bundle, temp_dir) to serve this request.
+
+        The user's fine-tuned model (if mlflow_run_id) is returned, never assigned to self:
+        the plugin instance is shared by concurrent requests, so swapping it into self leaked
+        a user's model to other requests — and, with two overlapping runs, left it in place
+        as the "base" model. temp_dir is None for the base model.
+        """
+        if not mlflow_run_id:
+            self._require_loaded()
+            return self._checkpoint, self._scaler, self._bundle, None
+        return download_user_model_from_mlflow(mlflow_run_id)
 
     # ── predict_batch ─────────────────────────────────────────────────────────
 
     def predict_batch(self, *, data_path: str, mlflow_run_id: str = "") -> PredictBatchResponse:
         """Score every valid 48-hour window in a raw hourly-telemetry CSV (one or more series)."""
-        user_tmp = None
-        saved = (self._checkpoint, self._scaler, self._bundle)
         if mlflow_run_id:
             logger.info("predict_batch — using user model from MLflow run_id=%s", mlflow_run_id)
-            user_tmp = self._resolve_user_model(mlflow_run_id)
+        checkpoint, scaler, bundle, user_tmp = self._resolve_model(mlflow_run_id)
         try:
-            self._require_loaded()
             with local_file_path(data_path) as local_path:
                 raw_df = pd.read_csv(local_path)
 
@@ -132,7 +131,7 @@ class Ml9CerealsInfestationSequenceClassifierPlugin(ModelPluginPort):
             if missing:
                 raise ValueError(f"El CSV no trae las columnas obligatorias: {missing}")
 
-            payload, _, has_target = preprocessing.build_windows(raw_df, self._bundle)
+            payload, _, has_target = preprocessing.build_windows(raw_df, bundle)
             if len(payload["X_seq"]) == 0:
                 raise InsufficientSequenceHistoryError(
                     f"Ninguna serie del CSV alcanza las {WINDOW_SIZE} observaciones horarias "
@@ -140,7 +139,7 @@ class Ml9CerealsInfestationSequenceClassifierPlugin(ModelPluginPort):
                     f"recibidas: {raw_df[GROUP_COLUMN].nunique()}, filas: {len(raw_df)}."
                 )
 
-            proba = postprocessing.run_inference(self._checkpoint, self._scaler, payload["X_seq"])
+            proba = postprocessing.run_inference(checkpoint, scaler, payload["X_seq"])
             pred_df = postprocessing.build_predictions_frame(
                 payload["window_meta"], proba, payload["y_seq"], has_target=has_target,
                 x_seq=payload["X_seq"], feature_columns=payload["feature_columns"],
@@ -148,7 +147,9 @@ class Ml9CerealsInfestationSequenceClassifierPlugin(ModelPluginPort):
 
             evaluated = None
             if has_target and np.size(payload["y_seq"]):
-                evaluated = self._metrics_from_windows(payload["X_seq"], payload["y_seq"])
+                evaluated = self._metrics_from_windows(
+                    payload["X_seq"], payload["y_seq"], checkpoint=checkpoint, scaler=scaler,
+                )
 
             self._record_prediction()
             logger.info(
@@ -167,7 +168,6 @@ class Ml9CerealsInfestationSequenceClassifierPlugin(ModelPluginPort):
         finally:
             if user_tmp:
                 shutil.rmtree(user_tmp, ignore_errors=True)
-                self._checkpoint, self._scaler, self._bundle = saved
 
     # ── predict_inline ────────────────────────────────────────────────────────
 
@@ -181,13 +181,10 @@ class Ml9CerealsInfestationSequenceClassifierPlugin(ModelPluginPort):
     ) -> PredictInlineResponse:  # pylint: disable=too-many-locals
         """Score the most recent 48-hour window of the submitted series history."""
         _ = model_key
-        user_tmp = None
-        saved = (self._checkpoint, self._scaler, self._bundle)
         if mlflow_run_id:
             logger.info("predict_inline — using user model from MLflow run_id=%s", mlflow_run_id)
-            user_tmp = self._resolve_user_model(mlflow_run_id)
+        checkpoint, scaler, bundle, user_tmp = self._resolve_model(mlflow_run_id)
         try:
-            self._require_loaded()
             rows: list[dict] = features["rows"]
             raw_df = preprocessing.build_raw_dataframe(rows)
 
@@ -195,7 +192,7 @@ class Ml9CerealsInfestationSequenceClassifierPlugin(ModelPluginPort):
             if missing:
                 raise ValueError(f"Las filas recibidas no traen las columnas obligatorias: {missing}")
 
-            payload, _, has_target = preprocessing.build_windows(raw_df, self._bundle)
+            payload, _, has_target = preprocessing.build_windows(raw_df, bundle)
             idx = preprocessing.last_window_index(payload)
             if idx == -1:
                 raise InsufficientSequenceHistoryError(
@@ -205,7 +202,7 @@ class Ml9CerealsInfestationSequenceClassifierPlugin(ModelPluginPort):
                     f"{raw_df[GROUP_COLUMN].nunique()}."
                 )
 
-            proba = postprocessing.run_inference(self._checkpoint, self._scaler, payload["X_seq"])
+            proba = postprocessing.run_inference(checkpoint, scaler, payload["X_seq"])
             pred_df = postprocessing.build_predictions_frame(
                 payload["window_meta"], proba, payload["y_seq"], has_target=has_target,
             )
@@ -248,11 +245,10 @@ class Ml9CerealsInfestationSequenceClassifierPlugin(ModelPluginPort):
         finally:
             if user_tmp:
                 shutil.rmtree(user_tmp, ignore_errors=True)
-                self._checkpoint, self._scaler, self._bundle = saved
 
     # ── train (fine-tuning) ───────────────────────────────────────────────────
 
-    def train(self, *, data_path: str, mlflow_run_id: str = "") -> TrainResponse:  # pylint: disable=too-many-locals,too-many-statements
+    def train(self, *, data_path: str, mlflow_run_id: str) -> TrainResponse:  # pylint: disable=too-many-locals,too-many-statements
         """Fine-tune the served GRU checkpoint on the caller's own labelled CSV.
 
         Follows the delivered training procedure (src/training/trainer.py) for everything that
@@ -354,7 +350,7 @@ class Ml9CerealsInfestationSequenceClassifierPlugin(ModelPluginPort):
         )
         metrics = {k: float(test_eval["metrics"][k]) for k in _METRIC_KEYS}
 
-        artifact_path, upload_warning = self._persist_retrained(result, metrics, tracker)
+        artifact_path = self._persist_retrained(result, metrics, tracker)
 
         logger.info(
             "ml9 train() done — ventanas train/val/test=%d/%d/%d f1_macro=%.4f (baseline %.4f) mlflow=%s",
@@ -378,16 +374,20 @@ class Ml9CerealsInfestationSequenceClassifierPlugin(ModelPluginPort):
             validation_f1_macro=float(result.metrics["f1_macro"]),
             baseline_f1_macro=baseline["f1_macro"],
             artifact_path=artifact_path,
-            upload_warning=upload_warning,
+            upload_warning=None,
         )
 
-    def _metrics_from_windows(self, x_seq: np.ndarray, y_seq: np.ndarray) -> dict[str, float]:
-        """Evaluate the currently served model on already-built windows."""
+    def _metrics_from_windows(
+        self, x_seq: np.ndarray, y_seq: np.ndarray, *, checkpoint: dict | None = None, scaler: Any = None,
+    ) -> dict[str, float]:
+        """Evaluate a model (the base one unless checkpoint/scaler are given) on built windows."""
+        checkpoint = checkpoint if checkpoint is not None else self._checkpoint
+        scaler = scaler if scaler is not None else self._scaler
         evaluation = evaluate_sequence_model(
-            self._checkpoint["model"],
-            transform_sequences(self._scaler, x_seq),
+            checkpoint["model"],
+            transform_sequences(scaler, x_seq),
             np.asarray(y_seq).astype(int),
-            batch_size=int(self._checkpoint.get("training_params", {}).get("batch_size", 128)),
+            batch_size=int(checkpoint.get("training_params", {}).get("batch_size", 128)),
             device="cpu",
         )
         return {k: float(evaluation["metrics"][k]) for k in _METRIC_KEYS}
@@ -397,14 +397,15 @@ class Ml9CerealsInfestationSequenceClassifierPlugin(ModelPluginPort):
         result: Any,
         metrics: dict[str, float],
         tracker: BaseMLflowTracker | None,
-    ) -> tuple[str, str | None]:
-        """Save the fine-tuned bundle locally under user_* names and, if asked, upload to MLflow.
+    ) -> str:
+        """Upload the fine-tuned bundle to its own MLflow run (artifact_path="model").
 
-        The fixed S3 artifacts are never overwritten: a user retrain lands on user_*.pt/json/pkl.
+        The retrained bundle lives only in MLflow — the served fixed artifacts and their local
+        copy are never written. Files keep the user_* names that mlflow_utils already reads.
+        Raises ModelPersistenceError if it cannot be saved: the result would be lost.
         """
-        _store.local_dir.mkdir(parents=True, exist_ok=True)
-        local_model_path = _store.local_dir / USER_MODEL_FILENAME
-        save_checkpoint(local_model_path, result.checkpoint)
+        if not tracker:
+            raise ModelPersistenceError("Sin run de MLflow: el modelo reentrenado no se ha guardado.")
 
         user_bundle = dict(self._bundle or {})
         user_bundle["model_files"] = {"winner": USER_MODEL_FILENAME}
@@ -412,29 +413,21 @@ class Ml9CerealsInfestationSequenceClassifierPlugin(ModelPluginPort):
         user_bundle["best_model_name"] = str(result.model_type)
         user_bundle["best_model_metric"] = float(result.metrics["f1_macro"])
         user_bundle["retrained_by_user"] = True
-        with open(_store.local_dir / USER_BUNDLE_FILENAME, "w", encoding="utf-8") as fh:
-            json.dump(user_bundle, fh, ensure_ascii=False, indent=2)
-        save_pickle(self._scaler, _store.local_dir / USER_SCALER_FILENAME)
 
-        upload_warning = None
-        if tracker:
-            try:
-                tracker.log_metrics(metrics)
-                mlflow_tmp = tempfile.mkdtemp(prefix="ml9_mlflow_")
-                try:
-                    torch.save(result.checkpoint, Path(mlflow_tmp) / USER_MODEL_FILENAME)
-                    shutil.copy2(_store.local_dir / USER_BUNDLE_FILENAME, Path(mlflow_tmp) / USER_BUNDLE_FILENAME)
-                    shutil.copy2(_store.path(SCALER_FILENAME), Path(mlflow_tmp) / USER_SCALER_FILENAME)
-                    tracker.upload_artifacts(mlflow_tmp, artifact_path="model")
-                finally:
-                    shutil.rmtree(mlflow_tmp, ignore_errors=True)
-            except Exception as exc:  # pylint: disable=broad-exception-caught
-                logger.error("MLflow artifact upload failed: %s", exc)
-                upload_warning = (
-                    f"El fine-tuning se completó y el modelo se guardó en local ({local_model_path}), "
-                    f"pero falló la subida a MLflow: {exc}"
-                )
-        return str(local_model_path), upload_warning
+        mlflow_tmp = tempfile.mkdtemp(prefix="ml9_mlflow_")
+        try:
+            tracker.log_metrics(metrics)
+            save_checkpoint(Path(mlflow_tmp) / USER_MODEL_FILENAME, result.checkpoint)
+            with open(Path(mlflow_tmp) / USER_BUNDLE_FILENAME, "w", encoding="utf-8") as fh:
+                json.dump(user_bundle, fh, ensure_ascii=False, indent=2)
+            save_pickle(self._scaler, Path(mlflow_tmp) / USER_SCALER_FILENAME)
+            tracker.upload_artifacts(mlflow_tmp, artifact_path="model")
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            logger.error("MLflow artifact upload failed: %s", exc)
+            raise ModelPersistenceError(f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}") from exc
+        finally:
+            shutil.rmtree(mlflow_tmp, ignore_errors=True)
+        return f"runs:/{tracker.run_id}/model/{USER_MODEL_FILENAME}"
 
     # ── stats ─────────────────────────────────────────────────────────────────
 

@@ -20,7 +20,7 @@ import pandas as pd
 
 from app.application.dto.stats_dto import InputField, OutputField, RuntimeStats, StatsResponse
 from app.domain.ports.model_plugin_port import ModelPluginPort
-from app.domain.services.exceptions import ModelNotLoadedError
+from app.domain.services.exceptions import ModelNotLoadedError, ModelPersistenceError
 from app.domain.services.mlflow_tracker import BaseMLflowTracker
 from app.infrastructure.artifact_store import local_file_path
 from app.plugins.ml3_wine_disease_pest_forecast import (
@@ -41,14 +41,10 @@ from app.plugins.ml3_wine_disease_pest_forecast.constants import (
     SCALER_FILENAME,
     SERIES_COLUMN,
     TRAIN_RANDOM_SEED,
-    USER_LABEL_ENCODER_FILENAME,
-    USER_MODEL_FILENAMES,
-    USER_SCALER_FILENAME,
     VERSION,
     WINDOW_SIZE,
 )
 from app.plugins.ml3_wine_disease_pest_forecast.mlflow_utils import download_user_model_from_mlflow
-from app.plugins.ml3_wine_disease_pest_forecast.model_loader import _store
 from app.plugins.ml3_wine_disease_pest_forecast.predict_dto import (
     PredictBatchResponse,
     PredictInlineResponse,
@@ -214,52 +210,44 @@ class Ml3WineDiseasePestForecastPlugin(ModelPluginPort):
 
     # ── train (full retraining with the delivered procedure) ─────────────────
 
-    def train(self, *, data_path: str, mlflow_run_id: str = "") -> TrainResponse:
+    def train(self, *, data_path: str, mlflow_run_id: str) -> TrainResponse:
         """Retrain the full Deep Ensemble from a labeled raw CSV with the delivered procedure.
 
-        Trains into fresh objects — the served fixed S3 artifacts are never mutated. User
-        artifacts are saved locally under user_* names and, when mlflow_run_id is given,
-        uploaded to MLflow under artifact_path="model" with the canonical filenames so that
-        mlflow_utils can rebuild the bundle.
+        Trains into fresh objects in a temporary directory with the canonical filenames, so
+        mlflow_utils can rebuild the bundle with that mlflow_run_id. The retrained ensemble
+        lives only in its own MLflow run (artifact_path="model"); the served fixed artifacts
+        and their local copy are never mutated nor overwritten.
         """
         self._require_loaded()
         raw_df = training.load_retraining_input(data_path)
 
-        _store.local_dir.mkdir(parents=True, exist_ok=True)
-        model_paths = {
-            "M1_LSTM": str(_store.local_dir / USER_MODEL_FILENAMES[0]),
-            "M2_CNN": str(_store.local_dir / USER_MODEL_FILENAMES[1]),
-            "M3_BiGRU": str(_store.local_dir / USER_MODEL_FILENAMES[2]),
-            "scaler": str(_store.local_dir / USER_SCALER_FILENAME),
-            "label_encoder": str(_store.local_dir / USER_LABEL_ENCODER_FILENAME),
-        }
-        result = training.run_retraining(raw_df, model_paths)
-        metrics = result["metrics"]
+        train_tmp = tempfile.mkdtemp(prefix="ml3_train_")
+        try:
+            model_paths = {
+                "M1_LSTM": f"{train_tmp}/{MODEL_FILENAMES[0]}",
+                "M2_CNN": f"{train_tmp}/{MODEL_FILENAMES[1]}",
+                "M3_BiGRU": f"{train_tmp}/{MODEL_FILENAMES[2]}",
+                "scaler": f"{train_tmp}/{SCALER_FILENAME}",
+                "label_encoder": f"{train_tmp}/{LABEL_ENCODER_FILENAME}",
+            }
+            result = training.run_retraining(raw_df, model_paths)
+            metrics = result["metrics"]
 
-        upload_warning = None
-        if mlflow_run_id:
-            tracker = BaseMLflowTracker(mlflow_run_id)
-            try:
-                tracker.log_params({"window_size": WINDOW_SIZE, "epochs": EPOCHS,
-                                    "batch_size": BATCH_SIZE, "seed": TRAIN_RANDOM_SEED})
-                tracker.log_metrics(metrics)
-                mlflow_tmp = tempfile.mkdtemp(prefix="ml3_mlflow_")
+            upload_warning = None
+            if not mlflow_run_id:
+                raise ModelPersistenceError("Sin run de MLflow: el modelo reentrenado no se ha guardado.")
+            else:
+                tracker = BaseMLflowTracker(mlflow_run_id)
                 try:
-                    for src, dst in zip(USER_MODEL_FILENAMES, MODEL_FILENAMES):
-                        shutil.copy2(_store.local_dir / src, f"{mlflow_tmp}/{dst}")
-                    shutil.copy2(
-                        _store.local_dir / USER_SCALER_FILENAME, f"{mlflow_tmp}/{SCALER_FILENAME}",
-                    )
-                    shutil.copy2(
-                        _store.local_dir / USER_LABEL_ENCODER_FILENAME,
-                        f"{mlflow_tmp}/{LABEL_ENCODER_FILENAME}",
-                    )
-                    tracker.upload_artifacts(mlflow_tmp, artifact_path="model")
-                finally:
-                    shutil.rmtree(mlflow_tmp, ignore_errors=True)
-            except Exception as exc:  # pylint: disable=broad-exception-caught
-                logger.error("MLflow artifact upload failed: %s", exc)
-                upload_warning = f"Modelo guardado localmente, pero falló la subida a MLflow: {exc}"
+                    tracker.log_params({"window_size": WINDOW_SIZE, "epochs": EPOCHS,
+                                        "batch_size": BATCH_SIZE, "seed": TRAIN_RANDOM_SEED})
+                    tracker.log_metrics(metrics)
+                    tracker.upload_artifacts(train_tmp, artifact_path="model")
+                except Exception as exc:  # pylint: disable=broad-exception-caught
+                    logger.error("MLflow artifact upload failed: %s", exc)
+                    raise ModelPersistenceError(f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}") from exc
+        finally:
+            shutil.rmtree(train_tmp, ignore_errors=True)
 
         logger.info(
             "ml3 train() done — n_train_windows=%d n_val_windows=%d n_test_windows=%d "

@@ -144,18 +144,32 @@ constraints: {}
 # tiempo de inferencia.
 
 training:
-  supported: false
-  # scripts/train.py / src.main train() SOLO acepta --config config/config.yaml -- no hay forma
-  # de pasarle un CSV de datos de cliente; config['data']['dataset_path'] es una ruta fija al
-  # dataset bundled del equipo de IA. Igual que en a14: reentrenar expondría únicamente la
-  # posibilidad de variar hiperparámetros sobre el MISMO histórico fijo, nunca incorporar datos
-  # nuevos del cliente -- por eso training.supported=false. mlflow_utils.py se implementa
-  # igualmente (regla del proyecto), como stub sin fine-tuning real disponible.
-  target_column: null
-  required_columns: null
-  hyperparams: null
-  metrics_returned: null
-  source: codigo_entrenamiento (ausencia de contrato de datos de entrada confirmada leyendo src/main.py::train())
+  supported: true
+  # [CORREGIDO 2026-10-08] Antes supported=false porque src/main.py::train() lee una ruta fija de
+  # config.yaml. Con el criterio de plugin-integration eso no lo impide: el motor servido es una GRU
+  # con pesos aprendidos y train() es un pipeline portable a un CSV del cliente con el mismo esquema
+  # (como ml23). Port literal en app/plugins/ml18_meat_spatial_price_forecast/training.py, verificado
+  # con el código v4.2 (commit 5ceeeb7): con el mismo TensorFlow (2.21, CPU), plugin y original dan
+  # métricas IDÉNTICAS a 4 decimales (test MAPE 9,9552 %, R² 0,8110; 17 épocas, mejor la 9). Frente
+  # al artefacto entregado (9,9323 % / 0,8114) la diferencia es del entorno (TF 2.20, otro hardware).
+  # El texto anterior (supported=false) era: "scripts/train.py / src.main train() SOLO acepta
+  # --config ... mlflow_utils.py ... stub sin fine-tuning real disponible".
+  source: codigo_entrenamiento   # src/main.py::train() + src/training/trainer.py + src/data_processing/preprocess.py
+  input_schema: "CSV con separador ';' en el formato de data/processed/model_ready/dataset_modelado_desde_2008.csv"
+  target_column: "PRECIO MEDIO KG"   # resuelto también con variantes de codificación de la cabecera (resolve_target_column)
+  required_columns: [Fecha, CCAA, Producto, Poblacion, RentaHogar, "CONSUMO X CAPITA", "PENETRACION (%)", "PRECIO MEDIO KG"]
+  hyperparams:   # config/config.yaml del código entregado
+    model: {type: GRU, units: 96, dropout: 0.2, dense_units: 32, learning_rate: 0.001, loss: mse}
+    lookback: 12
+    train_ratio: 0.70
+    val_ratio: 0.15
+    epochs: 60
+    batch_size: 32
+    early_stopping_patience: 8   # monitor val_loss, restore_best_weights
+    seed: 42
+  metrics_returned: [train/val/test mae, rmse, mape_pct, r2, n_train, n_val, n_test, epochs_run, best_epoch, training_time_s]
+  duracion_estimada: "~2,5 min en CPU (12 núcleos) con el dataset completo; 17 épocas, 8,5 s/época"
+  persistencia: "Solo MLflow (artifact_path=model: model.joblib, x_scaler.json, y_scaler.json, best_config.json, metrics.json). El modelo base nunca se sustituye."
 
 metrics_reported:
   dataset: test_holdout (split cronológico 70/15/15 por fecha única, sin solapamiento)
@@ -256,6 +270,19 @@ golden_cases:
     note: "Rechazo controlado (ValueError convertido a excepción de dominio -> 422 en el plugin), no una excepción no manejada ni un 500."
 
 known_issues:
+  - "[RESUELTO 2026-10-08, se subió la versión v4.2 (commit 5ceeeb7: 7 features, MAPE 9,93 %)] El código subido a inbox/a18/codigo/ (commit 078c07b, 2026-06-30) NO es el
+     del modelo integrado ni el adoptado en la memoria v4.2. Su config.yaml tiene 6 input_features
+     (sin PRECIO_MEDIO_KG_PROPIO, con un comentario que dice que se excluye a propósito), no existe
+     add_own_price_feature ni los modos forecast/backtest, y su models/artifacts/.../metrics.json da
+     test MAPE 12,146 % / R² 0,7716, que es la fila 'Sin propio, con vecino (config. previa)' de la
+     Tabla 5.4 de la memoria v4.2. El modelo adoptado (7 features, MAPE 9,93 % / R² 0,811) es el que
+     integra el plugin y el que se verificó el 2026-10-02 con otra copia del código (con
+     --forecast). Las diferencias del árbol de trabajo frente a 078c07b son solo finales de línea
+     (CRLF). Hace falta la versión del código y de los artefactos que corresponde a la memoria v4.2."
+  - "[NUEVO 2026-10-08; los artefactos válidos son los de inbox/a18/codigo/models/artifacts/best_gru_df_2008_con_renta/, md5 model.joblib 753ad0c2…] s3://<STORAGE_BUCKET>/artifacts/fixed/ml18_meat_spatial_price_forecast/ no
+     existe (listado de solo lectura) y los artefactos de 7 features tampoco están en el repo ni en
+     inbox/a18/codigo/ (los de ahí son los de 6 features). Sin ellos el servicio arranca con
+     loaded=false. Acción humana."
   - "Imprecisión README vs. código en el lag espacial: docs/README.md documenta la regla como
      LAG_X_VECINOS(ccaa, t) = media de X(ccaa_vecina, t-1) -- un retardo de un mes adicional.
      El código real (src/data_processing/preprocess.py::add_spatial_lags) empareja por

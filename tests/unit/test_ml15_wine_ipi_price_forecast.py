@@ -55,8 +55,15 @@ def test_predict_batch(client):
     assert body["n_predictions"] == len(body["predictions"])
 
 
-def test_train(client):
+def test_train_without_mlflow_run_id_returns_422(client):
     resp = client.post(f"{PREFIX}/train", json={"data_path": "/tmp/a15_train.csv"})
+    assert resp.status_code == 422
+
+
+def test_train(client):
+    resp = client.post(
+        f"{PREFIX}/train", json={"data_path": "/tmp/a15_train.csv", "mlflow_run_id": "run-test-123"},
+    )
     assert resp.status_code == 200
     body = resp.json()
     assert body["n_train_rows"] > 0

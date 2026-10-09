@@ -87,6 +87,11 @@ training:
     config/platform_config.yaml (constantes de heurística) sobre las 11 columnas de entrada. No
     hay procedimiento de "reentrenamiento por usuario" que tenga sentido aquí — cambiar el
     comportamiento significa cambiar las constantes de config, no ajustar un modelo con datos.
+    [RE-VERIFICADO 2026-10-02 contra inbox/a28/codigo/ real] constants.py ya integrado lo
+    confirma ("No hay artefacto entrenado que cargar: estas constantes SON el modelo") y
+    DELIVERY_README_CU28.md es explícito: "La regresión lineal es el predictor upstream
+    oficial. La neuroevolución es una comparativa experimental offline; no es el modelo
+    promovido." Ninguno de los dos es lo que sirve platform_run. Conclusión sin cambios.
     El repo SÍ trae un pipeline de entrenamiento real (src/training/train_upstream_predictor.py,
     train_purchase_trigger.py, train_quantity_optimizer.py, ruta mixed_context) que ajusta
     LinearRegression/Ridge y una comparativa neuroevolutiva — pero opera sobre un dataset con

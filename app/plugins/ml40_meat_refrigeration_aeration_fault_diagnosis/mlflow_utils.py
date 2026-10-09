@@ -3,11 +3,13 @@ from __future__ import annotations
 
 import logging
 import os
+import shutil
+import tempfile
 
 import joblib
 import yaml
 
-from app.domain.services.mlflow_tracker import BaseMLflowTracker
+from app.domain.services.mlflow_tracker import BaseMLflowTracker, require_user_model
 from app.plugins.ml40_meat_refrigeration_aeration_fault_diagnosis.constants import (
     MODEL_FILENAMES,
     SCALER_FILENAMES,
@@ -19,6 +21,7 @@ from app.plugins.ml40_meat_refrigeration_aeration_fault_diagnosis.constants impo
 logger = logging.getLogger(__name__)
 
 
+@require_user_model
 def download_user_model_from_mlflow(run_id: str):
     """Download a user-retrained RandomForest bundle (one system) from MLflow.
 
@@ -29,39 +32,41 @@ def download_user_model_from_mlflow(run_id: str):
     Returns (system, bundle_dict, temp_dir) or None if the download fails.
     Caller MUST shutil.rmtree(temp_dir) after inference — use try/finally.
     """
-    import tempfile
     tmp = tempfile.mkdtemp(prefix="mlflow_ml40_")
-    local_path = BaseMLflowTracker(run_id).download_artifacts(tmp, artifact_path="model")
-    if not local_path:
-        return None
+    try:
+        local_path = BaseMLflowTracker(run_id).download_artifacts(tmp, artifact_path="model")
+        if not local_path:
+            shutil.rmtree(tmp, ignore_errors=True)
+            return None
 
-    system = next(
-        (s for s in SYSTEMS if os.path.exists(os.path.join(local_path, MODEL_FILENAMES[s]))),
-        None,
-    )
-    if system is None:
-        logger.error("MLflow run %s does not contain any ml40 model file", run_id)
-        import shutil
+        system = next(
+            (s for s in SYSTEMS if os.path.exists(os.path.join(local_path, MODEL_FILENAMES[s]))),
+            None,
+        )
+        if system is None:
+            logger.error("MLflow run %s does not contain any ml40 model file", run_id)
+            shutil.rmtree(tmp, ignore_errors=True)
+            return None
 
+        def _yaml(filename: str) -> dict:
+            path = os.path.join(local_path, filename)
+            if not os.path.exists(path):
+                return {}
+            with open(path, encoding="utf-8") as fh:
+                return yaml.safe_load(fh) or {}
+
+        bundle = {
+            "model": joblib.load(os.path.join(local_path, MODEL_FILENAMES[system])),
+            "scaler": None,
+            "thresholds": _yaml(THRESHOLDS_FILENAMES[system]),
+            "stats": _yaml(STATS_FILENAMES[system]),
+        }
+        scaler_name = SCALER_FILENAMES.get(system)
+        if scaler_name and os.path.exists(os.path.join(local_path, scaler_name)):
+            bundle["scaler"] = joblib.load(os.path.join(local_path, scaler_name))
+
+        logger.info("Downloaded user model from MLflow run_id=%s (system=%s)", run_id, system)
+        return system, bundle, tmp
+    except BaseException:
         shutil.rmtree(tmp, ignore_errors=True)
-        return None
-
-    def _yaml(filename: str) -> dict:
-        path = os.path.join(local_path, filename)
-        if not os.path.exists(path):
-            return {}
-        with open(path, encoding="utf-8") as fh:
-            return yaml.safe_load(fh) or {}
-
-    bundle = {
-        "model": joblib.load(os.path.join(local_path, MODEL_FILENAMES[system])),
-        "scaler": None,
-        "thresholds": _yaml(THRESHOLDS_FILENAMES[system]),
-        "stats": _yaml(STATS_FILENAMES[system]),
-    }
-    scaler_name = SCALER_FILENAMES.get(system)
-    if scaler_name and os.path.exists(os.path.join(local_path, scaler_name)):
-        bundle["scaler"] = joblib.load(os.path.join(local_path, scaler_name))
-
-    logger.info("Downloaded user model from MLflow run_id=%s (system=%s)", run_id, system)
-    return system, bundle, tmp
+        raise

@@ -4,6 +4,38 @@ Fecha: 2026-09-28
 Plugin: `app/plugins/ml14_wine_phyto_price_forecast/`
 Manifest: `inbox/a14/manifest.yaml`
 
+> **[CORREGIDO 2026-10-08] Reanálisis con el código original completo y `/train` habilitado.**
+> El código subido a `inbox/a14/codigo/` es la entrega aprobada. El sha256 de `gru_model.pt` y del
+> dataset coincide con el del manifest, y su `reports/` no contiene la auditoría de la copia no
+> oficial. Comprobado con datos reales:
+>
+> | Comprobación | Resultado |
+> |---|---|
+> | Plugin frente a `run_prediction(model="GRU")` original, 40 ventanas repartidas por todo el histórico | 40/40 · diferencia máxima 1e-6 (redondeo) |
+> | `run_comparison()` original re-ejecutado en CPU | Reproduce `model_comparison.json` a 4 decimales (GRU RMSE 2,2873 ± 0,0268; Drift 2,5406) |
+> | `/train` del plugin con el dataset entregado | **Mismas métricas a 4 decimales** que el original, en 15 s |
+> | Modelo de la semilla 42 del plugin frente al original re-ejecutado | Idéntico (diferencia 0) |
+> | Ese modelo frente al `gru_model.pt` entregado | Diferencia máxima de pesos 2e-7 |
+> | Modelo reentrenado servido con `mlflow_run_id` | Predice 121,394124 en caso_001, igual que el base |
+> | Servidor real | `/health` loaded, `/predict` batch 200 (121,394124), `/train` sin run 422 |
+>
+> **Cambios en el plugin:**
+> - `training.py`: port de la parte GRU de `compare_models.py`.
+> - `/train` habilitado y persistido solo en MLflow; un fallo de subida da 502.
+> - `/predict` y `/stats` con `mlflow_run_id`; un run sin modelo da 422.
+>
+> **Hallazgos nuevos** (detalle en `inbox/a14/manifest.yaml::known_issues`):
+> - El early stopping del original se decide sobre el test, así que las métricas de test son
+>   optimistas. Se reproduce tal cual.
+> - La evaluación mensual anclada del propio equipo confirma que la GRU mejora al Drift: RMSE 2,55
+>   frente a 2,72.
+>
+> Fichas técnica y funcional regeneradas. Las líneas de abajo que dicen "`/train` → 501" son del
+> estado anterior.
+>
+> **Pendiente (acción humana):** subir `gru_model.pt` y `final_dataset_for_modeling.csv` a
+> `artifacts/fixed/ml14_wine_phyto_price_forecast/` en S3.
+
 ## Nota de proceso — corrección de entrega de código
 
 Esta integración se rehizo tras confirmar con el cliente (Erick Mercado, Slack, 2026-09-28) que

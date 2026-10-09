@@ -93,7 +93,8 @@ inbox/a09/codigo/a09-del-cereals-el-clasificacion-objetos-anomalos/data/splits/*
 inbox/a09/codigo/a09-del-cereals-el-clasificacion-objetos-anomalos/data/predictions/*.csv
 
 # inbox/<model>/codigo/ es el código original entregado por el equipo de IA para integrar el
-# modelo (ver CLAUDE.md: "No se commitea"). Suele pesar mucho (datasets, checkpoints, .git
+# modelo — lo único de inbox/ que no se commitea (ver CLAUDE.md, "Convención de carpetas").
+# Suele pesar mucho (datasets, checkpoints, .git
 # interno del equipo de IA que si no se ignora, git lo rastrea como gitlink huérfano y deja
 # cambios "modified content" imposibles de commitear/descartar). Regla general para que ningún
 # codigo/ futuro se vuelva a colar en el repo.
@@ -105,3 +106,5 @@ inbox/*/codigo/
 
 # Claude Code local settings (per-machine permissions/config, not shared config)
 .claude/settings.local.json
+# Metadatos de descarga de Windows (WSL)
+*:Zone.Identifier

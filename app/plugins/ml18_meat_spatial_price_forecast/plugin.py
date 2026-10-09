@@ -11,27 +11,41 @@ Accepted for production: GRU test MAPE 9.93% vs. the 20% KPI threshold defined i
 from __future__ import annotations
 
 import logging
+import shutil
+import tempfile
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pandas as pd
 
 from app.application.dto.stats_dto import InputField, OutputField, RuntimeStats, StatsResponse
 from app.domain.ports.model_plugin_port import ModelPluginPort
-from app.domain.services.exceptions import ModelNotLoadedError, TrainingNotSupportedError
+from app.domain.services.exceptions import ModelNotLoadedError, ModelPersistenceError
+from app.domain.services.mlflow_tracker import BaseMLflowTracker
 from app.infrastructure.artifact_store import local_file_path
-from app.plugins.ml18_meat_spatial_price_forecast import inference, model_loader
+from app.plugins.ml18_meat_spatial_price_forecast import inference, model_loader, training
 from app.plugins.ml18_meat_spatial_price_forecast.constants import (
     FRAMEWORK,
     LOOKBACK,
     METRICS_REPORTED,
     MODEL_ID,
     RAW_REQUIRED_COLS,
+    TRAIN_BATCH_SIZE,
+    TRAIN_EPOCHS,
+    TRAIN_RATIO,
+    TRAIN_SEED,
+    VAL_RATIO,
     VERSION,
+)
+from app.plugins.ml18_meat_spatial_price_forecast.mlflow_utils import (
+    download_user_model_from_mlflow,
+    upload_artifacts_to_mlflow,
 )
 from app.plugins.ml18_meat_spatial_price_forecast.predict_dto import (
     PredictBatchResponse,
     PredictInlineResponse,
 )
+from app.plugins.ml18_meat_spatial_price_forecast.train_dto import TrainResponse
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +74,17 @@ class Ml18MeatSpatialPriceForecastPlugin(ModelPluginPort):
         if not self.is_loaded():
             raise ModelNotLoadedError("El modelo no está cargado.")
 
+    def _resolve_bundle(self, mlflow_run_id: str) -> tuple[dict, str | None]:
+        """Return (bundle, temp_dir) as locals — never stored on self (shared across requests).
+
+        A run without a loadable model raises UserModelUnavailableError (→ 422): never fall
+        back silently to the base model. The caller must rmtree temp_dir in a finally block.
+        """
+        if mlflow_run_id:
+            return download_user_model_from_mlflow(mlflow_run_id)
+        self._require_loaded()
+        return self._bundle, None
+
     def _record_prediction(self) -> None:
         self._predict_count += 1
         self._last_predict_at = datetime.now(tz=timezone.utc).isoformat()
@@ -75,10 +100,13 @@ class Ml18MeatSpatialPriceForecastPlugin(ModelPluginPort):
         mlflow_run_id: str = "",
     ) -> PredictInlineResponse:
         """Predict next-month PRECIO MEDIO KG for every (CCAA, Producto) group in the panel."""
-        _ = model_key, threshold, mlflow_run_id
-        self._require_loaded()
-        rows: list[dict] = features["rows"]
-        predictions = inference.run_inference(self._bundle, rows)
+        _ = model_key, threshold
+        bundle, user_tmp = self._resolve_bundle(mlflow_run_id)
+        try:
+            predictions = inference.run_inference(bundle, features["rows"])
+        finally:
+            if user_tmp:
+                shutil.rmtree(user_tmp, ignore_errors=True)
         self._record_prediction()
         logger.info(
             "predict_inline done — %d predicciones, count=%d", len(predictions), self._predict_count,
@@ -91,13 +119,14 @@ class Ml18MeatSpatialPriceForecastPlugin(ModelPluginPort):
 
     def predict_batch(self, *, data_path: str, mlflow_run_id: str = "") -> PredictBatchResponse:
         """Predict next-month PRECIO MEDIO KG for every (CCAA, Producto) group in the CSV panel."""
-        _ = mlflow_run_id
-        self._require_loaded()
-        with local_file_path(data_path) as local_path:
-            df = pd.read_csv(local_path, sep=";")
-        rows: list[dict] = df.to_dict(orient="records")
-
-        predictions = inference.run_inference(self._bundle, rows)
+        bundle, user_tmp = self._resolve_bundle(mlflow_run_id)
+        try:
+            with local_file_path(data_path) as local_path:
+                df = pd.read_csv(local_path, sep=";")
+            predictions = inference.run_inference(bundle, df.to_dict(orient="records"))
+        finally:
+            if user_tmp:
+                shutil.rmtree(user_tmp, ignore_errors=True)
         self._record_prediction()
         logger.info(
             "predict_batch done — %d predicciones, count=%d", len(predictions), self._predict_count,
@@ -106,27 +135,62 @@ class Ml18MeatSpatialPriceForecastPlugin(ModelPluginPort):
             model_id=MODEL_ID, predictions=predictions, n_predictions=len(predictions), output_path=None,
         )
 
-    # ── train (no soportado — ver inbox/a18/manifest.yaml::training) ──────────
+    # ── train ─────────────────────────────────────────────────────────────────
 
-    def train(self, *, data_path: str = "", mlflow_run_id: str = "") -> None:
-        """Raise TrainingNotSupportedError — the delivered training procedure has no
-        client-data path (src.main::train() always reads the fixed dataset_path from
-        config.yaml, never a --data/--input CSV — see manifest.training)."""
-        _ = data_path, mlflow_run_id
-        raise TrainingNotSupportedError(
-            "ml18 no soporta reentrenamiento por usuario: el procedimiento de entrenamiento "
-            "entregado (src.main::train()) siempre reentrena sobre el mismo dataset fijo "
-            "bundled (config.yaml::data.dataset_path) -- no acepta ningún CSV de datos de "
-            "cliente, solo hiperparámetros. Reentrenar requiere el repo original "
-            "a18-rnn-carnico-espacial-prediccion-modas-gustos-areas y volver a subir el "
-            "artefacto a S3 bajo artifacts/fixed/ml18_meat_spatial_price_forecast/."
+    def train(self, *, data_path: str, mlflow_run_id: str) -> TrainResponse:
+        """Retrain the GRU from scratch with the AI team's procedure (see training.py).
+
+        The data comes from data_path (the original reads a fixed config path; the procedure
+        is the same). A new model is trained: the served one is never touched. The result
+        lives only in its MLflow run; if it cannot be uploaded, ModelPersistenceError (→ 502).
+        """
+        with local_file_path(data_path) as local_path:
+            history: list[tuple[int, dict]] = []
+            result = training.train_gru(
+                local_path, on_epoch=lambda epoch, logs: history.append((epoch, logs)),
+            )
+
+        artifact_tmp = tempfile.mkdtemp(prefix="ml18_train_")
+        try:
+            training.save_training_artifacts(Path(artifact_tmp), result)
+            upload_artifacts_to_mlflow(
+                artifact_tmp, mlflow_run_id, metrics=result.metrics,
+                params={"model": "GRU", "lookback": LOOKBACK, "epochs_max": TRAIN_EPOCHS,
+                        "batch_size": TRAIN_BATCH_SIZE, "train_ratio": TRAIN_RATIO,
+                        "val_ratio": VAL_RATIO, "seed": TRAIN_SEED},
+                history=history,
+            )
+        except Exception as exc:
+            logger.error("ml18: MLflow upload failed: %s", exc)
+            raise ModelPersistenceError(
+                f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}"
+            ) from exc
+        finally:
+            shutil.rmtree(artifact_tmp, ignore_errors=True)
+
+        return TrainResponse(
+            detail="GRU reentrenada desde cero con el procedimiento del equipo de IA",
+            **result.metrics,
+            mlflow_run_id=mlflow_run_id,
+            upload_warning=None,
         )
 
     # ── stats ─────────────────────────────────────────────────────────────────
 
+    @staticmethod
+    def _metrics_with_run(mlflow_run_id: str) -> dict:
+        metrics = dict(METRICS_REPORTED)
+        if mlflow_run_id:
+            tracker = BaseMLflowTracker(mlflow_run_id)
+            metrics["mlflow"] = {"params": tracker.get_params(), "metrics": tracker.get_metrics()}
+        return metrics
+
     def stats(self, mlflow_run_id: str = "") -> StatsResponse:
-        """Return model metadata, the input/output contract and the real hold-out metrics."""
-        _ = mlflow_run_id
+        """Return model metadata, the input/output contract and the real hold-out metrics.
+
+        With mlflow_run_id, the params and metrics of that retraining run are added under
+        metrics["mlflow"] (read-only; the base metrics stay as reported).
+        """
         inputs = [
             InputField(
                 name="rows", type="list[dict]",
@@ -156,7 +220,7 @@ class Ml18MeatSpatialPriceForecastPlugin(ModelPluginPort):
             framework=FRAMEWORK,
             inputs=inputs,
             outputs=outputs,
-            metrics=dict(METRICS_REPORTED),
+            metrics=self._metrics_with_run(mlflow_run_id),
             runtime_stats=RuntimeStats(
                 total_predictions=self._predict_count,
                 avg_latency_ms=None,

@@ -20,7 +20,9 @@ class TrainModelUseCase:
         mlflow_run_id = getattr(request, "mlflow_run_id", "")
         logger.info("Executing training, data_path=%s, mlflow_run_id=%s", data_path, mlflow_run_id)
         kwargs: dict[str, Any] = {"data_path": data_path, "mlflow_run_id": mlflow_run_id}
-        # Only ml40's train declares system (refrigeracion/aireado chosen by the user).
-        if "system" in inspect.signature(self._plugin.train).parameters:
-            kwargs["system"] = getattr(request, "system", None)
+        # Plugin-specific train options (ml40 "system", ml47 "mode"…): forward every request
+        # field that the plugin's train() declares; anything absent keeps the plugin default.
+        for name in inspect.signature(self._plugin.train).parameters:
+            if name not in kwargs and hasattr(request, name):
+                kwargs[name] = getattr(request, name)
         return self._plugin.train(**kwargs)

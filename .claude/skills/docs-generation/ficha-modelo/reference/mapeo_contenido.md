@@ -6,7 +6,7 @@ prosa larga, sin el formato corporativo. Esta guía explica cómo condensar
 ese contenido en el esquema de `reference/esquema_datos.md` para que el
 resultado final tenga el mismo formato para todos los modelos (ver
 `assets/ficha_tecnica_template.docx` / `ficha_funcional_template.docx` y los
-ejemplos ya publicados, p. ej. el modelo `a25 · wine-sulphite`).
+ejemplos ya publicados, p. ej. el modelo `a25 · wine-sulphites`).
 
 **Regla general: esto no es un find-and-replace.** Las fichas en bruto suelen
 tener 3-6 páginas de prosa (arquitectura, hiperparámetros, verificación
@@ -72,5 +72,5 @@ técnico de bodega/planta, no un ingeniero de datos.
    ```
 4. Verifica visualmente (convertir a PDF y mirar cada página — ver skill `docx`,
    sección "Verify the output") antes de entregar.
-5. Compara con un ejemplo ya publicado (p. ej. `a25 · wine-sulphite`) para
+5. Compara con un ejemplo ya publicado (p. ej. `a25 · wine-sulphites`) para
    confirmar que la estructura de secciones coincide exactamente.

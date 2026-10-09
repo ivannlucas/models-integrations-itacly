@@ -1,6 +1,6 @@
 {
   "model_id": "a10",
-  "model_slug": "cattle-disease-vector-detection",
+  "model_slug": "dairy-disease-vector-detection",
   "fecha": "Julio 2026",
   "descripcion": "Sistema de análisis de imágenes que localiza y reconoce, sobre fotografías de ganado vacuno, los tres vectores biológicos que transmiten enfermedades al animal: moscas, mosquitos y garrapatas. A partir de una foto, marca dónde hay cada bicho y de qué tipo es, y resume cuántos hay de cada especie. Está pensado como una herramienta de vigilancia sanitaria temprana en la explotación.",
   "objetivo": "Ayudar a la explotación a anticiparse a las infestaciones de moscas, mosquitos y garrapatas en el establo, detectando su presencia sobre los animales a partir de imágenes antes de que el problema se extienda. El objetivo de negocio declarado es reducir en torno a un 10% los costes de tratamiento asociados a estos vectores, una cifra que —según la propia entrega— todavía debe confirmarse con una validación en condiciones reales.",

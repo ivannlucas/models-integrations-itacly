@@ -1,6 +1,8 @@
 """Pydantic DTOs for the ml9 (cereal infestation) /train endpoint."""
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.application.dto.train_dto import MlflowRunId
+
 
 class TrainRequest(BaseModel):
     """Fine-tune request: CSV of labelled hourly telemetry (manifest.training.required_columns)."""
@@ -16,7 +18,7 @@ class TrainRequest(BaseModel):
             "48 observaciones horarias por sample_id."
         ),
     )
-    mlflow_run_id: str = Field(default="", description="MLflow run ID donde registrar métricas y artefactos")
+    mlflow_run_id: MlflowRunId = Field(description="MLflow run ID donde registrar métricas y artefactos")
 
 
 class TrainResponse(BaseModel):
@@ -43,8 +45,14 @@ class TrainResponse(BaseModel):
         ...,
         description="f1_macro del modelo servido sobre el mismo hold-out, para comparar antes/después",
     )
-    artifact_path: str = Field(..., description="Ruta local del checkpoint reentrenado (nunca sobrescribe el fijo)")
+    artifact_path: str = Field(
+        ...,
+        description=(
+            "URI de MLflow del checkpoint reentrenado (runs:/<mlflow_run_id>/model/...). El "
+            "artefacto fijo nunca se sobrescribe."
+        ),
+    )
     upload_warning: str | None = Field(
         default=None,
-        description="Informativo si el fine-tuning terminó pero falló la subida a MLflow",
+        description="Aviso si el fine-tuning terminó pero el modelo no se ha podido guardar en MLflow",
     )

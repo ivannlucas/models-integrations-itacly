@@ -1,0 +1,1008 @@
+# [RENOMBRADO 2026-10-06] Nomenclatura alineada con el estándar mlNN_<sector>_<desc>:
+#   modelo10_lacteo / modelo10-lacteo  ->  ml10_dairy_disease_vector_detection / ml10-dairy-disease-vector-detection
+#   Artefactos (local y S3): artifacts/modelo10_lacteo/ -> artifacts/ml10_dairy_disease_vector_detection/
+#   Las menciones al nombre antiguo en comentarios/known_issues son históricas.
+# ============================================================================
+# HISTORIAL DE CICLOS DE EXTRACCIÓN (no se borra, se añade)
+# ============================================================================
+# Ciclo 1 (2026-10-02): manifest inicial + verification_report.md. inbox/a10/codigo/
+#   tenía 219 ficheros — solo artefactos ya entrenados + 1 imagen real de ejemplo
+#   (data/test.jpg + data/predictions/test_results.json). Los 3 datasets públicos
+#   (Roboflow insects, Kaggle fly_mos, Roboflow ticks) solo existían como instrucciones
+#   de descarga en el README, no como datos. golden_cases: 1 caso real (caso_001_test_jpg).
+#   3 bugs encontrados/corregidos: preprocesado sin CenterCrop, detector YOLO sin
+#   device= explícito (500 real), hiperparams de train() inventados.
+# Ciclo 2 (fecha no registrada en este fichero): fix de _safe_device() — el self-test de
+#   CUDA no movía el módulo Conv2d a .cuda(), forzando CPU silenciosamente incluso con
+#   GPU funcional. Corregido en app/plugins/ml10_dairy_disease_vector_detection/model_loader.py.
+# Ciclo 3 (2026-10-05, ESTE CICLO): re-auditoría COMPLETA desde cero. inbox/a10/codigo/
+#   creció a 49.695 ficheros — el usuario añadió los 3 datasets reales completos
+#   (data/detection/raw/insects, data/classification/raw/fly_mos,
+#   data/classification/raw/ticks), antes solo referenciados en el README. Se
+#   reprodujo el split real 70/15/15 (seed=42) que usa create_detection_splits/
+#   create_classification_splits (src/training/utils_train.py) sobre
+#   data/*/processed (ya presente en el entregable) y se construyeron 25 golden_cases
+#   reales (antes 1), con `expected` obtenido ejecutando predict_inline() del plugin
+#   YA INTEGRADO contra el checkpoint real vendorizado (no inventado, no hand-typed).
+#   Confirmado con hash MD5: los 3 artefactos en artifacts/ml10_dairy_disease_vector_detection/ son
+#   BIT-A-BIT IDÉNTICOS a los de inbox/a10/codigo/.../models/*/artifacts/.
+#   Los 3 bugs del ciclo 1 y el bug del ciclo 2 se reconfirmaron CORREGIDOS contra
+#   datos reales (no solo releídos en el código). No se encontró ningún bug NUEVO de
+#   wiring/preprocesado/device/mlflow_run_id. Hallazgo nuevo (no un bug, una métrica
+#   real antes invisible): el pipeline COMPLETO (detector+crop+clasificador) mide
+#   accuracy=94.94% (394/415) sobre el split de test real reproducido — notablemente
+#   por debajo del accuracy=0.981 oficial de la memoria (que solo evalúa el
+#   clasificador aislado sobre crops ya recortados, nunca el pipeline completo) y
+#   especialmente débil en 'mos' (86.73%, con 6/98 imágenes sin ninguna detección
+#   por encima de det_conf_thresh=0.2). Ver `known_issues` para el detalle completo
+#   y las salvedades de reproducibilidad del split. golden_cases: 25/25 casos
+#   correctos (ver tabla en outputs/a10/verification_report.md).
+# ============================================================================
+model_id: ml10-dairy-disease-vector-detection
+sector: lacteo
+nombre: "Modelo para la detección de vectores de enfermedades de ganado vacuno"
+task_type: object_detection+image_classification   # pipeline de 2 etapas: YOLOv8n (detección) + MobileNetV3 (clasificación de especie)
+framework:
+  - torch==2.5.1+cu121
+  - torchvision==0.20.1+cu121
+  - ultralytics==8.4.17
+  - opencv-python==4.13.0.92
+  - pillow==12.0.0
+
+# Fuente: inbox/a10/codigo/.../src/predict/predictor.py, src/training/trainer.py,
+# config/config.yaml, memoria (sección "Arquitectura y Algoritmos",
+# "Artefactos de producción utilizados").
+artifacts:
+  folder: models/
+  files:
+    - detection/artifacts/detector/weights/best.pt    # YOLOv8n, 1 sola clase ("Vector")
+    - classification/artifacts/best_classifier.pth     # MobileNetV3-Large, head reemplazada (3 clases)
+    - classification/artifacts/class_names.json         # ["fly", "mos", "tick"], orden = índice de salida
+
+inputs:
+  fixed:
+    - name: image
+      type: file(base64|path)
+      description: >
+        Imagen RGB de piel/pelaje de ganado vacuno (jpg/jpeg/png/bmp/tif). Entrada única del
+        pipeline — no hay features tabulares; "no existe un proceso de ingeniería de
+        características como tal" (memoria, sección "Variables e Ingeniería de Características").
+    - name: det_conf_thresh
+      type: float
+      default: 0.2
+      description: "Umbral mínimo de confianza de detección (YOLOv8n) para no descartar una caja."
+    - name: cls_conf_thresh
+      type: float
+      default: 0.5
+      description: "Umbral mínimo de confianza de clasificación (MobileNetV3) para aceptar una detección."
+  control: null        # no hay optimizador/GA en este modelo
+  derived_if_missing: {}  # ninguno — det_conf_thresh/cls_conf_thresh tienen default fijo, no se derivan de otros campos
+
+outputs:
+  predict_inline:
+    - name: prediction
+      type: str
+      description: "Especie dominante (mayor cls_conf) entre las detecciones aceptadas: fly | mos | tick | no_vectors."
+    - name: confidence
+      type: float
+      description: "cls_conf de la detección dominante."
+    - name: vectors_count
+      type: int
+      description: "Número de detecciones que superaron ambos umbrales."
+    - name: detections
+      type: list[dict]
+      description: "Por detección: species, det_conf, cls_conf, bbox {x1,y1,x2,y2} (coords en la imagen original)."
+    - name: species_summary
+      type: dict
+      description: "Conteo de detecciones por especie."
+    - name: annotated_image
+      type: str(base64 jpeg)
+      description: "Imagen con bounding boxes dibujadas (no está en el código original — añadido por el equipo de integración para el front/XAI; no afecta a la predicción)."
+    - name: heatmap_crops
+      type: list[dict]
+      description: "Añadido por integración para el panel de explicabilidad (no está en el código original delivered): hasta 5 crops recortados con su species/cls_conf, usados por el servicio SHAP/Grad-CAM. No forma parte del pipeline de predicción original."
+
+training:
+  supported: true   # SOLO el clasificador MobileNetV3 — ver known_issues
+  duracion_estimada: "No medida con el dataset completo; hasta 100 épocas con early stopping (paciencia 15) sobre MobileNetV3 con backbone congelado"   # [AÑADIDO 2026-10-08]
+  target_column: null  # no aplica: clasificación de imágenes vía ImageFolder (carpeta = clase), no CSV con columna objetivo
+  required_columns: null  # no aplica (ver required_structure)
+  required_structure: >
+    ZIP con estructura {fly|mos|tick}/*.jpg (plano, se autodivide 70/15/15) o ya pre-dividido
+    {train|val}/{fly|mos|tick}/*.jpg — mismas 3 clases que class_names.json, mismo orden no
+    relevante (se reconstruye desde ImageFolder.classes en cada retrain).
+  hyperparams:
+    # == src/training/trainer.py::train_classifier + config/config.yaml (classifier:), NO elegidos por el agente ==
+    model: mobilenet_v3_large
+    pretrained_weights: IMAGENET1K_V1
+    frozen_backbone: true   # solo se entrena classifier[-1] (Linear reemplazada) + el resto de capas de `model.classifier`, que quedan congeladas por el freeze previo
+    optimizer: Adam
+    lr: 0.007980063451685896
+    weight_decay: 0.0003438715138565418
+    batch_size: 64
+    imgsz: 224
+    max_epochs: 100
+    patience: 15               # early stopping sobre val_loss
+    scheduler: "StepLR(step_size=10, gamma=0.1)"
+    best_model_criterion: val_accuracy   # se guarda el mejor state_dict por val_acc, no por val_loss
+    augmentation_train: "RandomHorizontalFlip + RandomRotation(15)"
+    split_ratios: {train: 0.7, val: 0.15, test: 0.15}  # splits.p_train/p_val/p_test en config.yaml
+  # [CORREGIDO 2026-10-08] El split de test (15 %) se calculaba y nunca se evaluaba; ahora se
+  # evalúa con las fórmulas de src/predict/predictor.py (accuracy + P/R/F1 por clase). El split
+  # automático aplica el tope splits.max_ticks=1400 del original y es reproducible (ficheros
+  # ordenados + Random(42) local; el original baraja os.listdir bajo set_seed(42) global).
+  metrics_returned: [train_samples, val_samples, test_samples, classes, epochs_run, best_val_acc, test_accuracy, test_per_class, time_min]
+  source: codigo_entrenamiento  # src/training/trainer.py, config/config.yaml
+  # Re-confirmado en el ciclo 3 (2026-10-05): split real reproducido ejecutando
+  # set_seed(42) + create_detection_splits + create_classification_splits
+  # (src/training/utils_train.py) tal cual sobre data/*/processed ya presente en el
+  # entregable → detección: train=3044/val=652/test=653 imágenes; clasificación:
+  # train=979/val=210/test=211 (tick, tope max_ticks=1400 aplicado sobre 4430
+  # disponibles), train=489/val=104/test=106 (fly), train=452/val=96/test=98 (mos).
+  # train() del plugin verificado end-to-end en este ciclo con datos REALES (no
+  # sintéticos como en el ciclo 1): ZIP de 75 imágenes reales (25/clase) del split
+  # train reproducido más arriba, mlflow_run_id real con BaseMLflowTracker
+  # monkeypatcheado a un stub no-op (ver known_issues sobre por qué: el tracker real
+  # cuelga en este sandbox sin red hacia MLflow) → entrenó 16 épocas (early stopping
+  # por patience=15), best_val_acc=88.9%, upload_artifacts del stub recibió
+  # class_names.json + best_classifier.pth correctamente. Confirma que la lógica de
+  # entrenamiento del plugin (split, hiperparams, loop, early stopping, guardado,
+  # llamadas a MLflow) funciona de extremo a extremo con datos reales — el único
+  # bloqueo es de infraestructura compartida (MLflow no accesible), no del plugin.
+
+constraints: {}   # ninguna restricción dura de negocio documentada (no hay análogo a "PU >= 13")
+
+# Memoria, Tabla "Ranking de modelos de detección en el conjunto de test" (YOLOv8n) y
+# "Ranking de modelos de clasificación en el conjunto de test" (MobileNetV3) — ver known_issues
+# sobre la discrepancia con los JSON de métricas incluidos en el código entregado.
+metrics_reported:
+  fuente: memoria_tabla_ranking_deteccion_y_clasificacion
+  deteccion:
+    modelo: YOLOv8n
+    mAP50: 0.790
+    mAP50_95: 0.466
+    precision: 0.824
+    recall: 0.710
+  clasificacion:
+    modelo: MobileNetV3
+    accuracy: 0.981
+    precision: 0.979
+    recall: 0.974
+    f1: 0.976
+  kpi_objetivo_memoria:
+    mAP50_min: 0.7
+    recall_deteccion_min: 0.65
+    accuracy_clasificacion_min: 0.8
+  veredicto_memoria: APTO   # "cumplen holgadamente con los objetivos especificados" (memoria, sección "Métricas y Rendimiento")
+  # ── Medición empírica NUEVA del ciclo 3 (2026-10-05), ahora que existen datos reales ──
+  # Fuente: ejecución real de predict_inline() del plugin integrado (checkpoint vendorizado,
+  # idéntico MD5 al entregado) sobre el split de test real reproducido (seed=42, ver
+  # `training` más arriba). Scripts usados, no incluidos en el repo (solo para esta auditoría):
+  # pipeline completo detector+crop+clasificador sobre las 415 imágenes de
+  # data/classification/splits/test/{fly,mos,tick}.
+  pipeline_completo_medido_ciclo3:
+    total: 415
+    correctos: 394
+    accuracy: 0.9494
+    sin_deteccion: 10   # vectors_count=0 pese a existir el vector (recall perdido en la etapa YOLO)
+    por_clase:
+      fly: {n: 106, correctos: 101, accuracy: 0.9528, sin_deteccion: 2}
+      mos: {n: 98, correctos: 85, accuracy: 0.8673, sin_deteccion: 6}
+      tick: {n: 211, correctos: 208, accuracy: 0.9858, sin_deteccion: 2}
+    deteccion_mAP50_medido: 0.9327   # model.val() de ultralytics sobre el split de detección reproducido (653 img, seed=42)
+    deteccion_precision_medida: 0.9465
+    deteccion_recall_medida: 0.8598
+    caveat_reproducibilidad_split: >
+      El split reproducido en este ciclo usa el MISMO código (create_detection_splits/
+      create_classification_splits, seed=42) y los MISMOS data/*/processed ya presentes en
+      el entregable, pero random.shuffle(os.listdir(...)) depende del orden de listado del
+      filesystem, que no está garantizado idéntico al que tuvo el equipo de IA cuando generó
+      los artefactos vendorizados (best.pt/best_classifier.pth) — no hay forma de probar que
+      este test set reproducido es EXACTAMENTE el mismo conjunto de imágenes que ellos
+      reservaron como test en su momento. Esto significa que no puede garantizarse ausencia
+      de leakage train/test entre este test set reproducido y el entrenamiento real de los
+      artefactos servidos: estos números de accuracy/mAP agregados deben leerse como
+      indicativos de correctitud de WIRING (el pipeline hace lo que dice que hace sobre datos
+      reales con groundtruth real) y no como una medición no-sesgada de generalización. La
+      comparación cualitativa (clasificador aislado ~0.981-0.990 oficial vs. pipeline completo
+      0.9494, con 'mos' notablemente peor en 0.8673) es la parte robusta del hallazgo: un
+      eventual leakage favorable haría que el accuracy REAL en producción fuera igual o PEOR,
+      nunca mejor, que lo medido aquí — así que la brecha frente al 0.981 oficial es, si acaso,
+      una cota optimista, no pesimista.
+
+# ============================================================================
+# GOLDEN CASES — ciclo 3 (2026-10-05): 25 casos reales (antes 1), ahora que los 3
+# datasets reales están presentes en inbox/a10/codigo/.../data/*/raw/.
+#
+# Metodología (nunca inventada):
+#   1. Split real reproducido con el CÓDIGO ORIGINAL (set_seed(42) +
+#      create_detection_splits + create_classification_splits de
+#      src/training/utils_train.py) sobre data/*/processed, ya presente en el
+#      entregable. Ver `training` arriba para los conteos resultantes.
+#   2. crop_{fly,mos,tick}_NN (18 casos): 6 imágenes por clase muestreadas
+#      aleatoriamente (seed=123, script de auditoría) del split TEST real recién
+#      reproducido. Ground truth = carpeta ImageFolder (fly/mos/tick), real, no
+#      inventado. `expected` = salida real de predict_inline() del plugin YA
+#      INTEGRADO, ejecutada contra el checkpoint vendorizado (idéntico MD5 al
+#      entregado) — no hand-typed. Las 18 coincidieron con el ground truth de
+#      carpeta (18/18).
+#   3. fullraw_{fly,mos,tick}_NN (6 casos): para 2 imágenes de test por clase, se
+#      recuperó la imagen RAW ORIGINAL (sin recortar) de la que salió ese crop
+#      (nombre de fichero `{base}_c{i}.jpg` → `{base}.jpg/.jpeg` en
+#      data/*/raw/fly_mos o data/*/raw/ticks/test/images) y se corrió el pipeline
+#      COMPLETO (detector YOLO sobre la imagen entera, no solo el clasificador
+#      sobre un crop ya hecho) — ejercita la etapa de detección+crop real, no solo
+#      clasificación. Las 6 coincidieron con el ground truth (6/6).
+#   4. caso_001_test_jpg: el único caso del ciclo 1, re-verificado en este ciclo
+#      contra el mismo checkpoint (sigue dando match exacto).
+#   5. NO se incluye ningún caso real de la rama "no_vectors": las 653 imágenes del
+#      split de detección test reproducido tienen todas al menos una anotación de
+#      vector (0 candidatas con label vacío/ausente) — documentado como gap real en
+#      known_issues, no simulado con una imagen sintética.
+#
+# Resultado: 25/25 casos con prediction == ground truth (ver
+# outputs/a10/verification_report.md para la tabla completa con det_conf/cls_conf/bbox).
+golden_cases:
+  - id: crop_fly_01
+    source: dataset_test_split_classification (seed=42, create_classification_splits sobre data real)
+    input:
+      image_path: inbox/a10/codigo/a10-del-dairy-deteccion-vectores-enfermedades-ganado-vacuno/data/classification/splits/test/fly/131_c4.jpg
+      det_conf_thresh: 0.2
+      cls_conf_thresh: 0.5
+    expected:
+      prediction: fly
+      confidence: 0.9762
+      vectors_count: 1
+      detections:
+      - species: fly
+        det_conf: 0.8202
+        cls_conf: 0.9762
+        bbox:
+          x1: 1
+          y1: 54
+          x2: 222
+          y2: 223
+      species_summary:
+        fly: 1
+    tolerance_abs: 0.01
+    notes: >-
+      Ground truth real (carpeta ImageFolder del split test real): species=fly. Crop pre-recortado del dataset
+      (padding 10%, resize 224x224 por preprocess.py); se alimenta entero a predict_inline -> el propio
+      YOLO detector debe redetectar el vector dentro del crop antes de clasificar (pipeline completo, no
+      solo el clasificador aislado).
+  - id: crop_fly_02
+    source: dataset_test_split_classification (seed=42, create_classification_splits sobre data real)
+    input:
+      image_path: inbox/a10/codigo/a10-del-dairy-deteccion-vectores-enfermedades-ganado-vacuno/data/classification/splits/test/fly/19355544_a21bdb265023
+        (56)_c0.jpg
+      det_conf_thresh: 0.2
+      cls_conf_thresh: 0.5
+    expected:
+      prediction: fly
+      confidence: 1.0
+      vectors_count: 1
+      detections:
+      - species: fly
+        det_conf: 0.8467
+        cls_conf: 1.0
+        bbox:
+          x1: 12
+          y1: 11
+          x2: 212
+          y2: 210
+      species_summary:
+        fly: 1
+    tolerance_abs: 0.01
+    notes: >-
+      Ground truth real (carpeta ImageFolder del split test real): species=fly. Crop pre-recortado del dataset
+      (padding 10%, resize 224x224 por preprocess.py); se alimenta entero a predict_inline -> el propio
+      YOLO detector debe redetectar el vector dentro del crop antes de clasificar (pipeline completo, no
+      solo el clasificador aislado).
+  - id: crop_fly_03
+    source: dataset_test_split_classification (seed=42, create_classification_splits sobre data real)
+    input:
+      image_path: inbox/a10/codigo/a10-del-dairy-deteccion-vectores-enfermedades-ganado-vacuno/data/classification/splits/test/fly/136_c0.jpg
+      det_conf_thresh: 0.2
+      cls_conf_thresh: 0.5
+    expected:
+      prediction: fly
+      confidence: 0.9928
+      vectors_count: 1
+      detections:
+      - species: fly
+        det_conf: 0.8013
+        cls_conf: 0.9928
+        bbox:
+          x1: 21
+          y1: 24
+          x2: 197
+          y2: 218
+      species_summary:
+        fly: 1
+    tolerance_abs: 0.01
+    notes: >-
+      Ground truth real (carpeta ImageFolder del split test real): species=fly. Crop pre-recortado del dataset
+      (padding 10%, resize 224x224 por preprocess.py); se alimenta entero a predict_inline -> el propio
+      YOLO detector debe redetectar el vector dentro del crop antes de clasificar (pipeline completo, no
+      solo el clasificador aislado).
+  - id: crop_fly_04
+    source: dataset_test_split_classification (seed=42, create_classification_splits sobre data real)
+    input:
+      image_path: inbox/a10/codigo/a10-del-dairy-deteccion-vectores-enfermedades-ganado-vacuno/data/classification/splits/test/fly/196_c0.jpg
+      det_conf_thresh: 0.2
+      cls_conf_thresh: 0.5
+    expected:
+      prediction: fly
+      confidence: 0.9823
+      vectors_count: 1
+      detections:
+      - species: fly
+        det_conf: 0.756
+        cls_conf: 0.9823
+        bbox:
+          x1: 26
+          y1: 20
+          x2: 205
+          y2: 194
+      species_summary:
+        fly: 1
+    tolerance_abs: 0.01
+    notes: >-
+      Ground truth real (carpeta ImageFolder del split test real): species=fly. Crop pre-recortado del dataset
+      (padding 10%, resize 224x224 por preprocess.py); se alimenta entero a predict_inline -> el propio
+      YOLO detector debe redetectar el vector dentro del crop antes de clasificar (pipeline completo, no
+      solo el clasificador aislado).
+  - id: crop_fly_05
+    source: dataset_test_split_classification (seed=42, create_classification_splits sobre data real)
+    input:
+      image_path: inbox/a10/codigo/a10-del-dairy-deteccion-vectores-enfermedades-ganado-vacuno/data/classification/splits/test/fly/115_c0.jpg
+      det_conf_thresh: 0.2
+      cls_conf_thresh: 0.5
+    expected:
+      prediction: fly
+      confidence: 1.0
+      vectors_count: 1
+      detections:
+      - species: fly
+        det_conf: 0.8742
+        cls_conf: 1.0
+        bbox:
+          x1: 9
+          y1: 5
+          x2: 219
+          y2: 223
+      species_summary:
+        fly: 1
+    tolerance_abs: 0.01
+    notes: >-
+      Ground truth real (carpeta ImageFolder del split test real): species=fly. Crop pre-recortado del dataset
+      (padding 10%, resize 224x224 por preprocess.py); se alimenta entero a predict_inline -> el propio
+      YOLO detector debe redetectar el vector dentro del crop antes de clasificar (pipeline completo, no
+      solo el clasificador aislado).
+  - id: crop_fly_06
+    source: dataset_test_split_classification (seed=42, create_classification_splits sobre data real)
+    input:
+      image_path: inbox/a10/codigo/a10-del-dairy-deteccion-vectores-enfermedades-ganado-vacuno/data/classification/splits/test/fly/46_c3.jpg
+      det_conf_thresh: 0.2
+      cls_conf_thresh: 0.5
+    expected:
+      prediction: fly
+      confidence: 0.8824
+      vectors_count: 1
+      detections:
+      - species: fly
+        det_conf: 0.7874
+        cls_conf: 0.8824
+        bbox:
+          x1: 0
+          y1: 3
+          x2: 210
+          y2: 203
+      species_summary:
+        fly: 1
+    tolerance_abs: 0.01
+    notes: >-
+      Ground truth real (carpeta ImageFolder del split test real): species=fly. Crop pre-recortado del dataset
+      (padding 10%, resize 224x224 por preprocess.py); se alimenta entero a predict_inline -> el propio
+      YOLO detector debe redetectar el vector dentro del crop antes de clasificar (pipeline completo, no
+      solo el clasificador aislado).
+  - id: crop_mos_01
+    source: dataset_test_split_classification (seed=42, create_classification_splits sobre data real)
+    input:
+      image_path: inbox/a10/codigo/a10-del-dairy-deteccion-vectores-enfermedades-ganado-vacuno/data/classification/splits/test/mos/bimages
+        (63)_c0.jpg
+      det_conf_thresh: 0.2
+      cls_conf_thresh: 0.5
+    expected:
+      prediction: mos
+      confidence: 0.9997
+      vectors_count: 1
+      detections:
+      - species: mos
+        det_conf: 0.7751
+        cls_conf: 0.9997
+        bbox:
+          x1: 17
+          y1: 18
+          x2: 212
+          y2: 209
+      species_summary:
+        mos: 1
+    tolerance_abs: 0.01
+    notes: >-
+      Ground truth real (carpeta ImageFolder del split test real): species=mos. Crop pre-recortado del dataset
+      (padding 10%, resize 224x224 por preprocess.py); se alimenta entero a predict_inline -> el propio
+      YOLO detector debe redetectar el vector dentro del crop antes de clasificar (pipeline completo, no
+      solo el clasificador aislado).
+  - id: crop_mos_02
+    source: dataset_test_split_classification (seed=42, create_classification_splits sobre data real)
+    input:
+      image_path: inbox/a10/codigo/a10-del-dairy-deteccion-vectores-enfermedades-ganado-vacuno/data/classification/splits/test/mos/istockphoto-176820613-612x612_c0.jpg
+      det_conf_thresh: 0.2
+      cls_conf_thresh: 0.5
+    expected:
+      prediction: mos
+      confidence: 0.9847
+      vectors_count: 1
+      detections:
+      - species: mos
+        det_conf: 0.7238
+        cls_conf: 0.9847
+        bbox:
+          x1: 21
+          y1: 23
+          x2: 193
+          y2: 194
+      species_summary:
+        mos: 1
+    tolerance_abs: 0.01
+    notes: >-
+      Ground truth real (carpeta ImageFolder del split test real): species=mos. Crop pre-recortado del dataset
+      (padding 10%, resize 224x224 por preprocess.py); se alimenta entero a predict_inline -> el propio
+      YOLO detector debe redetectar el vector dentro del crop antes de clasificar (pipeline completo, no
+      solo el clasificador aislado).
+  - id: crop_mos_03
+    source: dataset_test_split_classification (seed=42, create_classification_splits sobre data real)
+    input:
+      image_path: inbox/a10/codigo/a10-del-dairy-deteccion-vectores-enfermedades-ganado-vacuno/data/classification/splits/test/mos/istockphoto-478668346-612x612_c0.jpg
+      det_conf_thresh: 0.2
+      cls_conf_thresh: 0.5
+    expected:
+      prediction: mos
+      confidence: 1.0
+      vectors_count: 1
+      detections:
+      - species: mos
+        det_conf: 0.6533
+        cls_conf: 1.0
+        bbox:
+          x1: 36
+          y1: 28
+          x2: 202
+          y2: 192
+      species_summary:
+        mos: 1
+    tolerance_abs: 0.01
+    notes: >-
+      Ground truth real (carpeta ImageFolder del split test real): species=mos. Crop pre-recortado del dataset
+      (padding 10%, resize 224x224 por preprocess.py); se alimenta entero a predict_inline -> el propio
+      YOLO detector debe redetectar el vector dentro del crop antes de clasificar (pipeline completo, no
+      solo el clasificador aislado).
+  - id: crop_mos_04
+    source: dataset_test_split_classification (seed=42, create_classification_splits sobre data real)
+    input:
+      image_path: inbox/a10/codigo/a10-del-dairy-deteccion-vectores-enfermedades-ganado-vacuno/data/classification/splits/test/mos/istockphoto-579444824-612x612_c0.jpg
+      det_conf_thresh: 0.2
+      cls_conf_thresh: 0.5
+    expected:
+      prediction: mos
+      confidence: 0.9999
+      vectors_count: 1
+      detections:
+      - species: mos
+        det_conf: 0.7358
+        cls_conf: 0.9999
+        bbox:
+          x1: 22
+          y1: 22
+          x2: 223
+          y2: 200
+      species_summary:
+        mos: 1
+    tolerance_abs: 0.01
+    notes: >-
+      Ground truth real (carpeta ImageFolder del split test real): species=mos. Crop pre-recortado del dataset
+      (padding 10%, resize 224x224 por preprocess.py); se alimenta entero a predict_inline -> el propio
+      YOLO detector debe redetectar el vector dentro del crop antes de clasificar (pipeline completo, no
+      solo el clasificador aislado).
+  - id: crop_mos_05
+    source: dataset_test_split_classification (seed=42, create_classification_splits sobre data real)
+    input:
+      image_path: inbox/a10/codigo/a10-del-dairy-deteccion-vectores-enfermedades-ganado-vacuno/data/classification/splits/test/mos/5225848968_30f8d9d81c_24
+        (118)_c0.jpg
+      det_conf_thresh: 0.2
+      cls_conf_thresh: 0.5
+    expected:
+      prediction: mos
+      confidence: 1.0
+      vectors_count: 1
+      detections:
+      - species: mos
+        det_conf: 0.791
+        cls_conf: 1.0
+        bbox:
+          x1: 18
+          y1: 20
+          x2: 206
+          y2: 204
+      species_summary:
+        mos: 1
+    tolerance_abs: 0.01
+    notes: >-
+      Ground truth real (carpeta ImageFolder del split test real): species=mos. Crop pre-recortado del dataset
+      (padding 10%, resize 224x224 por preprocess.py); se alimenta entero a predict_inline -> el propio
+      YOLO detector debe redetectar el vector dentro del crop antes de clasificar (pipeline completo, no
+      solo el clasificador aislado).
+  - id: crop_mos_06
+    source: dataset_test_split_classification (seed=42, create_classification_splits sobre data real)
+    input:
+      image_path: inbox/a10/codigo/a10-del-dairy-deteccion-vectores-enfermedades-ganado-vacuno/data/classification/splits/test/mos/bimages
+        (36)_c8.jpg
+      det_conf_thresh: 0.2
+      cls_conf_thresh: 0.5
+    expected:
+      prediction: mos
+      confidence: 0.976
+      vectors_count: 1
+      detections:
+      - species: mos
+        det_conf: 0.3855
+        cls_conf: 0.976
+        bbox:
+          x1: 3
+          y1: 0
+          x2: 221
+          y2: 212
+      species_summary:
+        mos: 1
+    tolerance_abs: 0.01
+    notes: >-
+      Ground truth real (carpeta ImageFolder del split test real): species=mos. Crop pre-recortado del dataset
+      (padding 10%, resize 224x224 por preprocess.py); se alimenta entero a predict_inline -> el propio
+      YOLO detector debe redetectar el vector dentro del crop antes de clasificar (pipeline completo, no
+      solo el clasificador aislado).
+  - id: crop_tick_01
+    source: dataset_test_split_classification (seed=42, create_classification_splits sobre data real)
+    input:
+      image_path: inbox/a10/codigo/a10-del-dairy-deteccion-vectores-enfermedades-ganado-vacuno/data/classification/splits/test/tick/tick_IMG_20231007_203930_005_jpg.rf.b92c1140b42b498749a66dff93a5bc20_c0.jpg
+      det_conf_thresh: 0.2
+      cls_conf_thresh: 0.5
+    expected:
+      prediction: tick
+      confidence: 1.0
+      vectors_count: 1
+      detections:
+      - species: tick
+        det_conf: 0.6761
+        cls_conf: 1.0
+        bbox:
+          x1: 3
+          y1: 0
+          x2: 218
+          y2: 224
+      species_summary:
+        tick: 1
+    tolerance_abs: 0.01
+    notes: >-
+      Ground truth real (carpeta ImageFolder del split test real): species=tick. Crop pre-recortado del
+      dataset (padding 10%, resize 224x224 por preprocess.py); se alimenta entero a predict_inline -> el
+      propio YOLO detector debe redetectar el vector dentro del crop antes de clasificar (pipeline completo,
+      no solo el clasificador aislado).
+  - id: crop_tick_02
+    source: dataset_test_split_classification (seed=42, create_classification_splits sobre data real)
+    input:
+      image_path: inbox/a10/codigo/a10-del-dairy-deteccion-vectores-enfermedades-ganado-vacuno/data/classification/splits/test/tick/tick_rs-fed-177_jpg.rf.8de6b053a73e092d78424825effb98e7_c0.jpg
+      det_conf_thresh: 0.2
+      cls_conf_thresh: 0.5
+    expected:
+      prediction: tick
+      confidence: 1.0
+      vectors_count: 1
+      detections:
+      - species: tick
+        det_conf: 0.8839
+        cls_conf: 1.0
+        bbox:
+          x1: 0
+          y1: 5
+          x2: 215
+          y2: 220
+      species_summary:
+        tick: 1
+    tolerance_abs: 0.01
+    notes: >-
+      Ground truth real (carpeta ImageFolder del split test real): species=tick. Crop pre-recortado del
+      dataset (padding 10%, resize 224x224 por preprocess.py); se alimenta entero a predict_inline -> el
+      propio YOLO detector debe redetectar el vector dentro del crop antes de clasificar (pipeline completo,
+      no solo el clasificador aislado).
+  - id: crop_tick_03
+    source: dataset_test_split_classification (seed=42, create_classification_splits sobre data real)
+    input:
+      image_path: inbox/a10/codigo/a10-del-dairy-deteccion-vectores-enfermedades-ganado-vacuno/data/classification/splits/test/tick/tick_rs-f-12_jpg.rf.ba2df5a4f723f7000f0f54b0e0668658_c0.jpg
+      det_conf_thresh: 0.2
+      cls_conf_thresh: 0.5
+    expected:
+      prediction: tick
+      confidence: 1.0
+      vectors_count: 1
+      detections:
+      - species: tick
+        det_conf: 0.8988
+        cls_conf: 1.0
+        bbox:
+          x1: 16
+          y1: 5
+          x2: 217
+          y2: 215
+      species_summary:
+        tick: 1
+    tolerance_abs: 0.01
+    notes: >-
+      Ground truth real (carpeta ImageFolder del split test real): species=tick. Crop pre-recortado del
+      dataset (padding 10%, resize 224x224 por preprocess.py); se alimenta entero a predict_inline -> el
+      propio YOLO detector debe redetectar el vector dentro del crop antes de clasificar (pipeline completo,
+      no solo el clasificador aislado).
+  - id: crop_tick_04
+    source: dataset_test_split_classification (seed=42, create_classification_splits sobre data real)
+    input:
+      image_path: inbox/a10/codigo/a10-del-dairy-deteccion-vectores-enfermedades-ganado-vacuno/data/classification/splits/test/tick/tick_dr-fed-82_jpg.rf.ca1933d5e446a7b92a3b6bd60152762b_c0.jpg
+      det_conf_thresh: 0.2
+      cls_conf_thresh: 0.5
+    expected:
+      prediction: tick
+      confidence: 0.9999
+      vectors_count: 1
+      detections:
+      - species: tick
+        det_conf: 0.8652
+        cls_conf: 0.9999
+        bbox:
+          x1: 11
+          y1: 20
+          x2: 208
+          y2: 212
+      species_summary:
+        tick: 1
+    tolerance_abs: 0.01
+    notes: >-
+      Ground truth real (carpeta ImageFolder del split test real): species=tick. Crop pre-recortado del
+      dataset (padding 10%, resize 224x224 por preprocess.py); se alimenta entero a predict_inline -> el
+      propio YOLO detector debe redetectar el vector dentro del crop antes de clasificar (pipeline completo,
+      no solo el clasificador aislado).
+  - id: crop_tick_05
+    source: dataset_test_split_classification (seed=42, create_classification_splits sobre data real)
+    input:
+      image_path: inbox/a10/codigo/a10-del-dairy-deteccion-vectores-enfermedades-ganado-vacuno/data/classification/splits/test/tick/tick_rs-fed-205_jpg.rf.c003033a533df307216e90421605672c_c0.jpg
+      det_conf_thresh: 0.2
+      cls_conf_thresh: 0.5
+    expected:
+      prediction: tick
+      confidence: 1.0
+      vectors_count: 1
+      detections:
+      - species: tick
+        det_conf: 0.8691
+        cls_conf: 1.0
+        bbox:
+          x1: 0
+          y1: 10
+          x2: 210
+          y2: 223
+      species_summary:
+        tick: 1
+    tolerance_abs: 0.01
+    notes: >-
+      Ground truth real (carpeta ImageFolder del split test real): species=tick. Crop pre-recortado del
+      dataset (padding 10%, resize 224x224 por preprocess.py); se alimenta entero a predict_inline -> el
+      propio YOLO detector debe redetectar el vector dentro del crop antes de clasificar (pipeline completo,
+      no solo el clasificador aislado).
+  - id: crop_tick_06
+    source: dataset_test_split_classification (seed=42, create_classification_splits sobre data real)
+    input:
+      image_path: inbox/a10/codigo/a10-del-dairy-deteccion-vectores-enfermedades-ganado-vacuno/data/classification/splits/test/tick/tick_rs-fed-187_jpg.rf.62479022a42f9253e1e18424e4b3fe0f_c0.jpg
+      det_conf_thresh: 0.2
+      cls_conf_thresh: 0.5
+    expected:
+      prediction: tick
+      confidence: 0.9999
+      vectors_count: 1
+      detections:
+      - species: tick
+        det_conf: 0.94
+        cls_conf: 0.9999
+        bbox:
+          x1: 4
+          y1: 0
+          x2: 223
+          y2: 222
+      species_summary:
+        tick: 1
+    tolerance_abs: 0.01
+    notes: >-
+      Ground truth real (carpeta ImageFolder del split test real): species=tick. Crop pre-recortado del
+      dataset (padding 10%, resize 224x224 por preprocess.py); se alimenta entero a predict_inline -> el
+      propio YOLO detector debe redetectar el vector dentro del crop antes de clasificar (pipeline completo,
+      no solo el clasificador aislado).
+  - id: fullraw_fly_01
+    source: dataset_raw_real (imagen cruda original, no recortada, de la que salió un crop del test split)
+    input:
+      image_path: inbox/a10/codigo/a10-del-dairy-deteccion-vectores-enfermedades-ganado-vacuno/data/classification/raw/fly_mos/FLY_MOS_Dataset/190.jpeg
+      det_conf_thresh: 0.2
+      cls_conf_thresh: 0.5
+    expected:
+      prediction: fly
+      confidence: 0.9999
+      vectors_count: 1
+      detections:
+      - species: fly
+        det_conf: 0.8409
+        cls_conf: 0.9999
+        bbox:
+          x1: 36
+          y1: 66
+          x2: 183
+          y2: 170
+      species_summary:
+        fly: 1
+    tolerance_abs: 0.01
+    notes: >-
+      Imagen RGB cruda original (no recortada) cuyo crop derivado (190) cayó en el split test real (seed=42)
+      para la clase 'fly'. Ejercita el pipeline COMPLETO (YOLO detector sobre la imagen entera + crop +
+      clasificación), no solo el clasificador sobre un crop ya recortado -- a diferencia de los casos crop_*.
+  - id: fullraw_fly_02
+    source: dataset_raw_real (imagen cruda original, no recortada, de la que salió un crop del test split)
+    input:
+      image_path: inbox/a10/codigo/a10-del-dairy-deteccion-vectores-enfermedades-ganado-vacuno/data/classification/raw/fly_mos/FLY_MOS_Dataset/istockphoto-147973581-612x612.jpg
+      det_conf_thresh: 0.2
+      cls_conf_thresh: 0.5
+    expected:
+      prediction: fly
+      confidence: 1.0
+      vectors_count: 1
+      detections:
+      - species: fly
+        det_conf: 0.8997
+        cls_conf: 1.0
+        bbox:
+          x1: 136
+          y1: 65
+          x2: 434
+          y2: 350
+      species_summary:
+        fly: 1
+    tolerance_abs: 0.01
+    notes: >-
+      Imagen RGB cruda original (no recortada) cuyo crop derivado (istockphoto-147973581-612x612) cayó en
+      el split test real (seed=42) para la clase 'fly'. Ejercita el pipeline COMPLETO (YOLO detector sobre
+      la imagen entera + crop + clasificación), no solo el clasificador sobre un crop ya recortado -- a
+      diferencia de los casos crop_*.
+  - id: fullraw_mos_03
+    source: dataset_raw_real (imagen cruda original, no recortada, de la que salió un crop del test split)
+    input:
+      image_path: inbox/a10/codigo/a10-del-dairy-deteccion-vectores-enfermedades-ganado-vacuno/data/classification/raw/fly_mos/FLY_MOS_Dataset/5225848968_30f8d9d81c_24
+        (68).jpg
+      det_conf_thresh: 0.2
+      cls_conf_thresh: 0.5
+    expected:
+      prediction: mos
+      confidence: 1.0
+      vectors_count: 1
+      detections:
+      - species: mos
+        det_conf: 0.8132
+        cls_conf: 1.0
+        bbox:
+          x1: 5
+          y1: 0
+          x2: 281
+          y2: 227
+      species_summary:
+        mos: 1
+    tolerance_abs: 0.01
+    notes: >-
+      Imagen RGB cruda original (no recortada) cuyo crop derivado (5225848968_30f8d9d81c_24 (68)) cayó en
+      el split test real (seed=42) para la clase 'mos'. Ejercita el pipeline COMPLETO (YOLO detector sobre
+      la imagen entera + crop + clasificación), no solo el clasificador sobre un crop ya recortado -- a
+      diferencia de los casos crop_*.
+  - id: fullraw_mos_04
+    source: dataset_raw_real (imagen cruda original, no recortada, de la que salió un crop del test split)
+    input:
+      image_path: inbox/a10/codigo/a10-del-dairy-deteccion-vectores-enfermedades-ganado-vacuno/data/classification/raw/fly_mos/FLY_MOS_Dataset/5225848968_30f8d9d81c_24
+        (99).jpg
+      det_conf_thresh: 0.2
+      cls_conf_thresh: 0.5
+    expected:
+      prediction: mos
+      confidence: 0.9995
+      vectors_count: 1
+      detections:
+      - species: mos
+        det_conf: 0.8168
+        cls_conf: 0.9995
+        bbox:
+          x1: 147
+          y1: 108
+          x2: 319
+          y2: 213
+      species_summary:
+        mos: 1
+    tolerance_abs: 0.01
+    notes: >-
+      Imagen RGB cruda original (no recortada) cuyo crop derivado (5225848968_30f8d9d81c_24 (99)) cayó en
+      el split test real (seed=42) para la clase 'mos'. Ejercita el pipeline COMPLETO (YOLO detector sobre
+      la imagen entera + crop + clasificación), no solo el clasificador sobre un crop ya recortado -- a
+      diferencia de los casos crop_*.
+  - id: fullraw_tick_05
+    source: dataset_raw_real (imagen cruda original, no recortada, de la que salió un crop del test split)
+    input:
+      image_path: inbox/a10/codigo/a10-del-dairy-deteccion-vectores-enfermedades-ganado-vacuno/data/classification/raw/ticks/test/images/ir-m-109_jpg.rf.223cace6bf0dad3ccb2b5d6c386f2eb6.jpg
+      det_conf_thresh: 0.2
+      cls_conf_thresh: 0.5
+    expected:
+      prediction: tick
+      confidence: 1.0
+      vectors_count: 1
+      detections:
+      - species: tick
+        det_conf: 0.8811
+        cls_conf: 1.0
+        bbox:
+          x1: 280
+          y1: 299
+          x2: 385
+          y2: 385
+      species_summary:
+        tick: 1
+    tolerance_abs: 0.01
+    notes: >-
+      Imagen RGB cruda original (no recortada) cuyo crop derivado (ir-m-109_jpg.rf.223cace6bf0dad3ccb2b5d6c386f2eb6)
+      cayó en el split test real (seed=42) para la clase 'tick'. Ejercita el pipeline COMPLETO (YOLO detector
+      sobre la imagen entera + crop + clasificación), no solo el clasificador sobre un crop ya recortado
+      -- a diferencia de los casos crop_*.
+  - id: fullraw_tick_06
+    source: dataset_raw_real (imagen cruda original, no recortada, de la que salió un crop del test split)
+    input:
+      image_path: inbox/a10/codigo/a10-del-dairy-deteccion-vectores-enfermedades-ganado-vacuno/data/classification/raw/ticks/test/images/ir-fed-110_jpg.rf.1d2082a2c08ae4e3f4d85e50d1445a89.jpg
+      det_conf_thresh: 0.2
+      cls_conf_thresh: 0.5
+    expected:
+      prediction: tick
+      confidence: 1.0
+      vectors_count: 1
+      detections:
+      - species: tick
+        det_conf: 0.7422
+        cls_conf: 1.0
+        bbox:
+          x1: 131
+          y1: 270
+          x2: 310
+          y2: 460
+      species_summary:
+        tick: 1
+    tolerance_abs: 0.01
+    notes: >-
+      Imagen RGB cruda original (no recortada) cuyo crop derivado (ir-fed-110_jpg.rf.1d2082a2c08ae4e3f4d85e50d1445a89)
+      cayó en el split test real (seed=42) para la clase 'tick'. Ejercita el pipeline COMPLETO (YOLO detector
+      sobre la imagen entera + crop + clasificación), no solo el clasificador sobre un crop ya recortado
+      -- a diferencia de los casos crop_*.
+  - id: caso_001_test_jpg
+    source: codigo_prediccion_original (ya existente en manifest, re-verificado contra el checkpoint real
+      en este ciclo)
+    input:
+      image_path: inbox/a10/codigo/a10-del-dairy-deteccion-vectores-enfermedades-ganado-vacuno/data/test.jpg
+      det_conf_thresh: 0.2
+      cls_conf_thresh: 0.5
+    expected:
+      prediction: tick
+      confidence: 0.9996
+      vectors_count: 1
+      detections:
+      - species: tick
+        det_conf: 0.6819
+        cls_conf: 0.9996
+        bbox:
+          x1: 755
+          y1: 280
+          x2: 840
+          y2: 374
+      species_summary:
+        tick: 1
+    tolerance_abs: 0.01
+    notes: >-
+      Re-verificado en este ciclo completo (no solo heredado del manifest anterior).
+
+known_issues:
+  - "requirements.txt del código entregado está en UTF-16LE con CRLF — normalizar a UTF-8/LF
+     antes de usarlo para pip install/pip-audit."
+  - "DISCREPANCIA DE PREPROCESADO ENTRE EL PROPIO CÓDIGO ORIGINAL (ya corregida en el plugin
+     integrado, ver app/plugins/ml10_dairy_disease_vector_detection/preprocessing.py): src/predict/predictor.py
+     (predict_full_pipeline) y notebooks/evaluation/pipeline.ipynb recortan la detección del
+     YOLO y aplican Resize(256)+CenterCrop(224) antes de clasificar. Pero
+     src/training/trainer.py (train_classifier/_get_classification_transforms) y
+     src/predict/predictor.py (predict_classifier, la función que generó el accuracy=0.981
+     oficialmente reportado) entrenan/evalúan el clasificador con un Resize((224,224)) plano,
+     SIN CenterCrop, sobre imágenes que data_processing/preprocess.py ya había recortado con
+     10% de padding y reescalado a 224x224. La memoria (sección 'Mecanismo de Inferencia')
+     dice que la inferencia usa 'el mismo preprocesado... utilizado en el entrenamiento', lo
+     cual técnicamente describe la rama SIN CenterCrop — pero el único ejemplo end-to-end
+     realmente entregado (test.jpg/test_results.json) fue generado con la rama CON CenterCrop,
+     y el accuracy=0.981 oficial NUNCA evaluó el pipeline completo (detección+recorte+
+     clasificación) — solo el clasificador en aislado sobre imágenes ya preprocesadas (memoria,
+     sección 'Evidencias de Resultados': '...no se ha podido hacer una evaluación exhaustiva
+     del [pipeline completo] debido a la falta de datos'). El plugin integrado replica
+     Resize(256)+CenterCrop(224) para predict_inline/predict_batch (matchea el único golden
+     case real disponible) y mantiene el Resize plano SOLO para medir val_accuracy durante su
+     propio train() (replicando train_classifier), documentando ambas decisiones en el código.
+     Riesgo residual: el accuracy=0.981 reportado en la memoria no es representativo de lo que
+     el pipeline completo (con CenterCrop) realmente entrega en producción.
+     ACTUALIZACIÓN CICLO 3 (2026-10-05): con los 3 datasets reales ya presentes, esa brecha
+     dejó de ser una sospecha sin cuantificar — se midió directamente (ver
+     metrics_reported.pipeline_completo_medido_ciclo3): el pipeline completo (detector+crop+
+     clasificador, exactamente la ruta de predict_inline/predict_batch) obtiene accuracy=0.9494
+     (394/415) sobre el split de test real reproducido, claramente por debajo del 0.981/0.990
+     reportados para el clasificador aislado — y con una caída mucho más marcada en 'mos'
+     (0.8673, 6/98 sin ninguna detección del YOLO por encima de det_conf_thresh=0.2 default).
+     Esto confirma, con datos reales, que el riesgo documentado en el ciclo 1 era real y no
+     solo teórico — ver el caveat de reproducibilidad del split en metrics_reported sobre por
+     qué esta cifra debe leerse como medición de wiring/correctitud, no como benchmark de
+     generalización estricto."
+  - "Los JSON de métricas incluidos en el código entregado (models/detection/metrics/
+     detection_metrics.json: mAP50=0.885, recall=0.818; models/classification/metrics/
+     classification_metrics.json: accuracy=0.990) NO coinciden con los valores reportados en la
+     memoria (mAP50=0.790, recall=0.710, accuracy=0.981) — probablemente artefactos de un
+     reentrenamiento posterior a la redacción de la memoria v2.0. Se usa la tabla de la memoria
+     como metrics_reported (fuente auditada), pero el golden_case real (test.jpg) se compara
+     contra el comportamiento real de los artefactos vendorizados, que corresponden a los JSON
+     en disco, no a la tabla de la memoria."
+  - "SUPERADO EN EL CICLO 3 (2026-10-05): en los ciclos 1-2, el entrenamiento end-to-end
+     (detector + clasificador) requería 3 datasets públicos externos (Roboflow x2, Kaggle x1,
+     con registro) que NO venían incluidos en el ZIP entregado — solo los artefactos ya
+     entrenados y un único ejemplo de inferencia (test.jpg); por eso solo había 1 golden_case
+     real disponible. En este ciclo el usuario añadió los 3 datasets completos
+     (data/detection/raw/insects, data/classification/raw/fly_mos,
+     data/classification/raw/ticks — 49.695 ficheros en inbox/a10/codigo/, antes 219), lo que
+     permitió reproducir el split real 70/15/15 (seed=42) del código original y construir 25
+     golden_cases reales (ver bloque golden_cases arriba) con expected derivado de ejecutar el
+     checkpoint real, en vez de depender de un único ejemplo pre-generado por el equipo de IA."
+  - "El plugin integrado SOLO permite reentrenar el clasificador MobileNetV3 vía /train — el
+     detector YOLOv8n (que requiere anotaciones bbox, no una simple estructura de carpetas por
+     clase) no es reentrenable por esta vía. Esto es una decisión de alcance explícita, no un
+     bug: coincide con el docstring de Ml10DairyDiseaseVectorDetectionPlugin ('El entrenamiento solo afecta al
+     clasificador MobileNetV3') y con que no hay forma razonable de aceptar anotaciones de
+     bounding boxes de usuario en el contrato actual de /train (data_path=zip de imágenes)."
+  - "Tablas 'Pipeline de ETL', 'Tiempos de entrenamiento e inferencia', 'Ranking de detección' y
+     'Ranking de clasificación' de la memoria están anidadas dentro de otra tabla en el .docx
+     (no son tablas de nivel superior) — python-docx/pandoc estándar no las extrae con un
+     recorrido simple; hay que recorrer el árbol w:tbl del XML a cualquier profundidad. Dejar
+     constancia por si se repite en otras memorias del proyecto."
+  - "NUEVO (ciclo 3): no existe ningún caso real de la rama 'no_vectors' en los datos
+     entregados — las 653 imágenes del split de detección test reproducido (seed=42) tienen
+     todas al menos una anotación de vector; 0 candidatas con label vacío o ausente. No se
+     generó ninguna imagen sintética para cubrir ese hueco (regla del proyecto: nunca inventar
+     un golden case). La rama no_vectors SÍ se ejercitó funcionalmente (no como golden case
+     con ground truth real) subiendo cls_conf_thresh sobre una imagen real hasta forzar 0
+     detecciones por encima del umbral — confirma que el código de la rama no crashea, pero no
+     sustituye a un caso real con ground truth 'sin vectores'. Gap documentado, no cerrado."
+  - "NUEVO (ciclo 3): reconfirmado end-to-end con GPU real (RTX 2070 SUPER, torch 2.13.0+cu130)
+     que safe_device() en model_loader.py devuelve 'cuda' y que load()/predict_inline() corren
+     efectivamente en GPU (no solo que el self-test de device aislado pase) — los 25
+     golden_cases y la evaluación de 415 imágenes del pipeline completo (ver
+     metrics_reported.pipeline_completo_medido_ciclo3) se ejecutaron con
+     Ml10DairyDiseaseVectorDetectionPlugin().load() real, sin mockear detector/clasificador, confirmando que el
+     fix de _safe_device() del ciclo 2 sigue sin regresiones contra carga real de trabajo (415
+     imágenes + 1 ciclo de train() real en ~11s totales, no solo una llamada aislada)."
+  - "NUEVO (ciclo 3): los artefactos vendorizados en artifacts/ml10_dairy_disease_vector_detection/ (best_classifier.pth,
+     detector_best.pt, class_names.json) se confirmaron BIT-A-BIT IDÉNTICOS (md5sum) a los de
+     inbox/a10/codigo/.../models/{classification,detection}/artifacts/ — no hay desviación entre
+     lo servido en producción y lo entregado por el equipo de IA en este ciclo."

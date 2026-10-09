@@ -105,9 +105,17 @@ def test_train_rejects_invalid_system(client):
 
 
 def test_train(client):
-    resp = client.post(f"{PREFIX}/train", json={"data_path": "/tmp/dataset_aireado.csv"})
+    resp = client.post(
+        f"{PREFIX}/train",
+        json={"data_path": "/tmp/dataset_aireado.csv", "mlflow_run_id": "test-run-id"},
+    )
     assert resp.status_code == 200
     body = resp.json()
     assert body["system"] == "aireado"
     assert body["n_runs_train"] > 0
     assert 0.0 <= body["f1_macro"] <= 1.0
+
+
+def test_train_requires_mlflow_run_id(client):
+    resp = client.post(f"{PREFIX}/train", json={"data_path": "/tmp/dataset_aireado.csv"})
+    assert resp.status_code == 422

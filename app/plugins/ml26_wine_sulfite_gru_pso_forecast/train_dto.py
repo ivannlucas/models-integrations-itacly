@@ -5,6 +5,8 @@ from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.application.dto.train_dto import MlflowRunId
+
 
 class TrainRequest(BaseModel):
     """Fine-tune request: CSV in the AI team's sequential format (data/raw/sequential.csv.gz)."""
@@ -23,7 +25,11 @@ class TrainRequest(BaseModel):
             "Se necesitan al menos 7 lotes (partición 70/15/15 por lot_id)."
         ),
     )
-    mlflow_run_id: str = ""
+    mlflow_run_id: MlflowRunId = Field(
+        ...,
+        description="Run de MLflow donde se persiste el modelo reentrenado. Obligatorio: el "
+        "artefacto base nunca se sobrescribe.",
+    )
 
 
 class TrainResponse(BaseModel):
@@ -50,10 +56,8 @@ class TrainResponse(BaseModel):
     test_mae_future_free_sulfite_72h: Optional[float] = None
     test_rmse_underprotection_risk_72h: Optional[float] = None
     test_mae_underprotection_risk_72h: Optional[float] = None
-    local_artifact_dir: str = Field(
-        ...,
-        description="Carpeta local del modelo reentrenado (nunca sobrescribe el artefacto fijo)",
-    )
+    mlflow_run_id: str = Field(..., description="Run de MLflow donde quedó el modelo reentrenado")
     upload_warning: Optional[str] = Field(
-        default=None, description="Informativo si falló la subida a MLflow"
+        default=None,
+        description="Compatibilidad con la plataforma: siempre None (un fallo de subida es un 502)",
     )

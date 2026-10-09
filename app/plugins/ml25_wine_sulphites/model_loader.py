@@ -19,7 +19,7 @@ _store = ArtifactStore(ARTIFACT_FOLDER_NAME)
 
 
 def get_artifacts_dir():
-    """Return the local directory path where wine-sulphite artifacts are stored."""
+    """Return the local directory path where ml25-wine-sulphites artifacts are stored."""
     return _store.local_dir
 
 

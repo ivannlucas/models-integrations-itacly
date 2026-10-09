@@ -9,7 +9,7 @@
   "framework": "TensorFlow/Keras (GRU, 96 unidades, Dropout 0.2, Dense 32 + Dense 1); scikit-learn (StandardScaler, serializado como JSON); pandas / numpy",
   "artefacto": "model.joblib (bundle {model_json, weights} de un modelo Keras Sequential) + x_scaler.json + y_scaler.json",
   "objetivo": "Anticipar con un mes de antelación la evolución del precio medio por kg de productos cárnicos en cada Comunidad Autónoma, incorporando la influencia de los mercados de regiones vecinas, para dar soporte a la planificación de compras y a la evaluación de riesgo de coste en la cadena de suministro cárnica. El caso de uso de negocio (CU06) define el objetivo central y validado como la predicción espacio-temporal del precio -- la lectura adicional de 'modas y gustos' del título original se ofrece como interpretación exploratoria, no como resultado cuantificado de forma independiente.",
-  "caso_uso": "Modo predict inline y predict batch (idéntico cálculo, solo cambia el transporte del panel -- JSON o CSV): se aporta un panel mensual de al menos 12 meses consecutivos por cada combinación CCAA-Producto que se quiera predecir (Fecha, CCAA, Producto, Poblacion, RentaHogar, CONSUMO X CAPITA, PENETRACION (%), PRECIO MEDIO KG). Opcionalmente se puede aportar también el histórico de las CCAA vecinas para que el lag espacial use su valor real; si no se aporta, el servicio usa el propio valor de la CCAA como alternativa razonable (mismo comportamiento que el código original, documentado explícitamente en la memoria). El servicio genera automáticamente la fila del mes siguiente a predecir -- no hace falta aportarla. No hay modo de reentrenamiento por usuario (ver limitaciones): el procedimiento de entrenamiento entregado siempre reentrena sobre el mismo histórico bundled del equipo de IA.",
+  "caso_uso": "Modo predict inline y predict batch (idéntico cálculo, solo cambia el transporte del panel -- JSON o CSV): se aporta un panel mensual de al menos 12 meses consecutivos por cada combinación CCAA-Producto que se quiera predecir (Fecha, CCAA, Producto, Poblacion, RentaHogar, CONSUMO X CAPITA, PENETRACION (%), PRECIO MEDIO KG). Opcionalmente se puede aportar también el histórico de las CCAA vecinas para que el lag espacial use su valor real; si no se aporta, el servicio usa el propio valor de la CCAA como alternativa razonable (mismo comportamiento que el código original, documentado explícitamente en la memoria). El servicio genera automáticamente la fila del mes siguiente a predecir -- no hace falta aportarla. También admite reentrenamiento por usuario (/train): con un CSV en el mismo formato que el dataset de modelado del equipo de IA, repite su procedimiento completo (GRU desde cero, split temporal 70/15/15, parada temprana) y guarda el modelo resultante en MLflow, sin sustituir nunca el modelo base.",
   "inputs": [
     {
       "nombre": "rows (panel mensual, mínimo 12 filas por combinación CCAA-Producto)",
@@ -82,8 +82,8 @@
       "descripcion": "El lag espacial de estas dos comunidades insulares usa su propio valor como aproximación (no hay CCAA vecina definida en la matriz de vecindad). Es un comportamiento documentado y verificado (ver golden_cases caso Baleares), no un error -- pero implica que la señal espacial no aporta información adicional para estas dos regiones."
     },
     {
-      "tipo": "Sin reentrenamiento por usuario",
-      "descripcion": "El procedimiento de entrenamiento entregado por el equipo de IA no acepta ningún dato de cliente: siempre reentrena sobre el mismo histórico fijo bundled, solo permite variar hiperparámetros editando config.yaml. El endpoint /train de este servicio devuelve explícitamente 'no soportado' (HTTP 501)."
+      "tipo": "Reentrenamiento: requisitos y coste",
+      "descripcion": "El reentrenamiento por usuario repite el procedimiento del equipo de IA desde cero (no ajuste fino) y necesita un histórico mensual en el formato del dataset de modelado con suficientes fechas para el split temporal 70/15/15 y más de 12 meses por combinación CCAA-Producto. Con el dataset completo tarda unos 2,5 minutos en CPU dentro de la petición. El modelo reentrenado solo se guarda en MLflow y se usa indicando su run; el modelo base no cambia."
     },
     {
       "tipo": "Dependencia de fuentes de datos externas (MAPA/INE)",
@@ -106,7 +106,7 @@
   "que_no_hace": [
     "No sustituye el criterio experto de compras ante episodios de mercado extraordinarios.",
     "No predice precios a nivel de explotación individual -- solo el promedio por CCAA y producto.",
-    "No permite reentrenamiento con datos propios del usuario -- solo existe el artefacto fijo entregado por el equipo de IA.",
+    "No sustituye automáticamente el modelo base al reentrenar: el modelo reentrenado solo se usa si se indica su run de MLflow.",
     "No cuantifica ni valida de forma independiente la interpretación de 'modas y gustos de consumo' -- solo el precio medio predicho."
   ],
   "puede_equivocarse": "Sí. En la evaluación de test se equivoca de media un 9,93% del precio real -- una mejora clara frente a los baselines simples (14-20% de error), pero no una garantía exacta. Debe usarse como apoyo a la planificación de compras y a la evaluación de riesgo, nunca como sustituto del criterio experto ante cambios bruscos del mercado o fallos en la actualización de las fuentes de datos oficiales (MAPA/INE).",

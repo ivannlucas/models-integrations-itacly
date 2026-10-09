@@ -67,6 +67,12 @@ outputs:
 
 training:
   supported: true
+  # [CORREGIDO 2026-10-08] Alineado con el contrato común de reentrenamiento al integrar main en la
+  # rama de auditoría: mlflow_run_id obligatorio (422 si falta o va vacío); el modelo reentrenado se
+  # guarda SOLO en MLflow (antes también en artifacts/ con nombres user_*); un fallo de subida es 502
+  # (antes 200 con upload_warning); /predict con un run sin modelo cargable responde 422 (antes 200
+  # con el modelo base). Re-verificado con mapa_wine_prices_raw.csv: hold-out AUC 0.8438, F1 0.5926,
+  # P 0.4211, R 1.0, Acc 0.5417 (idéntico al verification_report); predicción base sin cambios (0.4621).
   source: codigo_entrenamiento   # modules/ML_models/training.py (train_with_walk_forward + train_final_models) + modules/common/config.py
   input_schema: "Mismo CSV crudo que inferencia (campaign+week o bulletin, + price_red). El target NO viene en el CSV: se calcula internamente."
   target_column: target   # DERIVADA internamente (features.py::generate_technical_features):
@@ -355,6 +361,13 @@ golden_cases:
       target: 0
 
 known_issues:
+  - id: artefactos_no_en_s3
+    detail: >
+      [NUEVO 2026-10-08] s3://<STORAGE_BUCKET>/artifacts/fixed/ml13_wine_price_fluctuation_prediction/
+      no existe (listado de solo lectura). Lo más parecido es artifacts/fixed/wine_price_fluctuation/
+      (marzo de 2026, anterior a la entrega de junio). Hay que subir los 4 ficheros de
+      inbox/a13/codigo/models/prod/ a la carpeta con el nombre del plugin; sin ellos el servicio
+      arranca con loaded=false. Acción humana (el agente no escribe en S3).
   - id: titulo_rnn_vs_modelo_produccion
     detail: >
       El título del proyecto/memoria y el nombre del repo dicen "redes neuronales recurrentes" (RNN),

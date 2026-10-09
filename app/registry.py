@@ -33,21 +33,23 @@ from app.domain.services.exceptions import (
 # ── Plugin imports ────────────────────────────────────────────────────────────
 
 
-from app.plugins.ml25_wine_sulphites.plugin import WineSulphitePlugin
+from app.plugins.ml25_wine_sulphites.plugin import Ml25WineSulphitesPlugin
 from app.plugins.ml25_wine_sulphites.predict_dto import (
-    PredictRequest as WineSO2_Request,
-    PredictResponse as WineSO2_Response,
+    PredictRequest as Ml25Wine_Request,
+    PredictResponse as Ml25Wine_Response,
 )
 from app.plugins.ml25_wine_sulphites.train_dto import (
-    TrainRequest as WineSO2_TrainReq,
-    TrainResponse as WineSO2_TrainResp,
+    TrainRequest as Ml25Wine_TrainReq,
+    TrainResponse as Ml25Wine_TrainResp,
 )
 
-from app.plugins.modelo10_lacteo.plugin import Modelo10LacteoPlugin
-from app.plugins.modelo10_lacteo.predict_dto import (
-    PredictRequest as Lacteo10_Request,
-    PredictResponse as Lacteo10_Response,
+from app.plugins.ml10_dairy_disease_vector_detection.plugin import Ml10DairyDiseaseVectorDetectionPlugin
+from app.plugins.ml10_dairy_disease_vector_detection.predict_dto import (
+    PredictRequest as Ml10Dairy_Request,
+    PredictResponse as Ml10Dairy_Response,
 )
+from app.plugins.ml10_dairy_disease_vector_detection.train_dto import TrainRequest as Ml10Dairy_TrainReq
+from app.application.dto.train_dto import TrainResponse as Ml10Dairy_TrainResp
 
 from app.plugins.ml8_cereals_img_anomaly_detector.plugin import Ml8CerealsImgAnomalyDetectorPlugin
 from app.plugins.ml8_cereals_img_anomaly_detector.predict_dto import (
@@ -64,17 +66,27 @@ from app.plugins.ml2_fungal_cnn_disease_detection.predict_dto import (
     PredictRequest as Ml2Fungal_Request,
     PredictResponse as Ml2Fungal_Response,
 )
+from app.plugins.ml2_fungal_cnn_disease_detection.train_dto import (
+    TrainRequest as Ml2Fungal_TrainRequest,
+    TrainResponse as Ml2Fungal_TrainResponse,
+)
 
 from app.plugins.ml5_meat_cow_behaviour.plugin import Ml5MeatCowBehaviourPlugin
 from app.plugins.ml5_meat_cow_behaviour.predict_dto import (
     PredictRequest as Ml5Cow_Request,
     PredictResponse as Ml5Cow_Response,
 )
+from app.plugins.ml5_meat_cow_behaviour.train_dto import TrainRequest as Ml5Cow_TrainReq
+from app.application.dto.train_dto import TrainResponse as Ml5Cow_TrainResp
 
 from app.plugins.ml7_cereals_grain_pest_detection.plugin import Ml7CerealsGrainPestDetectionPlugin
 from app.plugins.ml7_cereals_grain_pest_detection.predict_dto import (
     PredictRequest as Ml7Grain_Request,
     PredictResponse as Ml7Grain_Response,
+)
+from app.plugins.ml7_cereals_grain_pest_detection.train_dto import (
+    TrainRequest as Ml7Grain_TrainReq,
+    TrainResponse as Ml7Grain_TrainResp,
 )
 
 from app.plugins.ml41_meat_curing_machinery_acoustic_anomaly.plugin import (
@@ -93,6 +105,10 @@ from app.plugins.ml18_meat_spatial_price_forecast.plugin import Ml18MeatSpatialP
 from app.plugins.ml18_meat_spatial_price_forecast.predict_dto import (
     PredictRequest as Ml18_Request,
     PredictResponse as Ml18_Response,
+)
+from app.plugins.ml18_meat_spatial_price_forecast.train_dto import (
+    TrainRequest as Ml18_TrainReq,
+    TrainResponse as Ml18_TrainResp,
 )
 
 from app.plugins.ml30_meat_traceability_detection.plugin import Ml30MeatTraceabilityDetectionPlugin
@@ -126,6 +142,10 @@ from app.plugins.ml4_lactic_cnn_thermal_early_disease_detection.predict_dto impo
     PredictRequest as Ml4Thermal_Request,
     PredictResponse as Ml4Thermal_Response,
 )
+from app.plugins.ml4_lactic_cnn_thermal_early_disease_detection.train_dto import (
+    TrainRequest as Ml4Thermal_TrainReq,
+    TrainResponse as Ml4Thermal_TrainResp,
+)
 
 from app.plugins.ml23_lactic_market_price_forecast.plugin import (
     Ml23LacticMarketPriceForecastPlugin,
@@ -134,6 +154,10 @@ from app.plugins.ml23_lactic_market_price_forecast.predict_dto import (
     PredictRequest as Ml23_Request,
     PredictResponse as Ml23_Response,
 )
+from app.plugins.ml23_lactic_market_price_forecast.train_dto import (
+    TrainRequest as Ml23_TrainReq,
+    TrainResponse as Ml23_TrainResp,
+)
 
 from app.plugins.ml17_meat_market_price_analysis.plugin import (
     Ml17MeatMarketPriceAnalysisPlugin,
@@ -141,6 +165,10 @@ from app.plugins.ml17_meat_market_price_analysis.plugin import (
 from app.plugins.ml17_meat_market_price_analysis.predict_dto import (
     PredictRequest as Ml17_Request,
     PredictResponse as Ml17_Response,
+)
+from app.plugins.ml17_meat_market_price_analysis.train_dto import (
+    TrainRequest as Ml17_TrainReq,
+    TrainResponse as Ml17_TrainResp,
 )
 
 from app.plugins.ml35_dairy_ann_cleaning_cost.plugin import Ml35DairyAnnCleaningCostPlugin
@@ -174,10 +202,14 @@ from app.plugins.ml46_dairy_fouling_clog_detection.train_dto import (
     TrainRequest as Ml46Dairy_TrainReq,
     TrainResponse as Ml46Dairy_TrainResp,
 )
-from app.plugins.m47_dnsl_fallas_maquinaria_pasteurizado.plugin import M47DnsFallMaquinariaPasteurizadoPlugin
-from app.plugins.m47_dnsl_fallas_maquinaria_pasteurizado.predict_dto import (
-    PredictRequest as M47_Request,
-    PredictResponse as M47_Response,
+from app.plugins.ml47_dairy_dnsl_pasteurization_fault_detection.plugin import Ml47DairyDnslPasteurizationFaultDetectionPlugin
+from app.plugins.ml47_dairy_dnsl_pasteurization_fault_detection.predict_dto import (
+    PredictRequest as Ml47Dairy_Request,
+    PredictResponse as Ml47Dairy_Response,
+)
+from app.plugins.ml47_dairy_dnsl_pasteurization_fault_detection.train_dto import (
+    TrainRequest as Ml47Dairy_TrainReq,
+    TrainResponse as Ml47Dairy_TrainResp,
 )
 from app.plugins.ml45_cereals_dnsl_critical_point_detection.plugin import (
     Ml45CerealsDnslCriticalPointDetectionPlugin,
@@ -221,14 +253,14 @@ from app.plugins.ml28_meat_neuroevolutionary_raw_materials_prediction.predict_dt
     PredictRequest as Ml28Meat_Request,
     PredictResponse as Ml28Meat_Response,
 )
-from app.plugins.modelo43_cereales.plugin import Modelo43CerealesPlugin
-from app.plugins.modelo43_cereales.predict_dto import (
-    PredictRequest as Modelo43_Request,
-    PredictResponse as Modelo43_Response,
+from app.plugins.ml43_cereals_dnsl_anomaly_fault_detection.plugin import Ml43CerealsDnslAnomalyFaultDetectionPlugin
+from app.plugins.ml43_cereals_dnsl_anomaly_fault_detection.predict_dto import (
+    PredictRequest as Ml43Cereals_Request,
+    PredictResponse as Ml43Cereals_Response,
 )
-from app.plugins.modelo43_cereales.train_dto import (
-    TrainRequest as Modelo43_TrainReq,
-    TrainResponse as Modelo43_TrainResp,
+from app.plugins.ml43_cereals_dnsl_anomaly_fault_detection.train_dto import (
+    TrainRequest as Ml43Cereals_TrainReq,
+    TrainResponse as Ml43Cereals_TrainResp,
 )
 
 from app.plugins.ml3_wine_disease_pest_forecast.plugin import Ml3WineDiseasePestForecastPlugin
@@ -265,6 +297,10 @@ from app.plugins.ml14_wine_phyto_price_forecast.plugin import Ml14WinePhytoPrice
 from app.plugins.ml14_wine_phyto_price_forecast.predict_dto import (
     PredictRequest as Ml14_Request,
     PredictResponse as Ml14_Response,
+)
+from app.plugins.ml14_wine_phyto_price_forecast.train_dto import (
+    TrainRequest as Ml14_TrainReq,
+    TrainResponse as Ml14_TrainResp,
 )
 
 from app.plugins.ml26_wine_sulfite_gru_pso_forecast.exceptions import InvalidWineryInputError
@@ -321,24 +357,26 @@ class ModelEntry:
 
 REGISTRY: list[ModelEntry] = [
     ModelEntry(
-        model_id="wine-sulphite",
-        prefix="/models/wine-sulphite",
+        model_id="ml25-wine-sulphites",
+        prefix="/models/ml25-wine-sulphites",
         version="1.2.0",
-        plugin_class=WineSulphitePlugin,
-        predict_request_type=WineSO2_Request,
-        predict_response_type=WineSO2_Response,
+        plugin_class=Ml25WineSulphitesPlugin,
+        predict_request_type=Ml25Wine_Request,
+        predict_response_type=Ml25Wine_Response,
         extra_predict_exceptions=(NoValidSimulationPointError,),
-        train_request_type=WineSO2_TrainReq,
-        train_response_type=WineSO2_TrainResp,
+        train_request_type=Ml25Wine_TrainReq,
+        train_response_type=Ml25Wine_TrainResp,
     ),
     ModelEntry(
-        model_id="modelo10-lacteo",
-        prefix="/models/modelo10-lacteo",
+        model_id="ml10-dairy-disease-vector-detection",
+        prefix="/models/ml10-dairy-disease-vector-detection",
         version="1.0.0",
-        plugin_class=Modelo10LacteoPlugin,
-        predict_request_type=Lacteo10_Request,
-        predict_response_type=Lacteo10_Response,
+        plugin_class=Ml10DairyDiseaseVectorDetectionPlugin,
+        predict_request_type=Ml10Dairy_Request,
+        predict_response_type=Ml10Dairy_Response,
         extra_predict_exceptions=(),
+        train_request_type=Ml10Dairy_TrainReq,
+        train_response_type=Ml10Dairy_TrainResp,
     ),
     ModelEntry(
         model_id="ml8-cereals-img-anomaly-detector",
@@ -359,6 +397,8 @@ REGISTRY: list[ModelEntry] = [
         predict_request_type=Ml5Cow_Request,
         predict_response_type=Ml5Cow_Response,
         extra_predict_exceptions=(InvalidVideoError, InvalidImageError, InsufficientFramesError),
+        train_request_type=Ml5Cow_TrainReq,
+        train_response_type=Ml5Cow_TrainResp,
     ),
     ModelEntry(
         model_id="ml2-fungal-cnn-disease-detection",
@@ -367,6 +407,8 @@ REGISTRY: list[ModelEntry] = [
         plugin_class=Ml2FungalCnnDiseaseDetectionPlugin,
         predict_request_type=Ml2Fungal_Request,
         predict_response_type=Ml2Fungal_Response,
+        train_request_type=Ml2Fungal_TrainRequest,
+        train_response_type=Ml2Fungal_TrainResponse,
         extra_predict_exceptions=(InvalidImageError,),
     ),
     ModelEntry(
@@ -376,6 +418,8 @@ REGISTRY: list[ModelEntry] = [
         plugin_class=Ml7CerealsGrainPestDetectionPlugin,
         predict_request_type=Ml7Grain_Request,
         predict_response_type=Ml7Grain_Response,
+        train_request_type=Ml7Grain_TrainReq,
+        train_response_type=Ml7Grain_TrainResp,
         extra_predict_exceptions=(InvalidImageError,),
     ),
     ModelEntry(
@@ -414,6 +458,8 @@ REGISTRY: list[ModelEntry] = [
         plugin_class=Ml4LacticCnnThermalEarlyDiseaseDetectionPlugin,
         predict_request_type=Ml4Thermal_Request,
         predict_response_type=Ml4Thermal_Response,
+        train_request_type=Ml4Thermal_TrainReq,
+        train_response_type=Ml4Thermal_TrainResp,
         extra_predict_exceptions=(InvalidImageError,),
     ),
     ModelEntry(
@@ -424,6 +470,8 @@ REGISTRY: list[ModelEntry] = [
         predict_request_type=Ml23_Request,
         predict_response_type=Ml23_Response,
         extra_predict_exceptions=(),
+        train_request_type=Ml23_TrainReq,
+        train_response_type=Ml23_TrainResp,
     ),
     ModelEntry(
         model_id="ml17-meat-market-price-analysis",
@@ -432,6 +480,8 @@ REGISTRY: list[ModelEntry] = [
         plugin_class=Ml17MeatMarketPriceAnalysisPlugin,
         predict_request_type=Ml17_Request,
         predict_response_type=Ml17_Response,
+        train_request_type=Ml17_TrainReq,
+        train_response_type=Ml17_TrainResp,
         extra_predict_exceptions=(),
     ),
     ModelEntry(
@@ -468,13 +518,15 @@ REGISTRY: list[ModelEntry] = [
         train_response_type=Ml46Dairy_TrainResp,
     ),
     ModelEntry(
-        model_id="m47-dnsl-fallas-maquinaria-pasteurizado",
-        prefix="/models/m47-dnsl-fallas-maquinaria-pasteurizado",
+        model_id="ml47-dairy-dnsl-pasteurization-fault-detection",
+        prefix="/models/ml47-dairy-dnsl-pasteurization-fault-detection",
         version="1.0.0",
-        plugin_class=M47DnsFallMaquinariaPasteurizadoPlugin,
-        predict_request_type=M47_Request,
-        predict_response_type=M47_Response,
+        plugin_class=Ml47DairyDnslPasteurizationFaultDetectionPlugin,
+        predict_request_type=Ml47Dairy_Request,
+        predict_response_type=Ml47Dairy_Response,
         extra_predict_exceptions=(),
+        train_request_type=Ml47Dairy_TrainReq,
+        train_response_type=Ml47Dairy_TrainResp,
     ),
     ModelEntry(
         model_id="ml9-cereals-infestation-sequence-classifier",
@@ -519,15 +571,15 @@ REGISTRY: list[ModelEntry] = [
         extra_predict_exceptions=(),
     ),
     ModelEntry(
-        model_id="modelo43-cereales",
-        prefix="/models/modelo43-cereales",
+        model_id="ml43-cereals-dnsl-anomaly-fault-detection",
+        prefix="/models/ml43-cereals-dnsl-anomaly-fault-detection",
         version="1.0.0",
-        plugin_class=Modelo43CerealesPlugin,
-        predict_request_type=Modelo43_Request,
-        predict_response_type=Modelo43_Response,
+        plugin_class=Ml43CerealsDnslAnomalyFaultDetectionPlugin,
+        predict_request_type=Ml43Cereals_Request,
+        predict_response_type=Ml43Cereals_Response,
         extra_predict_exceptions=(InsufficientSensorWindowError,),
-        train_request_type=Modelo43_TrainReq,
-        train_response_type=Modelo43_TrainResp,
+        train_request_type=Ml43Cereals_TrainReq,
+        train_response_type=Ml43Cereals_TrainResp,
     ),
     ModelEntry(
         model_id="ml3-wine-disease-pest-forecast",
@@ -587,7 +639,7 @@ REGISTRY: list[ModelEntry] = [
         train_request_type=Ml41_TrainReq,
         train_response_type=Ml41_TrainResp,
     ),
-        ModelEntry(
+    ModelEntry(
         model_id="ml18-meat-spatial-price-forecast",
         prefix="/models/ml18-meat-spatial-price-forecast",
         version="1.0.0",
@@ -595,8 +647,8 @@ REGISTRY: list[ModelEntry] = [
         predict_request_type=Ml18_Request,
         predict_response_type=Ml18_Response,
         extra_predict_exceptions=(InsufficientRowsError,),
-        # train_request_type/train_response_type omitidos: training.supported=false — ver
-        # inbox/a18/manifest.yaml::training. train() lanza TrainingNotSupportedError (501).
+        train_request_type=Ml18_TrainReq,
+        train_response_type=Ml18_TrainResp,
     ),
     ModelEntry(
         model_id="ml13-wine-price-fluctuation-prediction",
@@ -617,8 +669,8 @@ REGISTRY: list[ModelEntry] = [
         predict_request_type=Ml14_Request,
         predict_response_type=Ml14_Response,
         extra_predict_exceptions=(InsufficientDataError,),
-        # train_request_type/train_response_type omitidos: training.supported=false — ver
-        # inbox/a14/manifest.yaml::training. train() lanza TrainingNotSupportedError (501).
+        train_request_type=Ml14_TrainReq,
+        train_response_type=Ml14_TrainResp,
     ),
     ModelEntry(
         model_id="ml26-wine-sulfite-gru-pso-forecast",

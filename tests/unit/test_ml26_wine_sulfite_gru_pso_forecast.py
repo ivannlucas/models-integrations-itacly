@@ -117,7 +117,7 @@ def test_predict_batch(client):
 
 
 def test_train(client):
-    resp = client.post(f"{PREFIX}/train", json={"data_path": "/tmp/sequential.csv"})
+    resp = client.post(f"{PREFIX}/train", json={"data_path": "/tmp/sequential.csv", "mlflow_run_id": "run-1"})
     assert resp.status_code == 200
     assert "val_overall_rmse" in resp.json()
 
@@ -289,29 +289,43 @@ def _sequential_training_frame(n_lots: int = 8, steps: int = 70) -> pd.DataFrame
     return pd.DataFrame(rows)
 
 
-def test_fine_tune_does_not_mutate_served_model():
+def test_training_starts_from_scratch_with_the_users_normalization():
+    """Port of train_sequence_with_config: a NEW model (seed 7) and z-score stats of the user's
+    train split, not the served model's weights or normalization (the old fine-tuning did that)."""
     torch = pytest.importorskip("torch")
     from app.plugins.ml26_wine_sulfite_gru_pso_forecast import training
+    from app.plugins.ml26_wine_sulfite_gru_pso_forecast._vendor.gru_model import build_gru_from_config
 
     base = _tiny_loaded_model()
     before = {k: v.clone() for k, v in base.network.state_dict().items()}
     data = training.prepare_training_data(_sequential_training_frame(), base)
-    assert data["train"][0].shape[1:] == (24, 22)
-    result = training.fine_tune(base, data, base.config)
-    assert result.epochs_run >= 1 and result.n_lots["train"] == 5
-    assert set(result.val_report) >= {"future_free_sulfite_72h", "underprotection_risk_72h", "overall_rmse"}
+    x_train, y_train, _ = data["train"]
+    assert x_train.shape[1:] == (24, 22) and x_train.flags.c_contiguous
+    cfg = {**base.config, "epochs": 1}
+    result = training.train_with_config(base, data, cfg)
+
+    assert result.epochs_run == 1 and result.n_lots["train"] == 5
+    assert set(result.val_report[base.target_names[0]]) == {"mae", "rmse", "mape"}
+    np.testing.assert_allclose(result.model.mean, x_train.mean(axis=(0, 1), keepdims=True).squeeze(0), rtol=1e-6)
+    np.testing.assert_allclose(result.model.y_mean, y_train.mean(axis=0), rtol=1e-6)
     for key, value in base.network.state_dict().items():
-        assert torch.equal(value, before[key])
+        assert torch.equal(value, before[key])          # the served model is never touched
+
+    training.set_global_seed(7)
+    fresh = build_gru_from_config(cfg, 22, 2).state_dict()
+    one_epoch = training.train_with_config(base, data, {**cfg, "patience": 1}).model.network.state_dict()
+    assert any(not torch.equal(fresh[k], one_epoch[k]) for k in fresh)
+    assert all(fresh[k].shape == one_epoch[k].shape for k in fresh)
 
 
-def test_fine_tune_requires_validation_lots():
+def test_training_requires_validation_lots():
     pytest.importorskip("torch")
     from app.plugins.ml26_wine_sulfite_gru_pso_forecast import training
 
     base = _tiny_loaded_model()
     data = training.prepare_training_data(_sequential_training_frame(n_lots=3), base)
     with pytest.raises(ValueError):
-        training.fine_tune(base, data, base.config)
+        training.train_with_config(base, data, base.config)
 
 
 # ── Real plugin class with an injected tiny model (no artifacts, MLflow mocked) ─
@@ -356,12 +370,13 @@ def test_real_plugin_stats_contract():
     assert "synthetic_data_warning" in stats.metrics
 
 
-def test_real_plugin_train_saves_user_model_and_uploads(tmp_path, monkeypatch):
+def test_real_plugin_train_uploads_only_to_mlflow(tmp_path, monkeypatch):
     from unittest.mock import MagicMock
 
-    from app.plugins.ml26_wine_sulfite_gru_pso_forecast import model_loader, plugin as plugin_mod
+    from app.plugins.ml26_wine_sulfite_gru_pso_forecast import model_loader
+    from app.plugins.ml26_wine_sulfite_gru_pso_forecast import plugin as plugin_mod
 
-    monkeypatch.setattr(model_loader, "user_trained_dir", lambda run: tmp_path / "user_trained" / run)
+    local_before = set(model_loader._store.local_dir.rglob("*"))  # pylint: disable=protected-access
     tracker = MagicMock()
     monkeypatch.setattr(plugin_mod, "BaseMLflowTracker", MagicMock(return_value=tracker))
     csv = tmp_path / "sequential.csv"
@@ -370,8 +385,9 @@ def test_real_plugin_train_saves_user_model_and_uploads(tmp_path, monkeypatch):
     before = {k: v.clone() for k, v in plugin._model.network.state_dict().items()}  # pylint: disable=protected-access
     resp = plugin.train(data_path=str(csv), mlflow_run_id="run123")
     assert resp.n_lots_train == 5 and resp.n_windows_val > 0
-    assert (tmp_path / "user_trained" / "run123" / "model_state.pt").exists()
     tracker.upload_artifacts.assert_called_once()
+    assert resp.mlflow_run_id == "run123"
+    assert set(model_loader._store.local_dir.rglob("*")) == local_before  # nothing written locally
     assert resp.upload_warning is None
     for key, value in plugin._model.network.state_dict().items():  # pylint: disable=protected-access
         assert (value == before[key]).all()  # served model untouched
@@ -383,14 +399,14 @@ def test_real_plugin_train_requires_stage_progress(tmp_path):
     frame.loc[3, "stage_progress"] = np.nan
     frame.to_csv(csv, index=False)
     with pytest.raises(ValueError, match="stage_progress"):
-        _real_plugin().train(data_path=str(csv))
+        _real_plugin().train(data_path=str(csv), mlflow_run_id="run-1")
 
 
 def test_real_plugin_train_missing_columns(tmp_path):
     csv = tmp_path / "bad.csv"
     _sequential_training_frame().drop(columns=["free_sulfite_mg_l"]).to_csv(csv, index=False)
     with pytest.raises(ValueError, match="free_sulfite_mg_l"):
-        _real_plugin().train(data_path=str(csv))
+        _real_plugin().train(data_path=str(csv), mlflow_run_id="run-1")
 
 
 def test_real_plugin_uses_and_cleans_mlflow_model(tmp_path, monkeypatch):
@@ -409,14 +425,30 @@ def test_real_plugin_uses_and_cleans_mlflow_model(tmp_path, monkeypatch):
     assert not user_dir.exists()  # temp dir removed in finally
 
 
-def test_mlflow_download_returns_none_without_artifacts(monkeypatch):
+def test_mlflow_download_without_artifacts_is_a_422_not_the_base_model(monkeypatch):
     from unittest.mock import MagicMock
 
+    from app.domain.services.exceptions import UserModelUnavailableError
     from app.plugins.ml26_wine_sulfite_gru_pso_forecast import mlflow_utils
 
     monkeypatch.setattr(mlflow_utils, "BaseMLflowTracker",
                         MagicMock(return_value=MagicMock(download_artifacts=MagicMock(return_value=""))))
-    assert mlflow_utils.download_user_model_from_mlflow("missing") is None
+    with pytest.raises(UserModelUnavailableError, match="missing"):
+        mlflow_utils.download_user_model_from_mlflow("missing")
+
+
+def test_real_plugin_train_fails_when_mlflow_upload_fails(tmp_path, monkeypatch):
+    from unittest.mock import MagicMock
+
+    from app.domain.services.exceptions import ModelPersistenceError
+    from app.plugins.ml26_wine_sulfite_gru_pso_forecast import plugin as plugin_mod
+
+    tracker = MagicMock(upload_artifacts=MagicMock(side_effect=ConnectionError("mlflow caído")))
+    monkeypatch.setattr(plugin_mod, "BaseMLflowTracker", MagicMock(return_value=tracker))
+    csv = tmp_path / "sequential.csv"
+    _sequential_training_frame().to_csv(csv, index=False)
+    with pytest.raises(ModelPersistenceError, match="mlflow caído"):
+        _real_plugin().train(data_path=str(csv), mlflow_run_id="run-1")
 
 
 def test_real_plugin_unloaded_raises():

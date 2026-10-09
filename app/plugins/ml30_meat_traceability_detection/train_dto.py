@@ -1,13 +1,15 @@
 """Pydantic DTOs for the meat-traceability /train endpoint."""
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.application.dto.train_dto import MlflowRunId
+
 
 class TrainRequest(BaseModel):
     """Train request: a CSV with the 33 features plus the target column."""
 
     model_config = ConfigDict(protected_namespaces=())
     data_path: str = Field(..., description="CSV con features + columna target")
-    mlflow_run_id: str
+    mlflow_run_id: MlflowRunId
 
 
 class TrainResponse(BaseModel):

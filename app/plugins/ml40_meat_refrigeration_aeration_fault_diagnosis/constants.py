@@ -27,17 +27,6 @@ STATS_FILENAMES = {
     "aireado": "aireado_stats.yaml",
 }
 
-# Filenames used for user-retrained artifacts (never overwrite the fixed S3 artifacts above)
-USER_MODEL_FILENAMES = {
-    "refrigeracion": "user_refrigeracion_model.pkl",
-    "aireado": "user_aireado_model.pkl",
-}
-USER_SCALER_FILENAMES = {"refrigeracion": "user_refrigeracion_scaler.pkl"}
-USER_STATS_FILENAMES = {
-    "refrigeracion": "user_refrigeracion_stats.yaml",
-    "aireado": "user_aireado_stats.yaml",
-}
-
 # config.yaml -> {system}.mapping (fault_id -> class name)
 CLASS_MAPPINGS = {
     "refrigeracion": {

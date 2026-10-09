@@ -1,0 +1,320 @@
+model_id: ml17_meat_market_price_analysis
+sector: carnico
+nombre: "Desarrollo de un modelo de análisis de precios de mercado de productos cárnicos"
+task_type: time_series_regression
+task_type_note: >
+  Regresión Ridge (scikit-learn, dentro de un Pipeline con ColumnTransformer ->
+  SimpleImputer(median) -> StandardScaler -> Ridge(alpha=1.0)) que predice el precio mensual
+  de porcino clase E España (target_price_pigmeat_class_e_es, €/100 kg) a horizonte t+1, a
+  partir de 8 features (el propio target en t como lag autorregresivo + 5 covariables
+  exógenas + month_sin/month_cos). Formulación one-step-ahead: las observaciones del mes t
+  predicen el valor del mes t+1. Seleccionado frente a baselines Naive/Seasonal-Naive y
+  frente a Random Forest / XGBoost por mejor MAE/RMSE/MASE/Directional Accuracy fuera de
+  muestra (ver reports/official_v1_4/tabular_benchmark.md del código entregado).
+
+  NOTA IMPORTANTE (manifest generado retroactivamente): este modelo ya tenía un plugin
+  integrado en app/plugins/ml17_meat_market_price_analysis/ ANTES de que existiera este
+  manifest -- viola el orden de trabajo estándar del repo (manifest-extraction siempre antes
+  de plugin-integration). Este manifest se generó ahora, a partir del código original
+  reordenado en inbox/a17/codigo/a17-retech-lote2-market-price-analysis-carnico/, para poder
+  auditar y, si procede, corregir el plugin ya existente contra el código y la memoria reales
+  -- ver known_issues para el resultado de esa auditoría.
+
+  El código entregado define también una línea paralela "long_history_v2" (mismo enfoque,
+  ventana histórica más larga, otro conjunto de covariables) y líneas supersedidas
+  (official_v1_3, long_history, *_exog, *_audit_split). NINGUNA de ellas está integrada ni se
+  integra aquí -- el plugin ya desplegado sirve en exclusiva la línea "official_v1_4", que es
+  la línea oficial vigente del proyecto (config/official_v1_4.yaml, lifecycle.status:
+  official_active, lifecycle.role: current_official_line). Este manifest documenta solo
+  official_v1_4.
+
+framework:
+  - scikit-learn==1.8.0
+  - pandas==3.0.2
+  - numpy==2.4.4
+  - PyYAML==6.0.3
+  - joblib  # usado por el plugin para (de)serializar el Pipeline; no listado explícitamente en
+            # requirements.txt del código entregado pero es dependencia transitiva de sklearn
+            # y ya está en requirements.txt del repo inference-pan-model.
+  # xgboost / matplotlib / websocket-client están en requirements.txt del código entregado
+  # mas solo se usan en el benchmark de referencias (xgboost, random_forest) y en
+  # notebooks/reporting -- no forman parte de la ruta de inferencia del modelo operativo Ridge.
+
+artifacts:
+  folder: models/artifacts/official_v1_4/   # ruta dentro del código entregado
+  files:
+    - ridge_official_v1_4.pkl        # sklearn.Pipeline completo (preprocessor + Ridge), joblib/pickle
+    - ridge_official_v1_4.meta.json  # metadata de entrenamiento (no se sirve en runtime, solo trazabilidad)
+  # En el plugin ya integrado: artifacts/ml17_meat_market_price_analysis/ridge_official_v1_4.pkl
+  # (ya presente localmente, formato idéntico -- verificado: sklearn.pipeline.Pipeline con
+  # ColumnTransformer(SimpleImputer+StandardScaler) + Ridge(alpha=1.0) cargando vía joblib.load).
+
+inputs:
+  fixed:
+    - name: date
+      type: str
+      unit: "YYYY-MM-DD"
+      description: >
+        Fecha de referencia del mes t (observación mensual). Se usa únicamente para derivar
+        month_sin/month_cos -- no entra como feature numérica directa al modelo.
+    - name: target_price_pigmeat_class_e_es
+      type: float
+      unit: "€/100kg"
+      description: "Precio porcino clase E España en el mes t -- feature autorregresiva (lag)."
+      train_range: [140.22, 248.59]   # min/max observado en data/splits/official_v1_4/{train,test}.csv
+    - name: eurostat_pigmeat_slaughter_tonnes_es
+      type: float
+      unit: "miles de toneladas"
+      description: "Sacrificio porcino España (Eurostat) en el mes t."
+    - name: eurostat_pigmeat_slaughter_tonnes_eu
+      type: float
+      unit: "miles de toneladas"
+      description: "Sacrificio porcino UE (Eurostat) en el mes t."
+    - name: cereal_feed_barley_price_monthly
+      type: float
+      unit: "€/tonelada"
+      description: "Precio mensual cebada pienso en el mes t."
+    - name: cereal_feed_maize_price_monthly
+      type: float
+      unit: "€/tonelada"
+      description: "Precio mensual maíz pienso en el mes t."
+    - name: mapa_porcino_otras_razas_price_monthly
+      type: float
+      unit: "€/100kg vivo"
+      description: "Precio mensual porcino otras razas MAPA en el mes t -- proxy contemporáneo del mismo mercado porcino."
+  control: []   # no hay optimización/GA en este modelo -- regresión pura
+  derived_if_missing:
+    month_sin: "sin(2*pi*mes(date)/12)"
+    month_cos: "cos(2*pi*mes(date)/12)"
+    # El código original (src/cu05/predict/service.py::_apply_missing_calendar_features)
+    # solo las calcula si NO vienen ya informadas en el CSV externo; el plugin ya integrado
+    # replica esto correctamente (_seasonal_from_row: usa month_sin/cos si vienen informados,
+    # si no los deriva de 'date').
+
+outputs:
+  predict_inline:
+    - name: y_pred
+      type: float
+      unit: "€/100kg"
+      description: "Precio predicho porcino clase E España en t+1."
+  predict_batch:
+    - name: y_pred
+      type: float
+      unit: "€/100kg"
+      description: "Precio predicho por fila de CSV, uno por cada observación mensual t -> t+1."
+  # Nota: el código CLI original (run_prediction) soporta horizon>1 vía recursión con
+  # exog_policy="last_known" (congela covariables exógenas al último valor conocido y solo
+  # recalcula month_sin/cos + el lag autorregresivo). El plugin integrado NO expone horizon>1
+  # -- solo one-step-ahead (t->t+1), que es el modo operativo nativo y el único evaluado en el
+  # benchmark oficial (ver metrics_reported). No se considera un bug: horizon>1 es una
+  # funcionalidad CLI adicional no requerida por el contrato ModelPluginPort ni por la memoria
+  # (sección "ENTRADAS DEL MODELO": "el mínimo histórico operativo ... es una fila mensual
+  # completa ... con esa fila se predice t+1").
+
+training:
+  supported: true
+  # El código entregado SÍ trae un procedimiento de entrenamiento real y reproducible
+  # (src/cu05/training/service.py::run_training + src/cu05/models/ridge.py::build_ridge_pipeline),
+  # ejecutable vía CLI (`cu05 official_v1_4 --train` / run_training). No es un modelo
+  # "solo artefacto, sin código de reentrenamiento" -- el plugin actualmente integrado
+  # (train() -> TrainingNotSupportedError) está IMPLEMENTADO INCORRECTAMENTE: su propio
+  # docstring/mensaje de error dice "modelo entrenado externamente", lo cual es falso. Ver
+  # known_issues.
+  target_column: target_price_pigmeat_class_e_es
+  date_column: date
+  required_columns:
+    # Las columnas que debe traer el CSV de entrenamiento -- igual a train split oficial
+    # (data/splits/official_v1_4/train.csv): date + las 6 features "crudas" (target_column
+    # incluido, porque se usa como feature autorregresiva) + month_sin/month_cos.
+    - date
+    - target_price_pigmeat_class_e_es
+    - eurostat_pigmeat_slaughter_tonnes_es
+    - eurostat_pigmeat_slaughter_tonnes_eu
+    - cereal_feed_barley_price_monthly
+    - cereal_feed_maize_price_monthly
+    - mapa_porcino_otras_razas_price_monthly
+    - month_sin
+    - month_cos
+  procedure: >
+    Ajuste supervisado one-step-ahead sobre el split train oficial, ordenado cronológicamente:
+    X_train = features[:-1] (todas las filas salvo la última), y_train =
+    target_column[1:] (el target desplazado una fila, i.e. el valor en t+1 de cada fila de
+    X_train). Pipeline: ColumnTransformer(numeric: SimpleImputer(strategy="median") ->
+    StandardScaler()) -> Ridge(alpha). El fit de imputer/scaler se hace EXCLUSIVAMENTE sobre
+    el split de entrenamiento (memoria, sección "PROCEDIMIENTO DE ENTRENAMIENTO": "su ajuste
+    se realiza exclusivamente sobre el conjunto de entrenamiento"). Requiere al menos 2 filas
+    (build_ridge_pipeline / _fit_model levantan ValueError si no).
+  hyperparams:
+    alpha: 1.0    # config/official_v1_4.yaml: benchmark.tabular_models.ridge.alpha (y config/config.yaml base, coincide)
+    imputer_strategy: median
+    scaler: StandardScaler
+  metrics_returned: [mae, rmse, mase, r2_train, directional_accuracy, n_samples]
+  # mae/rmse/r2/directional_accuracy: mismas métricas que reporta la memoria (Tabla 7,
+  # "Métricas descriptivas de entrenamiento sobre conjuntos train persistidos"). mase se
+  # reporta también porque es la métrica de selección de modelo del proyecto (tabla 6/8).
+  source: codigo_entrenamiento  # src/cu05/training/service.py + src/cu05/models/ridge.py
+  split_policy: >
+    80/20 cronológico estricto, sin mezclar pasado/futuro. official_v1_4: train 2013-05-01 a
+    2023-05-01 (121 filas), test 2023-06-01 a 2025-12-01 (31 filas). Memoria, sección
+    "ESTRATEGIA DE VALIDACIÓN".
+
+constraints: {}   # no hay restricciones de negocio explícitas (no es un modelo prescriptivo/GA)
+
+metrics_reported:
+  # Tabla 8 memoria / data/benchmarks/official_v1_4/full_benchmark.csv -- evaluación fuera de
+  # muestra sobre el test split completo (2023-06-01 a 2025-12-01, n=31), usando el artefacto
+  # fijo ridge_official_v1_4.pkl y covariables observadas en t para predecir t+1 (idéntico al
+  # modo de uso del plugin /predict).
+  mae: 4.4605
+  rmse: 6.4091
+  mase: 0.6405
+  directional_accuracy: 0.8710
+  r2_oos: 0.9097
+  n_test: 31
+  source: memoria_tabla_8 + data/benchmarks/official_v1_4/full_benchmark.csv
+  # Métricas de TRAIN (no usadas como tolerancia, solo trazabilidad adicional -- memoria Tabla 7):
+  train_mae: 5.2979
+  train_rmse: 7.1946
+  train_mase: 0.7607
+  train_r2: 0.9404
+  train_directional_accuracy: 0.7833
+
+golden_cases:
+  # 18 casos tomados de la serie temporal continua train+test de official_v1_4
+  # (data/splits/official_v1_4/{train,test}.csv), fila t -> target real observado en t+1.
+  # El tramo de predicción cubierto (t+1 entre 2023-06-01 y 2025-12-01) es EXACTAMENTE el
+  # mismo tramo fuera de muestra que reporta metrics_reported -- por tanto estos casos son
+  # comparables 1:1 contra el benchmark oficial del modelo, no solo contra el dataset crudo.
+  # input.date es el mes t (fila de entrada); expected.y_pred es target_price_pigmeat_class_e_es
+  # real observado en el mes t+1 (fila siguiente del dataset, no inventado).
+  - id: caso_001
+    input: {date: "2023-05-01", target_price_pigmeat_class_e_es: 247.3274, eurostat_pigmeat_slaughter_tonnes_es: 425.4, eurostat_pigmeat_slaughter_tonnes_eu: 1737.78, cereal_feed_barley_price_monthly: 259.416, cereal_feed_maize_price_monthly: 271.789143, mapa_porcino_otras_razas_price_monthly: 201.69}
+    expected: {y_pred: 247.403}
+    source: dataset_test_split
+  - id: caso_002
+    input: {date: "2023-07-01", target_price_pigmeat_class_e_es: 248.7042, eurostat_pigmeat_slaughter_tonnes_es: 364.32, eurostat_pigmeat_slaughter_tonnes_eu: 1567.54, cereal_feed_barley_price_monthly: 242.196531, cereal_feed_maize_price_monthly: 264.283333, mapa_porcino_otras_razas_price_monthly: 203.04}
+    expected: {y_pred: 243.1503}
+    source: dataset_test_split
+  - id: caso_003
+    input: {date: "2023-09-01", target_price_pigmeat_class_e_es: 231.5297, eurostat_pigmeat_slaughter_tonnes_es: 366.95, eurostat_pigmeat_slaughter_tonnes_eu: 1645.02, cereal_feed_barley_price_monthly: 239.305, cereal_feed_maize_price_monthly: 254.949286, mapa_porcino_otras_razas_price_monthly: 188.71}
+    expected: {y_pred: 216.1513}
+    source: dataset_test_split
+  - id: caso_004
+    input: {date: "2023-10-01", target_price_pigmeat_class_e_es: 216.1513, eurostat_pigmeat_slaughter_tonnes_es: 425.09, eurostat_pigmeat_slaughter_tonnes_eu: 1802.28, cereal_feed_barley_price_monthly: 236.272, cereal_feed_maize_price_monthly: 245.871429, mapa_porcino_otras_razas_price_monthly: 176.65}
+    expected: {y_pred: 201.9853}
+    source: dataset_test_split
+  - id: caso_005
+    input: {date: "2023-12-01", target_price_pigmeat_class_e_es: 199.9535, eurostat_pigmeat_slaughter_tonnes_es: 392.95, eurostat_pigmeat_slaughter_tonnes_eu: 1694.37, cereal_feed_barley_price_monthly: 232.4825, cereal_feed_maize_price_monthly: 244.634483, mapa_porcino_otras_razas_price_monthly: 164.52}
+    expected: {y_pred: 199.3013}
+    source: dataset_test_split
+  - id: caso_006
+    input: {date: "2024-02-01", target_price_pigmeat_class_e_es: 201.6848, eurostat_pigmeat_slaughter_tonnes_es: 437.69, eurostat_pigmeat_slaughter_tonnes_eu: 1764.57, cereal_feed_barley_price_monthly: 207.715, cereal_feed_maize_price_monthly: 210.999286, mapa_porcino_otras_razas_price_monthly: 167.71}
+    expected: {y_pred: 217.5032}
+    source: dataset_test_split
+  - id: caso_007
+    input: {date: "2024-04-01", target_price_pigmeat_class_e_es: 219.445, eurostat_pigmeat_slaughter_tonnes_es: 404.2, eurostat_pigmeat_slaughter_tonnes_eu: 1784.74, cereal_feed_barley_price_monthly: 205.376, cereal_feed_maize_price_monthly: 216.68, mapa_porcino_otras_razas_price_monthly: 180.71}
+    expected: {y_pred: 219.0539}
+    source: dataset_test_split
+  - id: caso_008
+    input: {date: "2024-05-01", target_price_pigmeat_class_e_es: 219.0539, eurostat_pigmeat_slaughter_tonnes_es: 410.65, eurostat_pigmeat_slaughter_tonnes_eu: 1743.53, cereal_feed_barley_price_monthly: 215.9775, cereal_feed_maize_price_monthly: 229.350714, mapa_porcino_otras_razas_price_monthly: 180.76}
+    expected: {y_pred: 220.7743}
+    source: dataset_test_split
+  - id: caso_009
+    input: {date: "2024-07-01", target_price_pigmeat_class_e_es: 223.3452, eurostat_pigmeat_slaughter_tonnes_es: 392.48, eurostat_pigmeat_slaughter_tonnes_eu: 1740.86, cereal_feed_barley_price_monthly: 194.7232, cereal_feed_maize_price_monthly: 225.822857, mapa_porcino_otras_razas_price_monthly: 185.42}
+    expected: {y_pred: 222.3274}
+    source: dataset_test_split
+  - id: caso_010
+    input: {date: "2024-09-01", target_price_pigmeat_class_e_es: 213.0023, eurostat_pigmeat_slaughter_tonnes_es: 387.82, eurostat_pigmeat_slaughter_tonnes_eu: 1676.32, cereal_feed_barley_price_monthly: 201.88, cereal_feed_maize_price_monthly: 227.526857, mapa_porcino_otras_razas_price_monthly: 175.34}
+    expected: {y_pred: 201.8261}
+    source: dataset_test_split
+  - id: caso_011
+    input: {date: "2024-11-01", target_price_pigmeat_class_e_es: 197.2023, eurostat_pigmeat_slaughter_tonnes_es: 440.16, eurostat_pigmeat_slaughter_tonnes_eu: 1825.23, cereal_feed_barley_price_monthly: 207.52, cereal_feed_maize_price_monthly: 233.857143, mapa_porcino_otras_razas_price_monthly: 158.13}
+    expected: {y_pred: 198.2364}
+    source: dataset_test_split
+  - id: caso_012
+    input: {date: "2024-12-01", target_price_pigmeat_class_e_es: 198.2364, eurostat_pigmeat_slaughter_tonnes_es: 406.67, eurostat_pigmeat_slaughter_tonnes_eu: 1733.7, cereal_feed_barley_price_monthly: 212.924, cereal_feed_maize_price_monthly: 235.462857, mapa_porcino_otras_razas_price_monthly: 157.46}
+    expected: {y_pred: 193.3597}
+    source: dataset_test_split
+  - id: caso_013
+    input: {date: "2025-02-01", target_price_pigmeat_class_e_es: 194.1118, eurostat_pigmeat_slaughter_tonnes_es: 460.55, eurostat_pigmeat_slaughter_tonnes_eu: 1808.41, cereal_feed_barley_price_monthly: 220.81875, cereal_feed_maize_price_monthly: 244.266667, mapa_porcino_otras_razas_price_monthly: 158.13}
+    expected: {y_pred: 204.8623}
+    source: dataset_test_split
+  - id: caso_014
+    input: {date: "2025-04-01", target_price_pigmeat_class_e_es: 215.76, eurostat_pigmeat_slaughter_tonnes_es: 415.93, eurostat_pigmeat_slaughter_tonnes_eu: 1782.7, cereal_feed_barley_price_monthly: 203.825, cereal_feed_maize_price_monthly: 233.971429, mapa_porcino_otras_razas_price_monthly: 176.86}
+    expected: {y_pred: 217.8161}
+    source: dataset_test_split
+  - id: caso_015
+    input: {date: "2025-06-01", target_price_pigmeat_class_e_es: 220.28, eurostat_pigmeat_slaughter_tonnes_es: 404.88, eurostat_pigmeat_slaughter_tonnes_eu: 1697.67, cereal_feed_barley_price_monthly: 190.023333, cereal_feed_maize_price_monthly: 222.295238, mapa_porcino_otras_razas_price_monthly: 180.66}
+    expected: {y_pred: 220.4077}
+    source: dataset_test_split
+  - id: caso_016
+    input: {date: "2025-07-01", target_price_pigmeat_class_e_es: 220.4077, eurostat_pigmeat_slaughter_tonnes_es: 405.75, eurostat_pigmeat_slaughter_tonnes_eu: 1771.28, cereal_feed_barley_price_monthly: 190.0015, cereal_feed_maize_price_monthly: 226.664286, mapa_porcino_otras_razas_price_monthly: 181.3}
+    expected: {y_pred: 211.1016}
+    source: dataset_test_split
+  - id: caso_017
+    input: {date: "2025-09-01", target_price_pigmeat_class_e_es: 197.2597, eurostat_pigmeat_slaughter_tonnes_es: 429.89, eurostat_pigmeat_slaughter_tonnes_eu: 1861.26, cereal_feed_barley_price_monthly: 189.272, cereal_feed_maize_price_monthly: 222.8, mapa_porcino_otras_razas_price_monthly: 161.47}
+    expected: {y_pred: 182.6052}
+    source: dataset_test_split
+  - id: caso_018
+    input: {date: "2025-11-01", target_price_pigmeat_class_e_es: 170.448, eurostat_pigmeat_slaughter_tonnes_es: 451.6, eurostat_pigmeat_slaughter_tonnes_eu: 1834.55, cereal_feed_barley_price_monthly: 199.8925, cereal_feed_maize_price_monthly: 219.0375, mapa_porcino_otras_razas_price_monthly: 138.34}
+    expected: {y_pred: 140.2247}
+    source: dataset_test_split
+
+known_issues:
+  - >
+    BUG CONFIRMADO en app/plugins/ml17_meat_market_price_analysis/plugin.py (antes de esta
+    revisión): train() lanzaba TrainingNotSupportedError incondicionalmente, con un mensaje
+    ("ml17 usa artefactos Ridge entrenados externamente") que contradice el código entregado
+    -- inbox/a17/codigo/.../src/cu05/training/service.py::run_training implementa un
+    procedimiento de reentrenamiento real y reproducible (Ridge sobre el split train oficial,
+    mismo preprocesado que el artefacto desplegado). app/registry.py tampoco declaraba
+    train_request_type/train_response_type para este plugin, igual que el bug #3 encontrado en
+    ml21 (ver inbox/a21/manifest.yaml) -- /train habría caído al DTO genérico aunque train()
+    se hubiese implementado. Corregido en esta revisión: train() real implementado siguiendo
+    exactamente el procedimiento de training.procedure, train_dto.py añadido con
+    mlflow_run_id obligatorio (sin default, convención de todo el repo para modelos con
+    reentrenamiento real), y registry.py actualizado con train_request_type/train_response_type.
+  - >
+    Auditoría de predict_inline/predict_batch (plugin.py existente) contra
+    src/cu05/predict/service.py y el artefacto .meta.json: NO se encontraron los bugs de tipo
+    ml21 (#1 retorno de dict crudo en vez de objeto Pydantic tipado, #2 zero-fill silencioso de
+    features). El plugin ya devuelve PredictInlineResponse/PredictBatchResponse tipados, y las
+    8 features que construye _build_frame() coinciden exactamente, columna a columna y en el
+    mismo orden, con feature_columns del .meta.json del artefacto real
+    (models/artifacts/official_v1_4/ridge_official_v1_4.meta.json) y con
+    dataset.final_feature_columns de config/official_v1_4.yaml -- no hay un dataset de
+    referencia oculto con ~90 columnas como en ml21 (este modelo solo tiene 8 features totales,
+    todas explícitas en el request). No se requirió ningún cambio en predict_inline/predict_batch.
+  - >
+    El código entregado soporta line="long_history_v2" (otra ventana temporal + otro bloque de
+    covariables, con inflación) como línea METODOLÓGICA de soporte, no oficial
+    (config/long_history_v2.yaml, Directional Accuracy 0.7736 < umbral 80% del KPI, memoria:
+    "su función no es sustituir a official_v1_4"). El plugin desplegado sirve únicamente
+    official_v1_4 -- correcto, no es un bug, pero se documenta aquí para que quede trazado por
+    qué no se integra una segunda línea/modo.
+  - >
+    requirements.txt del código entregado está en ASCII con CRLF (no UTF-16LE como en otros
+    modelos del repo) -- no requirió normalización de encoding.
+  - >
+    Verificación contra servidor real (18 golden_cases, tolerancia = 2x MAE reportado =
+    8.921): 16/18 dentro de tolerancia. Los 2 casos fuera de tolerancia (caso_006, diff=9.55;
+    caso_018, diff=26.60) se investigaron comparando la predicción del endpoint /predict
+    bit-a-bit contra una invocación directa del mismo .pkl fuera de la API -- ambas coinciden
+    exactamente, descartando un bug de wiring/preprocesado. caso_018 (2025-11-01 -> 2025-12-01)
+    es el mes con la mayor caída intermensual de todo el dataset (170.45 -> 140.22, -17.7%) --
+    un shock de mercado fuera de la variabilidad típica que Ridge (modelo lineal, sin señales
+    de ruptura de régimen) no puede capturar; esto coincide con la limitación ya documentada
+    en la memoria (sección "SESGOS CONOCIDOS DEL MODELO", punto 3: "riesgo de degradación ante
+    cambios de distribución (drift) o episodios de mercado no representados adecuadamente").
+    No se ajustó la tolerancia ni se descartó el caso -- ver outputs/a17/verification_report.md.
+  - >
+    Intento de /train con mlflow_run_id real contra el servidor local: BaseMLflowTracker usa
+    por defecto MLFLOW_TRACKING_URI=http://mlflow.mlflow:5000 (hostname interno de k8s), no
+    resuelto/alcanzable en este entorno de verificación -- la llamada a tracker.log_params()
+    (primera operación de red en train(), antes incluso de leer el CSV) cuelga sin timeout y
+    bloquea el único worker de uvicorn. Esto NO es un bug introducido en ml17 -- es el mismo
+    patrón (tracker.log_params() como primera llamada de train()) ya usado en ml35/ml25, por
+    lo que afecta a cualquier plugin con reentrenamiento real cuando se prueba fuera de un
+    clúster con MLflow accesible. Se verificó la lógica de negocio de train() (validación de
+    columnas, refit del pipeline, cálculo de métricas) de forma aislada evitando la llamada de
+    red; ver outputs/a17/verification_report.md para el detalle.

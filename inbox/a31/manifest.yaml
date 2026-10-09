@@ -313,6 +313,9 @@ training:
   hyperparams: null          # no hay hiperparámetros de aprendizaje; solo parámetros de escenario (ver inputs.fixed)
   metrics_returned: null
   source: memoria_seccion_4_9  # "No hay modelo que entrenar, ni artefacto serializado que cargar, ni semilla aleatoria"
+  # [RE-VERIFICADO 2026-10-02 contra inbox/a31/codigo/ real]: README.md confirma LP de principio
+  # a fin, sin ningún rastro de neuroevolución pese al nombre heredado de la carpeta. Conclusión
+  # sin cambios.
 
 # Criterios de éxito objetivos evaluados en cada ejecución (memoria Tabla 10). Referencia de
 # tolerancia, no caso 1:1. El resultado de 2023 es el KPI principal del proyecto.
@@ -452,7 +455,13 @@ known_issues:
      global exacto y determinista, y el surrogate + GA de la v1.x se retiran por sobreingeniería."
   - "REEMPLAZA AL PLUGIN INTEGRADO: el plugin actual app/plugins/ml31_cereals_residue_optimizer/
      corresponde al modelo surrogate v1.x (ANN + GA) que la memoria v2.0 ABANDONÓ. La integración
-     debe sustituir ese plugin por el optimizador LP v2.0 descrito aquí, no ampliarlo."
+     debe sustituir ese plugin por el optimizador LP v2.0 descrito aquí, no ampliarlo.
+     [RESUELTO] app/plugins/ml31_cereals_residue_optimizer/plugin.py ya es el optimizador LP
+     v2.0 (PuLP/CBC, TrainingNotSupportedError, sin ANN/GA) — outputs/a31/verification_report.md
+     confirma 12/12 golden cases contra este motor. PENDIENTE DISTINTO (ver abajo): la
+     documentación institucional en outputs/a31/ (datos_a31.json y las fichas generadas a
+     partir de él) seguía describiendo el surrogate v1.x — corregido en esta revisión,
+     ver outputs/a31/verification_report.md."
   - "SIN ARTEFACTOS SERIALIZADOS: no hay .pkl/.pt/pesos. El 'modelo' es el solver LP + JSON de
      economía + configs. training.supported=false. mlflow_utils.py será obligatorio igualmente
      (regla del repo) aunque no haya reentrenamiento por usuario."

@@ -10,7 +10,6 @@ import csv
 import logging
 import shutil
 import tempfile
-import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -20,9 +19,14 @@ import torch
 from app.application.dto.stats_dto import InputField, OutputField, RuntimeStats, StatsResponse
 from app.domain.ports.model_plugin_port import ModelPluginPort
 from app.domain.services.exceptions import (
-    InvalidAudioError, ModelNotLoadedError, UnsupportedMachineConfigurationError,
+    InvalidAudioError,
+    ModelNotLoadedError,
+    ModelPersistenceError,
+    UnsupportedMachineConfigurationError,
+    UserModelUnavailableError,
 )
 from app.domain.services.mlflow_tracker import BaseMLflowTracker
+from app.infrastructure.archive import safe_extract_zip
 from app.infrastructure.artifact_store import local_file_path
 from app.plugins.ml41_meat_curing_machinery_acoustic_anomaly.constants import (
     ARTIFACT_FOLDER_NAME,
@@ -160,11 +164,12 @@ class Ml41MeatCuringMachineryAcousticAnomalyPlugin(ModelPluginPort):
                 key = (machine, machine_id, snr)
                 if key in combinations:
                     return combinations[key], tmp
-                logger.warning(
-                    "MLflow run_id=%s has no fine-tuned checkpoint for %s — falling back "
-                    "to the standard artifact.", mlflow_run_id, key,
-                )
                 shutil.rmtree(tmp, ignore_errors=True)
+                raise UserModelUnavailableError(
+                    f"El run de MLflow '{mlflow_run_id}' no contiene un modelo reentrenado para "
+                    f"la combinación {machine}/{machine_id}/{snr}. No se usa el modelo base en "
+                    "su lugar: reentrena esa combinación o predice sin mlflow_run_id."
+                )
         self._require_loaded()
         loaded = self._cache.get(machine, machine_id, snr, self._device)
         return loaded, None
@@ -205,8 +210,7 @@ class Ml41MeatCuringMachineryAcousticAnomalyPlugin(ModelPluginPort):
         predictions: list[dict] = []
         with local_file_path(data_path) as local_zip:
             with tempfile.TemporaryDirectory() as tmp_dir:
-                with zipfile.ZipFile(local_zip, "r") as zf:
-                    zf.extractall(tmp_dir)
+                safe_extract_zip(local_zip, tmp_dir)
 
                 manifest_path = next(Path(tmp_dir).rglob("manifest.csv"), None)
                 if manifest_path is None:
@@ -245,13 +249,19 @@ class Ml41MeatCuringMachineryAcousticAnomalyPlugin(ModelPluginPort):
 
     # ── train ────────────────────────────────────────────────────────────────
 
-    def train(self, *, data_path: str, mlflow_run_id: str = "") -> TrainResponse:
+    def train(self, *, data_path: str, mlflow_run_id: str) -> TrainResponse:
         """Fine-tune (or train from scratch) every (machine, machine_id, snr) combination
         found under data_path's {snr}_{machine}/{machine_id}/{normal,abnormal}/*.wav layout.
 
         'normal' is required per combination trained; 'abnormal' is optional (if present,
         full auc/fnr/fpr/recall/threshold metrics are computed for that combination — see
         train_dto.py).
+
+        Fine-tuning always starts from the fixed base checkpoint, and the retrained
+        combinations live only in their own MLflow run (artifact_path="model", laid out as
+        {machine}/{machine_id}/{snr}/ so mlflow_utils can rebuild them with that
+        mlflow_run_id). The served base checkpoints, their local copy and the in-memory
+        cache are never mutated nor overwritten.
         """
         tracker = BaseMLflowTracker(mlflow_run_id) if mlflow_run_id else None
         per_combination: list[CombinationTrainMetrics] = []
@@ -259,10 +269,9 @@ class Ml41MeatCuringMachineryAcousticAnomalyPlugin(ModelPluginPort):
 
         with local_file_path(data_path) as local_zip:
             extract_dir = Path(tempfile.mkdtemp(prefix="ml41_train_"))
-            mlflow_upload_dir = Path(tempfile.mkdtemp(prefix="ml41_mlflow_")) if tracker else None
+            staging_dir = Path(tempfile.mkdtemp(prefix="ml41_mlflow_"))
             try:
-                with zipfile.ZipFile(local_zip, "r") as zf:
-                    zf.extractall(extract_dir)
+                safe_extract_zip(local_zip, extract_dir)
 
                 combos_found = self._discover_combinations(extract_dir)
                 if not combos_found:
@@ -273,31 +282,36 @@ class Ml41MeatCuringMachineryAcousticAnomalyPlugin(ModelPluginPort):
 
                 for machine, machine_id, snr, combo_root in combos_found:
                     metrics = self._train_one_combination(
-                        machine, machine_id, snr, combo_root, tracker, mlflow_upload_dir,
+                        machine, machine_id, snr, combo_root, tracker, staging_dir,
                     )
                     per_combination.append(metrics)
 
-                if tracker and mlflow_upload_dir:
+                if not tracker:
+                    raise ModelPersistenceError("Sin run de MLflow: el modelo reentrenado no se ha guardado.")
+                else:
                     try:
-                        tracker.upload_artifacts(str(mlflow_upload_dir), artifact_path="model")
+                        tracker.upload_artifacts(str(staging_dir), artifact_path="model")
                     except Exception as exc:  # pylint: disable=broad-exception-caught
                         logger.error("MLflow artifact upload failed: %s", exc)
-                        upload_warning = f"Local save OK, MLflow upload failed: {exc}"
+                        raise ModelPersistenceError(f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}") from exc
             finally:
                 shutil.rmtree(extract_dir, ignore_errors=True)
-                if mlflow_upload_dir:
-                    shutil.rmtree(mlflow_upload_dir, ignore_errors=True)
+                shutil.rmtree(staging_dir, ignore_errors=True)
 
-        # Invalidate old in-memory models without re-downloading fixed S3 artifacts
-        # over the checkpoints that were just trained and saved locally.
-        self._cache = CheckpointCache()
-        self._device = self._device or _safe_device()
-        self._ready = artifacts_available()
         return TrainResponse(
             detail=f"Entrenamiento completado para {len(per_combination)} combinación(es)",
             per_combination=per_combination,
             upload_warning=upload_warning,
         )
+
+    @staticmethod
+    def _base_checkpoint_path(machine: str, machine_id: str, snr: str) -> Path | None:
+        """Path to the fixed base checkpoint of a combination, or None if it has none."""
+        try:
+            path = _store.path(f"{combination_dir(machine, machine_id, snr)}/{CHECKPOINT_FILENAME}")
+        except FileNotFoundError:
+            return None
+        return path if path.exists() else None
 
     @staticmethod
     def _discover_combinations(root: Path) -> list[tuple[str, str, str, Path]]:
@@ -320,7 +334,7 @@ class Ml41MeatCuringMachineryAcousticAnomalyPlugin(ModelPluginPort):
 
     def _train_one_combination(
         self, machine: str, machine_id: str, snr: str, combo_root: Path,
-        tracker: BaseMLflowTracker | None, mlflow_upload_dir: Path | None,
+        tracker: BaseMLflowTracker | None, staging_dir: Path,
     ) -> CombinationTrainMetrics:
         normal_wavs = sorted((combo_root / "normal").glob("*.wav"))
         if not normal_wavs:
@@ -328,8 +342,7 @@ class Ml41MeatCuringMachineryAcousticAnomalyPlugin(ModelPluginPort):
 
         specs = np.stack([wav_to_logmel(str(p)) for p in normal_wavs], axis=0)  # (N,1,mels,frames)
 
-        existing_dir = _store.local_dir / combination_dir(machine, machine_id, snr)
-        existing_ckpt = existing_dir / CHECKPOINT_FILENAME
+        base_ckpt = self._base_checkpoint_path(machine, machine_id, snr)
         device = self._device or _safe_device()
 
         # Split BEFORE computing normalization stats (matches the original pipeline: stats
@@ -341,8 +354,8 @@ class Ml41MeatCuringMachineryAcousticAnomalyPlugin(ModelPluginPort):
         val_idx = perm[split_idx:] if len(perm) > split_idx else perm[:1]
         train_raw, val_raw = specs[train_idx], specs[val_idx]
 
-        if existing_ckpt.exists():
-            checkpoint = torch.load(existing_ckpt, map_location=device, weights_only=False)
+        if base_ckpt is not None:
+            checkpoint = torch.load(base_ckpt, map_location=device, weights_only=False)
             norm_mean, norm_std = float(checkpoint["norm_mean"]), float(checkpoint["norm_std"])
             model = build_model(machine, device)
             model.load_state_dict(checkpoint["model_state_dict"])
@@ -350,7 +363,7 @@ class Ml41MeatCuringMachineryAcousticAnomalyPlugin(ModelPluginPort):
         else:
             norm_mean, norm_std = float(train_raw.mean()), float(train_raw.std())
             model = build_model(machine, device)
-            logger.info("Training %s/%s/%s from scratch (no existing checkpoint)", machine, machine_id, snr)
+            logger.info("Training %s/%s/%s from scratch (no base checkpoint)", machine, machine_id, snr)
 
         train_data = normalize_logmel(train_raw, norm_mean, norm_std)
         val_data = normalize_logmel(val_raw, norm_mean, norm_std)
@@ -408,9 +421,9 @@ class Ml41MeatCuringMachineryAcousticAnomalyPlugin(ModelPluginPort):
         if tracker:
             tracker.log_metrics({f"{machine}_{machine_id}_{snr}_best_val_loss": best_val_loss})
 
-        # Save locally (always) via ArtifactStore's local_dir.
-        target_dir = _store.local_dir / combination_dir(machine, machine_id, snr)
-        target_dir.mkdir(parents=True, exist_ok=True)
+        # Stage for MLflow only — the fixed base checkpoint is never written.
+        combo_upload_dir = staging_dir / machine / machine_id / snr
+        combo_upload_dir.mkdir(parents=True, exist_ok=True)
         checkpoint_out = {
             "model_state_dict": model.state_dict(),
             "norm_mean": norm_mean, "norm_std": norm_std,
@@ -419,20 +432,14 @@ class Ml41MeatCuringMachineryAcousticAnomalyPlugin(ModelPluginPort):
             # without this key may use the original benchmark thresholds.
             "threshold": metrics_kwargs.get("threshold"),
         }
-        torch.save(checkpoint_out, target_dir / CHECKPOINT_FILENAME)
+        torch.save(checkpoint_out, combo_upload_dir / CHECKPOINT_FILENAME)
         np.savez(
-            target_dir / MAHA_STATS_FILENAME,
+            combo_upload_dir / MAHA_STATS_FILENAME,
             mean=maha_mean, inv_cov=maha_inv_cov,
             pca_mean=maha_pca[0] if maha_pca else np.zeros(0, dtype=np.float32),
             pca_v=maha_pca[1] if maha_pca else np.zeros((0, 0), dtype=np.float32),
             has_pca=np.array(maha_pca is not None),
         )
-
-        if mlflow_upload_dir:
-            combo_upload_dir = mlflow_upload_dir / machine / machine_id / snr
-            combo_upload_dir.mkdir(parents=True, exist_ok=True)
-            torch.save(checkpoint_out, combo_upload_dir / CHECKPOINT_FILENAME)
-            shutil.copy(target_dir / MAHA_STATS_FILENAME, combo_upload_dir / MAHA_STATS_FILENAME)
 
         return CombinationTrainMetrics(**metrics_kwargs)
 

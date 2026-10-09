@@ -100,7 +100,7 @@ XAI_TOP_VARIABLES = 8
 # config/config.yaml (training: / data_processing.external_data_split:). train()
 # previously used a simplified "fine-tune the served weights, fixed 30 epochs, no
 # threshold recalibration" shortcut — the real repo has no such concept, only
-# scripts/train.py's full from-scratch pipeline (same template as modelo43_cereales,
+# scripts/train.py's full from-scratch pipeline (same template as ml43_cereals_dnsl_anomaly_fault_detection,
 # confirmed near byte-identical trainer.py/metrics.py) — see plugin.py::train()
 # (modelo 43-44-45 audit, Fase 5: decision_threshold parity with local training).
 TRAIN_EXTERNAL_VAL_PCT = 13.3
@@ -145,7 +145,7 @@ DNF_LOSS_KWARGS = {
 
 # Base/served-model reference metrics, from
 # a45-dnsl-cereals-deteccion-puntos-criticos/models/metrics/results.json (test_metrics
-# block) — key names unified with modelo43_cereales's own TEST_METRICS (both real training
+# block) — key names unified with ml43_cereals_dnsl_anomaly_fault_detection's own TEST_METRICS (both real training
 # repos already use this exact naming), so the platform's "Atributos y métricas" panel shows
 # the same labels for both models instead of two different legacy conventions. Overwritten
 # key-by-key by stats(mlflow_run_id=...) once a real retrain logs its own values.

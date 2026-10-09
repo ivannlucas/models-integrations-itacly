@@ -2,7 +2,7 @@
 
 The minimum inference unit is a 240-timestep window (not a single row), so both modes take
 either a CSV data_path or — for inline — explicit per-sensor time-series arrays (same pattern
-already used by m47_dnsl_fallas_maquinaria_pasteurizado for the same reason).
+already used by ml47_dairy_dnsl_pasteurization_fault_detection for the same reason).
 """
 from typing import Annotated, Any, Literal, Union
 

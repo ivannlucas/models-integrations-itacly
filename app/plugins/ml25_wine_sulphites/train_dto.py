@@ -1,13 +1,15 @@
 """DTOs for wine sulphite training operations."""
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.application.dto.train_dto import MlflowRunId
+
 
 class TrainRequest(BaseModel):
     """Request body that specifies the CSV file to use for training."""
 
     model_config = ConfigDict(protected_namespaces=())
     data_path: str = Field(..., description="Path to the CSV training file inside the container")
-    mlflow_run_id: str
+    mlflow_run_id: MlflowRunId
 
 
 class TrainResponse(BaseModel):

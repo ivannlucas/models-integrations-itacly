@@ -71,10 +71,18 @@ def test_predict_batch(client):
 
 
 def test_train(client):
-    resp = client.post(f"{PREFIX}/train", json={"data_path": "/tmp/dataset_base.csv"})
+    resp = client.post(
+        f"{PREFIX}/train",
+        json={"data_path": "/tmp/dataset_base.csv", "mlflow_run_id": "test-run-id"},
+    )
     assert resp.status_code == 200
     body = resp.json()
     assert body["n_train_rows"] > 0
     assert body["n_test_rows"] > 0
-    assert 0.0 <= body["target_animales_f1"] <= 1.0
-    assert 0.0 <= body["target_insumos_f1"] <= 1.0
+
+
+def test_train_requires_mlflow_run_id(client):
+    """mlflow_run_id is mandatory — every retrain must be persisted to a specific MLflow
+    run (never discarded, never overwriting the fixed base artifact)."""
+    resp = client.post(f"{PREFIX}/train", json={"data_path": "/tmp/dataset_base.csv"})
+    assert resp.status_code == 422

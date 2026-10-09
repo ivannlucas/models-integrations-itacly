@@ -42,7 +42,7 @@ def _safe_device() -> torch.device:
     if not torch.cuda.is_available():
         return torch.device("cpu")
     try:
-        torch.nn.Conv2d(1, 1, 1)(torch.zeros(1, 1, 4, 4).cuda())
+        torch.nn.Conv2d(1, 1, 1).cuda()(torch.zeros(1, 1, 4, 4).cuda())
         return torch.device("cuda")
     except Exception:
         logger.warning("CUDA detected but not functional — falling back to CPU.")

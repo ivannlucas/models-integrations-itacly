@@ -1,4 +1,4 @@
-"""Unit tests for wine-sulphite preprocessing helpers."""
+"""Unit tests for ml25-wine-sulphites preprocessing helpers."""
 import types
 
 import numpy as np

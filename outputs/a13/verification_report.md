@@ -6,6 +6,22 @@
 - **Modelo servido**: Regresión Logística (`models/prod/model_config.json = logreg`). Pese al título, no se integra ninguna RNN: la rama GRU es experimental, no trae artefacto y la memoria la excluye de producción (ver `known_issues.titulo_rnn_vs_modelo_produccion`).
 - **Fecha**: 2026-10-06 · Entorno: WSL Ubuntu, Python 3.12.3, scikit-learn 1.5.2 (pin del repo), pandas 3.0.6, numpy 2.5.3, xgboost 3.4.1, fastapi 0.136.1
 
+> **[CORREGIDO 2026-10-08] Contrato de reentrenamiento.** Al integrar `main` en la rama de
+> auditoría, ml13 se alinea con el contrato común:
+> - `mlflow_run_id` es obligatorio en `/train`; si falta o va vacío, la respuesta es 422.
+> - El modelo reentrenado se guarda **solo en MLflow**. Ya no deja `user_*` en `artifacts/`.
+> - Si la subida a MLflow falla, `/train` responde 502. Antes respondía 200 con `upload_warning`.
+> - `/predict` con un run sin modelo cargable responde 422. Antes respondía 200 con el modelo base;
+>   las filas de la tabla de abajo que dicen "fallback al artefacto fijo" y "user_\*" son del
+>   comportamiento anterior.
+>
+> Re-verificación con `mapa_wine_prices_raw.csv`: `/train` obtiene hold-out AUC 0.8438, F1 0.5926,
+> P 0.4211, R 1.0 y Acc 0.5417 (idéntico a lo de abajo). La predicción base no cambia (0.4621).
+>
+> **Pendiente (acción humana):** los artefactos no están en
+> `s3://…/artifacts/fixed/ml13_wine_price_fluctuation_prediction/`. Hay que subir
+> `inbox/a13/codigo/models/prod/`.
+
 ## Checklist técnico
 
 - [x] flake8 (repo completo, `--extend-exclude=dist,build,inbox,outputs,artifacts`): 0 errores

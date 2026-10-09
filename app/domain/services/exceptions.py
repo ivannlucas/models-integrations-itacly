@@ -80,7 +80,7 @@ class InsufficientWindowHistoryError(ValueError):
 class InsufficientSensorWindowError(ValueError):
     """Raised when required sensor columns/values are missing or invalid, nulls exceed the
     allowed ratio, or too few rows survive to build a 180-row temporal window
-    (modelo43-cereales)."""
+    (ml43-cereals-dnsl-anomaly-fault-detection)."""
 
 
 class MissingRequiredFeatureError(ValueError):
@@ -103,3 +103,26 @@ class UnsupportedMachineConfigurationError(ValueError):
 
 class InvalidAudioError(ValueError):
     """Raised when the uploaded audio cannot be decoded as a valid WAV file (ml41)."""
+
+
+class UserModelUnavailableError(RuntimeError):
+    """Raised when predict/stats is asked for a user-retrained model (mlflow_run_id) that
+    cannot be loaded from MLflow: the run has no complete model or MLflow is unreachable.
+
+    Never fall back silently to the base model — the caller asked for its own model (→ 422).
+    """
+
+
+class ModelPersistenceError(RuntimeError):
+    """Raised when a retrained model cannot be saved to its MLflow run.
+
+    The retrained model only lives in MLflow, so if the upload fails the training result
+    is lost and the request must fail instead of answering 200 (→ 502).
+    """
+
+
+class ArchiveLimitExceededError(ValueError):
+    """Raised when a ZIP sent to /train or batch /predict would expand beyond the configured
+    size, file-count or compression-ratio limits, or holds a path outside its destination (→ 413).
+    See app/infrastructure/archive.py::safe_extract_zip.
+    """

@@ -7,12 +7,14 @@ collection) does not require those heavy, source-installed dependencies.
 import logging
 
 import torch
+from torch import nn
 
 from app.infrastructure.artifact_store import ArtifactStore
 from app.plugins.ml5_meat_cow_behaviour.constants import (
     ARTIFACT_FOLDER_NAME,
     CLASSIFIER_FILENAME,
     DETECTOR_FILENAME,
+    TRAINING_BEHAVIOR_TO_IDX,
 )
 
 logger = logging.getLogger(__name__)
@@ -20,12 +22,42 @@ logger = logging.getLogger(__name__)
 _store = ArtifactStore(ARTIFACT_FOLDER_NAME)
 
 
+class SlowFastCowBehavior(nn.Module):
+    """SlowFast-R50 backbone with the projection head resized to the cow classes.
+
+    Shared architecture builder: used both to load the served checkpoint (below) and,
+    from ``training.py``, to build the module trained/retrained by ``plugin.train()`` and
+    to rebuild a user-retrained checkpoint downloaded from MLflow (``mlflow_utils.py``) —
+    one definition, so the serving and training code paths can never drift apart.
+    """
+
+    def __init__(self, n_classes: int) -> None:
+        """Build the SlowFast-R50 backbone with a projection head for ``n_classes``."""
+        super().__init__()
+        self.model = torch.hub.load(
+            "facebookresearch/pytorchvideo",
+            "slowfast_r50",
+            pretrained=False,
+        )
+        in_features = self.model.blocks[-1].proj.in_features
+        self.model.blocks[-1].proj = nn.Linear(in_features, n_classes)
+
+    def forward(self, x: list) -> torch.Tensor:
+        """Run the SlowFast forward pass on a ``[slow, fast]`` pathway list."""
+        return self.model(x)
+
+
+def build_classifier_module(num_classes: int, device: str) -> "SlowFastCowBehavior":
+    """Build an un-trained (random head, no checkpoint loaded) SlowFast classifier module."""
+    return SlowFastCowBehavior(num_classes).to(device)
+
+
 def _safe_device() -> str:
     """Return ``"cuda"`` only if it can execute a conv op; otherwise ``"cpu"``."""
     if not torch.cuda.is_available():
         return "cpu"
     try:
-        torch.nn.Conv2d(1, 1, 1)(torch.zeros(1, 1, 4, 4).cuda())
+        torch.nn.Conv2d(1, 1, 1).cuda()(torch.zeros(1, 1, 4, 4).cuda())
         return "cuda"
     except Exception:
         logger.warning("CUDA detectada pero no funcional para operaciones de red — usando CPU.")
@@ -54,11 +86,16 @@ def _load_classifier(classifier_path: str, device: str):
 
     Returns ``(classifier, behavior_to_idx, idx_to_behavior, num_classes)``.
     """
-    from torch import nn
-
     checkpoint = torch.load(classifier_path, map_location=device, weights_only=True)
 
-    behavior_to_idx: dict[str, int] = checkpoint.get("behavior_to_idx", {})
+    # BUGFIX (see constants.TRAINING_BEHAVIOR_TO_IDX for the full writeup): the checkpoint's
+    # own embedded `behavior_to_idx` comes from configs/slowfast_cow_behavior.py, which is NOT
+    # the class order the model's output head actually learned during training (that was
+    # utils/data_utils.py's order). Decoding with the checkpoint's embedded dict silently
+    # mislabels 10 of 12 classes (only grazing=0 and ruminating-standing=6 happen to agree).
+    # We deliberately ignore checkpoint["behavior_to_idx"] for decoding and always use the
+    # verified-correct TRAINING_BEHAVIOR_TO_IDX constant instead.
+    behavior_to_idx: dict[str, int] = dict(TRAINING_BEHAVIOR_TO_IDX)
     idx_to_behavior: dict[int, str] = {v: k for k, v in behavior_to_idx.items()}
 
     # Read num_classes from the final projection layer shape.
@@ -68,24 +105,7 @@ def _load_classifier(classifier_path: str, device: str):
     for i in range(num_classes):
         idx_to_behavior.setdefault(i, f"unknown_{i}")
 
-    class SlowFastCowBehavior(nn.Module):
-        """SlowFast-R50 backbone with the projection head resized to the cow classes."""
-
-        def __init__(self, n_classes: int) -> None:
-            super().__init__()
-            self.model = torch.hub.load(
-                "facebookresearch/pytorchvideo",
-                "slowfast_r50",
-                pretrained=False,
-            )
-            in_features = self.model.blocks[-1].proj.in_features
-            self.model.blocks[-1].proj = nn.Linear(in_features, n_classes)
-
-        def forward(self, x: list) -> torch.Tensor:
-            """Run the SlowFast forward pass on a ``[slow, fast]`` pathway list."""
-            return self.model(x)
-
-    classifier = SlowFastCowBehavior(num_classes).to(device)
+    classifier = build_classifier_module(num_classes, device)
     classifier.load_state_dict(checkpoint["model_state_dict"])
     classifier.eval()
     return classifier, behavior_to_idx, idx_to_behavior, num_classes

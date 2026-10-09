@@ -70,6 +70,12 @@ def test_predict_batch(client):
     assert body["n_predictions"] == len(body["predictions"])
 
 
-def test_train_returns_501(client):
+def test_train_returns_200_with_metrics(client):
     resp = client.post(f"{PREFIX}/train", json={"data_path": "/tmp/x.csv", "mlflow_run_id": "test-run-id"})
-    assert resp.status_code == 501
+    assert resp.status_code == 200
+    body = resp.json()
+    assert {"test_mape_pct", "test_r2", "val_mape_pct", "n_train", "epochs_run"} <= body.keys()
+
+
+def test_train_without_mlflow_run_id_returns_422(client):
+    assert client.post(f"{PREFIX}/train", json={"data_path": "/tmp/x.csv"}).status_code == 422

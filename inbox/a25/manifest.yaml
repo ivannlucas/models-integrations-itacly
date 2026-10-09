@@ -1,0 +1,361 @@
+# [RENOMBRADO 2026-10-06] Nomenclatura alineada con el estándar mlNN_<sector>_<desc>:
+#   wine-sulphite (model_id) / wine_sulphite (artefactos)  ->  ml25-wine-sulphites / ml25_wine_sulphites (el paquete ya era app/plugins/ml25_wine_sulphites/)
+#   Artefactos (local y S3): artifacts/wine_sulphite/ -> artifacts/ml25_wine_sulphites/
+#   Las menciones al nombre antiguo en comentarios/known_issues son históricas.
+model_id: ml25-wine-sulphites
+sector: vitivinicola
+nombre: "Modelo para la predicción de niveles óptimos de sulfitos durante el proceso de elaboración del vino"
+task_type: regression_prescriptive  # dos RandomForest (calidad + SO2 ligado) + simulación/optimización de dosis
+framework:
+  - scikit-learn==1.8.0   # version con la que el equipo de IA entrenó (inbox/a25/codigo/modules/wine_quality/models/metadata.json). El venv del repo usa 1.5.2 — ver known_issues.
+  - pandas==2.3.3
+  - numpy==2.3.5
+  - joblib
+  - xgboost        # solo para los artefactos legacy bound_xgb/quality_xgb (comparativa), no usados en producción
+
+artifacts:
+  folder: modules/wine_quality/models/     # ruta real dentro del código entregado (NO "models/artifacts/" que menciona la memoria genéricamente)
+  files:
+    - quality_rf.pkl    # RandomForestRegressor(n_estimators=300, random_state=42, n_jobs=-1) -> quality (0-10)
+    - bound_rf.pkl      # RandomForestRegressor(n_estimators=300, random_state=42, n_jobs=-1) -> log1p(bound_so2)
+    - metadata.json      # metrics, features, hyperparameters, bound_monotonicity, reproducibility
+    - bound_xgb.json      # legacy, no usado por el plugin actual
+    - bound_xgb.pkl        # legacy
+    - quality_xgb.json      # legacy
+    - quality_xgb.pkl        # legacy
+
+inputs:
+  # 11 parámetros fisicoquímicos de la muestra de vino — llegan siempre del análisis de laboratorio
+  fixed:
+    - name: fixed acidity
+      type: float
+      unit: "g/dm³"
+      description: "Acidez fija"
+      train_range: [3.8, 14.2]
+    - name: volatile acidity
+      type: float
+      unit: "g/dm³"
+      description: "Acidez volátil"
+      train_range: [0.08, 1.1]
+    - name: citric acid
+      type: float
+      unit: "g/dm³"
+      description: "Ácido cítrico"
+      train_range: [0.0, 1.66]
+    - name: residual sugar
+      type: float
+      unit: "g/dm³"
+      description: "Azúcar residual"
+      train_range: [0.6, 65.8]
+    - name: chlorides
+      type: float
+      unit: "g/dm³"
+      description: "Cloruros"
+      train_range: [0.009, 0.346]
+    - name: density
+      type: float
+      unit: "g/cm³"
+      description: "Densidad"
+      train_range: [0.987, 1.039]
+    - name: pH
+      type: float
+      description: "pH"
+      train_range: [2.72, 3.82]
+    - name: sulphates
+      type: float
+      unit: "g/dm³"
+      description: "Sulfatos"
+      train_range: [0.22, 1.08]
+    - name: alcohol
+      type: float
+      unit: "% vol."
+      description: "Graduación alcohólica"
+      train_range: [8.0, 14.2]
+    - name: free sulfur dioxide
+      type: float
+      unit: "mg/L"
+      description: "SO2 libre actual (punto de partida de la simulación)"
+      train_range: [2.0, 289.0]
+    - name: total sulfur dioxide
+      type: float
+      unit: "mg/L"
+      description: "SO2 total actual"
+      train_range: [9.0, 440.0]
+
+  # Parámetros operativos de la simulación/optimización — el usuario los puede
+  # ajustar; si no los informa, el plugin usa los defaults de la memoria (sección 8.2)
+  control:
+    - name: min_molecular
+      type: float
+      default: 0.6
+      unit: "mg/L"
+      description: "SO2 molecular mínimo exigido por protección microbiológica (restricción dura)"
+    - name: max_total
+      type: float
+      default: 200.0
+      unit: "mg/L"
+      description: "SO2 total máximo permitido por normativa (restricción dura)"
+    - name: delta_max
+      type: float
+      default: 40.0
+      unit: "mg/L"
+      description: >
+        Incremento máximo de free SO2 a explorar sobre el valor actual. El rango
+        simulado real también se acota por el percentil 99 de 'free sulfur dioxide'
+        en el dataset de entrenamiento (ver known_issues) — nunca se extrapola más
+        allá de la distribución de entrenamiento aunque delta_max sea mayor.
+
+  derived_if_missing: {}   # no hay — todas las columnas fisicoquímicas son obligatorias en la entrada
+
+outputs:
+  # Un único modo de inferencia (simulación prescriptiva de dosis); no hay predict_batch
+  # separado a nivel de negocio, pero sí a nivel de API (mismo cálculo fila a fila)
+  predict_inline:
+    - name: recommended_free_so2
+      type: float
+      unit: "mg/L"
+      description: "Dosis de SO2 libre recomendada"
+    - name: recommended_bound_so2
+      type: float
+      unit: "mg/L"
+      description: "SO2 ligado estimado en el punto recomendado"
+    - name: recommended_total_so2
+      type: float
+      unit: "mg/L"
+      description: "SO2 total estimado en el punto recomendado"
+    - name: recommended_molecular_so2
+      type: float
+      unit: "mg/L"
+      description: "SO2 molecular en el punto recomendado"
+    - name: predicted_quality
+      type: float
+      description: "Calidad sensorial predicha en el punto recomendado (escala 0-10)"
+    - name: baseline_predicted_quality
+      type: float
+      description: "Calidad sensorial predicha en la dosis actual (sin intervención)"
+    - name: intervention_recommended
+      type: bool
+      description: "True si la mejora esperada supera 1x el MAE de calidad (umbral de intervención)"
+    - name: recommendation_reason
+      type: string
+      description: "Explicación textual de la decisión (mejora significativa vs. mínima intervención segura)"
+    - name: simulation_trajectory
+      type: list
+      description: "Trayectoria completa simulada (free/bound/total/molecular SO2 + calidad por cada dosis candidata)"
+
+training:
+  supported: true
+  target_column: quality          # modelo de calidad; bound_so2 se deriva internamente (total - free, clip >=0), no es columna de entrada
+  required_columns:
+    - fixed acidity
+    - volatile acidity
+    - citric acid
+    - residual sugar
+    - chlorides
+    - density
+    - pH
+    - sulphates
+    - alcohol
+    - free sulfur dioxide
+    - total sulfur dioxide
+    - quality
+  hyperparams:
+    model_qual: RandomForestRegressor
+    model_bound: RandomForestRegressor
+    n_estimators: 300
+    random_state: 42
+    n_jobs: -1
+    cv_splits: 5
+    cv_shuffle: true
+    seed: 42
+    protocol: official_cv5_full_dataset   # métricas = media de KFold(5, shuffle=True, seed=42); modelo final se ajusta sobre el 100% del dataset limpio (CV nunca retira datos del modelo servido)
+    bound_target_transform: log1p          # y_train = log1p(bound_so2); predicción se decodifica con expm1
+    bound_monotonicity: trajectory_postprocess_cumulative_max   # ajuste posterior en la simulación, no en el entrenamiento
+  metrics_returned:
+    - mae_quality
+    - mae_bound_so2
+    - n_train
+    - n_test
+    - training_time_s
+  source: codigo_entrenamiento   # inbox/a25/codigo/modules/wine_quality/src/training/train_rf.py (train_dual_models + cv_regression_metrics)
+
+constraints:
+  min_molecular_so2_mg_l: 0.6
+  max_total_so2_mg_l: 200.0
+  decision_margin_mae_multiple: 1.0
+  descripcion: >
+    Restricciones duras de negocio (independientes de la calidad predicha): el
+    optimizador descarta cualquier dosis simulada con SO2 molecular < 0.6 mg/L
+    (riesgo microbiológico) o SO2 total > 200 mg/L (límite legal). Si ningún punto
+    simulado cumple ambas, el plugin lanza NoValidSimulationPointError (422), nunca
+    devuelve una recomendación inválida silenciosamente. La recomendación solo
+    sugiere intervenir si la mejora de calidad esperada supera 1x el MAE de
+    calidad (0.427); si no, recomienda la mínima intervención segura dentro del
+    tramo válido.
+
+# CV 5-fold sobre el dataset completo (white_wine.csv, 4898 filas), seed=42 — sin
+# held-out test separado (no existe data/splits/ en el código entregado; el
+# protocolo oficial es "official_cv5_full_dataset", ver metadata.json y memoria
+# secciones 5.1/7.2). Fuente: inbox/a25/codigo/reports/baseline_metrics.csv +
+# modules/wine_quality/models/metadata.json (idénticos).
+metrics_reported:
+  dataset: white_wine.csv
+  n_samples: 4898
+  protocol: official_cv5_full_dataset
+  cv_splits: 5
+  random_seed: 42
+  quality:
+    mae: 0.42703344034242907
+    mae_std: 0.015273364901364958
+    r2: 0.5393515210602864
+    r2_std: 0.02357787224282418
+    baseline_dummy_mae: 0.671
+  bound_so2_mg_l:
+    mae: 14.511090467553563
+    mae_std: 0.49760873082923085
+    r2: 0.6222357276886727
+    r2_std: 0.02756539566674617
+    baseline_dummy_mae: 27.760
+
+# 14 filas reales de inbox/a25/codigo/data/white_wine.csv (mismo CSV usado para
+# entrenar+evaluar los artefactos), elegidas para cubrir todo el rango de
+# 'quality' (3 a 9) y un rango amplio de 'free sulfur dioxide' (11 a 118.5 mg/L).
+# NO existe un held-out test split separado en el código entregado (ver
+# known_issues) — el "expected" es el valor real (ground truth) del dataset:
+# quality tal cual, bound_so2 = total - free (clip >=0). Se compara contra la
+# salida del plugin (baseline_predicted_quality / recommended_bound_so2 en la
+# simulación con delta_max=0, que fuerza al optimizador a evaluar solo el punto
+# actual) con tolerancia = 2x el MAE de CV reportado (convención del repo).
+# tolerance_quality = 2 * 0.427 = 0.854 puntos de calidad
+# tolerance_bound_so2 = 2 * 14.511 = 29.02 mg/L
+golden_cases:
+  - id: caso_001
+    source: dataset_real_white_wine_csv_row_0
+    input: {fixed_acidity: 7.0, volatile_acidity: 0.27, citric_acid: 0.36, residual_sugar: 20.70, chlorides: 0.045, density: 1.00100, pH: 3.00, sulphates: 0.45, alcohol: 8.8, free_sulfur_dioxide: 45.0, total_sulfur_dioxide: 170.0}
+    expected: {quality: 6, bound_so2: 125.0}
+    tolerance: {quality: 0.854, bound_so2: 29.02}
+
+  - id: caso_002
+    source: dataset_real_white_wine_csv_row_10
+    input: {fixed_acidity: 8.1, volatile_acidity: 0.27, citric_acid: 0.41, residual_sugar: 1.45, chlorides: 0.033, density: 0.99080, pH: 2.99, sulphates: 0.56, alcohol: 12.0, free_sulfur_dioxide: 11.0, total_sulfur_dioxide: 63.0}
+    expected: {quality: 5, bound_so2: 52.0}
+    tolerance: {quality: 0.854, bound_so2: 29.02}
+
+  - id: caso_003
+    source: dataset_real_white_wine_csv_row_13
+    input: {fixed_acidity: 6.6, volatile_acidity: 0.16, citric_acid: 0.40, residual_sugar: 1.50, chlorides: 0.044, density: 0.99120, pH: 3.54, sulphates: 0.52, alcohol: 12.4, free_sulfur_dioxide: 48.0, total_sulfur_dioxide: 143.0}
+    expected: {quality: 7, bound_so2: 95.0}
+    tolerance: {quality: 0.854, bound_so2: 29.02}
+
+  - id: caso_004
+    source: dataset_real_white_wine_csv_row_17
+    input: {fixed_acidity: 6.2, volatile_acidity: 0.66, citric_acid: 0.48, residual_sugar: 1.20, chlorides: 0.029, density: 0.98920, pH: 3.33, sulphates: 0.39, alcohol: 12.8, free_sulfur_dioxide: 29.0, total_sulfur_dioxide: 75.0}
+    expected: {quality: 8, bound_so2: 46.0}
+    tolerance: {quality: 0.854, bound_so2: 29.02}
+
+  - id: caso_005
+    source: dataset_real_white_wine_csv_row_46
+    input: {fixed_acidity: 6.2, volatile_acidity: 0.45, citric_acid: 0.26, residual_sugar: 4.40, chlorides: 0.063, density: 0.99400, pH: 3.27, sulphates: 0.52, alcohol: 9.8, free_sulfur_dioxide: 63.0, total_sulfur_dioxide: 206.0}
+    expected: {quality: 4, bound_so2: 143.0}
+    tolerance: {quality: 0.854, bound_so2: 29.02}
+
+  - id: caso_006
+    source: dataset_real_white_wine_csv_row_251
+    input: {fixed_acidity: 8.5, volatile_acidity: 0.26, citric_acid: 0.21, residual_sugar: 16.20, chlorides: 0.074, density: 0.99800, pH: 3.02, sulphates: 0.50, alcohol: 9.8, free_sulfur_dioxide: 41.0, total_sulfur_dioxide: 197.0}
+    expected: {quality: 3, bound_so2: 156.0}
+    tolerance: {quality: 0.854, bound_so2: 29.02}
+
+  - id: caso_007
+    source: dataset_real_white_wine_csv_row_774
+    input: {fixed_acidity: 9.1, volatile_acidity: 0.27, citric_acid: 0.45, residual_sugar: 10.60, chlorides: 0.035, density: 0.99700, pH: 3.20, sulphates: 0.46, alcohol: 10.4, free_sulfur_dioxide: 28.0, total_sulfur_dioxide: 124.0}
+    expected: {quality: 9, bound_so2: 96.0}
+    tolerance: {quality: 0.854, bound_so2: 29.02}
+
+  - id: caso_008
+    source: dataset_real_white_wine_csv_row_827
+    input: {fixed_acidity: 7.4, volatile_acidity: 0.24, citric_acid: 0.36, residual_sugar: 2.00, chlorides: 0.031, density: 0.99055, pH: 3.28, sulphates: 0.48, alcohol: 12.5, free_sulfur_dioxide: 27.0, total_sulfur_dioxide: 139.0}
+    expected: {quality: 9, bound_so2: 112.0}
+    tolerance: {quality: 0.854, bound_so2: 29.02}
+
+  - id: caso_009
+    source: dataset_real_white_wine_csv_row_1688
+    input: {fixed_acidity: 6.7, volatile_acidity: 0.25, citric_acid: 0.26, residual_sugar: 1.55, chlorides: 0.041, density: 0.99490, pH: 3.55, sulphates: 0.63, alcohol: 9.4, free_sulfur_dioxide: 118.5, total_sulfur_dioxide: 216.0}
+    expected: {quality: 3, bound_so2: 97.5}
+    tolerance: {quality: 0.854, bound_so2: 29.02}
+
+  - id: caso_010
+    source: dataset_real_white_wine_csv_row_2119
+    input: {fixed_acidity: 8.0, volatile_acidity: 0.16, citric_acid: 0.36, residual_sugar: 1.50, chlorides: 0.033, density: 0.99410, pH: 3.20, sulphates: 0.39, alcohol: 10.3, free_sulfur_dioxide: 14.0, total_sulfur_dioxide: 122.0}
+    expected: {quality: 4, bound_so2: 108.0}
+    tolerance: {quality: 0.854, bound_so2: 29.02}
+
+  - id: caso_011
+    source: dataset_real_white_wine_csv_row_2253
+    input: {fixed_acidity: 6.3, volatile_acidity: 0.27, citric_acid: 0.18, residual_sugar: 7.70, chlorides: 0.048, density: 0.99620, pH: 3.23, sulphates: 0.47, alcohol: 9.0, free_sulfur_dioxide: 45.0, total_sulfur_dioxide: 186.0}
+    expected: {quality: 5, bound_so2: 141.0}
+    tolerance: {quality: 0.854, bound_so2: 29.02}
+
+  - id: caso_012
+    source: dataset_real_white_wine_csv_row_2522
+    input: {fixed_acidity: 7.3, volatile_acidity: 0.17, citric_acid: 0.24, residual_sugar: 8.10, chlorides: 0.121, density: 0.99508, pH: 3.17, sulphates: 0.38, alcohol: 10.4, free_sulfur_dioxide: 32.0, total_sulfur_dioxide: 162.0}
+    expected: {quality: 8, bound_so2: 130.0}
+    tolerance: {quality: 0.854, bound_so2: 29.02}
+
+  - id: caso_013
+    source: dataset_real_white_wine_csv_row_2622
+    input: {fixed_acidity: 6.6, volatile_acidity: 0.26, citric_acid: 0.21, residual_sugar: 2.90, chlorides: 0.026, density: 0.99089, pH: 3.22, sulphates: 0.38, alcohol: 11.3, free_sulfur_dioxide: 48.0, total_sulfur_dioxide: 126.0}
+    expected: {quality: 7, bound_so2: 78.0}
+    tolerance: {quality: 0.854, bound_so2: 29.02}
+
+  - id: caso_014
+    source: dataset_real_white_wine_csv_row_2638
+    input: {fixed_acidity: 7.5, volatile_acidity: 0.13, citric_acid: 0.38, residual_sugar: 1.10, chlorides: 0.023, density: 0.99112, pH: 3.28, sulphates: 0.53, alcohol: 11.8, free_sulfur_dioxide: 42.0, total_sulfur_dioxide: 104.0}
+    expected: {quality: 6, bound_so2: 62.0}
+    tolerance: {quality: 0.854, bound_so2: 29.02}
+
+known_issues:
+  - "La memoria (secciones 3.4 'Tabla 2 Pipeline de ETL', 6.4, 9.2-9.3) describe una
+     estructura de proyecto genérica (scripts/train.py, scripts/predict.py, src/main.py,
+     config/config.yaml, data/raw/, data/processed/, data/splits/, data/predictions/,
+     models/metrics/) que NO coincide con la estructura real entregada en
+     inbox/a25/codigo/ (modules/wine_quality/src/{training/train_rf.py,wine_quality/pipeline.py},
+     sin config.yaml, sin data/splits/, sin scripts/train.py). Parece texto de plantilla del
+     proyecto no actualizado para esta entrega concreta — no se ha podido verificar ninguno
+     de esos paths porque no existen en el código entregado."
+  - "La memoria referencia 'Tabla 5 Hiperparámetros del mejor modelo' y 'Tabla 6 Pruebas
+     realizadas y combinaciones evaluadas por modelo' (sección 5.1.C) y 'Tabla 7 Métricas de
+     validación cruzada' (sección 7.2), pero el .docx solo contiene 6 tablas insertadas en
+     total (verificado extrayendo todas las tablas del documento) — las tablas 5 y 6
+     referenciadas en el texto no están embebidas en el documento entregado."
+  - "No existe split de test explícito (data/splits/X_test.csv + y_test.csv ni equivalente)
+     en inbox/a25/codigo/ — el protocolo oficial de evaluación es KFold(5, shuffle=True,
+     random_state=42) sobre el dataset completo (white_wine.csv, 4898 filas), y el modelo
+     final que se sirve se ajusta sobre el 100% de esos datos (train_rf.py:
+     train_dual_models, protocol='official_cv5_full_dataset'). Los golden_cases de arriba
+     son por tanto filas reales del dataset de entrenamiento comparadas contra su valor
+     real (ground truth), con tolerancia = 2x el MAE de CV reportado — no son predicciones
+     sobre datos nunca vistos por el modelo."
+  - "Los artefactos .pkl entregados (modules/wine_quality/models/{quality_rf,bound_rf}.pkl)
+     se serializaron con scikit-learn 1.8.0; el venv de este repo tiene scikit-learn 1.5.2.
+     joblib.load() los carga correctamente (atributos y feature_names_in_ verificados) pero
+     emite sklearn.exceptions.InconsistentVersionWarning — cosmético, no impide la inferencia,
+     documentado aquí para que no se interprete como fallo en producción."
+  - "BUG ENCONTRADO Y CORREGIDO (plugin-integration, ya en app/plugins/ml25_wine_sulphites/):
+     el artefacto base servido en artifacts/ml25_wine_sulphites/ NO era el entregado por el equipo
+     de IA, sino uno generado por una versión anterior, incorrecta, de Ml25WineSulphitesPlugin.train()
+     (n_estimators=200 en vez de 300, split 80/20 cronológico sin shuffle sobre solo el 80% de
+     los datos en vez de CV 5-fold sobre el 100%, sin el filtro de limpieza química de
+     wine_quality.common.load_wine_data). Confirmado comparando
+     artifacts/ml25_wine_sulphites/metadata.json (n_train=3918, n_test=980, sin 'protocol') contra
+     inbox/a25/codigo/modules/wine_quality/models/metadata.json (protocol=
+     official_cv5_full_dataset, n_estimators=300). Se sustituyó el artefacto base por el
+     entregado y se corrigió train() para replicar el protocolo real (ver verification_report.md)."
+  - "BUG ENCONTRADO Y CORREGIDO: build_simulation_grid() (preprocessing.py) no acotaba el
+     rango de dosis simulado por el percentil 99 de 'free sulfur dioxide' en el dataset de
+     entrenamiento (wine_quality.common.SimulationConfig(sim_free_p_high=99.0), usado por el
+     pipeline de inferencia real para no extrapolar fuera de la distribución de
+     entrenamiento) — solo usaba delta_max, pudiendo explorar dosis muy por encima del rango
+     de entrenamiento para vinos con free SO2 actual alto. Corregido: train() ahora guarda
+     los percentiles reales en metadata['simulation'], con fallback a las constantes
+     BASE_FREE_SO2_P1/P99 (6.0/81.0 mg/L, calculadas del propio white_wine.csv) para el
+     artefacto base."

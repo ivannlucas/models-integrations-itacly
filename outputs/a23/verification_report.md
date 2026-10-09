@@ -15,7 +15,73 @@ verification antes de dar el plugin por bueno). El usuario aportó el código or
 deberían haberse hecho entonces. El resultado: **se ha encontrado y corregido un bug real de
 correctitud que dejaba `predict_batch()` devolviendo cero predicciones en silencio.**
 
-## Hallazgos y correcciones aplicadas
+## Ciclo 2 (2026-10-06) — `train()` estaba mal deshabilitado (bug de clase 3)
+
+Al revisar el estado global de los 25 plugins del repo se encontró que `training.supported:
+false` en este manifest (Ciclo 1) tenía el mismo motivo que ya se había detectado y corregido
+esta sesión en otros 4 modelos (ml2, ml4, ml7, ml17): el manifest afirmaba "sin procedimiento de
+reentrenamiento entregado en este repo", pero `inbox/a23/codigo/` **sí trae uno real y completo**
+(`scripts/train.py` → `src/training/runner.py::train_from_config()` →
+`src/training/compare_models.py::run_comparison()`), con `modules.training_enabled: true`
+explícito en `config/config.yaml`.
+
+### Bug corregido: `train()` deshabilitado sin motivo real
+
+Corregido reimplementando `train()` — porta fielmente SOLO el refit final de la arquitectura GRU
+ya seleccionada y desplegada (`prepare_horizon_dataset` → `split_dev_test` → `make_refit_split` →
+`prepare_rnn_split_with_test` → `train_rnn_multi_seed`), sin re-ejecutar la búsqueda completa
+Naive/Drift/XGBoost/LSTM/GRU por CV temporal que originalmente seleccionó GRU — misma
+simplificación ya aplicada a la búsqueda neuroevolutiva de `ml30`/`ml9` en este repo (reentrenar
+una NAS/comparativa completa en cada petición HTTP síncrona sería impracticable).
+
+**Verificación cuantitativa (sin reentrenamiento largo):** se ejecutó `plugin.train()`
+directamente (con `BaseMLflowTracker` monkeypatcheado a un stub no-op — mismo workaround ya
+documentado para otros modelos de esta sesión, `MLFLOW_TRACKING_URI` inalcanzable en este
+sandbox) sobre el **dataset real completo** (`data/processed/dataset_forecast_ready.csv`, 1.440
+filas, 16 series producto×canal):
+
+```
+TrainResponse: mae=0.0135 rmse=0.017 mape_pct=1.33 r2=0.8994 direction_acc_pct=90.6
+               n_train=1040 n_test=128 training_time_s=48.4
+```
+
+Estas cifras **coinciden a 4+ decimales** con `metrics_reported.gru_shipped_artifact_seed42` del
+manifest (MAE=0.013472696283459668, RMSE=0.0169822828247763, R²=0.8994110336510438,
+direction_acc=90.6 — el bloque de métricas del propio artefacto `gru_model.pt` ya servido,
+auditado en el Ciclo 1) — confirma que el refit portado reproduce exactamente el procedimiento
+original, no una aproximación. 48.4s de duración total (3 seeds sobre el dataset completo): no es
+un reentrenamiento largo, es ejecutable en cada petición.
+
+### Bug corregido (relacionado): `mlflow_run_id` ignorado en predict/stats
+
+`predict_inline`/`predict_batch`/`stats` declaraban `mlflow_run_id` en su firma pero lo
+descartaban siempre (`_ = mlflow_run_id`) — inofensivo mientras no existía ningún artefacto de
+usuario al que apuntar, pero se habría convertido en un bug real de aislamiento entre usuarios en
+cuanto `train()` empezara a producir artefactos reales. Corregido: los tres métodos ahora
+resuelven el bundle (modelo+scaler+manifest) del usuario vía `_resolve_for_predict()` cuando se
+indica `mlflow_run_id`, sin mutar nunca `self.*`, con `shutil.rmtree` del directorio temporal en
+`finally` — mismo patrón ya usado en `ml2`/`ml4`/`ml7`/`ml17`/`ml25`.
+
+### Checklist técnico (Ciclo 2)
+
+- [x] `flake8 app/plugins/ml23_lactic_market_price_forecast/ app/registry.py tests/conftest.py tests/unit/test_ml23_lactic_market_price_forecast.py`: 0 errores.
+- [x] `pylint app/plugins/ml23_lactic_market_price_forecast/ --disable=import-error`: **9.39/10**
+      (mismas categorías que el baseline ya aceptado en otros plugins de este repo:
+      `invalid-name` en variables `X`/`train_X`/`val_X` — convención numpy/ML estándar, no se
+      renombra — y `consider-using-from-import` en `rnn_models.py`, preexistente).
+- [x] `pytest tests/unit/ -q`: **505/505 passed** (suite completa, +1 respecto al baseline
+      anterior: se sustituyó `test_train_returns_501` por `test_train_returns_200_with_metrics` +
+      `test_train_without_mlflow_run_id_returns_422`).
+- [x] Arranque real (`MODEL=ml23-lactic-market-price-forecast`, puerto 8000) + `/health`: OK.
+- [x] `POST /train` sin `mlflow_run_id` → **422** (`Field required`), confirmado contra el
+      servidor real.
+- [x] `POST /predict` inline y batch (con el dataset real completo) tras el fix: sin cambios de
+      comportamiento, 200 en ambos, mismas predicciones que antes del Ciclo 2 (el fix de
+      `train()`/`mlflow_run_id` no toca la ruta de inferencia con el artefacto base).
+- Servidor y procesos detenidos limpiamente al terminar (`kill -9` + `pkill -9 -f
+  multiprocessing.spawn`), confirmado sin procesos huérfanos.
+
+## Hallazgos y correcciones aplicadas (Ciclo 1)
 
 ### 1. [CRÍTICO, CORREGIDO] `predict_batch()` no derivaba `current_price`
 
@@ -44,10 +110,14 @@ verificación (sin S3 configurado).
 que ya usan correctamente ~18 de los ~24 plugins del repo, incluido `ml16`). Verificado: `load()`
 funciona ahora sin `STORAGE_BUCKET`.
 
-**Mismo bug, sin tocar (fuera de alcance de esta tarea):** `m21_cereal_price_spatial`,
+**Mismo bug, sin tocar (fuera de alcance de esta tarea):** `ml21_cereals_price_spatial`,
 `ml25_wine_sulphites`, `ml5_meat_cow_behaviour`, `ml17_meat_market_price_analysis` y
 `modelo10_lacteo` usan el mismo patrón roto. Se deja constancia para que se decida si se corrigen
 en un cambio aparte.
+
+**[RESUELTO 2026-10-02]** Los 5 plugins listados ya usan el patrón lazy `_store.path(filename)`
+— ninguno llama a `download_all_if_needed()` a día de hoy. Corregidos en cambios posteriores a
+este informe (no en esta tarea de a23); verificado releyendo cada `model_loader.py`.
 
 ### 3. [MEDIO, CORREGIDO] Faltaba `mlflow_utils.py`
 
@@ -94,19 +164,33 @@ documentada, no se ha intentado cuantificar el error que introduce.
 
 ## Estado final
 
-**LISTO PARA PR** tras los 3 fixes aplicados (current_price, model_loader lazy-download,
-mlflow_utils.py). Antes de esta revisión el plugin estaba **roto en producción para
-predict_batch** (devolvía siempre cero predicciones) sin que ningún test existente lo detectara
-— los tests de `tests/unit/test_ml23_lactic_market_price_forecast.py` usan `FakePlugin` y nunca
-ejercitan el código real. Se recomienda añadir un test con artefactos reales (mismo patrón que
-`test_ml16_meat_raw_material_price_alert` si existiera) para que esta clase de bug no vuelva a
-pasar desapercibida.
+**LISTO PARA PR.** Resumen acumulado de ambos ciclos:
+
+- Ciclo 1: 3 fixes (current_price, model_loader lazy-download, mlflow_utils.py stub) — el plugin
+  estaba roto en producción para `predict_batch` (devolvía siempre cero predicciones) sin que
+  ningún test existente lo detectara (`tests/unit/` usa `FakePlugin`, nunca ejercita el código
+  real contra artefactos reales).
+- Ciclo 2: `train()` estaba deshabilitado sin motivo real (bug de clase 3, mismo patrón que
+  ml2/ml4/ml7/ml17) — corregido, verificado end-to-end contra el dataset real completo
+  (mae=0.0135, rmse=0.017, r2=0.8994 — coincide a 4+ decimales con el artefacto servido) y contra
+  el servidor HTTP real (422 sin `mlflow_run_id`). `mlflow_run_id` ahora también se usa de verdad
+  en predict/stats (antes se ignoraba).
+- `pytest` 505/505, `flake8` 0 errores, `pylint` 9.39/10 — sin regresiones.
 
 Pendiente de decisión humana (no bloqueante para PR de este plugin):
-- Corregir el mismo bug de `download_all_if_needed()` en los otros 5 plugins afectados.
-- Añadir `mlflow_utils.py` a los otros 3 plugins que también lo omiten.
-- Actualizar `outputs/a23/a23_ficha_tecnica.docx` para citar `GRU_artifact_metrics` en vez de
-  `GRU` (mean-across-seeds).
+- ~~Corregir el mismo bug de `download_all_if_needed()` en los otros 5 plugins afectados.~~
+  **[RESUELTO 2026-10-02]** — ver nota en el hallazgo #2 más arriba.
+- ~~Añadir `mlflow_utils.py` a los plugins que todavía lo omiten.~~ **[RESUELTO]** — los 5
+  plugins listados (`ml17`, `ml2`, `ml4`, `ml5`, `ml7`) ya tienen `mlflow_utils.py` real, no stub,
+  corregidos en sus propios ciclos de verificación de esta sesión.
+- ~~Actualizar `outputs/a23/a23_ficha_tecnica.docx` para citar `GRU_artifact_metrics` en vez de
+  `GRU` (mean-across-seeds).~~ **[RESUELTO 2026-10-02]** — `datos_a23.json` ahora incluye ambos
+  bloques, etiquetados por separado ("media 3 semillas" vs "artefacto servido, seed=42"), y la
+  ficha técnica se ha regenerado con `docs-generation`.
+- ~~La ficha técnica/funcional aún no se ha regenerado tras el Ciclo 2 (seguían describiendo
+  `train()` como no soportado).~~ **[RESUELTO]** — `datos_a23.json`/`datos_a23_funcional.json`
+  actualizados (contrato de train, métricas de correctitud del refit, limitaciones) y las fichas
+  regeneradas con `docs-generation`.
 
 Esta verificación no abre PR ni hace merge — queda pendiente de revisión humana del plugin, este
 informe y `inbox/a23/manifest.yaml` antes de abrir el PR.

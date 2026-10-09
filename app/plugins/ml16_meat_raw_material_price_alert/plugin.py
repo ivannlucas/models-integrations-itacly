@@ -20,7 +20,7 @@ import pandas as pd
 
 from app.application.dto.stats_dto import InputField, OutputField, RuntimeStats, StatsResponse
 from app.domain.ports.model_plugin_port import ModelPluginPort
-from app.domain.services.exceptions import ModelNotLoadedError
+from app.domain.services.exceptions import ModelNotLoadedError, ModelPersistenceError
 from app.domain.services.mlflow_tracker import BaseMLflowTracker
 from app.infrastructure.artifact_store import local_file_path
 from app.plugins.ml16_meat_raw_material_price_alert import model_loader, postprocessing, preprocessing, training
@@ -34,14 +34,9 @@ from app.plugins.ml16_meat_raw_material_price_alert.constants import (
     SCALER_FILENAMES,
     TARGETS,
     TRAIN_CONFIG_FILENAME,
-    USER_BAGGING_FILENAMES,
-    USER_MODEL_FILENAMES,
-    USER_SCALER_FILENAMES,
-    USER_TRAIN_CONFIG_FILENAME,
     VERSION,
 )
 from app.plugins.ml16_meat_raw_material_price_alert.mlflow_utils import download_user_model_from_mlflow
-from app.plugins.ml16_meat_raw_material_price_alert.model_loader import _store
 from app.plugins.ml16_meat_raw_material_price_alert.predict_dto import (
     PredictBatchResponse,
     PredictInlineResponse,
@@ -96,12 +91,6 @@ class Ml16MeatRawMaterialPriceAlertPlugin(ModelPluginPort):
             return None
         logger.info("Using user-retrained model from MLflow run_id=%s", mlflow_run_id)
         loaded = download_user_model_from_mlflow(mlflow_run_id)
-        if loaded is None:
-            logger.warning(
-                "No se pudo recuperar el modelo de MLflow run_id=%s; se usa el artefacto fijo.",
-                mlflow_run_id,
-            )
-            return None
         models, scalers, bagging_models, train_config, tmp = loaded
         return (models, scalers, bagging_models, train_config), tmp
 
@@ -207,7 +196,7 @@ class Ml16MeatRawMaterialPriceAlertPlugin(ModelPluginPort):
 
     # ── train (retraining with the original procedure) ───────────────────────
 
-    def train(self, *, data_path: str, mlflow_run_id: str = "") -> TrainResponse:
+    def train(self, *, data_path: str, mlflow_run_id: str) -> TrainResponse:
         """Retrain both targets from scratch on a labeled CSV shaped like
         dataset_clasificacion_base.csv (target_animales/target_insumos already computed — this
         plugin does not reproduce create_targets() nor the raw MAPA/GEE/RASVE ETL).
@@ -215,9 +204,9 @@ class Ml16MeatRawMaterialPriceAlertPlugin(ModelPluginPort):
         Follows the AI team's original procedure exactly (config/config.yaml hyperparams,
         walk-forward CV threshold search with manual override for target_insumos, bootstrap
         bagging). Trains into fresh model objects — the served fixed artifacts are never
-        mutated nor overwritten; user artifacts are saved under user_* filenames locally and,
-        when mlflow_run_id is given, uploaded to MLflow under artifact_path="model" with the
-        canonical filenames so mlflow_utils can rebuild the bundle.
+        mutated nor overwritten. The retrained bundle lives only in its own MLflow run
+        (artifact_path="model", canonical filenames so mlflow_utils can rebuild it with that
+        mlflow_run_id); nothing is written to the local artifacts folder.
         """
         self._require_loaded()
         with local_file_path(data_path) as local_path:
@@ -240,17 +229,10 @@ class Ml16MeatRawMaterialPriceAlertPlugin(ModelPluginPort):
             "n_bagging": len(next(iter(result["bagging_models"].values()), [])),
         }
 
-        # Persist locally under user_* names — the fixed S3 artifacts are never overwritten.
-        _store.local_dir.mkdir(parents=True, exist_ok=True)
-        for target in TARGETS:
-            joblib.dump(result["models"][target], _store.local_dir / USER_MODEL_FILENAMES[target])
-            joblib.dump(result["scalers"][target], _store.local_dir / USER_SCALER_FILENAMES[target])
-            joblib.dump(result["bagging_models"][target], _store.local_dir / USER_BAGGING_FILENAMES[target])
-        with open(_store.local_dir / USER_TRAIN_CONFIG_FILENAME, "w", encoding="utf-8") as fh:
-            json.dump(train_config, fh, indent=2, ensure_ascii=False)
-
         upload_warning = None
-        if mlflow_run_id:
+        if not mlflow_run_id:
+            raise ModelPersistenceError("Sin run de MLflow: el modelo reentrenado no se ha guardado.")
+        else:
             tracker = BaseMLflowTracker(mlflow_run_id)
             try:
                 tracker.log_params({
@@ -275,7 +257,7 @@ class Ml16MeatRawMaterialPriceAlertPlugin(ModelPluginPort):
                     shutil.rmtree(mlflow_tmp, ignore_errors=True)
             except Exception as exc:  # pylint: disable=broad-exception-caught
                 logger.error("MLflow artifact upload failed: %s", exc)
-                upload_warning = f"Modelo guardado localmente, pero falló la subida a MLflow: {exc}"
+                raise ModelPersistenceError(f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}") from exc
 
         m = result["metrics"]
         logger.info(

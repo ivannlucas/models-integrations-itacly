@@ -18,7 +18,6 @@ BEST_MODEL_FILENAME = "best_model.json"
 # torch.load(weights_only=True) + plain JSON, no pickle.
 USER_STATE_FILENAME = "model_state.pt"
 USER_META_FILENAME = "bundle_meta.json"
-USER_TRAINED_SUBDIR = "user_trained"
 MLFLOW_ARTIFACT_PATH = "model"
 
 # Mirror of the preprocessing block of inbox/a26/codigo/config/config.yaml (what

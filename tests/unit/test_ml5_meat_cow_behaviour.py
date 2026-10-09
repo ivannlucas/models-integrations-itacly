@@ -68,6 +68,15 @@ def test_predict_inline_insufficient_frames_maps_to_422(client, fake_plugins):
     assert resp.status_code == 422
 
 
-def test_train_returns_501(client):
-    resp = client.post(f"{PREFIX}/train", json={"data_path": "/tmp/x", "mlflow_run_id": "test-run-id"})
-    assert resp.status_code == 501
+def test_train_classifier_succeeds(client):
+    """Only the classifier supports /train now (detector stays out of scope)."""
+    resp = client.post(f"{PREFIX}/train", json={"data_path": "/tmp/x.zip", "mlflow_run_id": "test-run-id"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "train_clips" in body["metrics"]
+
+
+def test_train_without_mlflow_run_id_is_422(client):
+    """mlflow_run_id is required — no default, never a silent/unpersisted retrain."""
+    resp = client.post(f"{PREFIX}/train", json={"data_path": "/tmp/x.zip"})
+    assert resp.status_code == 422

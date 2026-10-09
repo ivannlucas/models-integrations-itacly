@@ -50,7 +50,7 @@ def test_predict_batch(client):
 
 
 def test_train(client):
-    resp = client.post(f"{PREFIX}/train", json={"data_path": "/tmp/train.csv", "mlflow_run_id": ""})
+    resp = client.post(f"{PREFIX}/train", json={"data_path": "/tmp/train.csv", "mlflow_run_id": "test-run-id"})
     assert resp.status_code == 200
     body = resp.json()
     assert body["detail"]
@@ -166,7 +166,7 @@ def test_stats_fetches_mlflow_metrics_when_run_id_given():
     """Regression: stats(mlflow_run_id=...) accepted the parameter but never used it —
     every retrain's /stats always reported the served model's static REPORTED_METRICS,
     no matter which trained run was asked about, same class of bug found and fixed in
-    modelo43_cereales/m21_cereal_price_spatial (see plugin.py::stats)."""
+    ml43_cereals_dnsl_anomaly_fault_detection/ml21_cereals_price_spatial (see plugin.py::stats)."""
     from unittest.mock import patch
 
     from app.plugins.ml3_wine_disease_pest_forecast.plugin import Ml3WineDiseasePestForecastPlugin

@@ -725,10 +725,15 @@ known_issues:
     text: >
       REENTRENAMIENTO CON DATOS REALES — NO VIABLE, LIMITACIÓN ACEPTADA (decisión del usuario 2026-09-29). /train se
       mantiene con el formato de entrada actual (data/raw/sequential.csv.gz: lecturas + stage_progress +
-      free_sulfite_mg_l) y genera un modelo de usuario aparte (local user_trained/ y MLflow), no auditado; el modelo
+      free_sulfite_mg_l) y genera un modelo de usuario aparte (desde 2026-10-08 solo en MLflow), no auditado; el modelo
       aceptado nunca se modifica. El target se deriva de free_sulfite_mg_l (SO2 libre continuo), que una bodega real no
       mide (solo analíticas puntuales), por lo que /train solo es aplicable a datos con ese formato (como los del
       simulador), no a históricos reales de bodega tal cual.
+      [CORREGIDO 2026-10-08] Al integrar main en la rama de auditoría, ml26 se alinea con el contrato común de
+      reentrenamiento: mlflow_run_id obligatorio (422 si falta o va vacío), el modelo reentrenado se guarda SOLO en
+      MLflow (ya no en artifacts/.../user_trained/; TrainResponse devuelve mlflow_run_id en lugar de
+      local_artifact_dir), un fallo de subida es 502 en vez de un aviso, y predict/stats con un run sin modelo cargable
+      responden 422 en lugar de 500 (download_user_model_from_mlflow con @require_user_model y limpieza del temporal).
   - id: KI-04
     severity: media
     text: >
@@ -736,6 +741,17 @@ known_issues:
       pero NO repite la búsqueda PSO (4 partículas x 3 iteraciones x 2 repeticiones = hasta 24 entrenamientos
       de 14 épocas + final) por coste en un endpoint síncrono. La memoria §10 recomienda repetir PSO al pasar a
       datos reales — eso queda fuera del endpoint /train.
+      [CORREGIDO 2026-10-09] El texto de arriba no describía lo que hacía el plugin: no reentrenaba con
+      train_sequence_with_config, sino que hacía un ajuste fino de los pesos SERVIDOS conservando la normalización
+      servida, un procedimiento que el equipo de IA no definió. Ahora training.py porta literalmente
+      train_sequence_with_config: modelo NUEVO con la configuración final de PSO, semilla 7 fijada justo antes (como
+      train_sequence_pso), z-score de X e y ajustado sobre el train del usuario. Verificado con
+      data/raw/sequential.csv.gz en CPU: las ventanas train/val/test coinciden con data/splits/*_seq_{X,y}.npy
+      (diferencia 0) y el plugin y el original ejecutado aislado dan pesos IDÉNTICOS (diferencia 0; val 1,56973,
+      test 1,40037, 25 épocas, mejor la 17, 240 s). Frente al artefacto entregado (1,5647 / 1,3983) la diferencia
+      es del entorno, que la memoria §9.1 ya anticipa ("ligeras variaciones entre entornos"). Hallazgo del port: las
+      ventanas deben ser C-contiguas como los .npy del original; si no, la media float32 del z-score cambia en el
+      último bit y tras 25 épocas el modelo diverge.
   - id: KI-05
     severity: info
     text: >
@@ -792,3 +808,9 @@ known_issues:
     text: >
       No es un modelo prescriptivo pese al título: PSO optimiza hiperparámetros en entrenamiento; no hay
       optimización de dosis ni de costes en inferencia. El "coste operativo" es contexto del caso de uso.
+  - id: KI-13
+    severity: media
+    text: >
+      [NUEVO 2026-10-09] s3://<STORAGE_BUCKET>/artifacts/fixed/ml26_wine_sulfite_gru_pso_forecast/ no existe (listado
+      de solo lectura). Hay que subir inbox/a26/codigo/models/artifacts/gru_pso.pkl (sha256 03fd25b6…0b16) y
+      best_model.json; sin ellos el servicio arranca con loaded=false. Acción humana.

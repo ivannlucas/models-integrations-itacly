@@ -28,12 +28,6 @@ BAGGING_FILENAMES = {
 }
 TRAIN_CONFIG_FILENAME = "train_config.json"
 
-# Filenames used for user-retrained artifacts (never overwrite the fixed S3 artifacts above)
-USER_MODEL_FILENAMES = {t: f"user_{name}" for t, name in MODEL_FILENAMES.items()}
-USER_SCALER_FILENAMES = {t: f"user_{name}" for t, name in SCALER_FILENAMES.items()}
-USER_BAGGING_FILENAMES = {t: f"user_{name}" for t, name in BAGGING_FILENAMES.items()}
-USER_TRAIN_CONFIG_FILENAME = "user_train_config.json"
-
 # predictor.py::_FEATURE_WARMUP_ROWS — filas que create_endogenous_features() elimina via
 # dropna() antes de crear secuencias, dominado por precip_total_lag6 (shift(6), range(3,7)).
 FEATURE_WARMUP_ROWS = 6

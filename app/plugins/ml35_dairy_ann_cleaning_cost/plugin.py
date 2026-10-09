@@ -13,7 +13,11 @@ import torch
 
 from app.application.dto.stats_dto import InputField, OutputField, RuntimeStats, StatsResponse
 from app.domain.ports.model_plugin_port import ModelPluginPort
-from app.domain.services.exceptions import ModelNotLoadedError, PuConstraintViolationError
+from app.domain.services.exceptions import (
+    ModelNotLoadedError,
+    ModelPersistenceError,
+    PuConstraintViolationError,
+)
 from app.domain.services.mlflow_tracker import BaseMLflowTracker
 from app.infrastructure.artifact_store import local_file_path
 from app.plugins.ml35_dairy_ann_cleaning_cost.constants import (
@@ -123,6 +127,20 @@ class Ml35DairyAnnCleaningCostPlugin(ModelPluginPort):
 
     # ── predict_inline ────────────────────────────────────────────────────────
 
+    def _resolve_model(self, mlflow_run_id: str) -> tuple[tuple, str | None]:
+        """Return ((model, scaler_X, scaler_y), temp_dir) to serve this request.
+
+        The user's retrained model (if mlflow_run_id) is returned, never assigned to self:
+        the plugin instance is shared by concurrent requests, so swapping it into self leaked
+        a user's model to other requests — and, with two overlapping runs, left it in place
+        as the "base" model. temp_dir is None for the base model.
+        """
+        if not mlflow_run_id:
+            self._require_loaded()
+            return (self._model, self._scaler_X, self._scaler_y), None
+        model, scaler_x, scaler_y, user_temp_dir = download_user_model_from_mlflow(mlflow_run_id)
+        return (model, scaler_x, scaler_y), user_temp_dir
+
     def predict_inline(
         self,
         *,
@@ -132,28 +150,23 @@ class Ml35DairyAnnCleaningCostPlugin(ModelPluginPort):
         mlflow_run_id: str = "",
     ) -> PredictInlineResponse | PredictOptimizeResponse:
         """Dispatch to ANN predict or GA optimize based on model_key."""
-        user_temp_dir = None
-        saved = (self._model, self._scaler_X, self._scaler_y)
         if mlflow_run_id:
             logger.info("predict_inline — using user model from MLflow run_id=%s", mlflow_run_id)
-            loaded = download_user_model_from_mlflow(mlflow_run_id)
-            if loaded:
-                self._model, self._scaler_X, self._scaler_y, user_temp_dir = loaded
+        ctx, user_temp_dir = self._resolve_model(mlflow_run_id)
         try:
-            self._require_loaded()
             if model_key == "optimize":
-                result = self._run_optimize(features)
+                result = self._run_optimize(features, ctx)
             else:
-                result = self._run_predict(features)
+                result = self._run_predict(features, ctx)
             self._record()
             return result
         finally:
             if user_temp_dir:
                 shutil.rmtree(user_temp_dir, ignore_errors=True)
-                self._model, self._scaler_X, self._scaler_y = saved
 
-    def _run_predict(self, features: dict) -> PredictInlineResponse:
+    def _run_predict(self, features: dict, ctx: tuple) -> PredictInlineResponse:
         """ANN single-sample inference with PU validation."""
+        model, scaler_X, scaler_y = ctx
         data = _resolve_features(features)
 
         temp_setpoint = float(data["temp_setpoint_leche"])
@@ -174,14 +187,14 @@ class Ml35DairyAnnCleaningCostPlugin(ModelPluginPort):
             data["temp_agua_servicio"], flujo,
             data["horas_desde_limpieza"], data["presion_diferencial_bar"],
         )
-        consumo = _infer(self._model, self._scaler_X, self._scaler_y, df)
+        consumo = _infer(model, scaler_X, scaler_y, df)
         return PredictInlineResponse(
             model_id=MODEL_ID,
             consumo_agua_l=round(consumo, 2),
             pu_logrado=round(pu, 4),
         )
 
-    def _run_optimize(self, features: dict) -> PredictOptimizeResponse:
+    def _run_optimize(self, features: dict, ctx: tuple) -> PredictOptimizeResponse:
         """Run pygad GA to find minimal-water setpoints respecting PU ≥ 13."""
         import pygad  # pylint: disable=import-outside-toplevel
 
@@ -190,9 +203,7 @@ class Ml35DairyAnnCleaningCostPlugin(ModelPluginPort):
             "horas_desde_limpieza", "presion_diferencial_bar",
         )}
 
-        model = self._model
-        scaler_X = self._scaler_X
-        scaler_y = self._scaler_y
+        model, scaler_X, scaler_y = ctx
 
         def _fitness(ga_instance, solution, solution_idx):
             t_leche, t_agua, flujo = float(solution[0]), float(solution[1]), float(solution[2])
@@ -257,22 +268,17 @@ class Ml35DairyAnnCleaningCostPlugin(ModelPluginPort):
 
     def predict_batch(self, *, data_path: str, mlflow_run_id: str = "") -> PredictBatchResponse:
         """Batch ANN inference over a CSV file."""
-        user_temp_dir = None
-        saved = (self._model, self._scaler_X, self._scaler_y)
         if mlflow_run_id:
             logger.info("predict_batch — using user model from MLflow run_id=%s", mlflow_run_id)
-            loaded = download_user_model_from_mlflow(mlflow_run_id)
-            if loaded:
-                self._model, self._scaler_X, self._scaler_y, user_temp_dir = loaded
+        ctx, user_temp_dir = self._resolve_model(mlflow_run_id)
         try:
-            self._require_loaded()
             with local_file_path(data_path) as local_path:
                 df = pd.read_csv(local_path)
             predictions: list[dict] = []
             for idx, row in df.iterrows():
                 try:
                     row_dict = row.to_dict()
-                    pred = self._run_predict(row_dict)
+                    pred = self._run_predict(row_dict, ctx)
                     predictions.append({
                         "row": int(idx),
                         "consumo_agua_l": pred.consumo_agua_l,
@@ -288,11 +294,10 @@ class Ml35DairyAnnCleaningCostPlugin(ModelPluginPort):
         finally:
             if user_temp_dir:
                 shutil.rmtree(user_temp_dir, ignore_errors=True)
-                self._model, self._scaler_X, self._scaler_y = saved
 
     # ── train ─────────────────────────────────────────────────────────────────
 
-    def train(self, *, data_path: str, mlflow_run_id: str = "") -> TrainResponse:  # pylint: disable=too-many-locals
+    def train(self, *, data_path: str, mlflow_run_id: str) -> TrainResponse:  # pylint: disable=too-many-locals
         """Fine-tune the ANN on user-labeled data (consumo_agua_l target required)."""
         import tempfile  # pylint: disable=import-outside-toplevel
         import joblib  # pylint: disable=import-outside-toplevel
@@ -352,7 +357,7 @@ class Ml35DairyAnnCleaningCostPlugin(ModelPluginPort):
         # mlflow_run_id); the served base model and its local artifacts are never replaced.
         upload_warning = None
         if not tracker:
-            upload_warning = "Sin run de MLflow: el modelo reentrenado no se ha guardado."
+            raise ModelPersistenceError("Sin run de MLflow: el modelo reentrenado no se ha guardado.")
         if tracker:
             tracker.log_metrics({"mae": mae, "r2": r2, "n_samples": len(df)})
             try:
@@ -364,7 +369,7 @@ class Ml35DairyAnnCleaningCostPlugin(ModelPluginPort):
                 shutil.rmtree(mlflow_tmp, ignore_errors=True)
             except Exception as exc:  # pylint: disable=broad-exception-caught
                 logger.error("MLflow artifact upload failed: %s", exc)
-                upload_warning = f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}"
+                raise ModelPersistenceError(f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}") from exc
 
         logger.info("train() done — mae=%.2f r2=%.4f n=%d mlflow=%s", mae, r2, len(df), bool(mlflow_run_id))
         return TrainResponse(

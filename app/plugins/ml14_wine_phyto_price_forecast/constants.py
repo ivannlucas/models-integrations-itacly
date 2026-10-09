@@ -63,6 +63,19 @@ HIDDEN_SIZE = 64
 NUM_LAYERS = 2
 DROPOUT = 0.3
 
+# ── /train — config/config.py (DEFAULT_RNN_*) and compare_models.py::train_rnn / N_SEEDS ──
+TRAIN_EPOCHS = 150
+TRAIN_BATCH_SIZE = 32
+TRAIN_LR = 1e-3
+TRAIN_WEIGHT_DECAY = 1e-5
+TRAIN_SCHEDULER_FACTOR = 0.5     # ReduceLROnPlateau
+TRAIN_SCHEDULER_PATIENCE = 10
+TRAIN_PATIENCE = 20              # early stopping
+TRAIN_N_SEEDS = 3
+TRAIN_SEED_BASE = 42             # the saved model is always seed 42's (canonical_seed)
+MLFLOW_ARTIFACT_PATH = "model"
+USER_SCALERS_FILENAME = "scalers.json"   # feature_columns + input/target scaler of a retrained model
+
 # Métricas del test reportado (models/metrics/model_comparison.json, split 80/20 único) — usadas
 # en stats(), nunca en la reconstrucción de la predicción.
 METRICS_REPORTED = {

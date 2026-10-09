@@ -92,7 +92,7 @@ class ArtifactStore:
 
     Usage::
 
-        _store = ArtifactStore("wine_sulphite")
+        _store = ArtifactStore("ml25_wine_sulphites")
         path = _store.path("quality_rf.pkl")   # returns a resolved Path
     """
 

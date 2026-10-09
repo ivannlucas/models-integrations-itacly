@@ -7,6 +7,8 @@ from typing import Any, Dict, List, Tuple
 import numpy as np
 from PIL import Image, ImageDraw
 
+from app.plugins.ml7_cereals_grain_pest_detection.constants import TRAINING_CLASS_ID_TO_CODE
+
 CLASS_NAMES: Dict[str, str] = {
     "cf": "Cryptolestes ferrugineus",
     "sz": "Sitophilus spp.",
@@ -41,13 +43,15 @@ def yolo_results_to_dict(
         class_ids = results.boxes.cls.cpu().numpy().astype(int)
         confidences = results.boxes.conf.cpu().numpy()
         xyxy = results.boxes.xyxy.cpu().numpy()
-        names = results.names  # {0: 'cf', 1: 'sz', ...}
+        # Decode via the fixed, verified id->code mapping — NEVER via results.names
+        # (the checkpoint's own embedded names are known to be wrong, see
+        # constants.TRAINING_CLASS_ID_TO_CODE for the full explanation and evidence).
 
         for i in range(len(class_ids)):
             conf = float(confidences[i])
             if conf < conf_threshold:
                 continue
-            cls_code = names.get(int(class_ids[i]), str(class_ids[i]))
+            cls_code = TRAINING_CLASS_ID_TO_CODE.get(int(class_ids[i]), str(class_ids[i]))
             detections.append({
                 "class": cls_code,
                 "class_name": CLASS_NAMES.get(cls_code, cls_code),

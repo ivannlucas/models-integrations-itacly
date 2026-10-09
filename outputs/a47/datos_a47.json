@@ -1,8 +1,8 @@
 {
   "model_id": "a47",
-  "model_slug": "m47-dnsl-fallas-maquinaria-pasteurizado",
+  "model_slug": "dairy-dnsl-pasteurization-fault-detection",
   "fecha": "Julio 2026",
-  "model_key": "m47-dnsl-fallas-maquinaria-pasteurizado",
+  "model_key": "ml47-dairy-dnsl-pasteurization-fault-detection",
   "version": "1.0.0",
 
   "descripcion": "Modelo de clasificación multi-etiqueta basado en Deep Neurosymbolic Learning (DNSL): una red convolucional 1D combinada con una función de pérdida guiada por la física (conservación de energía hidráulica y calorimetría). A partir de un ciclo completo de sensores de la maquinaria de pasteurizado, diagnostica simultáneamente el estado de salud de 4 componentes (enfriador/fouling, válvula, bomba y acumulador) en 3 niveles: sano, advertencia y crítico.",

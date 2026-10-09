@@ -28,7 +28,8 @@ def _safe_device() -> torch.device:
     if not torch.cuda.is_available():
         return torch.device("cpu")
     try:
-        torch.nn.Conv2d(1, 1, 1)(torch.zeros(1, 1, 4, 4).cuda())
+        probe = torch.nn.Conv2d(1, 1, 1).cuda()
+        probe(torch.zeros(1, 1, 4, 4).cuda())
         return torch.device("cuda")
     except Exception:
         logger.warning("CUDA detectada pero no funcional para operaciones de red — usando CPU.")
@@ -85,6 +86,29 @@ class LeafCNN(nn.Module):
         if return_features:
             return logits, feat
         return logits
+
+
+def create_model(num_classes: int, device: torch.device) -> LeafCNN:
+    """Instantiate a fresh ``LeafCNN`` with the original weight initialization.
+
+    Mirrors ``src/training/model.py:create_model`` from the delivered training
+    repository exactly (Kaiming-normal for Conv2d, Xavier-normal for Linear,
+    zero bias) — used by ``train()`` to build a brand-new model instead of
+    mutating the currently-served one in place.
+    """
+    model = LeafCNN(num_classes=num_classes).to(device)
+
+    def _init_weights(module: nn.Module) -> None:
+        if isinstance(module, nn.Conv2d):
+            nn.init.kaiming_normal_(module.weight)
+            if module.bias is not None:
+                nn.init.zeros_(module.bias)
+        elif isinstance(module, nn.Linear):
+            nn.init.xavier_normal_(module.weight)
+            nn.init.zeros_(module.bias)
+
+    model.apply(_init_weights)
+    return model
 
 
 def load_model_bundle() -> dict:

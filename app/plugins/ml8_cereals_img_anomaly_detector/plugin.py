@@ -7,7 +7,6 @@ import random
 import shutil
 import tempfile
 import time
-import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -15,8 +14,9 @@ import torch
 
 from app.application.dto.stats_dto import InputField, OutputField, RuntimeStats, StatsResponse
 from app.domain.ports.model_plugin_port import ModelPluginPort
-from app.domain.services.exceptions import InvalidImageError, ModelNotLoadedError
+from app.domain.services.exceptions import InvalidImageError, ModelNotLoadedError, ModelPersistenceError
 from app.domain.services.mlflow_tracker import BaseMLflowTracker
+from app.infrastructure.archive import safe_extract_zip
 from app.plugins.ml8_cereals_img_anomaly_detector.constants import (
     CATEGORY_NAMES,
     CEREAL_NAMES,
@@ -63,23 +63,79 @@ def _scan_split(data_root: Path, split_names: tuple) -> list:
     return records
 
 
-def _train_epoch(model, loader, optimizer, crit_cat, crit_cer, device):
-    from torch.nn import CrossEntropyLoss  # noqa: F401 — already imported by caller
+def _balance_hongos(records: list, max_samples_hongos: int | None, seed: int) -> list:
+    """Replicates src/training/dataset.py:balance_hongos — undersamples the 'hongos'
+    category in the TRAIN split only, down to max_samples_hongos (or, if None, to the
+    average count of the other categories). Part of the real delivered training
+    procedure (memoria sección 6.2: "esquema de balanceo en entrenamiento"), not optional."""
+    from collections import Counter
+
+    counts = Counter(categoria for _, categoria, _ in records)
+    current_hongos = counts.get("hongos", 0)
+    if current_hongos == 0:
+        return records
+
+    if max_samples_hongos is not None:
+        target = int(max_samples_hongos)
+    else:
+        others = [n for cat, n in counts.items() if cat != "hongos"]
+        target = int(sum(others) / len(others)) if others else current_hongos
+
+    if current_hongos <= target:
+        return records
+
+    rng = random.Random(seed)
+    hongos_records = [r for r in records if r[1] == "hongos"]
+    other_records = [r for r in records if r[1] != "hongos"]
+    sampled_hongos = rng.sample(hongos_records, target)
+    balanced = other_records + sampled_hongos
+    rng.shuffle(balanced)
+    logger.info("balance_hongos: %d -> %d muestras de 'hongos' en train", current_hongos, target)
+    return balanced
+
+
+def _load_mobilenetv3_backbone():
+    """Replicates src/training/model.py:_load_backbone for mobilenet_v3_large — tries the
+    real IMAGENET1K_V1 pretrained weights (as used in training/model.py and notebook
+    04_MobileNetV3.ipynb), falling back to weights=None if the download is unreachable
+    (e.g. sandboxed/offline environment)."""
+    from torchvision import models as _tv_models
+    try:
+        return _tv_models.mobilenet_v3_large(
+            weights=_tv_models.MobileNet_V3_Large_Weights.IMAGENET1K_V1
+        )
+    except Exception as exc:
+        logger.warning(
+            "No se pudieron descargar los pesos preentrenados IMAGENET1K_V1 (%s). "
+            "Continuando con inicialización aleatoria (weights=None).", exc,
+        )
+        return _tv_models.mobilenet_v3_large(weights=None)
+
+
+def _train_epoch(model, loader, optimizer, crit_cat, crit_cer, device, accumulation_steps=1):
+    """Replicates src/training/train.py:train_one_epoch — gradient accumulation included,
+    since the delivered training procedure uses accumulation_steps=2 (config.yaml)."""
     model.train()
     total_loss = correct_cat = correct_cer = total = 0
-    for imgs, lbls_cat, lbls_cer, _ in loader:
+    optimizer.zero_grad()
+    batch_idx = -1
+    for batch_idx, (imgs, lbls_cat, lbls_cer, _) in enumerate(loader):
         imgs = imgs.to(device)
         lbls_cat = lbls_cat.to(device)
         lbls_cer = lbls_cer.to(device)
         out_cat, out_cer = model(imgs)
-        loss = crit_cat(out_cat, lbls_cat) + crit_cer(out_cer, lbls_cer)
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
-        total_loss += loss.item()
+        loss_full = crit_cat(out_cat, lbls_cat) + crit_cer(out_cer, lbls_cer)
+        (loss_full / accumulation_steps).backward()
+        if (batch_idx + 1) % accumulation_steps == 0:
+            optimizer.step()
+            optimizer.zero_grad()
+        total_loss += loss_full.item()
         correct_cat += (out_cat.argmax(1) == lbls_cat).sum().item()
         correct_cer += (out_cer.argmax(1) == lbls_cer).sum().item()
         total += lbls_cat.size(0)
+    if (batch_idx + 1) % accumulation_steps != 0:
+        optimizer.step()
+        optimizer.zero_grad()
     n = max(len(loader), 1)
     return total_loss / n, 100 * correct_cat / total if total else 0.0, 100 * correct_cer / total if total else 0.0
 
@@ -102,13 +158,13 @@ def _validate_epoch(model, loader, crit_cat, crit_cer, device):
 
 
 def _run_phase(model, train_loader, val_loader, optimizer, crit_cat, crit_cer,
-               device, epochs, patience, phase_name):
+               device, epochs, patience, phase_name, accumulation_steps=1):
     best_loss, no_improve, best_state = float("inf"), 0, None
     history: dict = {"val_acc_cat": [], "val_acc_cer": []}
     logger.info("Iniciando %s", phase_name)
     for epoch in range(epochs):
         tr_loss, tr_acc_cat, tr_acc_cer = _train_epoch(
-            model, train_loader, optimizer, crit_cat, crit_cer, device
+            model, train_loader, optimizer, crit_cat, crit_cer, device, accumulation_steps
         )
         val_loss, val_acc_cat, val_acc_cer = _validate_epoch(
             model, val_loader, crit_cat, crit_cer, device
@@ -154,6 +210,18 @@ class Ml8CerealsImgAnomalyDetectorPlugin(ModelPluginPort):
             raise ModelNotLoadedError("El modelo no está cargado.")
         return self._bundle
 
+    def _resolve_bundle(self, mlflow_run_id: str) -> tuple[dict, str | None]:
+        """Return (bundle, temp_dir) to serve this request.
+
+        The user's retrained bundle (if mlflow_run_id) is returned, never assigned to
+        self._bundle: the plugin instance is shared by concurrent requests, so swapping it
+        into self leaked a user's model to other requests — and, with two overlapping runs,
+        left it in place as the "base" model. temp_dir is None for the base model.
+        """
+        if not mlflow_run_id:
+            return self._require_bundle(), None
+        return download_user_model_from_mlflow(mlflow_run_id)
+
     def predict_inline(
         self,
         *,
@@ -162,15 +230,10 @@ class Ml8CerealsImgAnomalyDetectorPlugin(ModelPluginPort):
         threshold: float | None = None,
         mlflow_run_id: str = "",
     ) -> PredictInlineResponse:
-        user_temp_dir = None
-        saved_bundle = self._bundle
         if mlflow_run_id:
             logger.info("predict_inline — using user-trained model from MLflow run_id=%s", mlflow_run_id)
-            loaded = download_user_model_from_mlflow(mlflow_run_id)
-            if loaded:
-                self._bundle, user_temp_dir = loaded
+        bundle, user_temp_dir = self._resolve_bundle(mlflow_run_id)
         try:
-            bundle = self._require_bundle()
             tensor = image_base64_to_tensor(
                 features["image_base64"], image_size=bundle["image_size"]
             ).to(bundle["device"])
@@ -193,18 +256,12 @@ class Ml8CerealsImgAnomalyDetectorPlugin(ModelPluginPort):
         finally:
             if user_temp_dir:
                 shutil.rmtree(user_temp_dir, ignore_errors=True)
-                self._bundle = saved_bundle
 
     def predict_batch(self, *, data_path: str, mlflow_run_id: str = "") -> PredictBatchResponse:
-        user_temp_dir = None
-        saved_bundle = self._bundle
         if mlflow_run_id:
             logger.info("predict_batch — using user-trained model from MLflow run_id=%s", mlflow_run_id)
-            loaded = download_user_model_from_mlflow(mlflow_run_id)
-            if loaded:
-                self._bundle, user_temp_dir = loaded
+        bundle, user_temp_dir = self._resolve_bundle(mlflow_run_id)
         try:
-            bundle = self._require_bundle()
             model = bundle["model"]
             device: torch.device = bundle["device"]
             image_size: int = bundle["image_size"]
@@ -233,8 +290,7 @@ class Ml8CerealsImgAnomalyDetectorPlugin(ModelPluginPort):
 
             try:
                 with tempfile.TemporaryDirectory() as tmp_dir:
-                    with zipfile.ZipFile(local_data_path, "r") as zf:
-                        zf.extractall(tmp_dir)
+                    safe_extract_zip(local_data_path, tmp_dir)
 
                     image_paths = sorted(
                         p for p in Path(tmp_dir).rglob("*")
@@ -276,7 +332,6 @@ class Ml8CerealsImgAnomalyDetectorPlugin(ModelPluginPort):
         finally:
             if user_temp_dir:
                 shutil.rmtree(user_temp_dir, ignore_errors=True)
-                self._bundle = saved_bundle
 
     def stats(self, mlflow_run_id: str = "") -> StatsResponse:
         arch = self._bundle["arch"] if self._bundle is not None else "unknown"
@@ -329,11 +384,11 @@ class Ml8CerealsImgAnomalyDetectorPlugin(ModelPluginPort):
 
     # ── Entrenamiento ─────────────────────────────────────────────────────────
 
-    def train(self, *, data_path: str, mlflow_run_id: str = "") -> TrainResponse:
+    def train(self, *, data_path: str, mlflow_run_id: str) -> TrainResponse:
         import torch.nn as nn
         from PIL import Image
         from torch.utils.data import DataLoader, Dataset
-        from torchvision import models, transforms
+        from torchvision import transforms
 
         from app.plugins.ml8_cereals_img_anomaly_detector.model_loader import MultiTaskMobileNetV3Large
 
@@ -349,7 +404,10 @@ class Ml8CerealsImgAnomalyDetectorPlugin(ModelPluginPort):
                 "fase2_epochs": 5,
                 "fase2_optimizer": "Adam",
                 "model": "MultiTaskMobileNetV3Large",
-                "backbone_weights": "IMAGENET1K_V2",
+                "backbone_weights": "IMAGENET1K_V1",
+                "accumulation_steps": 2,
+                "seed": 42,
+                "class_balancing": "balance_hongos + class/cereal_weights (CrossEntropyLoss) + WeightedRandomSampler",
             })
 
         _tmp_zip: str | None = None
@@ -377,6 +435,11 @@ class Ml8CerealsImgAnomalyDetectorPlugin(ModelPluginPort):
             raise ValueError("data_path debe ser un fichero .zip")
 
         from app.plugins.ml8_cereals_img_anomaly_detector.model_loader import _safe_device
+
+        _SEED = 42
+        torch.manual_seed(_SEED)
+        random.seed(_SEED)
+
         device = _safe_device()
         class_to_idx = {c: i for i, c in enumerate(CATEGORY_NAMES)}
         cereal_to_idx = {c: i for i, c in enumerate(CEREAL_NAMES)}
@@ -415,8 +478,7 @@ class Ml8CerealsImgAnomalyDetectorPlugin(ModelPluginPort):
 
         tmp_dir = tempfile.mkdtemp(prefix="ml8_train_")
         try:
-            with zipfile.ZipFile(local_data_path, "r") as zf:
-                zf.extractall(tmp_dir)
+            safe_extract_zip(local_data_path, tmp_dir)
 
             entries = list(Path(tmp_dir).iterdir())
             data_root = entries[0] if len(entries) == 1 and entries[0].is_dir() else Path(tmp_dir)
@@ -439,9 +501,43 @@ class Ml8CerealsImgAnomalyDetectorPlugin(ModelPluginPort):
                     len(train_records), len(val_records),
                 )
 
+            # Esquema de balanceo real (memoria 6.2 / src/main.py:run_training) — se aplica
+            # SOLO sobre train, nunca sobre validación:
+            #   1) balance_hongos: recorte de la categoría mayoritaria 'hongos'
+            train_records = _balance_hongos(train_records, max_samples_hongos=None, seed=_SEED)
+
+            #   2) class_weights / cereal_weights (inverse frequency, normalizados) para
+            #      CrossEntropyLoss — igual que src/main.py:run_training
+            from collections import Counter
+            cat_counts = Counter(categoria for _, categoria, _ in train_records)
+            cer_counts = Counter(cereal for _, _, cereal in train_records)
+            total_train = len(train_records)
+
+            # max(..., 1): a diferencia del notebook original (que asume las 4 categorías/
+            # cereales siempre presentes en train), aquí el ZIP lo sube un usuario vía API y
+            # una categoría/cereal podría venir ausente — evitamos un ZeroDivisionError en
+            # lugar de que /train devuelva 500 por un dataset de usuario incompleto.
+            class_weights = torch.tensor(
+                [total_train / max(cat_counts.get(c, 0), 1) for c in CATEGORY_NAMES], dtype=torch.float32
+            )
+            class_weights = class_weights / class_weights.sum() * len(CATEGORY_NAMES)
+
+            cereal_weights = torch.tensor(
+                [total_train / max(cer_counts.get(c, 0), 1) for c in CEREAL_NAMES], dtype=torch.float32
+            )
+            cereal_weights = cereal_weights / cereal_weights.sum() * len(CEREAL_NAMES)
+
+            #   3) WeightedRandomSampler (balanceo por lote, basado en categoría) — reemplaza
+            #      el shuffle=True plano para que el train_loader muestree igual que el
+            #      pipeline original
+            sample_weights = [1.0 / max(cat_counts.get(categoria, 0), 1) for _, categoria, _ in train_records]
+            sampler = torch.utils.data.WeightedRandomSampler(
+                sample_weights, num_samples=len(sample_weights), replacement=True
+            )
+
             train_loader = DataLoader(
                 _CerealDataset(train_records, is_train=True),
-                batch_size=16, shuffle=True, num_workers=0,
+                batch_size=16, sampler=sampler, num_workers=0,
             )
             val_loader = DataLoader(
                 _CerealDataset(val_records, is_train=False),
@@ -450,7 +546,9 @@ class Ml8CerealsImgAnomalyDetectorPlugin(ModelPluginPort):
             logger.info("Dataset: %d train, %d val", len(train_records), len(val_records))
 
             os.environ.setdefault("TORCH_HOME", "/tmp/.torch")
-            base = models.mobilenet_v3_large(weights="IMAGENET1K_V2")
+            # Backbone con pesos preentrenados IMAGENET1K_V1 — mismo que
+            # src/training/model.py:_load_backbone y notebook 04_MobileNetV3.ipynb.
+            base = _load_mobilenetv3_backbone()
             for param in base.parameters():
                 param.requires_grad = False
             for param in base.classifier.parameters():
@@ -462,8 +560,8 @@ class Ml8CerealsImgAnomalyDetectorPlugin(ModelPluginPort):
             )
             model.to(device)
 
-            crit_cat = nn.CrossEntropyLoss()
-            crit_cer = nn.CrossEntropyLoss()
+            crit_cat = nn.CrossEntropyLoss(weight=class_weights.to(device))
+            crit_cer = nn.CrossEntropyLoss(weight=cereal_weights.to(device))
 
             # Fase 1: transfer learning (neck + heads)
             t0 = time.perf_counter()
@@ -473,6 +571,7 @@ class Ml8CerealsImgAnomalyDetectorPlugin(ModelPluginPort):
             h1 = _run_phase(
                 model, train_loader, val_loader, opt1, crit_cat, crit_cer,
                 device, epochs=10, patience=3, phase_name="Fase 1: Transfer Learning",
+                accumulation_steps=2,
             )
             t1 = time.perf_counter() - t0
             if mlflow_run_id:
@@ -491,6 +590,7 @@ class Ml8CerealsImgAnomalyDetectorPlugin(ModelPluginPort):
             h2 = _run_phase(
                 model, train_loader, val_loader, opt2, crit_cat, crit_cer,
                 device, epochs=5, patience=3, phase_name="Fase 2: Fine-tuning",
+                accumulation_steps=2,
             )
             t2 = time.perf_counter() - t0
             if mlflow_run_id:
@@ -515,7 +615,7 @@ class Ml8CerealsImgAnomalyDetectorPlugin(ModelPluginPort):
             }
             upload_warning = None
             if not mlflow_run_id:
-                upload_warning = "Sin run de MLflow: el modelo reentrenado no se ha guardado."
+                raise ModelPersistenceError("Sin run de MLflow: el modelo reentrenado no se ha guardado.")
             if mlflow_run_id:
                 combined_cat_m = h2["val_acc_cat"] or h1["val_acc_cat"]
                 combined_cer_m = h2["val_acc_cer"] or h1["val_acc_cer"]
@@ -532,7 +632,7 @@ class Ml8CerealsImgAnomalyDetectorPlugin(ModelPluginPort):
                     shutil.rmtree(mlflow_tmp, ignore_errors=True)
                 except Exception as exc:
                     logger.error("MLflow artifact upload failed: %s", exc)
-                    upload_warning = f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}"
+                    raise ModelPersistenceError(f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}") from exc
 
             combined_cat = h2["val_acc_cat"] or h1["val_acc_cat"]
             combined_cer = h2["val_acc_cer"] or h1["val_acc_cer"]

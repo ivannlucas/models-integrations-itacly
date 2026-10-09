@@ -1,0 +1,387 @@
+model_id: ml7-cereals-grain-pest-detection
+sector: cerealista
+nombre: "Modelo de CNN para la detección temprana de infestaciones en granos de cereal"
+task_type: object_detection
+framework:
+  - ultralytics==8.4.6
+  - numpy==2.2.6
+  - opencv-python==4.13.0.90
+  - scikit-learn==1.7.2   # solo se usa en src/data_processing/split_dataset.py (train_test_split), no en inferencia
+  - PyYAML==6.0.3
+# requirements.txt entregado está en UTF-16LE con CRLF — normalizar a UTF-8/LF antes de
+# usarlo en pip-audit/pip install (ver known_issues).
+
+# ---------------------------------------------------------------------------
+# Ya integrado en app/plugins/ml7_cereals_grain_pest_detection/ y registrado en
+# app/registry.py ANTES de pasar por manifest-extraction/verification (irregularidad
+# detectada en esta sesión — ver tarea de auditoría). Este manifest se construye
+# retroactivamente contra inbox/a07/codigo/ para poder auditar y verificar lo ya
+# integrado, igual que si fuera el primer paso.
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# ACTUALIZACIÓN (Ciclo 2, 2026-10-06) — dataset real completo añadido
+#
+# El equipo de IA añadió el dataset PestDataset completo a inbox/a07/codigo/
+# (data/splits/{images,labels}/{train,val,test}: 12.597/2.700/2.700 imágenes reales con
+# anotaciones YOLO), inexistente en el Ciclo 1 (solo quedaban 6 imágenes embebidas como
+# salidas de celda en notebooks/predict.ipynb). Esto permitió re-auditar con datos reales y
+# encontró un BUG CRÍTICO invisible sin ellos: ver el known_issue "BUG EN EL PIPELINE DE
+# ETL ORIGINAL" más abajo, ahora marcado [CORREGIDO Ciclo 2] — el checkpoint servido
+# etiqueta mal la especie en ~3 de cada 5 detecciones. Corregido en
+# app/plugins/ml7_cereals_grain_pest_detection/{constants.py,postprocessing.py} y en el
+# propio código entregado (inbox/a07/codigo/.../src/data_processing/preprocess.py +
+# src/main.py), sin reentrenar ningún checkpoint — la corrección es puramente de
+# decodificación id→nombre, el detector (cajas) ya era correcto.
+#
+# Los `golden_cases` de abajo se reconstruyeron por completo desde el dataset real
+# (reemplazando los del Ciclo 1, basados en capturas del notebook que además heredaban el
+# mismo bug de nombres al estar renderizadas con `results.names`). El detalle completo del
+# hallazgo, la verificación cuantitativa y el fix están en
+# outputs/a07/verification_report.md, sección "Ciclo 2".
+# ---------------------------------------------------------------------------
+
+artifacts:
+  folder: models/artifacts/     # ruta dentro del código entregado
+  files:
+    - best.pt   # 5,418,978 bytes — único artefacto entregado (checkpoint YOLO ya fine-tuneado)
+  # last.pt NO se entrega (memoria sección 9.1: "last.pt: ... este fichero no se proporciona").
+  # best.pt YA ESTÁ colocado en artifacts/ml7_cereals_grain_pest_detection/best.pt
+  # (md5 idéntico al de inbox/a07/codigo/.../models/artifacts/best.pt — confirmado).
+
+inputs:
+  fixed:
+    - name: image
+      type: file   # image_path o image_base64 en el plugin; jpg/jpeg/png/bmp/tif
+      description: >
+        Imagen de grano almacenado. El dataset de entrenamiento usa imágenes de
+        512×512 px, pero YOLO reescala internamente a imgsz=512 en inferencia
+        (ver config/config.yaml: model.img_size) independientemente del tamaño
+        original de entrada.
+  control: null
+  derived_if_missing: null
+
+outputs:
+  predict_inline:
+    - name: detections
+      type: list
+      description: "[{class (código 2 letras), class_name (nombre especie), confidence, bbox[x1,y1,x2,y2]}]"
+    - name: prediction
+      type: str
+      description: "Especie dominante (mayor nº de detecciones, desempate por suma de confianzas)"
+    - name: confidence
+      type: float
+      description: "Confianza máxima entre las detecciones de la especie dominante"
+    - name: total_detections
+      type: int
+    - name: species_counts
+      type: dict
+    - name: annotated_image
+      type: str
+      description: "Imagen con bounding boxes dibujadas, JPEG base64"
+
+training:
+  supported: true
+  target_column: null   # no aplica: modelo de detección de objetos, no tabular
+  required_columns: null   # no aplica: el entrenamiento consume imágenes + anotaciones, no un CSV
+  data_layout_required:
+    description: >
+      scripts/train.py → src/training/train.py::train_model() entrena con
+      model.train(data=<dataset.yaml>, ...) de Ultralytics. El dataset.yaml (generado por
+      src/data_processing/preprocess.py::create_dataset_yaml, paso previo obligatorio
+      scripts/data_processing.py) describe splits/images/{train,val,test} +
+      splits/labels/{train,val,test} en formato YOLO (.txt normalizado por imagen),
+      derivados de anotaciones Pascal VOC (XML) en data/raw/annos2/ sobre imágenes en
+      data/raw/images/. Reentrenar con datos nuevos implica: (1) organizar
+      imágenes JPG + XML Pascal VOC nuevos en esa estructura, (2) ejecutar el pipeline de
+      ETL (relabel clases inválidas → eliminar 'unknown' → XML→YOLO → split balanceado
+      estratificado → generar dataset.yaml), (3) ejecutar train_model(). No existe una vía
+      de "subir un CSV" como en los modelos tabulares del repo.
+    source: "codigo_entrenamiento (src/training/train.py, src/data_processing/preprocess.py, src/data_processing/split_dataset.py)"
+  hyperparams:
+    epochs: 300
+    patience: 20          # early stopping
+    batch_size: 32
+    img_size: 512
+    device: 0              # GPU por defecto en el código original (ver known_issues — el
+                            # plugin YA integrado lo sobreescribe a "cpu" fijo)
+    workers: 0
+    optimizer: auto         # el código original NO pasa `optimizer=` explícito a model.train()
+                             # (deja el valor por defecto de Ultralytics); la memoria (sección
+                             # 6.1) documenta el resultado observado como optimizador AdamW.
+                             # No inventar un optimizer= explícito en el plugin: replicar
+                             # fielmente omitiendo el kwarg, igual que el código entregado.
+    lr0: 0.00868
+    momentum: 0.97
+    weight_decay: 0.00027
+    box: 8.19212
+    cls: 0.72124
+    dfl: 1.82105
+    hsv_h: 0.0017
+    hsv_s: 0.64489
+    hsv_v: 0.36131
+    degrees: 0.00145
+    translate: 0.16011
+    scale: 0.3
+    fliplr: 0.4361
+    mosaic: 0.72567
+    mixup: 0.00512
+    seed: 42
+  metrics_returned: [map50, map50_95, precision, recall, n_images]
+  source: "codigo_entrenamiento (config/config.yaml bloque model + src/training/train.py) + memoria sección 6.2 Tabla 6 (confirma mismos valores) y sección 6.1 (optimizador AdamW, pérdida box+cls+DFL de Ultralytics)"
+
+constraints: null   # no hay restricciones duras de negocio tipo "PU >= 13" en este modelo;
+                     # el umbral de confianza (eval.conf=0.28 en config.yaml) es un
+                     # hiperparámetro de postprocesado, no una restricción de dominio.
+
+metrics_reported:
+  # Tabla 7 (memoria) — métricas de DETECCIÓN sobre el conjunto de test (2700 imágenes, 4090 instancias)
+  deteccion:
+    all: {precision: 0.84, recall: 0.81, map50: 0.87}
+    cf: {precision: 0.93, recall: 0.71, map50: 0.84}
+    os: {precision: 0.84, recall: 0.94, map50: 0.95}
+    rd: {precision: 0.74, recall: 0.75, map50: 0.87}
+    sz: {precision: 0.86, recall: 0.80, map50: 0.88}
+    tc: {precision: 0.83, recall: 0.86, map50: 0.88}
+  # Tabla 8 (memoria) — métricas de CLASIFICACIÓN (por clase predicha vs. real, sin bbox) sobre el mismo test
+  clasificacion:
+    all: {precision: 0.71, recall: 0.87}
+    cf: {precision: 0.78, recall: 0.74}
+    os: {precision: 0.78, recall: 0.96}
+    rd: {precision: 0.60, recall: 0.84}
+    sz: {precision: 0.74, recall: 0.83}
+    tc: {precision: 0.76, recall: 0.89}
+  kpi_negocio: "IDP (Índice de Detección de Plagas) = mAP@0.5, objetivo > 0.8, resultado 0.87 (cumple)"
+  source: "memoria, sección 7.2, Tabla 7 y Tabla 8"
+
+# ---------------------------------------------------------------------------
+# GOLDEN CASES (Ciclo 2, 2026-10-06 — reconstruidos desde el dataset real)
+#
+# Los golden cases del Ciclo 1 (basados en capturas de notebooks/predict.ipynb) se
+# descartaron por completo: además de depender de imgsz/conf por defecto distintos de
+# producción (ya documentado entonces), sus "expected" se leyeron visualmente de
+# `results[0].plot()`, que dibuja la etiqueta de texto usando `results.names` — es decir,
+# heredaban el mismo bug de decodificación de especie corregido en este ciclo (ver
+# known_issues). No eran ground truth fiable.
+#
+# Fuente real: data/splits/images/test/ + data/splits/labels/test/ (2.700 imágenes reales,
+# el split de test oficial ya generado por el pipeline de preprocesado entregado). 20 casos
+# de una sola especie (4 por especie, `random.Random(42).sample()` sobre las imágenes de
+# test cuyo .txt de etiquetas solo contiene una clase) + 3 casos multi-especie (misma
+# semilla). `ground_truth_species` se obtiene decodificando el class_id del .txt con el
+# orden REAL de entrenamiento (config.yaml: cf=0,sz=1,rd=2,tc=3,os=4 — el que confirma el
+# known_issue de abajo), nunca con `results.names`. `expected` es la salida real del
+# checkpoint servido (best.pt) ejecutado en proceso con el mismo pre/postprocesado ya
+# corregido del plugin (conf=0.28, imgsz=512) — no tecleada a mano — y se verificó además
+# contra el servidor HTTP real (ver outputs/a07/verification_report.md, Ciclo 2): los 23
+# casos reproducen exactamente la misma salida vía API que en proceso.
+# ---------------------------------------------------------------------------
+golden_cases:
+  tolerance:
+    prediction_species: exact            # especie dominante (ganadora por conteo) debe coincidir exactamente
+    confidence: 0.001                    # inferencia determinista (sin augmentation) — debe coincidir casi exacto
+    total_detections: exact
+  cases:
+    - id: caso_001
+      input: {image: "data/splits/images/test/10478.jpg"}
+      ground_truth_species: cf
+      expected: {prediction: cf, confidence: 0.6837, total_detections: 1, species_counts: {cf: 1}}
+      source: dataset_real_test_split
+    - id: caso_002
+      input: {image: "data/splits/images/test/12793.jpg"}
+      ground_truth_species: cf
+      expected: {prediction: cf, confidence: 0.626, total_detections: 1, species_counts: {cf: 1}}
+      source: dataset_real_test_split
+    - id: caso_003
+      input: {image: "data/splits/images/test/17671.jpg"}
+      ground_truth_species: cf
+      expected: {prediction: cf, confidence: 0.4423, total_detections: 1, species_counts: {cf: 1}}
+      source: dataset_real_test_split
+    - id: caso_004
+      input: {image: "data/splits/images/test/1992.jpg"}
+      ground_truth_species: cf
+      expected: {prediction: cf, confidence: 0.4836, total_detections: 2, species_counts: {cf: 1, rd: 1}}
+      source: dataset_real_test_split
+      note: "Ground truth de la imagen es solo 'cf' (único class_id en el .txt), pero el detector añade 1 caja 'rd' de baja confianza (0.3291) — falso positivo real del detector, no un bug de wiring (ver mAP real 0.871 en verification_report.md)."
+    - id: caso_005
+      input: {image: "data/splits/images/test/11897.jpg"}
+      ground_truth_species: sz
+      expected: {prediction: sz, confidence: 0.7134, total_detections: 1, species_counts: {sz: 1}}
+      source: dataset_real_test_split
+    - id: caso_006
+      input: {image: "data/splits/images/test/12517.jpg"}
+      ground_truth_species: sz
+      expected: {prediction: sz, confidence: 0.74, total_detections: 1, species_counts: {sz: 1}}
+      source: dataset_real_test_split
+    - id: caso_007
+      input: {image: "data/splits/images/test/13944.jpg"}
+      ground_truth_species: sz
+      expected: {prediction: sz, confidence: 0.7341, total_detections: 1, species_counts: {sz: 1}}
+      source: dataset_real_test_split
+    - id: caso_008
+      input: {image: "data/splits/images/test/6455.jpg"}
+      ground_truth_species: sz
+      expected: {prediction: sz, confidence: 0.748, total_detections: 1, species_counts: {sz: 1}}
+      source: dataset_real_test_split
+    - id: caso_009
+      input: {image: "data/splits/images/test/11110.jpg"}
+      ground_truth_species: rd
+      expected: {prediction: rd, confidence: 0.5671, total_detections: 2, species_counts: {rd: 2}}
+      source: dataset_real_test_split
+    - id: caso_010
+      input: {image: "data/splits/images/test/12705.jpg"}
+      ground_truth_species: rd
+      expected: {prediction: rd, confidence: 0.6638, total_detections: 1, species_counts: {rd: 1}}
+      source: dataset_real_test_split
+    - id: caso_011
+      input: {image: "data/splits/images/test/634.jpg"}
+      ground_truth_species: rd
+      expected: {prediction: rd, confidence: 0.6561, total_detections: 1, species_counts: {rd: 1}}
+      source: dataset_real_test_split
+    - id: caso_012
+      input: {image: "data/splits/images/test/9408.jpg"}
+      ground_truth_species: rd
+      expected: {prediction: rd, confidence: 0.4917, total_detections: 2, species_counts: {rd: 2}}
+      source: dataset_real_test_split
+    - id: caso_013
+      input: {image: "data/splits/images/test/1084.jpg"}
+      ground_truth_species: tc
+      expected: {prediction: tc, confidence: 0.6825, total_detections: 1, species_counts: {tc: 1}}
+      source: dataset_real_test_split
+    - id: caso_014
+      input: {image: "data/splits/images/test/12389.jpg"}
+      ground_truth_species: tc
+      expected: {prediction: tc, confidence: 0.7233, total_detections: 4, species_counts: {tc: 4}}
+      source: dataset_real_test_split
+    - id: caso_015
+      input: {image: "data/splits/images/test/15174.jpg"}
+      ground_truth_species: tc
+      expected: {prediction: tc, confidence: 0.7074, total_detections: 1, species_counts: {tc: 1}}
+      source: dataset_real_test_split
+    - id: caso_016
+      input: {image: "data/splits/images/test/15454.jpg"}
+      ground_truth_species: tc
+      expected: {prediction: tc, confidence: 0.7499, total_detections: 1, species_counts: {tc: 1}}
+      source: dataset_real_test_split
+    - id: caso_017
+      input: {image: "data/splits/images/test/10890.jpg"}
+      ground_truth_species: os
+      expected: {prediction: os, confidence: 0.6966, total_detections: 1, species_counts: {os: 1}}
+      source: dataset_real_test_split
+    - id: caso_018
+      input: {image: "data/splits/images/test/15542.jpg"}
+      ground_truth_species: os
+      expected: {prediction: os, confidence: 0.7051, total_detections: 2, species_counts: {os: 2}}
+      source: dataset_real_test_split
+    - id: caso_019
+      input: {image: "data/splits/images/test/8424.jpg"}
+      ground_truth_species: os
+      expected: {prediction: os, confidence: 0.5906, total_detections: 1, species_counts: {os: 1}}
+      source: dataset_real_test_split
+    - id: caso_020
+      input: {image: "data/splits/images/test/968.jpg"}
+      ground_truth_species: os
+      expected: {prediction: none, confidence: 0.0, total_detections: 0, species_counts: {}}
+      source: dataset_real_test_split
+      note: "Falso negativo real del detector (ground truth tiene 'os' pero conf<0.28 para todas las cajas candidatas) — no es un bug de wiring, es exactamente el tipo de error que mide recall=0.856 en verification_report.md."
+    - id: caso_021
+      input: {image: "data/splits/images/test/9180.jpg"}
+      ground_truth_species: multi (sz+tc)
+      expected: {prediction: tc, confidence: 0.706, total_detections: 2, species_counts: {tc: 1, sz: 1}}
+      source: dataset_real_test_split
+    - id: caso_022
+      input: {image: "data/splits/images/test/7670.jpg"}
+      ground_truth_species: multi (sz+os)
+      expected: {prediction: sz, confidence: 0.6855, total_detections: 3, species_counts: {sz: 2, os: 1}}
+      source: dataset_real_test_split
+    - id: caso_023
+      input: {image: "data/splits/images/test/8892.jpg"}
+      ground_truth_species: multi (sz+rd)
+      expected: {prediction: rd, confidence: 0.6257, total_detections: 1, species_counts: {rd: 1}}
+      source: dataset_real_test_split
+      note: "Ground truth multi-especie (sz+rd) pero el detector solo recupera 1 caja 'rd' con conf>=0.28 — recall parcial real, coherente con recall=0.856 agregado, no un bug."
+
+known_issues:
+  - "[RESUELTO Ciclo 2, 2026-10-06] ENTREGA SIN DATASET: en el Ciclo 1, inbox/a07/codigo/ no
+     incluía ninguna imagen ni anotación real del dataset PestDataset (18.069 imágenes vía
+     Google Drive externo, nunca descargado); no existía data/raw, data/processed ni
+     data/splits, y los golden cases de aquel ciclo se extrajeron de salidas embebidas en
+     notebooks/predict.ipynb. El equipo de IA añadió después el dataset completo con su
+     procesamiento ya ejecutado (data/raw/{images,annos2}, data/processed/, data/splits/
+     {images,labels}/{train,val,test}: 12.597/2.700/2.700 imágenes reales) — ver sección
+     ACTUALIZACIÓN al inicio de este manifest. Los golden cases se reconstruyeron por
+     completo desde este dataset real (ver sección GOLDEN CASES arriba) y permitieron
+     detectar el bug crítico de decodificación de especie documentado en el known_issue de
+     ETL de esta misma lista."
+
+  - "requirements.txt ENTREGADO EN UTF-16LE CON CRLF — romperá pip install/pip-audit si se usa
+     tal cual; normalizar a UTF-8/LF primero."
+
+  - "[CORREGIDO Ciclo 2, 2026-10-06] BUG CRÍTICO EN EL PIPELINE DE ETL ORIGINAL
+     (src/data_processing/preprocess.py): convert_xmls_to_yolo_labels() asigna class_id a
+     cada caja según el ORDEN de config.yaml::valid_classes (cf=0, sz=1, rd=2, tc=3, os=4),
+     pero create_dataset_yaml() (llamada después, en el mismo pipeline,
+     src/main.py::data_processing()) recalculaba las clases por separado como
+     sorted(set(...)) de las clases vistas en los XML = [cf, os, rd, sz, tc] alfabético, y
+     escribía ESE orden en dataset.yaml::names — embebido por Ultralytics en el checkpoint
+     resultante como `model.names` al entrenar.
+
+     La conclusión original de este known_issue (Ciclo 1, sin dataset real disponible) era
+     INCORRECTA: afirmaba que esto 'no afecta a la inferencia del plugin ya integrado porque
+     el plugin lee los nombres directamente de results.names... fuente de verdad real'. Con
+     el dataset real ya disponible (data/splits/{images,labels}/test/, 2.700 imágenes), se
+     confirmó que results.names/model.names del best.pt servido ES la codificación
+     alfabética (incorrecta) — exactamente la misma inconsistencia, ya materializada en el
+     checkpoint de producción, no solo un riesgo de un reentrenamiento futuro.
+
+     Verificación cuantitativa (best.pt real, 500 imágenes reales de test, 100
+     estratificadas por especie, seed=42):
+       - decodificando con el `model.names` embebido (orden alfabético, el que usaba el
+         plugin hasta este ciclo): accuracy de especie = 195/500 = 39.0%
+       - decodificando con el orden real de entrenamiento (config.yaml: cf=0,sz=1,rd=2,
+         tc=3,os=4): accuracy de especie = 472/500 = 94.4%
+     model.val() sobre el split de test completo (2.700 imágenes) da mAP50=0.871/
+     precision=0.876/recall=0.856 — coherente con el 0.87/0.84/0.81 de la memoria,
+     confirmando que el detector (regresión de cajas) siempre fue correcto: el bug es
+     puramente de decodificación id→nombre, invisible a las métricas de detección
+     agnósticas a nombres, y nunca ejercitado por los tests unitarios (usan FakePlugin).
+
+     Corregido en dos sitios:
+     1. app/plugins/ml7_cereals_grain_pest_detection/constants.py — nueva constante
+        TRAINING_CLASS_ID_TO_CODE con el orden real (config.yaml), documentada con la
+        evidencia completa. postprocessing.py::yolo_results_to_dict ya NO usa
+        `results.names` para decodificar, solo esta constante.
+     2. inbox/a07/codigo/.../src/data_processing/preprocess.py::create_dataset_yaml() —
+        ahora recibe `classes` como parámetro (el mismo `valid_classes` de config.yaml que
+        ya usa convert_xmls_to_yolo_labels) en vez de recalcular sorted(set(...)) de los
+        XML, para que un reentrenamiento futuro desde cero con este código produzca un
+        checkpoint ya consistente. src/main.py actualizado para pasar ese parámetro.
+
+     No se ha reentrenado ningún checkpoint — el best.pt servido no cambia (las cajas que
+     detecta siguen siendo correctas), solo cambió qué nombre de especie se les asigna al
+     decodificar. Verificado end-to-end contra el servidor real (POST /predict) tras el
+     fix — ver outputs/a07/verification_report.md sección Ciclo 2."
+
+  - "DEVICE DE INFERENCIA: config/config.yaml fija model.device=0 (GPU) por defecto para
+     entrenamiento Y predictor.py::predict_folder() también usa model_cfg.get('device', 0),
+     es decir, el pipeline oficial de inferencia del equipo de IA usa GPU por defecto, no CPU.
+     El plugin ya integrado fuerza _DEVICE='cpu' con un comentario que afirma incorrectamente
+     que 'el source forzaba cpu' — ver auditoría/fix aplicado."
+
+  - "conf_threshold DE NEGOCIO: config/config.yaml::eval.conf=0.28 es el umbral oficial usado
+     en evaluate.py/validate_model() y es el valor que replica correctamente el plugin
+     (CONF_THRESHOLD=0.28 en constants.py). predictor.py::predict_folder(), en cambio, tiene un
+     fallback por defecto distinto (eval_cfg.get('conf', 0.001)) que NO se usa en la práctica
+     porque config.yaml siempre define eval.conf=0.28 — no es una discrepancia real, solo un
+     default de código muerto si faltara la clave."
+
+  - "imgsz NO SE PASABA EN EL PLUGIN YA INTEGRADO: predictor.py::predict_folder() pasa
+     imgsz=img_size (512, el tamaño de entrenamiento) explícitamente a model.predict(). El
+     plugin integrado NO pasaba imgsz en absoluto antes de esta sesión (Ultralytics usa 640 por
+     defecto) — ver auditoría/fix aplicado, bug de preprocesado real (clase 2 del audit)."
+
+  - "YOLO26n: el nombre usado en config.yaml/memoria ('yolo26n.pt') no es una arquitectura YOLO
+     pública estándar en ultralytics==8.4.6 bajo ese nombre exacto a fecha de esta integración;
+     no es relevante para el plugin porque éste carga directamente el checkpoint ya entrenado
+     (best.pt) vía YOLO(str(path)), sin depender del nombre del modelo base usado para el
+     fine-tuning original."

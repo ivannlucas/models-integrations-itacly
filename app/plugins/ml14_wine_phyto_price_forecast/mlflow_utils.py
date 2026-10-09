@@ -1,28 +1,49 @@
-"""MLflow helper for ml14 — download user-trained model from MLflow.
-
-ml14 has no retraining path today: train() raises TrainingNotSupportedError. The delivered
-scripts/train.py (src/training/compare_models.py::main()) does not accept any client-supplied
-data — it always re-reads the fixed bundled dataset and only exposes hyperparameter flags — so
-there is no user-trained-artifact format this plugin could ever download and load (see
-inbox/a14/manifest.yaml::training). This file exists to satisfy the repo-wide "every plugin
-ships mlflow_utils.py" convention, so a future real fine-tuning implementation has a
-consistent place to land, without inventing a download format that has no caller today.
-"""
+"""MLflow helpers for ml14 — retrained GRU bundles live only in their MLflow run."""
 from __future__ import annotations
 
 import logging
+import os
+import shutil
+import tempfile
+
+from app.domain.services.mlflow_tracker import BaseMLflowTracker, require_user_model
+from app.plugins.ml14_wine_phyto_price_forecast.constants import (
+    ARTIFACT_FOLDER_NAME,
+    MLFLOW_ARTIFACT_PATH,
+    MODEL_FILENAME,
+)
+from app.plugins.ml14_wine_phyto_price_forecast.model_loader import load_user_bundle
 
 logger = logging.getLogger(__name__)
 
 
+@require_user_model   # None or an artifact load error, with run_id → UserModelUnavailableError (422)
 def download_user_model_from_mlflow(run_id: str):
-    """Return None — no user-trained model format exists for ml14 (train() is unsupported).
+    """Download a retrained bundle (gru_model.pt + scalers.json) from MLflow.
 
-    Kept for interface consistency with every other plugin's mlflow_utils.py; predict_inline/
-    predict_batch never call this because mlflow_run_id has no effect on ml14 (there is no
-    user-retrained artifact it could ever point to).
+    Returns (bundle, temp_dir), or None if the run has no complete model.
+    Caller MUST shutil.rmtree(temp_dir) after inference — use try/finally.
     """
-    logger.warning(
-        "ml14 has no retraining path — ignoring mlflow_run_id=%s and using the fixed artifact.",
-        run_id,
-    )
+    tmp = tempfile.mkdtemp(prefix="mlflow_ml14_")
+    try:
+        local_path = BaseMLflowTracker(run_id).download_artifacts(tmp, artifact_path=MLFLOW_ARTIFACT_PATH)
+        if not local_path or not os.path.exists(os.path.join(local_path, MODEL_FILENAME)):
+            logger.warning("MLflow run_id=%s sin artefacto completo en '%s'", run_id, MLFLOW_ARTIFACT_PATH)
+            shutil.rmtree(tmp, ignore_errors=True)
+            return None
+        bundle = load_user_bundle(local_path)
+        logger.info("Downloaded user model from MLflow run_id=%s", run_id)
+        return bundle, tmp
+    except BaseException:   # e.g. a missing scalers.json: never leave the temp dir behind
+        shutil.rmtree(tmp, ignore_errors=True)
+        raise
+
+
+def upload_artifacts_to_mlflow(artifact_dir: str, mlflow_run_id: str, metrics: dict, params: dict) -> None:
+    """Log params and final metrics, then upload the retrained bundle under artifact_path="model"."""
+    tracker = BaseMLflowTracker(mlflow_run_id)
+    tracker.connect(mlflow_run_id)
+    tracker.log_params(params)
+    tracker.log_metrics({k: float(v) for k, v in metrics.items() if isinstance(v, (int, float))})
+    tracker.set_tags({"model_id": ARTIFACT_FOLDER_NAME})
+    tracker.upload_artifacts(artifact_dir, artifact_path=MLFLOW_ARTIFACT_PATH)
