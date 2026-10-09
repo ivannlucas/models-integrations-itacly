@@ -314,6 +314,10 @@ from app.plugins.ml14_wine_phyto_price_forecast.predict_dto import (
     PredictRequest as Ml14_Request,
     PredictResponse as Ml14_Response,
 )
+from app.plugins.ml14_wine_phyto_price_forecast.train_dto import (
+    TrainRequest as Ml14_TrainReq,
+    TrainResponse as Ml14TrainResp,
+)
 from app.plugins.ml15_wine_ipi_price_forecast.predict_dto import (
     PredictBatchResponse as Ml15BatchResp,
     PredictInlineResponse as Ml15InlineResp,
@@ -1901,6 +1905,17 @@ FAKE_FACTORIES: dict[str, tuple[Callable, Callable]] = {
 }
 
 
+def _ml14_train(plugin: FakePlugin, *, data_path: str) -> Ml14TrainResp:
+    """Fake train response for ml14 (GRU values of the delivered model_comparison.json)."""
+    return Ml14TrainResp(
+        detail="GRU reentrenada con el procedimiento del equipo de IA",
+        mae=1.699, mae_std=0.0269, rmse=2.2873, rmse_std=0.0268, mape_pct=1.3933, mape_pct_std=0.017,
+        r2=0.7108, r2_std=0.0068, direction_acc_pct=77.7, skill_score=0.6435, drift_rmse=2.5406,
+        naive_rmse=3.8856, beats_drift=True, n_train=830, n_test=211, epochs_run_seed_42=60,
+        n_seeds=3, training_time_s=20.0, mlflow_run_id="run-test-ml14", upload_warning=None,
+    )
+
+
 def _ml18_train(plugin: FakePlugin, *, data_path: str) -> Ml18TrainResp:
     """Fake train response for ml18 (values of the delivered metrics.json)."""
     return Ml18TrainResp(
@@ -1914,6 +1929,7 @@ def _ml18_train(plugin: FakePlugin, *, data_path: str) -> Ml18TrainResp:
 
 
 TRAIN_FACTORIES: dict[str, Callable] = {
+    "ml14-wine-phyto-price-forecast": _ml14_train,
     "ml18-meat-spatial-price-forecast": _ml18_train,
     "ml5-meat-cow-behaviour": _ml5_cow_train,
     "ml46-dairy-fouling-clog-detection": _ml46_dairy_train,
@@ -2266,6 +2282,8 @@ TEST_REGISTRY: list[ModelEntry] = [
         predict_request_type=Ml14_Request,
         predict_response_type=Ml14_Response,
         extra_predict_exceptions=(InsufficientDataError,),
+        train_request_type=Ml14_TrainReq,
+        train_response_type=Ml14TrainResp,
     ),
 ]
 

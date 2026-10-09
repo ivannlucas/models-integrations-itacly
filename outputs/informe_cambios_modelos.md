@@ -494,7 +494,7 @@ Los tests nuevos de esta ronda llaman al código real:
 La correctitud de cada modelo sigue respaldada por su informe de verificación contra el servidor
 real.
 
-## 10. Anexo (8 de octubre de 2026): integración de ml13 y ml18 desde `main`
+## 10. Anexo (8 de octubre de 2026): ml13, ml14 y ml18 (integrados desde `main`)
 
 ### 10.1 ml13 (`ml13-wine-price-fluctuation-prediction`)
 
@@ -548,12 +548,44 @@ aprendidos. Ahora `/train` funciona:
 - ml13, ml18 y ml26 añadidos a `test_user_model_isolation.py`.
 - Fichas técnica y funcional regeneradas.
 
-**ml14** usa el mismo argumento para no permitir el reentrenamiento; queda pendiente de revisar.
 
-### 10.3 S3
+### 10.3 ml14 (`ml14-wine-phyto-price-forecast`): verificado y `/train` habilitado
 
-Ni ml13 ni ml18 tienen artefactos en `artifacts/fixed/<ARTIFACT_FOLDER_NAME>/`, así que en
+El código subido es la entrega aprobada: los hashes de `gru_model.pt` y del dataset coinciden con
+los del manifest.
+
+**Inferencia.** El plugin coincide con el predictor original en 40 ventanas repartidas por todo el
+histórico (diferencia máxima 1e-6).
+
+**Reentrenamiento.** Antes no estaba disponible (501) con el mismo argumento que ml18, la ruta fija
+del dataset. `training.py` porta la parte GRU de `compare_models.py`:
+
+- El `/train` del plugin y el original re-ejecutado reproducen `model_comparison.json` a 4
+  decimales (RMSE 2,2873 ± 0,0268).
+- El modelo de la semilla 42 es idéntico al del original re-ejecutado y difiere del entregado en
+  2e-7.
+- Tarda unos 15 s.
+- Acepta el dataset de modelado o las series en bruto de `/predict`.
+
+**Hallazgos nuevos.**
+
+- El early stopping del original se decide sobre el test, así que las métricas son optimistas. Se
+  reproduce tal cual y queda documentado.
+- La evaluación mensual del propio equipo confirma que la GRU mejora al Drift (RMSE 2,55 frente a
+  2,72).
+
+**Otros cambios.**
+
+- `/stats` incluye los datos del run.
+- Tests nuevos: `test_ml14_training.py`.
+- ml14 añadido a `test_user_model_isolation.py`.
+- Fichas regeneradas.
+
+### 10.4 S3
+
+Ni ml13, ni ml14, ni ml18 tienen artefactos en `artifacts/fixed/<ARTIFACT_FOLDER_NAME>/`, así que en
 despliegue arrancarían con `loaded=false`. Los artefactos válidos son:
 
 - ml13: `inbox/a13/codigo/models/prod/`.
+- ml14: `inbox/a14/codigo/models/artifacts/gru_model.pt` y `data/processed/final_dataset_for_modeling.csv`.
 - ml18: `inbox/a18/codigo/models/artifacts/best_gru_df_2008_con_renta/`.

@@ -434,7 +434,7 @@ def ml46(monkeypatch, tmp_path):
     }
 
 
-# ── ml13 / ml18 / ml26 (integrated from main) ───────────────────────────────
+# ── ml13 / ml14 / ml18 / ml26 (integrated from main) ───────────────────────────────
 
 @pytest.fixture
 def ml13(monkeypatch, tmp_path):
@@ -456,6 +456,29 @@ def ml13(monkeypatch, tmp_path):
     instance = cls()
     instance.load()
     csv = _csv_with(tmp_path, ["price_red"])
+    return probe, {
+        "predict_inline": lambda run_id: instance.predict_inline(features={"rows": []}, mlflow_run_id=run_id),
+        "predict_batch": lambda run_id: instance.predict_batch(data_path=csv, mlflow_run_id=run_id),
+    }
+
+
+@pytest.fixture
+def ml14(monkeypatch, tmp_path):
+    from app.plugins.ml14_wine_phyto_price_forecast import plugin
+
+    probe = Probe()
+    monkeypatch.setattr(plugin.model_loader, "load_artifact_bundle", lambda: {"model": _FakeModel(BASE, probe)})
+    monkeypatch.setattr(plugin, "download_user_model_from_mlflow",
+                        lambda run_id: ({"model": _FakeModel(f"USER-{run_id}", probe)}, tempfile.mkdtemp()))
+
+    def run_inference(bundle, _rows):
+        bundle["model"].probe.touch(bundle["model"].name)
+        raise _Stop
+
+    monkeypatch.setattr(plugin.preprocessing, "run_inference", run_inference)
+    instance = plugin.Ml14WinePhytoPriceForecastPlugin()
+    instance.load()
+    csv = _csv_with(tmp_path, ["date"])
     return probe, {
         "predict_inline": lambda run_id: instance.predict_inline(features={"rows": []}, mlflow_run_id=run_id),
         "predict_batch": lambda run_id: instance.predict_batch(data_path=csv, mlflow_run_id=run_id),
@@ -514,7 +537,7 @@ def ml26(monkeypatch, tmp_path):
 CASES = [("ml9", "predict_inline"), ("ml9", "predict_batch"),
          ("ml2", "predict_inline"), ("ml2", "predict_batch"), ("ml2", "stats")] + [
     (name, method)
-    for name in ("ml4", "ml8", "ml13", "ml17", "ml18", "ml21", "ml25", "ml26", "ml30", "ml34", "ml35", "ml46")
+    for name in ("ml4", "ml8", "ml13", "ml14", "ml17", "ml18", "ml21", "ml25", "ml26", "ml30", "ml34", "ml35", "ml46")
     for method in ("predict_inline", "predict_batch")
 ]
 

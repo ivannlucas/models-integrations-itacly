@@ -179,24 +179,42 @@ constraints: {}
 # implementarse como excepción de dominio (rechazo 4xx), no como un resultado más.
 
 training:
-  supported: false
-  # scripts/train.py (== src/training/compare_models.py::main()) NO acepta ningún CSV/ruta de
-  # datos de entrada -- su argparse solo expone hiperparámetros (--horizon, --epochs, --seq_len,
-  # --test_ratio, --hidden_size, --batch_size). Internamente siempre relee la ruta fija
-  # data/processed/final_dataset_for_modeling.csv. Es decir: no existe ninguna forma de
-  # reentrenar con datos nuevos aportados por un cliente -- solo se puede re-ejecutar la MISMA
-  # comparación de arquitecturas (XGBoost/GRU/LSTM, 3 semillas, hasta 150 épocas) sobre el MISMO
-  # histórico ya bundled, con otros hiperparámetros. Exponer esto como "reentrenamiento por
-  # usuario" en un endpoint train() sería engañoso: no incorporaría ningún dato nuevo del cliente
-  # y tardaría varios minutos en ejecutarse. Por eso training.supported=false, siguiendo la regla
-  # del skill de no inventar un procedimiento de fine-tuning que el equipo de IA no definió.
-  # mlflow_utils.py se implementa igualmente sin excepción (regla del proyecto), como stub sin
-  # reentrenamiento real disponible.
-  target_column: null
-  required_columns: null
-  hyperparams: null
-  metrics_returned: null
-  source: codigo_entrenamiento (ausencia de contrato de datos de entrada confirmada leyendo src/training/compare_models.py::main())
+  supported: true
+  # [CORREGIDO 2026-10-08] Antes supported=false porque compare_models.py::main() lee una ruta fija.
+  # Con el criterio de plugin-integration eso no lo impide: el motor servido es una GRU con pesos
+  # aprendidos y el procedimiento es portable a un CSV del cliente (como ml23 y ml18). Port en
+  # app/plugins/ml14_wine_phyto_price_forecast/training.py (solo la GRU seleccionada; XGBoost y LSTM
+  # eran la comparativa). Verificado con el dataset entregado, en CPU:
+  #   - el original re-ejecutado y el plugin reproducen model_comparison.json a 4 decimales
+  #     (GRU RMSE 2,2873 ± 0,0268, MAE 1,699, R² 0,7108, skill 0,6435; Drift 2,5406);
+  #   - el modelo de la semilla 42 del plugin es idéntico al del original re-ejecutado (diferencia 0)
+  #     y difiere del gru_model.pt entregado en 2e-7; predice 121,394124 en caso_001, igual que el base.
+  # El texto anterior (supported=false) argumentaba que no había forma de aportar datos nuevos.
+  source: codigo_entrenamiento   # src/training/compare_models.py (prepare_horizon_dataset, split_temporal, train_rnn, train_rnn_multi_seed) + config/config.py
+  input_schema: >
+    CSV semanal (domingos) en el formato de data/processed/final_dataset_for_modeling.csv (FECHA + 39
+    features) o las series en bruto de /predict (date + PROTECCION_FITO, CARBURANTES, COPPER_EUR_TON,
+    GAS_EUR_MMBTU, COIL_EUR_BARRIL, DEXUSEU). En bruto pasa por el mismo feature engineering de la
+    inferencia, que descarta las 12 primeras semanas (calentamiento de lags) que el dataset entregado sí
+    conserva.
+  target_column: PROTECCION_FITO   # objetivo derivado: residuo a 16 semanas sobre el baseline Drift
+  hyperparams:   # config/config.py + compare_models.py::train_rnn
+    horizon_weeks: 16
+    seq_len: 12
+    test_ratio: 0.2
+    hidden_size: 64
+    num_layers: 2
+    dropout: 0.3
+    epochs: 150
+    batch_size: 32
+    optimizer: {name: Adam, lr: 0.001, weight_decay: 0.00001}
+    scheduler: {name: ReduceLROnPlateau, factor: 0.5, patience: 10}
+    early_stopping_patience: 20
+    grad_clip: 1.0
+    seeds: [42, 43, 44]   # el modelo guardado es siempre el de la semilla 42
+  metrics_returned: [mae, rmse, mape_pct, r2 (media ± std de 3 semillas), direction_acc_pct, skill_score, drift_rmse, naive_rmse, beats_drift, n_train, n_test]
+  duracion_estimada: "~15 s en CPU con el dataset completo (3 semillas)"
+  persistencia: "Solo MLflow (artifact_path=model: gru_model.pt + scalers.json). El modelo base nunca se sustituye."
 
 metrics_reported:
   dataset: test_holdout (split temporal único 80/20, sin partición de validation separada)
@@ -362,6 +380,23 @@ golden_cases:
     note: "Rechazo controlado, no una excepción no manejada -- debe mapearse a un 422 de dominio en el plugin, no a un 500."
 
 known_issues:
+  - "[NUEVO 2026-10-08] El early stopping y la restauración de los mejores pesos de
+     compare_models.py::train_rnn se deciden con la pérdida sobre las secuencias de TEST (no hay
+     partición de validación). Las métricas de test de model_comparison.json (y las que devuelve
+     /train, que reproduce el procedimiento tal cual) son por tanto optimistas. Se mantiene igual para
+     que el modelo reentrenado sea comparable con el entregado; corregirlo cambiaría el procedimiento
+     del equipo de IA. Es coherente con el split único 80/20 sin validación ya documentado en
+     metrics_reported."
+  - "[NUEVO 2026-10-08] El código entregado incluye reports/interpolation/ con una evaluación mensual
+     anclada a la serie MAPA original (sin interpolar a semanas): GRU RMSE 2,550 / MAE 1,791 frente a
+     Drift 2,720 / 2,084 en 49 meses (2021-10 a 2025-10). La GRU sigue mejorando al Drift sin la
+     interpolación semanal. reports/error_analysis/ añade que los errores de GRU y Drift están muy
+     correlados (0,88) y que comparten el 59 % del top-10 % de errores: la mejora no elimina el riesgo
+     en cambios bruscos. No es la carpeta reports/audit/ de la copia no oficial."
+  - "[NUEVO 2026-10-08] s3://<STORAGE_BUCKET>/artifacts/fixed/ml14_wine_phyto_price_forecast/ no existe
+     (listado de solo lectura). Hay que subir inbox/a14/codigo/models/artifacts/gru_model.pt y
+     data/processed/final_dataset_for_modeling.csv (el plugin reajusta los scalers desde él). Acción
+     humana."
   - "CORREGIDO (hallazgo post-integración, detectado por QA): si el cliente incluía un campo
      extra no documentado (p. ej. 'comment', una nota de texto) en ALGUNAS filas del histórico
      pero no en todas, ese campo se colaba como columna más en el DataFrame interno y el

@@ -298,6 +298,10 @@ from app.plugins.ml14_wine_phyto_price_forecast.predict_dto import (
     PredictRequest as Ml14_Request,
     PredictResponse as Ml14_Response,
 )
+from app.plugins.ml14_wine_phyto_price_forecast.train_dto import (
+    TrainRequest as Ml14_TrainReq,
+    TrainResponse as Ml14_TrainResp,
+)
 
 from app.plugins.ml26_wine_sulfite_gru_pso_forecast.exceptions import InvalidWineryInputError
 from app.plugins.ml26_wine_sulfite_gru_pso_forecast.plugin import Ml26WineSulfiteGruPsoForecastPlugin
@@ -665,8 +669,8 @@ REGISTRY: list[ModelEntry] = [
         predict_request_type=Ml14_Request,
         predict_response_type=Ml14_Response,
         extra_predict_exceptions=(InsufficientDataError,),
-        # train_request_type/train_response_type omitidos: training.supported=false — ver
-        # inbox/a14/manifest.yaml::training. train() lanza TrainingNotSupportedError (501).
+        train_request_type=Ml14_TrainReq,
+        train_response_type=Ml14_TrainResp,
     ),
     ModelEntry(
         model_id="ml26-wine-sulfite-gru-pso-forecast",
