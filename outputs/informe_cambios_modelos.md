@@ -494,7 +494,7 @@ Los tests nuevos de esta ronda llaman al código real:
 La correctitud de cada modelo sigue respaldada por su informe de verificación contra el servidor
 real.
 
-## 10. Anexo (8-9 de octubre de 2026): ml13, ml14, ml18 y ml26 (integrados desde `main`)
+## 10. Anexo (8-10 de octubre de 2026): ml13, ml14, ml18, ml26 y ml41
 
 ### 10.1 ml13 (`ml13-wine-price-fluctuation-prediction`)
 
@@ -610,12 +610,53 @@ nunca se commiteó. También se han generado `datos_a26.json`, `datos_a26_funcio
 técnica y funcional (plantilla paramétrica) y `a26_metadatos.docx` (plantilla corporativa). En el
 manifest se corrige KI-04 y se añade KI-13 (artefactos ausentes en S3).
 
-### 10.5 S3
+### 10.5 ml41 (`ml41-meat-curing-machinery-acoustic-anomaly`): `/train` corregido, verificado y documentado
 
-Ni ml13, ni ml14, ni ml18, ni ml26 tienen artefactos en `artifacts/fixed/<ARTIFACT_FOLDER_NAME>/`, así que en
+Con el código original en `inbox/a41/codigo/` (los 48 checkpoints Audio-MAE y los 48 del baseline,
+sin audio) y la memoria v1.4:
+
+**Inferencia y umbrales verificados frente al original.**
+
+- Los 48 umbrales del plugin coinciden con `reports/table_auc_por_caso.csv`.
+- 144 casos (48 combinaciones × 3 WAV sintéticos), en CPU: espectrograma idéntico, `maha_score` con
+  diferencia relativa ≤ 4,8e-7 y etiqueta idéntica.
+- Matiz al manifest: `maha_score` no es determinista al bit, porque el encoder baraja parches incluso
+  con `mask_ratio=0`. La variación es ≤ 6e-7 en CPU y llega a 1,7e-4 entre CPU y GPU.
+
+**`/train` no era el procedimiento del equipo de IA.**
+
+- **Antes:** hacía un ajuste fino del checkpoint base con su normalización, un split
+  `default_rng`, la semilla fijada después de crear el modelo y `drop_last` condicional.
+- **El original:** `run_training` entrena siempre un modelo nuevo, o se salta el entrenamiento si ya
+  existe uno.
+- **Ahora:** es un port literal con el mismo split (`RandomState(42)`, 80/20), normalización sobre
+  el train, semilla antes de crear el modelo y `drop_last=True`.
+- **Resultado:** con los mismos datos, pesos idénticos al original (diferencia 0).
+- **Coste:** en CPU, 1-1,5 h por combinación (el original tardaba 155 s en GPU).
+
+**Cierre con el dataset MIMII completo (mismo día).**
+
+- **Golden cases: 22/22** contra el servidor real. El audio de `sample_data/` resultó ser el de
+  `-6_dB_fan/id_00`, no el de 0 dB; un barrido de las 48 carpetas lo localizó. Corregido en el
+  manifest.
+- **Métricas de las 48 combinaciones** recalculadas con el plugin sobre el test real: AUC medio
+  idéntico (0,7720), diferencia máxima por combinación 2,9e-4 y 48/48 con FNR ≤ 10 %.
+- **Entrenamiento en GPU.** El original usa autocast bf16 y GradScaler, y el plugin entrenaba en fp32;
+  portado. Con eso, el reentrenamiento real de fan/id_00/0_dB en GPU da lo mismo que el original a 4
+  decimales (val_loss 0,7400, AUC 0,7896, umbral 7,2069), en unos 10 minutos.
+- **Pendiente:** solo la acción operativa de subir los 48 directorios `vit_tiny_*` a S3.
+
+**Documentación.** Fichas técnica y funcional (plantilla paramétrica), `a41_metadatos.docx`,
+`datos_a41*.json`, manifest (training, determinismo de `maha_score`, memoria v1.4, S3) y sección
+nueva en el informe de verificación.
+
+### 10.6 S3
+
+Ni ml13, ni ml14, ni ml18, ni ml26, ni ml41 tienen artefactos en `artifacts/fixed/<ARTIFACT_FOLDER_NAME>/`, así que en
 despliegue arrancarían con `loaded=false`. Los artefactos válidos son:
 
 - ml13: `inbox/a13/codigo/models/prod/`.
 - ml14: `inbox/a14/codigo/models/artifacts/gru_model.pt` y `data/processed/final_dataset_for_modeling.csv`.
 - ml18: `inbox/a18/codigo/models/artifacts/best_gru_df_2008_con_renta/`.
 - ml26: `inbox/a26/codigo/models/artifacts/gru_pso.pkl` y `best_model.json`.
+- ml41: los 48 directorios `vit_tiny_*` de `inbox/a41/codigo/models/artifacts/`.

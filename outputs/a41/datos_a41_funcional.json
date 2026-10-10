@@ -1,0 +1,101 @@
+{
+  "model_id": "a41",
+  "model_slug": "meat-curing-machinery-acoustic-anomaly",
+  "fecha": "Octubre 2026",
+  "model_key": "ml41-meat-curing-machinery-acoustic-anomaly",
+  "version": "1.0.0 (memoria v1.4)",
+  "que_no_responde": "No te dice qué pieza falla ni por qué: indica si el sonido de la máquina se aleja de su funcionamiento normal.",
+  "entradas_contexto": "Necesitas una grabación de unos 10 segundos del sonido de la máquina y saber qué equipo es: tipo, unidad y en qué nivel de ruido de fondo trabaja.",
+  "kpis": [
+    {
+      "kpi": "No dejar pasar averías",
+      "valor_umbral": "detectar al menos 9 de cada 10 (FNR ≤ 10 %)",
+      "descripcion": "CUMPLE en laboratorio en las 48 combinaciones."
+    },
+    {
+      "kpi": "Distinguir sonido normal de anómalo",
+      "valor_umbral": "AUC claramente por encima de 0,5",
+      "descripcion": "CUMPLE en ventilador, bomba y corredera (0,83-0,88 de media); NO en válvula (0,53)."
+    },
+    {
+      "kpi": "Falsas alarmas asumibles",
+      "valor_umbral": "que no saturen al equipo de mantenimiento",
+      "descripcion": "Alrededor de una alerta por cada dos grabaciones normales: apto como triaje, no para funcionamiento autónomo."
+    }
+  ],
+  "ejemplo_interpretacion": "Si para el ventilador id_00 en la configuración de 0 dB el servicio devuelve una distancia de 8,2 con umbral 6,61 y etiqueta 1, el sonido se ha alejado de lo normal y conviene programar una inspección. Con una distancia de 4,0 la etiqueta sería 0 y la máquina suena como en funcionamiento normal.",
+  "margen_error": "Está calibrado para no dejar pasar más de 1 de cada 10 averías en las pruebas de laboratorio. El precio es que alrededor de la mitad de las grabaciones de máquinas sanas también dan alerta, y en las válvulas muchas más. Una alerta significa revisar, no avería confirmada.",
+  "revisar_manualmente": [
+    "Cualquier alerta en una válvula: el modelo apenas distingue sus fallos.",
+    "Equipos nuevos, recién reparados o con cambios de carga: su sonido normal puede haber cambiado.",
+    "Grabaciones mucho más cortas o largas de 10 segundos, o hechas desde otra posición del micrófono.",
+    "Un aumento sostenido de alertas en periodos en que la máquina funciona bien: puede ser deriva y conviene recalibrar."
+  ],
+  "que_no_hace": [
+    "No diagnostica el tipo de avería ni la pieza afectada.",
+    "No sustituye el mantenimiento preventivo ni la inspección del técnico.",
+    "No funciona con máquinas distintas de las 4 tipologías y 16 unidades entrenadas.",
+    "No sustituye automáticamente el modelo base al reentrenar: el modelo reentrenado solo se usa si se indica su ejecución de MLflow."
+  ],
+  "puede_equivocarse": "Sí. Las cifras de acierto se obtuvieron con grabaciones de laboratorio y ruido añadido artificialmente; su traslado al secadero real no está validado y requiere recalibrar con audio de la propia máquina antes de usarlo en producción. Aun en laboratorio genera muchas falsas alarmas y en válvulas es poco fiable. Úsalo como primer filtro para decidir qué equipos inspeccionar, nunca como única garantía.",
+  "descripcion": "Herramienta que escucha una grabación del sonido de una máquina del secadero (ventilador, bomba, corredera o válvula) y avisa si suena distinto de cuando funciona bien. Sirve para detectar a tiempo averías que pueden estropear lotes de embutido en curación.",
+  "objetivo": "Que el equipo de mantenimiento se entere pronto de que un equipo empieza a fallar, antes de que la avería afecte a la temperatura o la humedad del secadero. Está ajustado para no dejar pasar averías, aunque a cambio da bastantes avisos de más: es preferible inspeccionar una máquina sana que perder un lote.",
+  "caso_uso": "Grabas unos 10 segundos del sonido de la máquina y lo envías indicando qué equipo es (tipo, unidad) y en qué condiciones de ruido de fondo trabaja. Recibes una puntuación de cuánto se aleja su sonido del funcionamiento normal y una indicación clara: normal o revisar. También puedes enviar varias grabaciones a la vez en un archivo comprimido con una lista que indique a qué equipo corresponde cada una.",
+  "inputs": [
+    {
+      "nombre": "Grabación del sonido",
+      "descripcion": "Unos 10 segundos de audio de la máquina en funcionamiento (archivo WAV)."
+    },
+    {
+      "nombre": "Tipo de máquina",
+      "descripcion": "Ventilador, bomba, corredera o válvula."
+    },
+    {
+      "nombre": "Unidad",
+      "descripcion": "Cuál de las cuatro unidades entrenadas de ese tipo es (cada una tiene su propio modelo)."
+    },
+    {
+      "nombre": "Ruido de fondo",
+      "descripcion": "Nivel de ruido de la nave más parecido a las pruebas: alto, medio o bajo. Se elige una vez al poner el sistema en marcha, no en cada grabación."
+    }
+  ],
+  "outputs": [
+    {
+      "nombre": "Puntuación de anomalía",
+      "descripcion": "Cuánto se aleja el sonido del funcionamiento normal de esa máquina.",
+      "interpretacion": "Cuanto más alta, más distinto suena; se compara con el umbral."
+    },
+    {
+      "nombre": "Umbral",
+      "descripcion": "Valor a partir del cual se considera que la máquina debe revisarse; cada equipo tiene el suyo.",
+      "interpretacion": "Está ajustado para no dejar pasar más de 1 de cada 10 averías en las pruebas."
+    },
+    {
+      "nombre": "Resultado",
+      "descripcion": "Normal (0) o revisar (1).",
+      "interpretacion": "Revisar significa programar una inspección, no que la avería esté confirmada."
+    }
+  ],
+  "limitaciones": [
+    {
+      "tipo": "Probado en laboratorio",
+      "descripcion": "Se entrenó y evaluó con grabaciones de laboratorio con ruido añadido. Antes de usarlo en el secadero hay que ajustarlo con grabaciones de la propia máquina y comprobar que funciona."
+    },
+    {
+      "tipo": "Válvulas",
+      "descripcion": "Con las válvulas el modelo casi no distingue lo normal de lo anómalo y da muchas alertas falsas. No lo uses solo para válvulas."
+    },
+    {
+      "tipo": "Muchas alertas",
+      "descripcion": "Para no dejar pasar averías, alrededor de la mitad de las grabaciones de máquinas sanas también dan alerta. Úsalo para decidir qué revisar primero."
+    },
+    {
+      "tipo": "Necesita grabaciones limpias de referencia",
+      "descripcion": "Si al entrenarlo la máquina ya tenía un fallo empezando, el modelo lo aprende como normal y deja de detectarlo."
+    },
+    {
+      "tipo": "Reentrenar lleva tiempo",
+      "descripcion": "Volver a entrenar un equipo con grabaciones nuevas tarda unos 10 minutos con tarjeta gráfica y más de una hora sin ella. El modelo reentrenado no sustituye al original."
+    }
+  ]
+}

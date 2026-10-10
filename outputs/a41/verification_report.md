@@ -7,6 +7,88 @@
 completos) pero nunca se había generado este informe — gap detectado en una auditoría
 repo-wide del estado de `inbox/`/`outputs/` de los 25 plugins registrados.
 
+> **[CERRADO 2026-10-10] Verificación con el dataset MIMII completo.** Ya están en `inbox/a41/codigo/data/`
+> los 54.057 WAV crudos y los `.npy` procesados de train/val/test.
+>
+> **Golden cases (Parte B): 22/22 ✅.** Ejecutados contra el endpoint HTTP real. Origen corregido: el audio de
+> `sample_data/` son los ficheros homónimos de `-6_dB_fan/id_00`, no de `0_dB_fan/id_00`. Con los de 0 dB
+> fallaban los 22, con diferencias del 10-120 %; un barrido de las 48 carpetas localizó la de −6 dB. Los
+> valores esperados corresponden a ese audio puntuado con el modelo de `fan/id_00/0_dB`.
+>
+> | Caso | Fichero | Etiqueta real | maha esperado | maha obtenido | Δ rel. | Etiqueta | ¿OK? |
+> |---|---|---|---|---|---|---|---|
+> | caso_001 | abnormal/00000000.wav | 1 | 15.2161 | 15.2191 | 2.0e-04 | 1 | ✅ |
+> | caso_002 | abnormal/00000001.wav | 1 | 12.2056 | 12.2023 | 2.7e-04 | 1 | ✅ |
+> | caso_003 | abnormal/00000002.wav | 1 | 9.3580 | 9.3582 | 1.7e-05 | 1 | ✅ |
+> | caso_004 | abnormal/00000003.wav | 1 | 8.2902 | 8.2919 | 2.0e-04 | 1 | ✅ |
+> | caso_005 | abnormal/00000004.wav | 1 | 16.2408 | 16.2388 | 1.2e-04 | 1 | ✅ |
+> | caso_006 | abnormal/00000005.wav | 1 | 10.3027 | 10.3040 | 1.2e-04 | 1 | ✅ |
+> | caso_007 | abnormal/00000006.wav | 1 | 6.7848 | 6.7856 | 1.3e-04 | 1 | ✅ |
+> | caso_008 | abnormal/00000007.wav | 1 | 9.7266 | 9.7263 | 3.1e-05 | 1 | ✅ |
+> | caso_009 | abnormal/00000008.wav | 1 | 6.8919 | 6.8922 | 3.8e-05 | 1 | ✅ |
+> | caso_010 | abnormal/00000009.wav | 1 | 13.6871 | 13.6875 | 3.0e-05 | 1 | ✅ |
+> | caso_011 | abnormal/00000010.wav | 1 | 13.2500 | 13.2477 | 1.8e-04 | 1 | ✅ |
+> | caso_012 | normal/00000000.wav | 0 | 6.1289 | 6.1290 | 3.0e-05 | 0 | ✅ |
+> | caso_013 | normal/00000001.wav | 0 | 12.8497 | 12.8506 | 7.6e-05 | 1 | ✅ |
+> | caso_014 | normal/00000002.wav | 0 | 5.9723 | 5.9706 | 2.8e-04 | 0 | ✅ |
+> | caso_015 | normal/00000003.wav | 0 | 12.3090 | 12.3100 | 7.9e-05 | 1 | ✅ |
+> | caso_016 | normal/00000004.wav | 0 | 10.7194 | 10.7193 | 1.4e-05 | 1 | ✅ |
+> | caso_017 | normal/00000005.wav | 0 | 11.6504 | 11.6496 | 7.3e-05 | 1 | ✅ |
+> | caso_018 | normal/00000006.wav | 0 | 8.3878 | 8.3890 | 1.4e-04 | 1 | ✅ |
+> | caso_019 | normal/00000007.wav | 0 | 8.5015 | 8.5019 | 4.0e-05 | 1 | ✅ |
+> | caso_020 | normal/00000008.wav | 0 | 17.2392 | 17.2396 | 2.6e-05 | 1 | ✅ |
+> | caso_021 | normal/00000009.wav | 0 | 11.0048 | 11.0024 | 2.1e-04 | 1 | ✅ |
+> | caso_022 | normal/00000010.wav | 0 | 10.0492 | 10.0473 | 1.9e-04 | 1 | ✅ |
+>
+> Recall 1,0 y FPR 0,818 (9 falsas alarmas en 11 normales), como declaraba el manifest. Tolerancia: etiqueta
+> exacta y `maha_score` ≤ 0,5 %; la diferencia máxima es 2,8e-4, en GPU.
+>
+> | Comprobación con datos reales | Resultado |
+> |---|---|
+> | Métricas de las 48 combinaciones con el plugin (normales de val frente a anómalos de test, `.npy` originales, unos 29.000 espectrogramas, GPU) frente a `table_auc_por_caso.csv` | AUC máx. Δ 2,9e-4, media idéntica (0,7720); FNR 0,0912 frente a 0,0909; FPR 0,4684 idéntico; 48/48 con FNR ≤ 10 %; FNR igual en 44/48 (4 difieren en una muestra); umbrales a ≤ 1,5 % |
+> | Reentrenamiento real de `fan/id_00/0_dB` en GPU: plugin (desde los WAV crudos) frente a `run_training` original (desde los `.npy`) | **Iguales a 4 decimales**: best_val_loss 0,7400; AUC Maha 0,7896; umbral 7,2069; recall 0,9017; auc_mse 0,4221; 808/203 |
+> | Ese reentrenamiento frente al modelo entregado | val_loss 0,7400 frente a 0,7401; AUC 0,7896 frente a 0,7585. La diferencia es variación del propio original entre ejecuciones en GPU |
+>
+> **Corregido además.** En CUDA el original entrena con autocast bf16 y GradScaler, y el plugin entrenaba en
+> fp32. Ahora lo hace igual (solo en CUDA). Sin este cambio, el reentrenamiento en GPU del plugin no habría
+> coincidido con el del original.
+>
+> **Estado: LISTO PARA PR.** Solo queda la acción operativa de subir los 48 directorios `vit_tiny_*` a S3.
+> Tests: 909 passed; flake8 limpio; pylint 9,33/10.
+
+> **[ACTUALIZADO 2026-10-10] Reanálisis con el código original (`inbox/a41/codigo/`, memoria v1.4).**
+> Llegaron los 48 checkpoints Audio-MAE y los 48 del baseline, pero ningún audio: `data/` está vacío y
+> `sample_data/` no está en el repo ni en este equipo.
+>
+> | Comprobación | Resultado |
+> |---|---|
+> | Umbrales del plugin (`thresholds.py`) frente a `reports/table_auc_por_caso.csv` | 48/48 idénticos; las 48 combinaciones cumplen FNR ≤ 10 % |
+> | Inferencia plugin frente al original (`wav_to_logmel` + `load_model` + `mahalanobis_scores`), 48 combinaciones × 3 WAV sintéticos (10 s a 16 kHz, 5 s con relleno, 44,1 kHz estéreo), CPU | Espectrograma idéntico; `maha_score` con diferencia relativa ≤ 4,8e-7; `predicted_label` idéntico en 144/144 |
+> | Arquitectura y pesos | `state_dict` y módulos idénticos; mismo CLS con la misma entrada y la misma semilla |
+> | `/train` frente a `run_training` original (`force=True`, 2 épocas, 40 WAV sintéticos de fan, CPU) | **Pesos idénticos (diferencia 0)**, misma normalización (−18,055 / 4,788), mismo split (32/8) y mismo `best_val_loss` |
+> | Servidor real con los checkpoints en `artifacts/` local | `/health` loaded; `/predict` inline 200 (umbral de la tabla); `/train` sin run 422 |
+>
+> **Corregido en `/train`.** Hacía un ajuste fino de los pesos del checkpoint base, con su normalización.
+> El original nunca lo hace: `run_training` se salta el entrenamiento si ya existe `best.pth` y, con
+> `force=True`, entrena un modelo nuevo. Además se corrigieron tres detalles:
+> - el split usaba `default_rng` en vez de `RandomState(42)`;
+> - la semilla se fijaba después de crear el modelo;
+> - `drop_last` era condicional.
+>
+> El nuevo `/train` reproduce el original al bit. En CPU tarda unas 1-1,5 h por combinación con datos
+> reales; el original tardaba 155 s en GPU.
+>
+> **Precisión sobre `maha_score`.** No es determinista al bit: con `mask_ratio=0` el encoder sigue
+> barajando parches. La variación entre ejecuciones es ≤ 6e-7 relativo. Entre CPU y GPU llega a 1,7e-4,
+> lo que solo importa con un score justo en el umbral.
+>
+> **Sigue pendiente:**
+> - los 22 golden cases: hace falta `sample_data/` (fan/id_00/0_dB);
+> - subir los 48 directorios `vit_tiny_*` a S3.
+>
+> Tests: 909 passed; flake8 limpio; pylint 9,32/10 (igual que antes del cambio). El texto de abajo es
+> la revisión del 2026-10-02.
+
 ## Hallazgo crítico — los checkpoints NO existen en el S3 de producción
 
 Arrancando el servicio real contra el bucket S3 configurado en `.env`

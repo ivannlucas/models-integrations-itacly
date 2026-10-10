@@ -38,7 +38,10 @@ from app.plugins.ml41_meat_curing_machinery_acoustic_anomaly.constants import (
     METRICS_REPORTED,
     MODEL_ID,
     SNRS,
+    TRAINING_COMMON,
     TRAINING_HYPERPARAMS_BY_MACHINE,
+    TRAINING_SPLIT_RATIO,
+    TRAINING_SPLIT_SEED,
     VERSION,
 )
 from app.plugins.ml41_meat_curing_machinery_acoustic_anomaly.inference import (
@@ -55,10 +58,8 @@ from app.plugins.ml41_meat_curing_machinery_acoustic_anomaly.model_loader import
     LoadedCombination,
     artifacts_available,
     build_model,
-    combination_dir,
     ensure_artifacts_downloaded,
     _safe_device,
-    _store,
 )
 from app.plugins.ml41_meat_curing_machinery_acoustic_anomaly.postprocessing import build_inline_result
 from app.plugins.ml41_meat_curing_machinery_acoustic_anomaly.predict_dto import (
@@ -250,14 +251,15 @@ class Ml41MeatCuringMachineryAcousticAnomalyPlugin(ModelPluginPort):
     # ── train ────────────────────────────────────────────────────────────────
 
     def train(self, *, data_path: str, mlflow_run_id: str) -> TrainResponse:
-        """Fine-tune (or train from scratch) every (machine, machine_id, snr) combination
+        """Retrain every (machine, machine_id, snr) combination
         found under data_path's {snr}_{machine}/{machine_id}/{normal,abnormal}/*.wav layout.
 
         'normal' is required per combination trained; 'abnormal' is optional (if present,
         full auc/fnr/fpr/recall/threshold metrics are computed for that combination — see
         train_dto.py).
 
-        Fine-tuning always starts from the fixed base checkpoint, and the retrained
+        Each combination is trained from scratch with the AI team's procedure
+        (trainer.py::run_training, see _train_one_combination), and the retrained
         combinations live only in their own MLflow run (artifact_path="model", laid out as
         {machine}/{machine_id}/{snr}/ so mlflow_utils can rebuild them with that
         mlflow_run_id). The served base checkpoints, their local copy and the in-memory
@@ -305,15 +307,6 @@ class Ml41MeatCuringMachineryAcousticAnomalyPlugin(ModelPluginPort):
         )
 
     @staticmethod
-    def _base_checkpoint_path(machine: str, machine_id: str, snr: str) -> Path | None:
-        """Path to the fixed base checkpoint of a combination, or None if it has none."""
-        try:
-            path = _store.path(f"{combination_dir(machine, machine_id, snr)}/{CHECKPOINT_FILENAME}")
-        except FileNotFoundError:
-            return None
-        return path if path.exists() else None
-
-    @staticmethod
     def _discover_combinations(root: Path) -> list[tuple[str, str, str, Path]]:
         """Find {snr}_{machine}/{machine_id}/normal/*.wav under root."""
         found = []
@@ -332,7 +325,7 @@ class Ml41MeatCuringMachineryAcousticAnomalyPlugin(ModelPluginPort):
                     found.append((matched_machine, machine_id_dir.name, snr_part, machine_id_dir))
         return found
 
-    def _train_one_combination(
+    def _train_one_combination(  # pylint: disable=too-many-statements  # mirrors run_training
         self, machine: str, machine_id: str, snr: str, combo_root: Path,
         tracker: BaseMLflowTracker | None, staging_dir: Path,
     ) -> CombinationTrainMetrics:
@@ -342,33 +335,36 @@ class Ml41MeatCuringMachineryAcousticAnomalyPlugin(ModelPluginPort):
 
         specs = np.stack([wav_to_logmel(str(p)) for p in normal_wavs], axis=0)  # (N,1,mels,frames)
 
-        base_ckpt = self._base_checkpoint_path(machine, machine_id, snr)
         device = self._device or _safe_device()
+        hyperparams = TRAINING_HYPERPARAMS_BY_MACHINE[machine]
 
-        # Split BEFORE computing normalization stats (matches the original pipeline: stats
-        # are always fit on the train split only, applied to val — no leakage).
-        rng = np.random.default_rng(42)
-        perm = rng.permutation(len(specs))
-        split_idx = max(1, int(len(perm) * 0.8))
-        train_idx = perm[:split_idx]
-        val_idx = perm[split_idx:] if len(perm) > split_idx else perm[:1]
-        train_raw, val_raw = specs[train_idx], specs[val_idx]
+        # preprocess.py::process_machine_id: RandomState(split_seed=42) permutation, first
+        # int(0.8 * n) clips to train, the rest to val.
+        idx = np.random.RandomState(TRAINING_SPLIT_SEED).permutation(len(specs))  # pylint: disable=no-member  # legacy RandomState, as the original
+        cut = int(TRAINING_SPLIT_RATIO * len(specs))
+        train_raw, val_raw = specs[idx[:cut]], specs[idx[cut:]]
+        if len(val_raw) == 0 or len(train_raw) < hyperparams["batch_size"]:
+            raise ValueError(
+                f"{machine}/{machine_id}/{snr}: {len(specs)} clips normales no bastan. El split 80/20 "
+                f"deja {len(train_raw)} de entrenamiento y {len(val_raw)} de validación, y el original "
+                f"descarta el último lote incompleto (drop_last): hacen falta al menos "
+                f"{hyperparams['batch_size']} clips de entrenamiento y 1 de validación."
+            )
 
-        if base_ckpt is not None:
-            checkpoint = torch.load(base_ckpt, map_location=device, weights_only=False)
-            norm_mean, norm_std = float(checkpoint["norm_mean"]), float(checkpoint["norm_std"])
-            model = build_model(machine, device)
-            model.load_state_dict(checkpoint["model_state_dict"])
-            logger.info("Fine-tuning existing checkpoint for %s/%s/%s", machine, machine_id, snr)
-        else:
-            norm_mean, norm_std = float(train_raw.mean()), float(train_raw.std())
-            model = build_model(machine, device)
-            logger.info("Training %s/%s/%s from scratch (no base checkpoint)", machine, machine_id, snr)
+        # trainer.py::run_training (the original never fine-tunes: with an existing best.pth it
+        # skips training, and with force=True it trains a NEW model). Normalization stats come
+        # from the train split (MIMIIDataset), seed 42 is set BEFORE the model is created.
+        norm_mean, norm_std = float(train_raw.mean()), float(train_raw.std())
+        torch.manual_seed(TRAINING_COMMON["seed"])
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(TRAINING_COMMON["seed"])
+        np.random.seed(TRAINING_COMMON["seed"])
+        model = build_model(machine, device)
+        logger.info("Training %s/%s/%s from scratch (original procedure)", machine, machine_id, snr)
 
         train_data = normalize_logmel(train_raw, norm_mean, norm_std)
         val_data = normalize_logmel(val_raw, norm_mean, norm_std)
 
-        hyperparams = TRAINING_HYPERPARAMS_BY_MACHINE[machine]
         if tracker:
             tracker.log_params({f"{machine}_{machine_id}_{snr}_{k}": v for k, v in hyperparams.items()})
 
