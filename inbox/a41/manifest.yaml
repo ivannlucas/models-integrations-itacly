@@ -140,6 +140,27 @@ constraints:
 
 training:
   supported: true
+  # [CORREGIDO 2026-10-10] Procedimiento de /train. El plugin hacía un ajuste fino de los pesos del
+  # checkpoint base, con su normalización, un split np.random.default_rng y la semilla fijada DESPUÉS de
+  # crear el modelo. El original nunca hace eso: trainer.py::run_training se SALTA el entrenamiento si ya
+  # existe best.pth y, con force=True, entrena un AudioMAE NUEVO (semilla 42 antes de crearlo),
+  # normalización calculada sobre el train (MIMIIDataset), split de preprocess.py::process_machine_id
+  # (np.random.RandomState(42), corte int(0,8·n)) y drop_last=True. Portado así. Verificado con el
+  # original en CPU sobre los mismos 40 WAV sintéticos: pesos IDÉNTICOS (diferencia 0), misma
+  # normalización y mismo best_val_loss. Con menos clips de los que exige el split + drop_last, error
+  # claro. Umbral audit_fnr y recalibración Mahalanobis: ya eran fieles al original.
+  # [CORREGIDO 2026-10-10, con datos reales] En CUDA el original entrena con autocast bf16 + GradScaler y valida
+  # con autocast bf16; el plugin entrenaba siempre en fp32. Portado (solo en CUDA; en CPU no cambia nada).
+  # Reentrenamiento real de fan/id_00/0_dB en GPU (RTX 2070 SUPER) con el MIMII completo: el plugin (desde los
+  # WAV crudos) y el run_training original (desde los .npy) dan lo mismo a 4 decimales: best_val_loss 0,7400,
+  # AUC Mahalanobis 0,7896, umbral audit_fnr 7,2069, recall 0,9017, auc_mse 0,4221, 808/203 de train/val,
+  # 100 épocas. Frente al modelo entregado (val_loss 0,7401, AUC 0,7585, umbral 6,6067) la diferencia es
+  # variación del propio original entre ejecuciones en GPU (cudnn.benchmark=True, no portado por ser global).
+  # Duración: 540 s el original y 586 s el plugin (incluye calcular los 1.418 espectrogramas desde los WAV).
+  duracion_estimada: >
+    Por combinación, ~1-1,5 h en CPU (100 épocas, 646 clips de train, 2,4-3 s por lote) y ~155 s en la GPU
+    del equipo de IA (metrics.json: training_time_s). Inviable en un /train síncrono en CPU con datos
+    reales; ver plugin-integration § Duración.
   threshold_persistence: >
     [CORREGIDO 2026-10-07] train() ya no escribe en la carpeta local de artefactos: el
     fine-tuning parte siempre del checkpoint base fijo y el resultado (best.pth con threshold
@@ -254,6 +275,15 @@ metrics_reported:
 golden_cases:
   model_key: fan_id_00_0_dB
   source: sample_data_original_inference
+  # [CORREGIDO 2026-10-10] ORIGEN REAL DEL AUDIO. Con el dataset MIMII completo ya en inbox/a41/codigo/data/raw,
+  # los 22 WAV de sample_data/ son los ficheros homónimos de "-6_dB_fan/id_00/{normal,abnormal}/", NO de
+  # "0_dB_fan/id_00" (barrido de las 48 carpetas: la de -6 dB reproduce los valores esperados a 2e-5/2e-4; la de
+  # 0 dB difiere un 10-120 %). Los valores esperados son correctos, pero corresponden a audio de -6 dB puntuado con
+  # el modelo de fan/id_00/0_dB: la identificación "por cercanía de estadísticas" acertó la máquina y la unidad,
+  # no el SNR. Los selectores de abajo (snr 0_dB) son los del modelo usado y se mantienen.
+  # Re-ejecutados 2026-10-10 contra el endpoint HTTP real con ese audio: 22/22 dentro de tolerancia (diferencia
+  # relativa máxima de maha_score 2,8e-4, en GPU), etiquetas idénticas, recall 1,0 y FPR 0,818 como en el manifest.
+  audio_source_real: "inbox/a41/codigo/data/raw/MIMII Dataset/-6_dB_fan/id_00/{normal,abnormal}/000000NN.wav"
   tolerance:
     predicted_label: exact
     maha_score_pct: 0.5
@@ -420,3 +450,30 @@ known_issues:
      datos anómalos reales disponibles, debe derivarse de la distribución de scores normales
      (percentil alto) y requiere validación empírica en campo, no solo el threshold heredado
      del benchmark MIMII."
+
+  - "[RESUELTO 2026-10-10, el MIMII completo y los .npy procesados ya están en inbox/a41/codigo/data/: 22/22
+     golden_cases reproducidos (ver golden_cases.audio_source_real) y métricas de las 48 combinaciones recalculadas
+     con el plugin; ver verification_report.md] CÓDIGO ORIGINAL DISPONIBLE: inbox/a41/codigo/ trae ahora los 48 checkpoints Audio-MAE
+     (vit_tiny_{fan,pump,slider,valve}, best.pth + maha_stats.npz) y los 48 del baseline. Verificado: los 48
+     umbrales de thresholds.py coinciden con reports/table_auc_por_caso.csv; inferencia plugin frente al
+     original en las 48 combinaciones x 3 WAV (144 casos, CPU): espectrograma idéntico, maha_score con
+     diferencia relativa <= 4,8e-7 y predicted_label idéntico. Sigue SIN audio real (data/ vacío) y
+     sample_data/ no está en el repo ni en este equipo: los 22 golden_cases siguen sin poder ejecutarse."
+  - "[NUEVO 2026-10-10] PRECISIÓN SOBRE EL DETERMINISMO DE maha_score: forward_encoder con mask_ratio=0 sigue
+     barajando los parches con torch.rand (random_masking), así que el CLS varía en el último bit según el
+     estado del generador. Efecto medido: <= 6e-7 relativo entre ejecuciones en CPU. Entre CPU y GPU la
+     diferencia llega a 1,7e-4 relativo (aritmética distinta), irrelevante salvo un score justo en el umbral.
+     La afirmación anterior (<1e-5) es correcta en un mismo dispositivo."
+  - "[NUEVO 2026-10-10] MEMORIA v1.4 (18/08/2026): mantiene Audio-MAE como modelo final (Conclusiones) aunque
+     en Especificaciones y Criterios de Éxito recomienda el Baseline en la mayoría de casos y Audio-MAE para
+     pump. La decisión humana del 2026-09-15 sigue vigente. Inconsistencia interna: §Salidas dice que
+     predicted_label usa el umbral de Youden, pero §Criterios de Éxito y los umbrales entregados usan
+     audit_fnr (FNR <= 10 %), que es lo que aplica el plugin."
+  - "[NUEVO 2026-10-10] S3: artifacts/fixed/ml41_meat_curing_machinery_acoustic_anomaly/ sigue vacío. Los 48
+     directorios vit_tiny_* de inbox/a41/codigo/models/artifacts/ (sin baseline/) son los que hay que subir."
+  - "[NUEVO 2026-10-10] MÉTRICAS DE LAS 48 COMBINACIONES RECALCULADAS CON EL PLUGIN sobre data/processed/{val,test}
+     (normales de validación frente a anómalos de test, como evaluate_results): AUC Mahalanobis con diferencia
+     máxima 2,9e-4 por combinación y media idéntica (0,7720); FNR medio 0,0912 frente a 0,0909 y FPR medio
+     0,4684 idéntico; 48/48 con FNR <= 10 %; FNR igual en 44 de 48 (las otras 4 difieren en una sola muestra);
+     umbrales a menos del 1,5 % (el umbral es una puntuación concreta y la aritmética de GPU puede elegir la
+     vecina)."

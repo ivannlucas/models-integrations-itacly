@@ -36,8 +36,10 @@ FEATURES = dict(machine="fan", machine_id="id_00", snr="0_dB", audio_base64="tes
 def runtime(tmp_path, monkeypatch):
     artifact_root = tmp_path / "artifacts"
     store = SimpleNamespace(local_dir=artifact_root, path=lambda name: artifact_root / name)
-    monkeypatch.setattr(plugin, "_store", store)
     monkeypatch.setattr(model_loader, "_store", store)
+    # 5 synthetic clips per combination: a batch of 2 keeps the original drop_last split usable.
+    monkeypatch.setitem(plugin.TRAINING_HYPERPARAMS_BY_MACHINE, "fan",
+                        {**plugin.TRAINING_HYPERPARAMS_BY_MACHINE["fan"], "batch_size": 2})
     for module in (plugin, model_loader, mlflow_utils):
         monkeypatch.setattr(module, "build_model", lambda machine, device: torch.nn.Linear(2, 2).to(device))
         monkeypatch.setattr(module, "_safe_device", lambda: torch.device("cpu"))
@@ -151,20 +153,24 @@ def test_train_persists_calibration_only_in_mlflow(runtime, tmp_path):
     assert routed.predictions[0]["predicted_label"] == 1
 
 
-def test_repeated_training_always_starts_from_base_checkpoint(runtime, tmp_path, monkeypatch):
-    starting_points = []
+def test_training_never_reads_the_base_checkpoint_and_normalizes_with_user_data(runtime, tmp_path, monkeypatch):
+    """Port of trainer.py::run_training: the original never fine-tunes (an existing best.pth is
+    skipped, force=True trains a NEW model), and its normalization comes from the train split."""
+    loaded = []
     real_load = torch.load
+    monkeypatch.setattr(plugin.torch, "load", lambda path, *a, **k: loaded.append(str(path)) or real_load(path, *a, **k))
+    runtime.instance.train(data_path=str(training_zip(tmp_path, True)), mlflow_run_id="run-1")
+    assert not any(p.endswith("best.pth") and str(runtime.combo_dir) in p for p in loaded)
+    retrained = real_load(runtime.remote / "fan/id_00/0_dB/best.pth", weights_only=False)
+    assert retrained["norm_mean"] == pytest.approx(1.0)       # the synthetic normal clips are all 1.0
+    assert retrained["norm_mean"] != runtime.checkpoint["norm_mean"]
 
-    def recording_load(path, *args, **kwargs):
-        checkpoint = real_load(path, *args, **kwargs)
-        starting_points.append(checkpoint.get("threshold", "base"))
-        return checkpoint
 
-    monkeypatch.setattr(plugin.torch, "load", recording_load)
-    for _ in range(2):
+def test_too_few_clips_for_the_original_split_is_a_clear_error(runtime, tmp_path, monkeypatch):
+    monkeypatch.setitem(plugin.TRAINING_HYPERPARAMS_BY_MACHINE, "fan",
+                        {**plugin.TRAINING_HYPERPARAMS_BY_MACHINE["fan"], "batch_size": 32})
+    with pytest.raises(ValueError, match="no bastan"):
         runtime.instance.train(data_path=str(training_zip(tmp_path, True)), mlflow_run_id="run-1")
-    # Both fine-tunes start from the fixed base checkpoint, never from a previous retrain.
-    assert starting_points == ["base", "base"]
 
 
 def test_train_without_mlflow_run_fails_and_does_not_persist(runtime, tmp_path):

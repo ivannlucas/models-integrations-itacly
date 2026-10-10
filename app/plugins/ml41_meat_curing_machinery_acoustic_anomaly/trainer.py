@@ -1,4 +1,4 @@
-"""Fine-tuning logic, ported from inbox/a41/codigo/src/training/trainer.py.
+"""Training loop, ported from inbox/a41/codigo/src/training/trainer.py (run_training).
 
 Same optimizer (AdamW with selective weight decay), same CosineWarmupScheduler, same
 per-machine hyperparameters (never invented — see constants.TRAINING_HYPERPARAMS_BY_MACHINE,
@@ -41,27 +41,43 @@ class CosineWarmupScheduler(optim.lr_scheduler._LRScheduler):
         return [self.min_lr + (base_lr - self.min_lr) * cosine for base_lr in self.base_lrs]
 
 
-def _train_one_epoch(model: AudioMAE, loader: DataLoader, optimizer, device, mask_ratio: float) -> float:
+def _train_one_epoch(  # pylint: disable=too-many-arguments,too-many-positional-arguments  # as train_one_epoch
+    model: AudioMAE, loader: DataLoader, optimizer, device, mask_ratio: float,
+    scaler=None,
+) -> float:
+    """trainer.py::train_one_epoch: on CUDA the original trains under bf16 autocast with a
+    GradScaler (unscale before the gradient clip); on CPU it is plain fp32."""
     model.train()
     total_loss = 0.0
     for (imgs,) in loader:
         imgs = imgs.to(device)
         optimizer.zero_grad()
-        loss, _, _ = model(imgs, mask_ratio=mask_ratio)
-        loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-        optimizer.step()
+        if scaler is not None:
+            with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+                loss, _, _ = model(imgs, mask_ratio=mask_ratio)
+            scaler.scale(loss).backward()
+            scaler.unscale_(optimizer)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            scaler.step(optimizer)
+            scaler.update()
+        else:
+            loss, _, _ = model(imgs, mask_ratio=mask_ratio)
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            optimizer.step()
         total_loss += loss.item()
     return total_loss / max(len(loader), 1)
 
 
 def _validate(model: AudioMAE, loader: DataLoader, device, mask_ratio: float) -> float:
+    """trainer.py::validate: bf16 autocast on CUDA (a no-op on CPU, as in the original)."""
     model.eval()
     total_loss = 0.0
     with torch.no_grad():
         for (imgs,) in loader:
             imgs = imgs.to(device)
-            loss, _, _ = model(imgs, mask_ratio=mask_ratio)
+            with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=device.type == "cuda"):
+                loss, _, _ = model(imgs, mask_ratio=mask_ratio)
             total_loss += loss.item()
     return total_loss / max(len(loader), 1)
 
@@ -73,22 +89,19 @@ def fine_tune(
     device: torch.device,
     hyperparams: dict,
 ) -> tuple[float, dict]:
-    """Fine-tune (or train from scratch) `model` in place on already-normalized data.
+    """Train `model` (a new AudioMAE, seeded by the caller) in place on already-normalized data.
 
     train_data/val_data: (N, 1, n_mels, target_frames) float32 arrays, already normalized
     with the combination's norm_mean/norm_std.
 
     Returns (best_val_loss, history).
     """
-    seed = TRAINING_COMMON["seed"]
-    torch.manual_seed(seed)
-    np.random.seed(seed)
-
+    # Seeds are set by the caller BEFORE the model is created (run_training order).
     train_ds = TensorDataset(torch.from_numpy(train_data).float())
     val_ds = TensorDataset(torch.from_numpy(val_data).float())
 
     batch_size = hyperparams["batch_size"]
-    train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, drop_last=len(train_ds) > batch_size)
+    train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, drop_last=True)
     val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False)
 
     decay, no_decay = [], []
@@ -108,6 +121,7 @@ def fine_tune(
     epochs = TRAINING_COMMON["epochs"]
     patience = TRAINING_COMMON["patience"]
     scheduler = CosineWarmupScheduler(optimizer, hyperparams["warmup_epochs"], epochs, min_lr=1e-6)
+    scaler = torch.amp.GradScaler("cuda") if device.type == "cuda" else None
 
     best_val_loss = float("inf")
     best_state = None
@@ -115,7 +129,7 @@ def fine_tune(
     history: dict = {"train_loss": [], "val_loss": []}
 
     for epoch in range(1, epochs + 1):
-        train_loss = _train_one_epoch(model, train_loader, optimizer, device, hyperparams["mask_ratio"])
+        train_loss = _train_one_epoch(model, train_loader, optimizer, device, hyperparams["mask_ratio"], scaler)
         val_loss = _validate(model, val_loader, device, hyperparams["mask_ratio"])
         scheduler.step()
         history["train_loss"].append(train_loss)

@@ -1,0 +1,183 @@
+{
+  "model_id": "a41",
+  "model_slug": "meat-curing-machinery-acoustic-anomaly",
+  "fecha": "Octubre 2026",
+  "model_key": "ml41-meat-curing-machinery-acoustic-anomaly",
+  "version": "1.0.0 (memoria v1.4)",
+  "descripcion": "Detección no supervisada de anomalías acústicas en maquinaria del secadero de curado (ventilador, bomba, corredera y válvula) con un Audio Masked Autoencoder ViT-Tiny. Hay un modelo por combinación de máquina, unidad y nivel de ruido (48 en total). La decisión se toma con la distancia de Mahalanobis del token CLS respecto a la distribución de audios normales y un umbral calibrado para FNR ≤ 10 %.",
+  "task_type": "Detección de anomalías no supervisada sobre audio (entrenamiento solo con muestras normales)",
+  "framework": "PyTorch (AudioMAE: ViT-Tiny, embed_dim 192, profundidad y cabezas por máquina: fan 9/6, pump 7/4, slider 4/4, valve 5/8; decoder 4 capas de 128); librosa para el espectrograma log-Mel; numpy para Mahalanobis con PCA (30-90 componentes según la máquina)",
+  "artefacto": "48 directorios vit_tiny_{machine}/{machine}/{machine_id}/{snr}/ con best.pth (pesos, media y desviación de normalización) y maha_stats.npz (media, covarianza inversa y PCA de los embeddings normales). Umbral audit_fnr por combinación tomado de reports/table_auc_por_caso.csv",
+  "objetivo": "Detectar a tiempo averías en los equipos que regulan temperatura y humedad del secadero de embutidos, donde un fallo no detectado puede arruinar lotes enteros. Por esa asimetría de costes, el criterio de éxito prioriza la sensibilidad: tasa de falsos negativos (FNR) ≤ 10 % por combinación, aceptando un número elevado de falsas alarmas. El modelo se entrena solo con funcionamiento normal, porque en planta es muy difícil reunir grabaciones de fallos.",
+  "caso_uso": "Modo inline: se envía una grabación WAV (base64; cualquier frecuencia y número de canales, se convierte a mono 16 kHz) y se elige la máquina, la unidad y el nivel de ruido de la combinación entrenada más parecida a la instalación. El servicio calcula el espectrograma log-Mel (128 × 1024, unos 10,24 s; recorta o rellena por reflexión), lo normaliza con las estadísticas de esa combinación y devuelve el error de reconstrucción (informativo), la distancia de Mahalanobis y la etiqueta normal/anómalo según el umbral calibrado. Modo batch: ZIP con un manifest.csv (filename, machine, machine_id, snr) y los WAV. Reentrenamiento (/train): ZIP con {snr}_{machine}/{machine_id}/normal/*.wav (y opcionalmente abnormal/ para calcular AUC y el umbral); repite el entrenamiento original desde cero y guarda el resultado solo en MLflow.",
+  "inputs": [
+    {
+      "nombre": "audio_base64",
+      "tipo": "string (WAV en base64)",
+      "descripcion": "Grabación de la máquina; se recomiendan 10 s a 16 kHz. Se convierte a mono y a log-Mel de 128 bandas × 1024 tramas (n_fft 1024, win 400, hop 160)",
+      "obligatorio": "Sí",
+      "valor_defecto": "-"
+    },
+    {
+      "nombre": "machine",
+      "tipo": "categórica (fan, pump, slider, valve)",
+      "descripcion": "Tipo de máquina; selecciona la arquitectura y el modelo",
+      "obligatorio": "Sí",
+      "valor_defecto": "-"
+    },
+    {
+      "nombre": "machine_id",
+      "tipo": "categórica (id_00, id_02, id_04, id_06)",
+      "descripcion": "Unidad física concreta; cada una tiene su propio modelo entrenado",
+      "obligatorio": "Sí",
+      "valor_defecto": "-"
+    },
+    {
+      "nombre": "snr",
+      "tipo": "categórica (-6_dB, 0_dB, 6_dB)",
+      "descripcion": "Nivel de ruido de fondo de la combinación de entrenamiento MIMII más parecida a la instalación; no es una medida en tiempo real",
+      "obligatorio": "Sí",
+      "valor_defecto": "-"
+    },
+    {
+      "nombre": "threshold",
+      "tipo": "float",
+      "descripcion": "Umbral de Mahalanobis alternativo al calibrado (uso avanzado, p. ej. tras validar en planta)",
+      "obligatorio": "No",
+      "valor_defecto": "umbral audit_fnr de la combinación"
+    },
+    {
+      "nombre": "mlflow_run_id",
+      "tipo": "string",
+      "descripcion": "Run de MLflow de un modelo reentrenado; sin él se usa el modelo base",
+      "obligatorio": "No",
+      "valor_defecto": "modelo base"
+    }
+  ],
+  "outputs": [
+    {
+      "nombre": "maha_score",
+      "tipo": "float",
+      "descripcion": "Distancia de Mahalanobis del token CLS (proyectado con PCA) a la distribución de audios normales de entrenamiento. Señal de decisión",
+      "rango": "≥ 0; los umbrales calibrados van de 2,6 a 14,9 según la combinación",
+      "interpretacion": "cuanto mayor, más se aleja del funcionamiento normal"
+    },
+    {
+      "nombre": "predicted_label",
+      "tipo": "int (0/1)",
+      "descripcion": "1 si maha_score ≥ threshold_used",
+      "rango": "0 = normal, 1 = anómalo",
+      "interpretacion": "1 = revisar la máquina"
+    },
+    {
+      "nombre": "threshold_used",
+      "tipo": "float",
+      "descripcion": "Umbral aplicado: el audit_fnr de la combinación (FNR ≤ 10 % en test), el del modelo reentrenado o el indicado en la petición",
+      "rango": "según la combinación",
+      "interpretacion": "punto de corte de la decisión"
+    },
+    {
+      "nombre": "mse_score",
+      "tipo": "float",
+      "descripcion": "Error de reconstrucción del autoencoder con el 75 % de parches enmascarados al azar",
+      "rango": "≥ 0",
+      "interpretacion": "solo informativo: varía un 5-6 % entre ejecuciones por el enmascaramiento aleatorio"
+    }
+  ],
+  "metricas": [
+    {
+      "nombre": "AUC Mahalanobis medio (48 combinaciones, test MIMII)",
+      "valor": "0,772 (fan 0,856; pump 0,875; slider 0,826; valve 0,531)",
+      "descripcion": "reports/table_auc_por_caso.csv y metrics.json de cada checkpoint",
+      "interpretacion": "buena separación en fan, pump y slider; en valve apenas mejor que el azar"
+    },
+    {
+      "nombre": "Criterio de éxito FNR ≤ 10 %",
+      "valor": "48/48 combinaciones; FNR medio 0,091",
+      "descripcion": "Umbral audit_fnr: el más alto que garantiza TPR ≥ 90 % en el test de cada combinación",
+      "interpretacion": "se detectan al menos 9 de cada 10 anomalías en todas las combinaciones"
+    },
+    {
+      "nombre": "Falsas alarmas al umbral de FNR ≤ 10 %",
+      "valor": "FPR medio 0,468 (valve 0,842, rango 0,74-0,93)",
+      "descripcion": "Coste operativo de priorizar la sensibilidad",
+      "interpretacion": "aproximadamente una de cada dos grabaciones normales genera alerta: sirve como triaje, no como sistema autónomo"
+    },
+    {
+      "nombre": "Referencia no desplegada: baseline (autoencoder FC)",
+      "valor": "AUC medio 0,800",
+      "descripcion": "Memoria v1.4: mejor media global; Audio-MAE se mantiene como modelo final por su ventaja en pump (0,875 frente a 0,811) y su escalabilidad",
+      "interpretacion": "para combinaciones de AUC bajo la memoria recomienda el baseline como alternativa"
+    },
+    {
+      "nombre": "Verificación tras la integración (2026-10-10)",
+      "valor": "22/22 golden cases; métricas de las 48 combinaciones recalculadas con el servicio sobre el test real (AUC medio 0,7720 idéntico, 48/48 con FNR ≤ 10 %); reentrenamiento real igual al original a 4 decimales",
+      "descripcion": "outputs/a41/verification_report.md, con el dataset MIMII completo y contra el endpoint HTTP real",
+      "interpretacion": "el servicio reproduce el código entregado"
+    }
+  ],
+  "limitaciones": [
+    {
+      "tipo": "Laboratorio, no planta",
+      "descripcion": "MIMII se grabó en laboratorio con ruido de fábrica añadido sintéticamente. No hay evidencia de rendimiento en el secadero real sin recalibrar con audio de la máquina concreta y validar con grabaciones reales."
+    },
+    {
+      "tipo": "Válvulas",
+      "descripcion": "AUC 0,46-0,60 y FPR 0,74-0,93 (sigue alto a +6 dB, con menos ruido). No se recomienda su uso autónomo para válvulas sin una segunda validación."
+    },
+    {
+      "tipo": "Muchas falsas alarmas",
+      "descripcion": "Para garantizar FNR ≤ 10 %, alrededor de la mitad de las grabaciones normales generan alerta. Es un sistema de triaje para concentrar las inspecciones."
+    },
+    {
+      "tipo": "Umbral heredado del benchmark",
+      "descripcion": "Los umbrales se calibraron con las anomalías de MIMII. En producción, sin fallos etiquetados, hay que derivarlos de los scores normales de la máquina real y validarlos en campo."
+    },
+    {
+      "tipo": "Contaminación del entrenamiento",
+      "descripcion": "El modelo asume que todo el audio de entrenamiento es normal; un fallo incipiente en esos datos invierte la detección sin aviso."
+    },
+    {
+      "tipo": "Reentrenamiento costoso",
+      "descripcion": "Repite el entrenamiento original desde cero: unos 10 minutos por combinación en GPU (9-10 min medidos en una RTX 2070 SUPER) y 1-1,5 h en CPU. No implementa la recalibración Mahalanobis sin reentrenar (subcomando calibrate) que la memoria recomienda para adaptar el modelo a planta."
+    }
+  ],
+  "fichero_nombre": "22 grabaciones WAV de MIMII (data/raw/MIMII Dataset/-6_dB_fan/id_00/{normal,abnormal}/00000000-00000010.wav), puntuadas con el modelo fan/id_00/0_dB",
+  "fichero_registros": "22 grabaciones de unos 10 s (11 normales y 11 anómalas); valores esperados en inbox/a41/manifest.yaml (golden_cases)",
+  "fichero_resultado": "22/22 dentro de tolerancia contra el endpoint real (maha_score con diferencia ≤ 2,8e-4, etiquetas idénticas): recall 1,0 y FPR 0,818 con el umbral 6,6067 (9 falsas alarmas esperadas en 11 normales)",
+  "observaciones_tecnicas": "Inferencia en CPU o GPU (en GPU, maha_score difiere hasta 1,7e-4 relativo de CPU). En GPU el reentrenamiento usa autocast bf16, como el original. Carga perezosa con caché LRU de combinaciones (las 48 ocupan unos 2 GB). Entorno del equipo de IA: torch 2.4.1, librosa 0.11.0, soundfile 0.13.1, numpy 1.24.4. maha_score varía ≤ 6e-7 entre ejecuciones porque el encoder baraja parches incluso sin enmascarar; mse_score varía un 5-6 %. Monitorización recomendada por la memoria: recalibrar y valorar reentrenamiento si la mediana o el percentil 95 de los scores sobre periodos normales se desplaza de forma sostenida, o si la tasa de alertas en periodos nominales se duplica.",
+  "que_no_responde": "No te dice qué pieza falla ni por qué: indica si el sonido de la máquina se aleja de su funcionamiento normal.",
+  "entradas_contexto": "Necesitas una grabación de unos 10 segundos del sonido de la máquina y saber qué equipo es: tipo, unidad y en qué nivel de ruido de fondo trabaja.",
+  "ejemplo_interpretacion": "Si para el ventilador id_00 en la configuración de 0 dB el servicio devuelve una distancia de 8,2 con umbral 6,61 y etiqueta 1, el sonido se ha alejado de lo normal y conviene programar una inspección. Con una distancia de 4,0 la etiqueta sería 0 y la máquina suena como en funcionamiento normal.",
+  "margen_error": "Está calibrado para no dejar pasar más de 1 de cada 10 averías en las pruebas de laboratorio. El precio es que alrededor de la mitad de las grabaciones de máquinas sanas también dan alerta, y en las válvulas muchas más. Una alerta significa revisar, no avería confirmada.",
+  "revisar_manualmente": [
+    "Cualquier alerta en una válvula: el modelo apenas distingue sus fallos.",
+    "Equipos nuevos, recién reparados o con cambios de carga: su sonido normal puede haber cambiado.",
+    "Grabaciones mucho más cortas o largas de 10 segundos, o hechas desde otra posición del micrófono.",
+    "Un aumento sostenido de alertas en periodos en que la máquina funciona bien: puede ser deriva y conviene recalibrar."
+  ],
+  "que_no_hace": [
+    "No diagnostica el tipo de avería ni la pieza afectada.",
+    "No sustituye el mantenimiento preventivo ni la inspección del técnico.",
+    "No funciona con máquinas distintas de las 4 tipologías y 16 unidades entrenadas.",
+    "No sustituye automáticamente el modelo base al reentrenar: el modelo reentrenado solo se usa si se indica su ejecución de MLflow."
+  ],
+  "puede_equivocarse": "Sí. Las cifras de acierto se obtuvieron con grabaciones de laboratorio y ruido añadido artificialmente; su traslado al secadero real no está validado y requiere recalibrar con audio de la propia máquina antes de usarlo en producción. Aun en laboratorio genera muchas falsas alarmas y en válvulas es poco fiable. Úsalo como primer filtro para decidir qué equipos inspeccionar, nunca como única garantía.",
+  "kpis": [
+    {
+      "kpi": "No dejar pasar averías",
+      "valor_umbral": "detectar al menos 9 de cada 10 (FNR ≤ 10 %)",
+      "descripcion": "CUMPLE en laboratorio en las 48 combinaciones."
+    },
+    {
+      "kpi": "Distinguir sonido normal de anómalo",
+      "valor_umbral": "AUC claramente por encima de 0,5",
+      "descripcion": "CUMPLE en ventilador, bomba y corredera (0,83-0,88 de media); NO en válvula (0,53)."
+    },
+    {
+      "kpi": "Falsas alarmas asumibles",
+      "valor_umbral": "que no saturen al equipo de mantenimiento",
+      "descripcion": "Alrededor de una alerta por cada dos grabaciones normales: apto como triaje, no para funcionamiento autónomo."
+    }
+  ]
+}

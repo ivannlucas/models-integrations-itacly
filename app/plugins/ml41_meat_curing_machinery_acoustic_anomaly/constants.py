@@ -59,6 +59,9 @@ TRAINING_COMMON = {
     "epochs": 100, "patience": 20, "seed": 42, "weight_decay_default": 0.05,
     "betas": (0.9, 0.95),
 }
+# config/config.yaml training.split_ratio / split_seed (preprocess.py::process_machine_id).
+TRAINING_SPLIT_RATIO = 0.8
+TRAINING_SPLIT_SEED = 42
 TRAINING_HYPERPARAMS_BY_MACHINE: dict[str, dict] = {
     "fan":    {"warmup_epochs": 7,  "weight_decay": 0.0004723501245203774, "mask_ratio": 0.5574479341391712, "lr": 0.0004502789161109957, "batch_size": 32},
     "pump":   {"warmup_epochs": 9,  "weight_decay": 0.02356540010076827,   "mask_ratio": 0.7277871776757026, "lr": 0.0003962419971237532, "batch_size": 32},
