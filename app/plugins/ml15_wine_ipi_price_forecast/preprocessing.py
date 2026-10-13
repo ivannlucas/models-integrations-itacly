@@ -33,15 +33,21 @@ def _is_blank(value: Any) -> bool:
 
 
 def _parse_date(date_val: Any) -> datetime:
-    s = str(date_val).strip()
-    if not s:
+    """Any pandas-parseable date (YYYY-MM-DD, YYYY-MM...), like the original's pd.to_datetime."""
+    if _is_blank(date_val):
         raise ValueError("empty date value")
-    return datetime.strptime(s[:10], "%Y-%m-%d")
+    parsed = pd.to_datetime(str(date_val).strip(), errors="coerce")
+    if pd.isna(parsed):
+        raise ValueError(f"unparseable date {date_val!r}")
+    return parsed.to_pydatetime()
 
 
 def _resolve_date_value(row: dict[str, Any]) -> Any | None:
-    date_val = row.get("date")
-    return date_val if not _is_blank(date_val) else row.get("origin_date")
+    """origin_date, then date — predictor.py::_ensure_date_column's priority."""
+    for key in ("origin_date", "date"):
+        if not _is_blank(row.get(key)):
+            return row.get(key)
+    return None
 
 
 def _calendar_features(date_val: Any) -> dict[str, float]:
@@ -59,9 +65,13 @@ def _calendar_features(date_val: Any) -> dict[str, float]:
     }
 
 
-def _derive_from_history(resolved: dict[str, Any], missing: list[str], date_val: Any) -> dict[str, float]:
-    """Best-effort derivation of *missing* feature(s) from the bundled reference history.
+def _derive_from_history(
+    resolved: dict[str, Any], missing: list[str], date_val: Any,
+) -> tuple[dict[str, float], list[str], float | None]:
+    """Derive *missing* feature(s) from the bundled reference history.
 
+    Returns (values, notes, y_true): notes are the last-available-value notes of the derived
+    features only, y_true the observed IPI at origin + horizon (None if not observed yet).
     Raises ValueError (chaining the underlying cause) if the bundled reference data is
     unavailable, or doesn't cover the dates needed for one of the requested lags.
     """
@@ -82,22 +92,32 @@ def _derive_from_history(resolved: dict[str, Any], missing: list[str], date_val:
             f"referencia bundled: {exc}"
         ) from exc
 
-    return {col: float(derived_row[col]) for col in missing if col in derived_row}
+    values = {col: float(derived_row[col]) for col in missing if col in derived_row}
+    notes = [note for col, note in derived_row["_notes"] if col in missing]
+    return values, notes, derived_row["y_true"]
 
 
-def build_feature_row(
+def resolve_feature_row(
     row: dict[str, Any], feature_columns: list[str], calendar_derived_columns: tuple[str, ...],
-) -> dict[str, float]:
-    """Resolve every column in *feature_columns* from *row*.
+    target_column: str | None = None,
+) -> tuple[dict[str, float], dict[str, Any]]:
+    """Resolve every column in *feature_columns* from *row*, plus the prediction metadata.
 
     Fills in calendar columns and/or (current value +) lag/exogenous columns from
-    'date'/'origin_date' + the bundled reference history when missing. Raises ValueError
+    'origin_date'/'date' + the bundled reference history when missing. Raises ValueError
     naming exactly which feature(s) are still missing/blank once every derivation path has
     been tried — this is what maps to HTTP 422 via MissingRequiredFeatureError in plugin.py,
     not a generic 500.
+
+    The metadata follows predictor.py: y_true is the row's own target_column when it brings
+    one (prepared panel), else the observed IPI at origin + horizon when the features were
+    derived from the history; feature_status/feature_notes flag exogenous features that used
+    the last available value (a prepared panel's own feature_status/feature_notes are kept).
     """
     resolved = dict(row)
     date_val = _resolve_date_value(resolved)
+    notes: list[str] = []
+    y_true: float | None = None
 
     missing_calendar = [
         col for col in calendar_derived_columns
@@ -113,13 +133,28 @@ def build_feature_row(
 
     missing = [col for col in feature_columns if _is_blank(resolved.get(col))]
     if missing and date_val is not None:
-        resolved.update(_derive_from_history(resolved, missing, date_val))
+        values, notes, y_true = _derive_from_history(resolved, missing, date_val)
+        resolved.update(values)
 
     missing = [col for col in feature_columns if _is_blank(resolved.get(col))]
     if missing:
         raise ValueError(f"Faltan variables obligatorias del modelo: {missing}")
 
-    return {col: float(resolved[col]) for col in feature_columns}
+    if target_column and not _is_blank(row.get(target_column)):
+        y_true = float(row[target_column])
+    status, status_notes = history.feature_status(notes)
+    if not notes and not _is_blank(row.get("feature_status")):
+        status = str(row["feature_status"])
+        status_notes = "" if _is_blank(row.get("feature_notes")) else str(row["feature_notes"])
+    meta = {"y_true": y_true, "feature_status": status, "feature_notes": status_notes}
+    return {col: float(resolved[col]) for col in feature_columns}, meta
+
+
+def build_feature_row(
+    row: dict[str, Any], feature_columns: list[str], calendar_derived_columns: tuple[str, ...],
+) -> dict[str, float]:
+    """The resolved feature values only (see resolve_feature_row)."""
+    return resolve_feature_row(row, feature_columns, calendar_derived_columns)[0]
 
 
 def build_feature_frame(

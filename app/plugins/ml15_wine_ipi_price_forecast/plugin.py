@@ -97,9 +97,12 @@ class Ml15WineIpiPriceForecastPlugin(ModelPluginPort):
         feature_columns = list(payload["feature_columns"])
         horizon = int(payload["horizon"])
         try:
-            X = preprocessing.build_feature_frame(row, feature_columns, CALENDAR_DERIVED_COLUMNS)
+            values, meta = preprocessing.resolve_feature_row(
+                row, feature_columns, CALENDAR_DERIVED_COLUMNS, target_column=str(payload["target_column"]),
+            )
         except ValueError as exc:
             raise MissingRequiredFeatureError(str(exc)) from exc
+        X = pd.DataFrame([values])[feature_columns]
 
         origin_date, target_date = preprocessing.resolve_origin_target_dates(row, horizon)
         return {
@@ -110,6 +113,7 @@ class Ml15WineIpiPriceForecastPlugin(ModelPluginPort):
             "y_anchor": float(X.iloc[0][str(payload["anchor_column"])]),
             "origin_date": origin_date,
             "target_date": target_date,
+            **meta,
         }
 
     # ── predict_inline ────────────────────────────────────────────────────────
@@ -141,6 +145,9 @@ class Ml15WineIpiPriceForecastPlugin(ModelPluginPort):
                 y_pred=r["y_pred"],
                 y_anchor=r["y_anchor"],
                 model_name=str(payload.get("model_name", "Ridge")),
+                y_true=r["y_true"],
+                feature_status=r["feature_status"],
+                feature_notes=r["feature_notes"],
                 xai_feature_values={col: float(r["X"].iloc[0][col]) for col in r["feature_columns"]},
             )
         finally:
@@ -218,6 +225,7 @@ class Ml15WineIpiPriceForecastPlugin(ModelPluginPort):
             origin_date, target_date = preprocessing.resolve_origin_target_dates(
                 {"date": dates[row_idx].strftime("%Y-%m-%d")}, horizon,
             )
+            status, notes = history.feature_status([note for _, note in derived.iloc[pos]["_notes"]])
             predictions[row_idx] = {
                 "row": row_idx,
                 "origin_date": origin_date,
@@ -225,6 +233,9 @@ class Ml15WineIpiPriceForecastPlugin(ModelPluginPort):
                 "horizon": horizon,
                 "y_pred": float(y_pred[pos]),
                 "y_anchor": float(derived.iloc[pos][anchor_column]),
+                "y_true": derived.iloc[pos]["y_true"],
+                "feature_status": status,
+                "feature_notes": notes,
                 "model_id": MODEL_ID,
             }
 
@@ -257,6 +268,9 @@ class Ml15WineIpiPriceForecastPlugin(ModelPluginPort):
                             "horizon": r["horizon"],
                             "y_pred": r["y_pred"],
                             "y_anchor": r["y_anchor"],
+                            "y_true": r["y_true"],
+                            "feature_status": r["feature_status"],
+                            "feature_notes": r["feature_notes"],
                             "model_id": MODEL_ID,
                         })
                     except ValueError as exc:
@@ -277,10 +291,11 @@ class Ml15WineIpiPriceForecastPlugin(ModelPluginPort):
     # ── train (retraining with the original procedure) ────────────────────────
 
     def train(self, *, data_path: str, mlflow_run_id: str) -> TrainResponse:
-        """Retrain a fresh Pipeline(StandardScaler + Ridge(alpha=25.0)) from a labeled CSV.
+        """Retrain a fresh Pipeline(StandardScaler + Ridge(alpha=25.0)) from a model-ready panel.
 
-        Follows the AI team's original procedure exactly (same model_kind/alpha as
-        config.yaml::production_deployment — see manifest.training). The retrained artifact
+        The AI team's original procedure (training.py: frozen train/validation/test splits by
+        origin date, trainer.py's train filter and get_stats.py's test metrics) — on the delivered
+        panel it reproduces horizon_6_ridge.pkl and final_evaluation.json exactly. The retrained artifact
         lives only in its own MLflow run (artifact_path="model", canonical filename so
         mlflow_utils can reload it with that mlflow_run_id); the served fixed artifact and
         its local copy are never mutated nor overwritten.
@@ -299,6 +314,9 @@ class Ml15WineIpiPriceForecastPlugin(ModelPluginPort):
             "model_params": {"alpha": ALPHA},
             "trained_at": datetime.now(tz=timezone.utc).isoformat(),
             "n_training_rows": result["n_train"],
+            "train_end_date": str(result["train_end_date"].date()),
+            "training_origin_start": str(result["train_origin_start"].date()),
+            "training_origin_end": str(result["train_origin_end"].date()),
         })
 
         upload_warning = None
@@ -309,7 +327,7 @@ class Ml15WineIpiPriceForecastPlugin(ModelPluginPort):
             mlflow_tmp = None
             try:
                 tracker.log_params({"model_kind": "ridge", "alpha": ALPHA})
-                tracker.log_metrics(metrics)
+                tracker.log_metrics({k: v for k, v in metrics.items() if v is not None})
                 mlflow_tmp = tempfile.mkdtemp(prefix="ml15_mlflow_")
                 joblib.dump(new_payload, f"{mlflow_tmp}/{MODEL_FILENAME}")
                 tracker.upload_artifacts(mlflow_tmp, artifact_path="model")
@@ -321,19 +339,22 @@ class Ml15WineIpiPriceForecastPlugin(ModelPluginPort):
                     shutil.rmtree(mlflow_tmp, ignore_errors=True)
 
         logger.info(
-            "ml15 train() done — n_train=%d n_test=%d rmse=%.4f mae=%.4f r2=%.4f mlflow=%s",
-            result["n_train"], result["n_test"], metrics["rmse"], metrics["mae"], metrics["r2"],
-            bool(mlflow_run_id),
+            "ml15 train() done — n_train=%d n_test=%d rmse=%s mlflow_run_id=%s",
+            result["n_train"], result["n_test"], metrics["rmse"], mlflow_run_id,
         )
         return TrainResponse(
             detail="Reentrenamiento completado (Ridge, procedimiento original).",
             n_train_rows=result["n_train"],
             n_test_rows=result["n_test"],
-            rmse=metrics["rmse"],
-            mae=metrics["mae"],
-            mape_pct=metrics["mape_pct"],
-            r2=metrics["r2"],
-            mda_pct=metrics["mda_pct"],
+            train_end_date=str(result["train_end_date"].date()),
+            test_start_date=str(result["test_start_date"].date()),
+            test_end_date=str(result["test_end_date"].date()),
+            **metrics,
+            baseline_rmse=result["baseline_persistence"]["rmse"],
+            baseline_mape_pct=result["baseline_persistence"]["mape_pct"],
+            rmse_reduction_pct=result["rmse_reduction_pct"],
+            mape_reduction_pct=result["mape_reduction_pct"],
+            training_time_s=result["training_time_s"],
             upload_warning=upload_warning,
         )
 
@@ -384,6 +405,12 @@ class Ml15WineIpiPriceForecastPlugin(ModelPluginPort):
             OutputField(name="y_pred", type="float", description="IPI fitosanitario nacional predicho a t+6 (índice base 2020=100)."),
             OutputField(name="y_anchor", type="float", description="ipi_national_current usado como ancla."),
             OutputField(name="target_date", type="date", description="origin_date + 6 meses, si origin_date es derivable."),
+            OutputField(name="y_true", type="float", description="IPI real en target_date si ya se conoce; null si es futuro."),
+            OutputField(
+                name="feature_status", type="str",
+                description="exact | exogenous_last_available (alguna exógena usó el último dato disponible).",
+            ),
+            OutputField(name="feature_notes", type="str", description="Detalle del desfase de cada exógena; vacío si exact."),
         ]
         base = StatsResponse(
             model_name=MODEL_ID,

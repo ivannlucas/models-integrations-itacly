@@ -53,7 +53,10 @@ class PredictBatchResponse(BaseModel):
     model_id: str
     predictions: list[dict[str, Any]] = Field(
         ...,
-        description="Una entrada por fila: row, origin_date/target_date (si derivables), y_pred, y_anchor.",
+        description=(
+            "Una entrada por fila: row, origin_date/target_date (si derivables), y_pred, y_anchor, "
+            "y_true (null si aún no se conoce), feature_status y feature_notes; o 'error' si la fila falló."
+        ),
     )
     n_predictions: int
     output_path: str | None = None
@@ -122,6 +125,15 @@ class PredictInlineResponse(BaseModel):
     y_pred: float = Field(..., description="IPI fitosanitario nacional predicho a t+6 (índice base 2020=100).")
     y_anchor: float = Field(..., description="ipi_national_current usado como ancla (referencia de dirección).")
     model_name: str
+    y_true: float | None = Field(
+        default=None,
+        description="IPI real observado en target_date si ya se conoce (histórico de referencia o el target del panel); null si es futuro.",
+    )
+    feature_status: str = Field(
+        default="exact",
+        description="'exact', o 'exogenous_last_available' si alguna exógena usó el último dato disponible por retraso de publicación.",
+    )
+    feature_notes: str = Field(default="", description="Qué variable usó el último dato disponible y con qué desfase; vacío si exact.")
     xai_feature_values: dict[str, float] | None = Field(
         default=None, description="Valores de las 16 features usadas — consumido por el servicio de explicabilidad."
     )

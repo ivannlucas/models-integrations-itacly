@@ -218,11 +218,15 @@ metrics_reported:
   fpr_mean: 0.4684
   pct_cumple_fnr_objetivo: 1.0   # 48/48 combinaciones cumplen FNR <= 10% (criterio de éxito, memoria 5.3)
   fnr_objetivo_negocio: 0.10
+  # [CORREGIDO 2026-10-13] Rangos de ViT-Tiny, el modelo desplegado (reports/table_auc_por_caso.csv,
+  # filas vit_tiny_*, mismas cifras que cada metrics.json). Los anteriores (fan 0.68-0.97, pump
+  # 0.58-0.99, slider 0.58-0.99, valve 0.45-0.61) eran los de la memoria para MAE-Base.
   auc_maha_range_por_maquina:
-    fan:    [0.68, 0.97]
-    pump:   [0.58, 0.99]
-    slider: [0.58, 0.99]
-    valve:  [0.45, 0.61]   # valve es el caso problemático documentado (ver known_issues)
+    fan:    [0.59, 0.99]
+    pump:   [0.60, 0.99]
+    slider: [0.62, 0.98]
+    valve:  [0.46, 0.60]   # valve es el caso problemático documentado (ver known_issues)
+  fpr_range_valve: [0.74, 0.93]   # ViT-Tiny; la memoria da 0.63-0.84 para el conjunto de variantes
   comparacion_baseline_no_implementado:
     auc_mse_mean: 0.8005106088153237   # recalculado desde metrics.json, coincide con memoria (~0.800)
     nota: "Mejor AUC global que ViT-Tiny, pero no es el modelo elegido para producción (ver nota de alcance)."
@@ -445,7 +449,8 @@ known_issues:
      entrenamiento asume que TODO el audio de referencia es normal — una contaminación con
      fallos incipientes en esos datos invierte silenciosamente el sentido de la detección,
      sin mecanismo de alerta; (3) valve es el caso problemático en todas las variantes
-     (AUC 0.45-0.61, FPR 0.63-0.84 incluso a +6dB) — no se recomienda despliegue autónomo
+     (AUC 0.45-0.61, FPR 0.63-0.84 incluso a +6dB; con el ViT-Tiny desplegado AUC 0.46-0.60 y
+     FPR 0.74-0.93 [CORREGIDO 2026-10-13]) — no se recomienda despliegue autónomo
      para válvulas sin una segunda validación; (4) el umbral de decisión en producción, sin
      datos anómalos reales disponibles, debe derivarse de la distribución de scores normales
      (percentil alto) y requiere validación empírica en campo, no solo el threshold heredado

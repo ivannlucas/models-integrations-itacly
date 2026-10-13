@@ -98,9 +98,13 @@ def ml15(monkeypatch, tmp_path):
 
     from app.plugins.ml15_wine_ipi_price_forecast import mlflow_utils, plugin
 
+    metrics = dict(rmse=1.0, mae=1.0, mape_pct=1.0, r2=0.5, mda_pct=100.0)
     monkeypatch.setattr(plugin.training, "train_model", lambda df: {
-        "model": StandardScaler(), "n_train": 10, "n_test": 2,
-        "metrics": dict(rmse=1.0, mae=1.0, mape_pct=1.0, r2=0.5, mda_pct=100.0),
+        "model": StandardScaler(), "n_train": 10, "n_test": 2, "metrics": metrics,
+        "baseline_persistence": metrics, "rmse_reduction_pct": 0.0, "mape_reduction_pct": 0.0,
+        "train_end_date": pd.Timestamp("2023-12-01"), "train_origin_start": pd.Timestamp("2016-06-01"),
+        "train_origin_end": pd.Timestamp("2023-06-01"), "test_start_date": pd.Timestamp("2025-01-01"),
+        "test_end_date": pd.Timestamp("2026-01-01"), "training_time_s": 0.0,
     })
     instance = plugin.Ml15WineIpiPriceForecastPlugin()
     instance._payload = {"feature_columns": []}  # pylint: disable=protected-access

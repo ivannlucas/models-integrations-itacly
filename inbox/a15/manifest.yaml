@@ -174,6 +174,18 @@ training:
       - quarter
       - is_spring_risk
       - ipi_national_t_plus_6   # target; solo se exige en filas dentro de train_end_date
+    protocol: >
+      [CORREGIDO 2026-10-13] Procedimiento original completo, portado en
+      app/plugins/ml15_wine_ipi_price_forecast/training.py: splits congelados por fecha de origen
+      (features.py::_generate_temporal_splits — train < val_start, validación 12 meses, test 13
+      meses; config.yaml los fija en 2023-12 / 2024 / 2025-01..2026-01 y el plugin ancla esa misma
+      estructura al último mes de origen del CSV), entrenamiento solo con filas cuyo target_date
+      (origen + 6) cae hasta train_end (trainer.py::_filter_supervised_rows), NaN/inf de las features
+      a 0.0 (_build_feature_matrix) y métricas de test frente a la persistencia (get_stats.py). Sobre
+      data/processed/model_ready_panel.csv reproduce horizon_6_ridge.pkl bit a bit (85 filas, mismos
+      coeficientes, intercepto y escalador) y final_evaluation.json. La versión anterior del plugin
+      usaba un holdout del 15 % final del CSV: no reproducía el artefacto (coeficientes a 0,20) y
+      dejaba en train filas cuyo objetivo a t+6 caía dentro del periodo de test.
     note: >
       trainer.py::_select_feature_columns NO usa una lista fija hardcodeada: selecciona
       automáticamente todas las columnas numéricas del CSV de entrenamiento salvo
@@ -194,7 +206,9 @@ training:
     - r2
     - mda_pct
     - n_observations
-    # nombres exactos devueltos por src/get_stats/get_stats.py::_regression_metrics
+    # nombres exactos devueltos por src/get_stats/get_stats.py::_regression_metrics. El /train del
+    # plugin devuelve además la persistencia (baseline_rmse, baseline_mape_pct) y la mejora
+    # (rmse_reduction_pct, mape_reduction_pct), como final_evaluation.json.
   source: codigo_entrenamiento
 
 metrics_reported:
@@ -335,6 +349,22 @@ golden_cases:
     tolerance_pct: 1.0
 
 known_issues:
+  - "[CORREGIDO 2026-10-13] /train no seguía el procedimiento original (holdout del 15 % final,
+     filas con alguna feature nula descartadas). Ahora es un puerto fiel: ver training.protocol.
+     Verificado con tests/unit/test_ml15_training.py y outputs/a15/verification_report.md."
+  - "[CORREGIDO 2026-10-13] El plugin no devolvía y_true, feature_status ni feature_notes, que sí
+     declara outputs.predict_inline y produce predictor.py. Ahora los devuelve en inline y batch,
+     con el mismo texto de nota que el original (p. ej. origin 2026-02: usa_lag_1 usa el dato de
+     2025-12 con desfase de 1 mes). Diferencia deliberada: el original asigna el mismo
+     feature_status a todo el panel si cualquier fila usó el último dato disponible; el plugin lo
+     calcula por fila. Igual que el original, no hay tope de desfase (su max_staleness_months=3
+     existe como parámetro pero nunca se aplica)."
+  - "[CORREGIDO 2026-10-13] Prioridad de fecha: el plugin tomaba 'date' antes que 'origin_date'
+     y solo aceptaba YYYY-MM-DD. Ahora sigue predictor.py::_ensure_date_column (origin_date >
+     date > year+month) y acepta cualquier fecha que pandas interprete (p. ej. YYYY-MM)."
+  - "Diferencia deliberada en inferencia: en un panel preparado con alguna feature vacía, el
+     original la rellena con 0.0 (un IPI ~125 pasa a 0); el plugin la deriva del histórico de
+     referencia si la fila trae fecha, y si no, responde 422 nombrando la variable."
   - "Naming engañoso: la carpeta entregada se llama 'a15-rnn-vitivinicola-...' y el listado de
      abreviaturas de la memoria incluye LSTM/GRU, pero el modelo PRODUCTIVO es Ridge Regression
      (scikit-learn, lineal regularizado) -- no hay ninguna red neuronal recurrente en train.py,
@@ -380,7 +410,9 @@ known_issues:
      disponible en la serie IPI nacional bundled (feb-2026). Los golden_cases incluyen las 13
      filas pero solo 8 permiten verificar contra un valor real; las otras 5 solo verifican
      reproducibilidad numérica del wiring (y_pred determinista), no exactitud."
-  - "El .pkl fue serializado con scikit-learn==1.8.0 (ver requirements.txt y metadata interna del
+  - "[RESUELTO 2026-10-13] Con scikit-learn==1.5.2 (la versión fijada en el servicio por
+     compatibilidad con explicabilidad) los 13 golden_cases dan diferencia 0.0 y las métricas de
+     final_evaluation.json se reproducen. Nota original: El .pkl fue serializado con scikit-learn==1.8.0 (ver requirements.txt y metadata interna del
      payload); al cargarlo con scikit-learn==1.9.1 (entorno usado para esta extracción) sklearn
      emite InconsistentVersionWarning para StandardScaler/Ridge/Pipeline. Las predicciones
      recalculadas coinciden a precisión de máquina con final_evaluation.json pese al warning,

@@ -80,11 +80,11 @@ FINANCIAL_RAW_COLUMNS = ("chem_sector_avg", "copper_avg", "oil_brent_avg", "eur_
 # order, when a caller supplies a simple monthly IPI value instead of the full feature set.
 SIMPLE_IPI_VALUE_CANDIDATES = ("ipi_national_current", "spain", "ipi", "value", "y")
 
-# Default chronological holdout fraction used by train() to report test metrics when the
-# generic retraining CSV doesn't carry the AI team's original fixed train/val/test date cuts
-# (2016-06/2023-12/2024-12/2026-01). ~15% is close to the original test proportion (13/116 ≈
-# 11.2%) while staying usable on smaller retraining CSVs. See training.py.
-TEST_HOLDOUT_FRACTION = 0.15
+# Split structure of config.yaml::training (validation 2024-01..2024-12 = 12 months, test
+# 2025-01..2026-01 = 13 months, train_end = the month before validation), anchored by training.py
+# to the retraining CSV's last origin month. On the delivered panel it is the original split.
+VALIDATION_MONTHS = 12
+TEST_MONTHS = 13
 
 # Hold-out test metrics of the delivered artifact — models/metrics/final_evaluation.json,
 # horizon t+6, Ridge alpha=25.0 (matches memoria Tabla 4; recomputed and verified bit-for-bit

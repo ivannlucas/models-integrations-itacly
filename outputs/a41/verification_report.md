@@ -155,7 +155,7 @@ sin más trabajo de extracción.
 ## Puntos ya documentados en el manifest (confirmados, no resueltos en esta revisión — no son
 ## bugs de integración, son limitaciones reales del modelo entregado)
 
-- **AUC pobre en `valve`** (0.45–0.61 según combinación) — el propio manifest ya lo marca como
+- **AUC pobre en `valve`** (0.46–0.60 según combinación con ViT-Tiny; el 0.45–0.61 anterior era el rango de MAE-Base de la memoria — corregido el 2026-10-13) — el propio manifest ya lo marca como
   "no recomendado para despliegue autónomo sin supervisión humana" para esa máquina.
 - **`mse_score` no determinista** (~5-6% de variación entre ejecuciones) — documentado como
   informativo únicamente; el golden dataset usa tolerancia `informational_only` para ese campo
@@ -184,3 +184,36 @@ verificado de extremo a extremo hacen falta, en este orden:
    fan/id_00/0_dB, dado que `valve` tiene el rendimiento más débil del sistema.
 
 _Este skill no abre PR ni hace merge — el gate humano es el último paso._
+
+## Revisión de los artefactos recibidos para S3 (2026-10-13)
+
+Se recibió de nuevo el código del modelo, sin el dataset MIMII, con la carpeta
+`models/artifacts/`. Contenido: `vit_tiny_{fan,pump,slider,valve}/` (48 combinaciones con `best.pth`
++ `maha_stats.npz`, 2,17 GB) y `baseline/` (los 48 del baseline, que el plugin no usa).
+
+| Comprobación | Resultado |
+|---|---|
+| Carga estricta (`load_state_dict(strict=True)`) con la arquitectura de cada máquina del plugin | 48/48 |
+| `machine`/`machine_id`/`snr` guardados en cada `best.pth` frente a su carpeta | 48/48 coinciden |
+| Dimensiones de `maha_stats.npz` (PCA 70/90/90/30 sobre embedding de 192) | 48/48 |
+| `val_loss`, `norm_mean` y `norm_std` del checkpoint frente a su `metrics.json` | 48/48 coinciden |
+| Umbral de `reports/table_auc_por_caso.csv` frente a `thresholds.py` del plugin | 48/48 coinciden |
+| Checkpoint `fan/id_00/0_dB` frente a lo registrado en esta verificación | `val_loss` 0,7401, AUC 0,7585 y umbral 6,6067, idénticos |
+| Métricas globales del manifest (AUC Mahalanobis medio, FNR, FPR, % que cumple FNR) | 0,772 / 0,0909 / 0,4684 / 100 %, idénticas |
+| Fechas: `trained_at` de los `metrics.json` y fecha de los `best.pth` | 2026-06-08 en ambos; `maha_stats.npz` del 2026-07-10 (recalibración posterior, la usada en la tabla de AUC) |
+| Inferencia del plugin frente al código original (`wav_to_logmel` + `load_model` + Mahalanobis), 48 combinaciones, WAV sintético, CPU | diferencia relativa de `maha_score` ≤ 2,0e-4 (barajado de parches, ya documentado); etiqueta idéntica en 48/48 |
+
+**Conclusión: son los mismos artefactos con los que se verificó el modelo y son válidos para S3.**
+Los 22 casos dorados no se pueden repetir sin el audio de MIMII, pero el checkpoint usado en ellos
+y en el reentrenamiento (`fan/id_00/0_dB`) coincide en todas las cifras registradas.
+
+Diferencias que no afectan a la validez:
+- En 4 combinaciones (`pump/id_00/-6_dB`, `slider/id_04/-6_dB`, `slider/id_06/-6_dB`,
+  `slider/id_06/6_dB`) el AUC de `metrics.json` y el de la tabla difieren ≤ 2,1e-4: la tabla se
+  calculó con los `maha_stats.npz` recalibrados.
+- **Corregido en el manifest y en `constants.py`**: los rangos de AUC por máquina eran los de
+  MAE-Base de la memoria (fan 0,68–0,97, pump y slider 0,58–0,99, valve 0,45–0,61). Los de
+  ViT-Tiny son fan 0,59–0,99, pump 0,60–0,99, slider 0,62–0,98 y valve 0,46–0,60 (FPR de valve
+  0,74–0,93). `/stats` exponía los valores erróneos.
+
+Para verificar la subida: `outputs/a41/artifacts_md5.txt` (md5 de los 96 ficheros).

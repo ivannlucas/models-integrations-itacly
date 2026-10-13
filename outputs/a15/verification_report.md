@@ -174,3 +174,50 @@ Pendiente de decisión humana (no bloquea el plugin, documentado en
 - Refrescar periódicamente el snapshot bundled (`global_phytosanitary_prices_b2020.csv` /
   `financial_proxies_monthly.csv`) para que las fechas más recientes no dependan siempre de que
   el llamante aporte `ipi_national_current` manualmente.
+
+## Revisión completa contra el código original (2026-10-13)
+
+Con el código entregado completo en `inbox/a15/codigo/`, se ha revisado el plugin de nuevo,
+ejecutando el original y el plugin con los mismos datos.
+
+### Artefacto
+Ejecutar `src/training/trainer.py::train_model` con el `config.yaml` entregado reproduce
+`models/artifacts/horizon_6_ridge.pkl` bit a bit: 85 filas, mismos coeficientes, intercepto y
+escalador. El artefacto es el resultado del procedimiento documentado.
+
+### Inferencia (paridad con `src/predict/predictor.py`)
+| Modo | Casos | Resultado |
+|---|---|---|
+| Solo `origin_date` (`build_inference_panel_from_history`), 2016-06 a 2026-12 | 127 meses | 117 idénticos en `y_pred`, `y_true`, `feature_status` y `feature_notes`; los otros 10 fallan en ambos (no hay IPI nacional después de feb-2026) |
+| Histórico simple `data/input/ipi_history.csv` | 15 filas | diferencia 0.0 |
+| Panel preparado: `panel_test.csv` / `model_ready_panel.csv` | 13 / 116 filas | diferencia 0.0 / ≤ 3e-14 |
+| `golden_cases` con scikit-learn 1.5.2 (versión del servicio) | 13 | diferencia 0.0; RMSE de test = 1.0395874 (igual que `final_evaluation.json`) |
+
+### Correcciones
+| Hallazgo | Corrección |
+|---|---|
+| `/train` usaba un holdout del 15 % final del CSV: no reproducía el artefacto (coeficientes a 0,20), dejaba en train filas cuyo objetivo a t+6 caía en el periodo de test y descartaba filas con alguna feature nula | Puerto fiel (`training.py`): splits por fecha con la estructura de `config.yaml` (test = últimos 13 meses, validación = 12 anteriores), entrenamiento solo con filas cuyo objetivo cae antes de la validación, nulos a 0 y métricas de `get_stats.py` frente a la persistencia. Sobre `model_ready_panel.csv` reproduce el artefacto bit a bit y `final_evaluation.json` (RMSE 1.0396 frente a 2.2619 de la persistencia, −54,04 %) |
+| No se devolvían `y_true`, `feature_status` ni `feature_notes` | Devueltos en inline y batch, con el texto de nota del original |
+| `date` tenía prioridad sobre `origin_date`, y solo se aceptaba `YYYY-MM-DD` | Prioridad del original (`origin_date` > `date` > `year`+`month`) y fechas que pandas interprete |
+
+`TrainResponse` añade el periodo (`train_end_date`, `test_start_date`, `test_end_date`), la
+persistencia (`baseline_rmse`, `baseline_mape_pct`), la mejora (`rmse_reduction_pct`,
+`mape_reduction_pct`) y `training_time_s`. Las métricas son nulas si el test no tiene filas con
+valor real (el original lo reporta como `evaluation_available: false`).
+
+### Verificación
+- `tests/unit/test_ml15_training.py` (11 tests nuevos, incluida la reproducción exacta del artefacto
+  y de `final_evaluation.json`, que se salta si falta `inbox/a15/codigo/`) más los 32 existentes:
+  43/43. Contratos de MLflow e higiene: verdes.
+- Prueba de humo contra la app FastAPI real (`MODEL=ml15-wine-ipi-price-forecast`, artefactos
+  reales, MLflow simulado): `/health` cargado; inline `caso_001` = 125.48069826420476 con
+  `y_true` = 126.55; inline `2026-02` marcado `exogenous_last_available`; batch de
+  `ipi_history.csv` 15/15; `/train` con `model_ready_panel.csv` → 200 con 85/8 filas y las métricas
+  oficiales; sin `mlflow_run_id` → 422; con un CSV demasiado corto → 400.
+- flake8 limpio.
+
+**Estado: ✅ listo para revisión humana.** Pendiente de decisión (sin cambios):
+- La capa `regional_layer` sigue fuera del plugin.
+- El histórico de referencia empaquetado (IPI hasta feb-2026, financieros hasta jun-2026) solo se
+  actualiza si el equipo de IA lo regenera.
+- El nombre "rnn" de la carpeta original no se aclara en el README entregado.

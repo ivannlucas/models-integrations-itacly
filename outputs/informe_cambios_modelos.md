@@ -680,3 +680,18 @@ Verificación: 912 tests en este repo y 966 en el de producción, flake8 limpio.
 del servicio de explicabilidad se probaron con los artefactos reales de ml14, ml18, ml21 y ml26:
 en todas, la explicación suma exactamente la predicción del plugin. ml15 y ml41 se probaron con
 artefactos sintéticos con el formato real, porque sus artefactos no están disponibles en local.
+
+## 12. Anexo (13 de octubre de 2026): ml15 revisado con el código original
+
+Con el código entregado completo (`inbox/a15/codigo/`) se ha revisado ml15. El artefacto entregado
+es exactamente el que produce `trainer.py`, y la inferencia del plugin coincide con `predictor.py`
+en todos sus modos (117 meses con solo fecha, el histórico simple y los paneles). Correcciones:
+
+| Hallazgo | Corrección |
+|---|---|
+| `/train` usaba un holdout del 15 % final: no reproducía el artefacto y dejaba en train objetivos que caían en el periodo de test | Puerto fiel del procedimiento original (splits por fecha, filtro de objetivo, nulos a 0, métricas de `get_stats.py` frente a la persistencia). Reproduce `horizon_6_ridge.pkl` bit a bit y `final_evaluation.json` |
+| No se devolvían `y_true`, `feature_status` ni `feature_notes` | Devueltos en inline y batch, con el texto de nota del original |
+| `date` tenía prioridad sobre `origin_date`, y solo se aceptaba `YYYY-MM-DD` | Prioridad y parseo del original |
+
+Con scikit-learn 1.5.2 (la versión del servicio) los 13 casos dorados y las métricas oficiales se
+reproducen exactamente. Detalle en `outputs/a15/verification_report.md`.

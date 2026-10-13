@@ -26,11 +26,15 @@ from app.plugins.ml15_wine_ipi_price_forecast.constants import (
     AUTOREGRESSIVE_LAGS,
     COMMODITY_LAGS,
     FINANCIAL_RAW_COLUMNS,
+    HORIZON,
     INTL_LAGS,
     SIMPLE_IPI_VALUE_CANDIDATES,
     TARGET_SOURCE_COLUMN,
 )
 from app.plugins.ml15_wine_ipi_price_forecast.model_loader import reference_data_paths
+
+EXACT = "exact"
+EXOGENOUS_LAST_AVAILABLE = "exogenous_last_available"
 
 
 def _month_start(dates: pd.Series) -> pd.Series:
@@ -84,9 +88,17 @@ def _lookup_monthly_values(
     source_name: str,
     output_column: str,
     allow_last_available: bool = False,
+    allow_missing: bool = False,
+    notes: list[tuple[int, str, str]] | None = None,
 ) -> pd.Series:
-    """Port of _lookup_monthly_values (allow_missing is always False here — a value this
-    plugin cannot resolve must surface as an explicit error, never a silent NaN feature)."""
+    """Port of _lookup_monthly_values.
+
+    allow_missing is only used for y_true (a target that is not observed yet): a feature this
+    plugin cannot resolve must surface as an explicit error, never a silent NaN feature. Each
+    last-available fallback appends (row, output_column, note) to *notes*, with the original's
+    note text — like the original, there is no staleness cap (its max_staleness_months is never
+    enforced).
+    """
     if value_column not in source_df.columns:
         raise ValueError(
             f"Reference file for {source_name} is missing required column '{value_column}'."
@@ -109,10 +121,19 @@ def _lookup_monthly_values(
             candidates = source[source["date"] <= requested_date]
             if candidates.empty:
                 continue
-            values.loc[idx] = float(candidates.iloc[-1][value_column])
+            fallback_row = candidates.iloc[-1]
+            fallback_date = pd.Timestamp(fallback_row["date"])
+            values.loc[idx] = float(fallback_row[value_column])
+            if notes is not None:
+                staleness = (requested_date.year - fallback_date.year) * 12 + requested_date.month - fallback_date.month
+                notes.append((int(idx), output_column, (
+                    f"{output_column}: se usa {str(value_column).upper()} {fallback_date.strftime('%Y-%m-%d')} "
+                    f"como último dato disponible para {requested_date.strftime('%Y-%m-%d')}; "
+                    f"desfase={staleness} {'mes' if staleness == 1 else 'meses'}"
+                )))
         missing = values.isna()
 
-    if missing.any():
+    if missing.any() and not allow_missing:
         missing_labels = dates.loc[missing].dt.strftime("%Y-%m-%d").unique().tolist()
         raise ValueError(
             f"No se puede derivar la feature '{output_column}': faltan datos de "
@@ -167,9 +188,15 @@ def derive_feature_rows(
     build_inference_panel_from_history, which re-sorts by date — callers that need the
     original row order, e.g. predict_batch, would otherwise have to re-match rows back to
     input positions by date, which breaks silently if two origin_dates collide).
+
+    Also returns, per row, y_true (the observed IPI at origin + HORIZON, None if not observed
+    yet) and _notes: the (column, note) pairs of every exogenous feature that used the last
+    available value. The original sets feature_status/feature_notes for the whole panel at once;
+    here they are kept per row so one late month does not flag every row of a batch.
     """
     out = pd.DataFrame({"date": _month_start(pd.Series(origin_dates))})
     out["month"] = out["date"].dt.month
+    notes: list[tuple[int, str, str]] = []
 
     out["ipi_national_current"] = _lookup_monthly_values(
         source_df=prices_df, value_column=TARGET_SOURCE_COLUMN, lookup_dates=out["date"],
@@ -192,7 +219,7 @@ def derive_feature_rows(
             source_df=prices_df, value_column=source_col,
             lookup_dates=out["date"] - pd.DateOffset(months=lag),
             source_name="global phytosanitary prices (bundled reference)",
-            output_column=output_col, allow_last_available=True,
+            output_column=output_col, allow_last_available=True, notes=notes,
         )
 
     for source_col, lag in COMMODITY_LAGS.items():
@@ -201,7 +228,7 @@ def derive_feature_rows(
             source_df=financial_df, value_column=source_col,
             lookup_dates=out["date"] - pd.DateOffset(months=lag),
             source_name="financial proxies (bundled reference)",
-            output_column=output_col, allow_last_available=True,
+            output_column=output_col, allow_last_available=True, notes=notes,
         )
 
     out["month_sin"] = out["month"].apply(lambda m: math.sin(2.0 * math.pi * m / 12.0))
@@ -209,7 +236,23 @@ def derive_feature_rows(
     out["quarter"] = out["date"].dt.quarter
     out["is_spring_risk"] = out["month"].isin([4, 5, 6]).astype(int)
 
+    y_true = _lookup_monthly_values(
+        source_df=prices_df, value_column=TARGET_SOURCE_COLUMN,
+        lookup_dates=out["date"] + pd.DateOffset(months=HORIZON),
+        source_name="global phytosanitary prices (bundled reference)",
+        output_column="y_true", allow_missing=True,
+    )
+    out["y_true"] = [None if pd.isna(v) else float(v) for v in y_true]
+    out["_notes"] = [[(col, note) for row, col, note in notes if row == i] for i in range(len(out))]
+
     return out.drop(columns=["month"])
+
+
+def feature_status(notes: list[str]) -> tuple[str, str]:
+    """(feature_status, feature_notes) exactly as the original builds them from its notes."""
+    if not notes:
+        return EXACT, ""
+    return EXOGENOUS_LAST_AVAILABLE, " | ".join(sorted(set(notes)))
 
 
 def find_simple_ipi_column(columns: list[str]) -> str | None:

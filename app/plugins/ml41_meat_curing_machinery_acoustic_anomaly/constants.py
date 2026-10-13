@@ -83,7 +83,9 @@ METRICS_REPORTED = {
     "pct_cumple_fnr_objetivo": 1.0,
     "fnr_objetivo_negocio": 0.10,
     "auc_maha_range_por_maquina": {
-        "fan": [0.68, 0.97], "pump": [0.58, 0.99],
-        "slider": [0.58, 0.99], "valve": [0.45, 0.61],
+        # ViT-Tiny, reports/table_auc_por_caso.csv (vit_tiny_* rows). The previous values
+        # (fan 0.68-0.97, pump/slider 0.58-0.99, valve 0.45-0.61) were the memoria's MAE-Base ranges.
+        "fan": [0.59, 0.99], "pump": [0.60, 0.99],
+        "slider": [0.62, 0.98], "valve": [0.46, 0.60],
     },
 }

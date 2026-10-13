@@ -1765,8 +1765,12 @@ def _ml15_train(plugin: FakePlugin, *, data_path: str) -> Ml15TrainResp:
     """Fake retraining response for the ml15 national phytosanitary IPI (Ridge) forecast model."""
     return Ml15TrainResp(
         detail="Reentrenamiento completado (Ridge, procedimiento original).",
-        n_train_rows=98,
-        n_test_rows=18,
+        n_train_rows=85,
+        n_test_rows=8,
+        train_end_date="2023-12-01",
+        test_start_date="2025-01-01",
+        test_end_date="2026-01-01",
+        training_time_s=0.05,
         rmse=1.0396,
         mae=0.9440,
         mape_pct=0.7377,
