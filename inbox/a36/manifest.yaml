@@ -1,0 +1,748 @@
+# manifest ml36 — generado por skill manifest-extraction; golden_cases extraídos de datasets reales del equipo de IA (no inventados)
+model_id: ml36_dairy_dnl_co2_emissions_optimizer
+sector: lacteo
+nombre: Modelo basado en algoritmos genéticos para la reducción del impacto ambiental en los procesos de transformación de la leche
+task_type: regression_prescriptive
+framework:
+- torch>=2.6,<3 (CPU)
+- scikit-learn==1.8.0
+- deap==1.4.3
+- joblib==1.5.3
+- numpy==2.4.2
+- pandas==3.0.1
+- PyYAML==6.0.3
+artifacts:
+  folder: models/artifacts/
+  files:
+  - MLP_Final_Best_From_Search.pt
+  - scaler_X.pkl
+  - scaler_Y.pkl
+  - ga_policy_global.json
+  - ../metrics/final_model_config.json
+  notes:
+    MLP_Final_Best_From_Search.pt: 'state_dict DynamicMLP: 11 -> [Linear64+BatchNorm+ReLU+Dropout0.1] x1 -> 2 (orden salida [T_out, CO2_emissions])'
+    scaler_X.pkl: StandardScaler sobre las 11 features (orden feature_order)
+    scaler_Y.pkl: MinMaxScaler sobre [T_out, CO2_emissions]; NO StandardScaler
+    ga_policy_global.json: politica global GA (best_individual=[T_serv,Delta_P,Regeneration_perc]); la usan los modos static/hybrid
+    final_model_config.json: vive en models/metrics/, no en artifacts/; define input_size/num_layers/neurons/activation/dropout
+inputs:
+  feature_order:
+  - T_serv
+  - F_milk
+  - T_in
+  - Fat_perc
+  - Viscosity
+  - Regeneration_perc
+  - Delta_P
+  - t_ciclo
+  - Hydraulic_Resistance
+  - T_serv_margin
+  - Thermal_Intensity
+  fixed_context:
+  - name: F_milk
+    unit: L/h
+    description: Caudal volumétrico de leche
+    train_range:
+    - 4469.84
+    - 5856.05
+  - name: T_in
+    unit: °C
+    description: Temperatura de entrada de la leche
+    train_range:
+    - 3.36
+    - 7.66
+  - name: Fat_perc
+    unit: '%'
+    description: '% de grasa del lote'
+    train_range:
+    - 3.2
+    - 4.19
+  - name: Viscosity
+    unit: mPa·s
+    description: Viscosidad dinámica de la leche (unidad no confirmada en la memoria)
+    train_range:
+    - 1.89
+    - 2.26
+  - name: t_ciclo
+    unit: min
+    description: Tiempo desde el inicio del ciclo de producción (muestreo cada 5)
+    train_range:
+    - 5.0
+    - 610.0
+  control:
+  - name: T_serv
+    unit: °C
+    description: Temperatura del líquido de calentamiento
+    ga_range:
+    - 73.4
+    - 84.31
+    train_range:
+    - 75.32
+    - 84.31
+  - name: Delta_P
+    unit: bar
+    description: Presión de impulsión de las bombas (unidad no confirmada en la memoria)
+    ga_range:
+    - 0.6
+    - 1.6
+    train_range:
+    - 0.603
+    - 1.603
+  - name: Regeneration_perc
+    unit: '%'
+    description: Eficiencia de regeneración térmica
+    ga_range:
+    - 86.9
+    - 93.4
+    train_range:
+    - 86.93
+    - 93.48
+  derived_always:
+    Hydraulic_Resistance: Delta_P / F_milk**2  (0 si F_milk==0)
+    T_serv_margin: T_serv - 72.5
+    Thermal_Intensity: ((72.5 - T_in) * (1 - Regeneration_perc/100)) / 853.6279
+  notes: En predict el cliente aporta las 8 variables base (contexto + control) y el plugin deriva las 3 restantes (fórmulas verificadas contra
+    test_raw fila 0). En optimize solo se aporta contexto.
+outputs:
+  predict_inline:
+  - name: T_out
+    unit: °C
+    description: Temperatura de salida de la leche predicha
+  - name: CO2_emissions
+    unit: kg
+    description: Emisiones de CO2 por registro predichas
+  optimize:
+  - name: recommended_T_serv
+    unit: °C
+  - name: recommended_Delta_P
+    unit: bar
+  - name: recommended_Regeneration_perc
+    unit: '%'
+  - name: recommended_CO2_pred
+    unit: kg
+  - name: recommended_T_out_pred
+    unit: °C
+  - name: policy_*
+    description: setpoints/CO2/T_out de la política global estática
+  - name: co2_saving_vs_policy
+    unit: kg
+  - name: co2_saving_vs_current
+    unit: kg
+    description: solo si se aportan los setpoints actuales
+  - name: decision_mode
+    description: static | adaptive | hybrid (default hybrid)
+training:
+  supported: true
+  source: 'codigo_entrenamiento (src/training/trainer.py, config/config.yaml: training_model1; memoria §Arquitectura y Algoritmos)'
+  target_column: null
+  target_columns:
+  - T_out
+  - CO2_emissions
+  target_column_comment: modelo multi-salida; el orden [T_out, CO2_emissions] es contractual (scaler_Y). No hay una única target_column; plugin-integration
+    debe decidir cómo mapearlo al contrato TrainRequest.
+  required_columns:
+  - T_serv
+  - F_milk
+  - T_in
+  - Fat_perc
+  - Viscosity
+  - Regeneration_perc
+  - Delta_P
+  - t_ciclo
+  - Hydraulic_Resistance
+  - T_serv_margin
+  - Thermal_Intensity
+  - T_out
+  - CO2_emissions
+  - cycle_id
+  required_columns_comment: cycle_id solo para el split por ciclos; si falta el código lo reconstruye desde t_ciclo (reinicio = nuevo ciclo).
+    Las 3 derivadas pueden calcularse en el plugin si faltan.
+  split:
+    strategy: por ciclo, estratificado por estación, seed 42
+    approx: 70/15/15
+  hyperparams:
+    optimizer: Adam
+    loss: MSELoss
+    lr: 0.0001
+    epochs: 400
+    early_stopping_patience: 30
+    batch_size: 128
+    num_layers: 1
+    neurons: 64
+    activation: ReLU
+    dropout_rate: 0.1
+    batch_norm: true
+    seed: 1
+    x_scaler: StandardScaler
+    y_scaler: MinMaxScaler
+  metrics_returned:
+  - mae_t_out
+  - r2_t_out
+  - mse_t_out
+  - mae_co2
+  - r2_co2
+  - mse_co2
+constraints:
+  t_out_min_celsius: 72.5
+  penalty_factor: 50.0
+  gene_bounds:
+    T_serv:
+    - 73.4
+    - 84.31
+    Delta_P:
+    - 0.6
+    - 1.6
+    Regeneration_perc:
+    - 86.9
+    - 93.4
+  descripcion: Restricción térmica de pasteurización T_out >= 72.5 °C. En el GA original es BLANDA (penalización 50*(72.5-T_out) sumada al fitness),
+    no un rechazo duro; la política global viola 0.34% de contextos (177/51389). El plugin debe exponer un flag de factibilidad (T_out_violation)
+    y decidir en plugin-integration si lanza excepción de dominio — requiere confirmación humana.
+ga_config:
+  library: deap==1.4.3
+  seed: 42
+  dataset_ga:
+    pop_size: 120
+    n_gen: 100
+    cxpb: 0.9
+    mutpb: 0.35
+    elite_size: 5
+    mutation_eta: 10.0
+    mutation_indpb: 0.6
+    tournament_size: 3
+    cx_alpha: 0.3
+  adaptive_ga:
+    pop_size: 16
+    n_gen: 14
+    cxpb: 0.85
+    mutpb: 0.3
+    elite_size: 2
+    mutation_eta: 10.0
+    mutation_indpb: 0.6
+    tournament_size: 3
+    cx_alpha: 0.3
+    seed: 42
+    row_seed: seed + i (i desde 1)
+  modes:
+    static: aplica ga_policy_global.json
+    adaptive: GA por fila
+    hybrid: GA por fila sembrado con la política (y setpoints actuales si se aportan) — modo por defecto
+metrics_reported:
+  dataset: test_hold_out
+  n_samples_test: 7704
+  source: memoria Tabla 11 / models/metrics/final_test_metrics.json
+  T_out:
+    mae: 0.019092
+    mse: 0.000592
+    r2: 0.999492
+  CO2_emissions:
+    mae: 0.307587
+    mse: 0.147651
+    r2: 0.895145
+  ga_validation:
+    n_instances: 7755
+    co2_original_kg: 156067.35
+    co2_optimized_kg: 122231.46
+    mejora_pct: 21.68
+    source: models/metrics/ga/kpi_summary.csv
+golden_cases:
+- id: predict_001
+  mode: predict
+  test_row_index: 0
+  input:
+    T_serv: 78.34
+    F_milk: 4995.54
+    T_in: 4.12
+    Fat_perc: 3.3
+    Viscosity: 1.99
+    Regeneration_perc: 91.54
+    Delta_P: 0.742
+    t_ciclo: 5.0
+  expected:
+    T_out: 77.18
+    CO2_emissions: 18.574
+  expected_model_pred:
+    T_out: 77.19326
+    CO2_emissions: 18.408106
+  source: dataset_test_split (data/splits/test_raw.csv + data/predictions/final_test_predictions.csv)
+- id: predict_002
+  mode: predict
+  test_row_index: 453
+  input:
+    T_serv: 81.15
+    F_milk: 5172.03
+    T_in: 3.95
+    Fat_perc: 4.01
+    Viscosity: 2.11
+    Regeneration_perc: 87.97
+    Delta_P: 1.28
+    t_ciclo: 565.0
+  expected:
+    T_out: 79.39
+    CO2_emissions: 23.393
+  expected_model_pred:
+    T_out: 79.37327
+    CO2_emissions: 23.192757
+  source: dataset_test_split (data/splits/test_raw.csv + data/predictions/final_test_predictions.csv)
+- id: predict_003
+  mode: predict
+  test_row_index: 906
+  input:
+    T_serv: 79.52
+    F_milk: 5072.03
+    T_in: 4.54
+    Fat_perc: 3.98
+    Viscosity: 2.09
+    Regeneration_perc: 91.83
+    Delta_P: 0.831
+    t_ciclo: 20.0
+  expected:
+    T_out: 78.38
+    CO2_emissions: 17.867
+  expected_model_pred:
+    T_out: 78.369255
+    CO2_emissions: 18.336058
+  source: dataset_test_split (data/splits/test_raw.csv + data/predictions/final_test_predictions.csv)
+- id: predict_004
+  mode: predict
+  test_row_index: 1359
+  input:
+    T_serv: 77.18
+    F_milk: 4813.29
+    T_in: 4.98
+    Fat_perc: 4.08
+    Viscosity: 2.11
+    Regeneration_perc: 92.33
+    Delta_P: 0.743
+    t_ciclo: 15.0
+  expected:
+    T_out: 76.2
+    CO2_emissions: 16.316
+  expected_model_pred:
+    T_out: 76.24816
+    CO2_emissions: 16.955738
+  source: dataset_test_split (data/splits/test_raw.csv + data/predictions/final_test_predictions.csv)
+- id: predict_005
+  mode: predict
+  test_row_index: 1812
+  input:
+    T_serv: 81.68
+    F_milk: 5282.41
+    T_in: 5.2
+    Fat_perc: 3.72
+    Viscosity: 2.04
+    Regeneration_perc: 88.89
+    Delta_P: 1.197
+    t_ciclo: 505.0
+  expected:
+    T_out: 80.0
+    CO2_emissions: 22.572
+  expected_model_pred:
+    T_out: 80.021484
+    CO2_emissions: 22.215536
+  source: dataset_test_split (data/splits/test_raw.csv + data/predictions/final_test_predictions.csv)
+- id: predict_006
+  mode: predict
+  test_row_index: 2265
+  input:
+    T_serv: 80.97
+    F_milk: 5210.38
+    T_in: 6.28
+    Fat_perc: 3.94
+    Viscosity: 2.09
+    Regeneration_perc: 88.77
+    Delta_P: 1.254
+    t_ciclo: 535.0
+  expected:
+    T_out: 79.35
+    CO2_emissions: 22.142
+  expected_model_pred:
+    T_out: 79.355034
+    CO2_emissions: 21.826887
+  source: dataset_test_split (data/splits/test_raw.csv + data/predictions/final_test_predictions.csv)
+- id: predict_007
+  mode: predict
+  test_row_index: 2718
+  input:
+    T_serv: 80.62
+    F_milk: 5268.25
+    T_in: 6.22
+    Fat_perc: 3.63
+    Viscosity: 2.03
+    Regeneration_perc: 89.88
+    Delta_P: 1.183
+    t_ciclo: 580.0
+  expected:
+    T_out: 79.13
+    CO2_emissions: 20.779
+  expected_model_pred:
+    T_out: 79.19327
+    CO2_emissions: 20.677544
+  source: dataset_test_split (data/splits/test_raw.csv + data/predictions/final_test_predictions.csv)
+- id: predict_008
+  mode: predict
+  test_row_index: 3171
+  input:
+    T_serv: 77.4
+    F_milk: 4981.18
+    T_in: 6.13
+    Fat_perc: 4.08
+    Viscosity: 2.06
+    Regeneration_perc: 89.94
+    Delta_P: 0.776
+    t_ciclo: 10.0
+  expected:
+    T_out: 76.1
+    CO2_emissions: 19.866
+  expected_model_pred:
+    T_out: 76.13303
+    CO2_emissions: 19.504335
+  source: dataset_test_split (data/splits/test_raw.csv + data/predictions/final_test_predictions.csv)
+- id: predict_009
+  mode: predict
+  test_row_index: 3624
+  input:
+    T_serv: 78.16
+    F_milk: 4801.61
+    T_in: 6.49
+    Fat_perc: 3.33
+    Viscosity: 2.01
+    Regeneration_perc: 90.93
+    Delta_P: 0.71
+    t_ciclo: 30.0
+  expected:
+    T_out: 77.05
+    CO2_emissions: 18.159
+  expected_model_pred:
+    T_out: 77.03275
+    CO2_emissions: 18.281004
+  source: dataset_test_split (data/splits/test_raw.csv + data/predictions/final_test_predictions.csv)
+- id: predict_010
+  mode: predict
+  test_row_index: 4078
+  input:
+    T_serv: 78.59
+    F_milk: 4829.31
+    T_in: 6.72
+    Fat_perc: 3.84
+    Viscosity: 2.07
+    Regeneration_perc: 89.77
+    Delta_P: 0.782
+    t_ciclo: 85.0
+  expected:
+    T_out: 77.3
+    CO2_emissions: 19.676
+  expected_model_pred:
+    T_out: 77.30152
+    CO2_emissions: 19.461609
+  source: dataset_test_split (data/splits/test_raw.csv + data/predictions/final_test_predictions.csv)
+- id: predict_011
+  mode: predict
+  test_row_index: 4531
+  input:
+    T_serv: 79.24
+    F_milk: 5308.89
+    T_in: 6.55
+    Fat_perc: 3.49
+    Viscosity: 2.06
+    Regeneration_perc: 90.78
+    Delta_P: 0.899
+    t_ciclo: 55.0
+  expected:
+    T_out: 77.93
+    CO2_emissions: 19.318
+  expected_model_pred:
+    T_out: 77.97424
+    CO2_emissions: 19.491762
+  source: dataset_test_split (data/splits/test_raw.csv + data/predictions/final_test_predictions.csv)
+- id: predict_012
+  mode: predict
+  test_row_index: 4984
+  input:
+    T_serv: 78.86
+    F_milk: 4902.29
+    T_in: 6.57
+    Fat_perc: 3.81
+    Viscosity: 2.07
+    Regeneration_perc: 92.14
+    Delta_P: 0.797
+    t_ciclo: 95.0
+  expected:
+    T_out: 77.84
+    CO2_emissions: 17.26
+  expected_model_pred:
+    T_out: 77.82393
+    CO2_emissions: 17.293304
+  source: dataset_test_split (data/splits/test_raw.csv + data/predictions/final_test_predictions.csv)
+- id: predict_013
+  mode: predict
+  test_row_index: 5437
+  input:
+    T_serv: 77.51
+    F_milk: 5324.93
+    T_in: 6.49
+    Fat_perc: 3.35
+    Viscosity: 1.98
+    Regeneration_perc: 89.39
+    Delta_P: 0.904
+    t_ciclo: 100.0
+  expected:
+    T_out: 76.05
+    CO2_emissions: 20.343
+  expected_model_pred:
+    T_out: 76.07592
+    CO2_emissions: 20.678883
+  source: dataset_test_split (data/splits/test_raw.csv + data/predictions/final_test_predictions.csv)
+- id: predict_014
+  mode: predict
+  test_row_index: 5890
+  input:
+    T_serv: 78.25
+    F_milk: 5150.2
+    T_in: 6.27
+    Fat_perc: 3.5
+    Viscosity: 2.06
+    Regeneration_perc: 89.28
+    Delta_P: 0.886
+    t_ciclo: 105.0
+  expected:
+    T_out: 76.8
+    CO2_emissions: 21.02
+  expected_model_pred:
+    T_out: 76.79213
+    CO2_emissions: 20.57707
+  source: dataset_test_split (data/splits/test_raw.csv + data/predictions/final_test_predictions.csv)
+- id: predict_015
+  mode: predict
+  test_row_index: 6343
+  input:
+    T_serv: 78.24
+    F_milk: 5153.13
+    T_in: 6.47
+    Fat_perc: 3.47
+    Viscosity: 2.01
+    Regeneration_perc: 89.86
+    Delta_P: 0.859
+    t_ciclo: 95.0
+  expected:
+    T_out: 76.84
+    CO2_emissions: 19.415
+  expected_model_pred:
+    T_out: 76.88675
+    CO2_emissions: 19.968191
+  source: dataset_test_split (data/splits/test_raw.csv + data/predictions/final_test_predictions.csv)
+- id: predict_016
+  mode: predict
+  test_row_index: 6796
+  input:
+    T_serv: 78.14
+    F_milk: 4862.04
+    T_in: 5.85
+    Fat_perc: 3.44
+    Viscosity: 2.01
+    Regeneration_perc: 89.8
+    Delta_P: 0.74
+    t_ciclo: 70.0
+  expected:
+    T_out: 76.81
+    CO2_emissions: 20.256
+  expected_model_pred:
+    T_out: 76.85466
+    CO2_emissions: 19.557316
+  source: dataset_test_split (data/splits/test_raw.csv + data/predictions/final_test_predictions.csv)
+- id: predict_017
+  mode: predict
+  test_row_index: 7249
+  input:
+    T_serv: 80.45
+    F_milk: 5278.19
+    T_in: 4.82
+    Fat_perc: 4.07
+    Viscosity: 2.11
+    Regeneration_perc: 89.46
+    Delta_P: 0.905
+    t_ciclo: 25.0
+  expected:
+    T_out: 78.9
+    CO2_emissions: 20.756
+  expected_model_pred:
+    T_out: 78.92705
+    CO2_emissions: 21.413357
+  source: dataset_test_split (data/splits/test_raw.csv + data/predictions/final_test_predictions.csv)
+- id: predict_018
+  mode: predict
+  test_row_index: 7703
+  input:
+    T_serv: 82.07
+    F_milk: 5332.41
+    T_in: 4.13
+    Fat_perc: 4.1
+    Viscosity: 2.14
+    Regeneration_perc: 90.35
+    Delta_P: 1.398
+    t_ciclo: 565.0
+  expected:
+    T_out: 80.57
+    CO2_emissions: 21.096
+  expected_model_pred:
+    T_out: 80.55128
+    CO2_emissions: 21.01972
+  source: dataset_test_split (data/splits/test_raw.csv + data/predictions/final_test_predictions.csv)
+- id: optimize_001
+  mode: optimize
+  val_row_index: 0
+  input:
+    F_milk: 4915.07
+    T_in: 3.85
+    Fat_perc: 3.57
+    Viscosity: 2.04
+    t_ciclo: 5.0
+  input_current_setpoints:
+    T_serv: 79.5
+    Delta_P: 0.75
+    Regeneration_perc: 91.88
+  expected_static_policy:
+    T_serv: 73.55013
+    Delta_P: 0.6
+    Regeneration_perc: 93.4
+    CO2_pred: 15.603968
+    T_out_pred: 72.791527
+  expected_current:
+    CO2_pred: 18.143688
+    T_out_pred: 78.388786
+  expected_adaptive_reference:
+    T_serv: 73.410186
+    Delta_P: 0.605209
+    Regeneration_perc: 93.39825
+    CO2_pred: 15.5859
+    T_out_pred: 72.659409
+    note: salida del GA adaptativo (DEAP). Es reproducible con la semilla 43 + val_row_index (42 + indice de fila desde 1); la verificacion
+      real reproduce estos valores con diferencia <= 5e-5. NO es cierto que CO2_pred <= policy CO2_pred (la politica puede incumplir
+      T_out >= 72.5 y el GA elige entonces una solucion mas cara pero factible).
+  source: dataset_validation_split (val_raw.csv + data/predictions/realtime_decisions.csv, modo hybrid)
+- id: optimize_002
+  mode: optimize
+  val_row_index: 1
+  input:
+    F_milk: 5010.61
+    T_in: 4.21
+    Fat_perc: 3.57
+    Viscosity: 2.04
+    t_ciclo: 10.0
+  input_current_setpoints:
+    T_serv: 77.8
+    Delta_P: 0.781
+    Regeneration_perc: 91.38
+  expected_static_policy:
+    T_serv: 73.55013
+    Delta_P: 0.6
+    Regeneration_perc: 93.4
+    CO2_pred: 15.691304
+    T_out_pred: 72.776001
+  expected_current:
+    CO2_pred: 18.510902
+    T_out_pred: 76.660973
+  expected_adaptive_reference:
+    T_serv: 73.432359
+    Delta_P: 0.765963
+    Regeneration_perc: 93.4
+    CO2_pred: 15.757544
+    T_out_pred: 72.72229
+    note: salida del GA adaptativo (DEAP). Es reproducible con la semilla 43 + val_row_index (42 + indice de fila desde 1); la verificacion
+      real reproduce estos valores con diferencia <= 5e-5. NO es cierto que CO2_pred <= policy CO2_pred (la politica puede incumplir
+      T_out >= 72.5 y el GA elige entonces una solucion mas cara pero factible).
+  source: dataset_validation_split (val_raw.csv + data/predictions/realtime_decisions.csv, modo hybrid)
+- id: optimize_003
+  mode: optimize
+  val_row_index: 2000
+  input:
+    F_milk: 5198.58
+    T_in: 6.49
+    Fat_perc: 3.94
+    Viscosity: 2.01
+    t_ciclo: 365.0
+  input_current_setpoints:
+    T_serv: 80.44
+    Delta_P: 1.054
+    Regeneration_perc: 89.2
+  expected_static_policy:
+    T_serv: 73.55013
+    Delta_P: 0.6
+    Regeneration_perc: 93.4
+    CO2_pred: 15.561646
+    T_out_pred: 72.667969
+  expected_current:
+    CO2_pred: 21.176714
+    T_out_pred: 78.906128
+  expected_adaptive_reference:
+    T_serv: 77.426759
+    Delta_P: 0.808163
+    Regeneration_perc: 93.34158
+    CO2_pred: 16.260206
+    T_out_pred: 76.590958
+    note: salida del GA adaptativo (DEAP). Es reproducible con la semilla 43 + val_row_index (42 + indice de fila desde 1); la verificacion
+      real reproduce estos valores con diferencia <= 5e-5. NO es cierto que CO2_pred <= policy CO2_pred (la politica puede incumplir
+      T_out >= 72.5 y el GA elige entonces una solucion mas cara pero factible).
+  source: dataset_validation_split (val_raw.csv + data/predictions/realtime_decisions.csv, modo hybrid)
+- id: optimize_004
+  mode: optimize
+  val_row_index: 5000
+  input:
+    F_milk: 5154.72
+    T_in: 6.33
+    Fat_perc: 3.68
+    Viscosity: 2.06
+    t_ciclo: 505.0
+  input_current_setpoints:
+    T_serv: 78.82
+    Delta_P: 1.169
+    Regeneration_perc: 89.67
+  expected_static_policy:
+    T_serv: 73.55013
+    Delta_P: 0.6
+    Regeneration_perc: 93.4
+    CO2_pred: 15.406671
+    T_out_pred: 72.647728
+  expected_current:
+    CO2_pred: 20.334961
+    T_out_pred: 77.37384
+  expected_adaptive_reference:
+    T_serv: 73.521238
+    Delta_P: 1.032503
+    Regeneration_perc: 93.397171
+    CO2_pred: 15.711964
+    T_out_pred: 72.704651
+    note: salida del GA adaptativo (DEAP). Es reproducible con la semilla 43 + val_row_index (42 + indice de fila desde 1); la verificacion
+      real reproduce estos valores con diferencia <= 5e-5. NO es cierto que CO2_pred <= policy CO2_pred (la politica puede incumplir
+      T_out >= 72.5 y el GA elige entonces una solucion mas cara pero factible).
+  source: dataset_validation_split (val_raw.csv + data/predictions/realtime_decisions.csv, modo hybrid)
+known_issues:
+- 'requirements.txt es ASCII/LF (no UTF-16) pero es un pip freeze de entorno completo (jupyter, matplotlib, statsmodels...) con torch via --extra-index-url
+  CPU: el plugin debe usar un subconjunto mínimo (torch, scikit-learn, joblib, numpy, pandas, deap).'
+- 'El código entregado carga artefactos con rutas relativas a config.yaml y reentrena automáticamente si faltan (auto_train_if_missing=True) —
+  NO replicar en el plugin: si faltan artefactos debe fallar con excepción de dominio.'
+- scaler_X.pkl/scaler_Y.pkl están serializados con numpy 2.x (numpy._core); no cargan con numpy 1.x. El entorno de verificación debe usar numpy>=2
+  y scikit-learn==1.8.0.
+- 'Hay copias duplicadas en models/artifacts/nb_experiments/ y MLP_Baseline.pt: solo se usan los artefactos de la raíz de models/artifacts/ (config.yaml:
+  training_model1.final_model.weights_filename).'
+- realtime_decisions.csv incluye policy_source con ruta absoluta de Windows del equipo de IA (C:\Users\PC\...); no usar ese campo.
+- El orden de salida del MLP es [T_out, CO2_emissions]; scaler_Y es MinMaxScaler (no StandardScaler).
+- 'Constantes hardcoded en el cálculo de features: 72.5 (t_out_reference) y 853.6279 (Thermal_Intensity); deben ir a constants.py.'
+- 'Inconsistencias en la memoria: (a) un objetivo cita umbral ''mínimo 72 °C'' pero código/config/tablas usan 72.5 °C; (b) Tabla 10 etiqueta 15.5859
+  kg como CO2 ''de variables actuales'' cuando en realtime_decisions.csv es recommended_CO2_pred (el actual es 18.1437) y cita ''14.10%'' de ahorro
+  cuando 0.0181/15.604 = 0.12%; (c) la memoria describe enable_economic_objective/price_co2_per_kg en config.yaml pero esos parámetros NO existen
+  en config.yaml ni en src/ — modo económico no implementado; (d) la memoria cita la salida T_out_violation pero realtime_decisions.csv no la
+  contiene; (e) KPI memoria 122.240,37 kg optimizado / 33.826,98 ahorro vs kpi_summary.csv 122.231,46 / 33.835,89 (se usan los de kpi_summary.csv).
+  Requiere confirmación humana.'
+- 'config.yaml y defaults de ga_model_pipeline.py difieren (per_row n_gen 20 vs 17; bounds por defecto más amplios): rigen los valores de config.yaml
+  (los de este manifest).'
+- El dataset es 100% sintético (simulador PHE); la memoria lo reconoce ('Ajuste Sim2Real'). Las métricas no son extrapolables a planta real.
+- 'R2 de CO2_emissions (0.895) es muy inferior al de T_out (0.9995): la tolerancia de golden cases para CO2 debe basarse en MAE=0.31 kg, no en
+  la de T_out (MAE=0.019 °C).'
+- 'Golden cases optimize: expected_static_policy y expected_current son deterministas; expected_adaptive_reference tambien se reproduce exactamente fijando la semilla 43 + val_row_index (verificado 4/4, diferencia <= 5e-5). No asumir que el CO2 recomendado es <= al de la politica: en 6869 de 7755 filas de realtime_decisions.csv es mayor, porque la politica global incumple T_out >= 72.5 en 21 filas y el GA prioriza la factibilidad.'
+- 'inbox/a36 se entregó como .zip (descomprimido a inbox/a36/codigo/). La memoria no trae sección explícita de ''Resultados en Conjunto de Test''
+  con ese nombre: se usó Tabla 11 (verificada contra final_test_metrics.json).'
+- 'Nota: pandoc no está instalado en este entorno; la memoria se extrajo con un parser XML propio (sin pérdida de texto relevante, pero las tablas
+  pierden formato).'
+- 'Hallazgo en el código original: en realtime_decision_pipeline._run_adaptive_ga_for_row los individuos semilla (política + operación actual) se añaden a la población y justo después se trunca a pop_size, descartándolos. En la práctica "hybrid" == "adaptive". El plugin lo replica fielmente para reproducir los resultados del equipo de IA; confirmar con ellos si es intencionado.'
+- 'Versiones: los .pkl de scalers vienen de scikit-learn 1.8.0 / numpy 2.x pero el requirements.txt del repo fija scikit-learn==1.5.2 y numpy>=1.24 (y deap==1.4.4 vs 1.4.3). Hay que comprobar la carga de scaler_X/scaler_Y en el entorno real (verification).'

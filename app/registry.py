@@ -193,6 +193,18 @@ from app.plugins.ml34_dairy_pasteurization_energy_ga.train_dto import (
     TrainResponse as Ml34Dairy_TrainResp,
 )
 
+from app.plugins.ml36_dairy_dnl_co2_emissions_optimizer.plugin import (
+    Ml36DairyDnlCo2EmissionsOptimizerPlugin,
+)
+from app.plugins.ml36_dairy_dnl_co2_emissions_optimizer.predict_dto import (
+    PredictRequest as Ml36Dairy_Request,
+    PredictResponse as Ml36Dairy_Response,
+)
+from app.plugins.ml36_dairy_dnl_co2_emissions_optimizer.train_dto import (
+    TrainRequest as Ml36Dairy_TrainReq,
+    TrainResponse as Ml36Dairy_TrainResp,
+)
+
 from app.plugins.ml46_dairy_fouling_clog_detection.plugin import Ml46DairyFoulingClogDetectionPlugin
 from app.plugins.ml46_dairy_fouling_clog_detection.predict_dto import (
     PredictRequest as Ml46Dairy_Request,
@@ -210,6 +222,15 @@ from app.plugins.ml47_dairy_dnsl_pasteurization_fault_detection.predict_dto impo
 from app.plugins.ml47_dairy_dnsl_pasteurization_fault_detection.train_dto import (
     TrainRequest as Ml47Dairy_TrainReq,
     TrainResponse as Ml47Dairy_TrainResp,
+)
+from app.plugins.m48_dnsl_fallas_maquinaria_pasteurizado.plugin import M48DnsFallMaquinariaPasteurizadoPlugin
+from app.plugins.m48_dnsl_fallas_maquinaria_pasteurizado.predict_dto import (
+    PredictRequest as M48_Request,
+    PredictResponse as M48_Response,
+)
+from app.plugins.m48_dnsl_fallas_maquinaria_pasteurizado.train_dto import (
+    TrainRequest as M48_TrainReq,
+    TrainResponse as M48_TrainResp,
 )
 from app.plugins.ml45_cereals_dnsl_critical_point_detection.plugin import (
     Ml45CerealsDnslCriticalPointDetectionPlugin,
@@ -507,6 +528,17 @@ REGISTRY: list[ModelEntry] = [
         train_response_type=Ml34Dairy_TrainResp,
     ),
     ModelEntry(
+        model_id="ml36-dairy-dnl-co2-emissions-optimizer",
+        prefix="/models/ml36-dairy-dnl-co2-emissions-optimizer",
+        version="1.0.0",
+        plugin_class=Ml36DairyDnlCo2EmissionsOptimizerPlugin,
+        predict_request_type=Ml36Dairy_Request,
+        predict_response_type=Ml36Dairy_Response,
+        extra_predict_exceptions=(ThermalSafetyViolationError,),
+        train_request_type=Ml36Dairy_TrainReq,
+        train_response_type=Ml36Dairy_TrainResp,
+    ),
+    ModelEntry(
         model_id="ml46-dairy-fouling-clog-detection",
         prefix="/models/ml46-dairy-fouling-clog-detection",
         version="1.0.0",
@@ -527,6 +559,17 @@ REGISTRY: list[ModelEntry] = [
         extra_predict_exceptions=(),
         train_request_type=Ml47Dairy_TrainReq,
         train_response_type=Ml47Dairy_TrainResp,
+    ),
+    ModelEntry(
+        model_id="m48-dnsl-fallas-maquinaria-pasteurizado",
+        prefix="/models/m48-dnsl-fallas-maquinaria-pasteurizado",
+        version="1.0.0",
+        plugin_class=M48DnsFallMaquinariaPasteurizadoPlugin,
+        predict_request_type=M48_Request,
+        predict_response_type=M48_Response,
+        train_request_type=M48_TrainReq,
+        train_response_type=M48_TrainResp,
+        extra_predict_exceptions=(),
     ),
     ModelEntry(
         model_id="ml9-cereals-infestation-sequence-classifier",

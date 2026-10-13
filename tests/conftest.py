@@ -202,6 +202,17 @@ from app.plugins.ml34_dairy_pasteurization_energy_ga.train_dto import (
     TrainRequest as Ml34Dairy_TrainReq,
     TrainResponse as Ml34DairyTrainResp,
 )
+from app.plugins.ml36_dairy_dnl_co2_emissions_optimizer.predict_dto import (
+    PredictBatchResponse as Ml36DairyBatchResp,
+    PredictInlineResponse as Ml36DairyInlineResp,
+    PredictOptimizeResponse as Ml36DairyOptimizeResp,
+    PredictRequest as Ml36Dairy_Request,
+    PredictResponse as Ml36Dairy_Response,
+)
+from app.plugins.ml36_dairy_dnl_co2_emissions_optimizer.train_dto import (
+    TrainRequest as Ml36Dairy_TrainReq,
+    TrainResponse as Ml36DairyTrainResp,
+)
 from app.plugins.ml46_dairy_fouling_clog_detection.predict_dto import (
     PredictBatchResponse as Ml46DairyBatchResp,
     PredictInlineResponse as Ml46DairyInlineResp,
@@ -232,6 +243,16 @@ from app.plugins.ml47_dairy_dnsl_pasteurization_fault_detection.predict_dto impo
     PredictInlineResponse as Ml47DairyInlineResp,
     PredictRequest as Ml47Dairy_Request,
     PredictResponse as Ml47Dairy_Response,
+)
+from app.plugins.m48_dnsl_fallas_maquinaria_pasteurizado.predict_dto import (
+    PredictBatchResponse as M48BatchResp,
+    PredictInlineResponse as M48InlineResp,
+    PredictRequest as M48_Request,
+    PredictResponse as M48_Response,
+)
+from app.plugins.m48_dnsl_fallas_maquinaria_pasteurizado.train_dto import (
+    TrainRequest as M48_TrainReq,
+    TrainResponse as M48TrainResp,
 )
 from app.plugins.ml40_meat_refrigeration_aeration_fault_diagnosis.predict_dto import (
     PredictBatchResponse as Ml40MeatBatchResp,
@@ -1135,6 +1156,56 @@ def _ml34_dairy_train(plugin: FakePlugin, *, data_path: str) -> Ml34DairyTrainRe
     )
 
 
+_ML36_OPTIMIZE = dict(
+    decision_mode="hybrid", used_adaptive_ga=True, seed=43,
+    recommended_T_serv=73.41, recommended_Delta_P=0.605, recommended_Regeneration_perc=93.398,
+    recommended_CO2_pred=15.5859, recommended_T_out_pred=72.6594, recommended_factible=True,
+    policy_T_serv=73.55, policy_Delta_P=0.6, policy_Regeneration_perc=93.4,
+    policy_CO2_pred=15.604, policy_T_out_pred=72.7915, co2_saving_vs_policy=0.0181,
+)
+
+
+def _ml36_dairy_inline(plugin: FakePlugin, *, features: dict, model_key, threshold):
+    """Fake inline/optimize prediction response for the ml36 DNL CO2 optimizer plugin."""
+    if model_key == "optimize":
+        return Ml36DairyOptimizeResp(
+            model_id="ml36-dairy-dnl-co2-emissions-optimizer", **_ML36_OPTIMIZE,
+        )
+    return Ml36DairyInlineResp(
+        model_id="ml36-dairy-dnl-co2-emissions-optimizer",
+        T_out_pred=77.1933, CO2_emissions_pred=18.4081,
+    )
+
+
+def _ml36_dairy_batch(plugin: FakePlugin, *, data_path: str, model_key: str | None = None) -> Ml36DairyBatchResp:
+    """Fake batch prediction response for the ml36 plugin (GA-vs-MLP dispatch on model_key)."""
+    if model_key == "optimize":
+        return Ml36DairyBatchResp(
+            model_id="ml36-dairy-dnl-co2-emissions-optimizer",
+            predictions=[{
+                "row": 0, "F_milk": 4995.54, "T_in": 4.12, "Fat_perc": 3.3,
+                "Viscosity": 1.99, "t_ciclo": 5.0,
+                "model_id": "ml36-dairy-dnl-co2-emissions-optimizer", **_ML36_OPTIMIZE,
+            }],
+            output_path=None,
+        )
+    return Ml36DairyBatchResp(
+        model_id="ml36-dairy-dnl-co2-emissions-optimizer",
+        predictions=[{"row": 0, "T_out_pred": 77.1933, "CO2_emissions_pred": 18.4081}],
+        output_path=None,
+    )
+
+
+def _ml36_dairy_train(plugin: FakePlugin, *, data_path: str) -> Ml36DairyTrainResp:
+    """Fake fine-tuning response for the ml36 plugin."""
+    return Ml36DairyTrainResp(
+        detail="Fine-tuning completado",
+        mae_t_out=0.0191, mse_t_out=0.000592, r2_t_out=0.9995,
+        mae_co2=0.3076, mse_co2=0.147651, r2_co2=0.8951,
+        n_samples=500, epochs_executed=60,
+    )
+
+
 def _ml46_dairy_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> Ml46DairyInlineResp:
     """Fake inline prediction response for the ml46 dairy fouling/clog detection plugin."""
     return Ml46DairyInlineResp(
@@ -1238,6 +1309,56 @@ def _ml47_dairy_batch(plugin: FakePlugin, *, data_path: str) -> Ml47DairyBatchRe
             "model_name": "ml47-dairy-dnsl-pasteurization-fault-detection",
         }],
         output_path=None,
+    )
+
+
+def _m48_xai_result(state: str = "Normal") -> dict:
+    """xai_result fake con el contrato de modelo-43 (claves del final_report)."""
+    result: dict = {"Estado_del_sistema": {"Estado_interpretativo": state}}
+    if state == "Normal":
+        result["Mensaje_operativo"] = ["Todos los componentes en estado Sano: no se requiere intervención."]
+    else:
+        result["Bloques_principales"] = ["Fouling"]
+        result["Variables_clave"] = ["TS1", "TS2", "FS1"]
+        result["Acciones_sugeridas"] = ["Fouling: Detener producción y ejecutar limpieza CIP inmediata"]
+    result["Detalle_componentes"] = [{"componente": "Fouling", "prediccion": "Crítico" if state != "Normal" else "Sano"}]
+    return result
+
+
+def _m48_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> M48InlineResp:
+    """Fake inline response for the m48 DNSL + XAI model (xai_result / xai_error, contrato de modelo-43)."""
+    with_xai = features.get("include_xai", True)
+    return M48InlineResp(
+        model_id="m48-dnsl-fallas-maquinaria-pasteurizado",
+        Enfriador_Fouling=0, Valvula_Switch=0, Bomba_Leakage=0, Acumulador_Gas=0,
+        Confianza_Fouling=0.99, Confianza_Valvula=0.98, Confianza_Bomba=0.97, Confianza_Acumulador=0.96,
+        model_name="m48-dnsl-fallas-maquinaria-pasteurizado",
+        xai_result=_m48_xai_result("Normal") if with_xai else None,
+        xai_error=None,
+    )
+
+
+def _m48_batch(plugin: FakePlugin, *, data_path: str) -> M48BatchResp:
+    """Fake batch response for m48: XAI por ciclo, con el ciclo 2 con xai_error (error parcial)."""
+    rows = []
+    for cid in (1, 2, 3):
+        failed = cid == 2
+        rows.append({
+            "Cycle_ID": cid, "Enfriador_Fouling": 0, "Valvula_Switch": 0, "Bomba_Leakage": 0, "Acumulador_Gas": 0,
+            "Confianza_Fouling": 0.99, "Confianza_Valvula": 0.98, "Confianza_Bomba": 0.97, "Confianza_Acumulador": 0.96,
+            "model_name": "m48-dnsl-fallas-maquinaria-pasteurizado",
+            "xai_result": None if failed else _m48_xai_result("Normal"),
+            "xai_error": "boom" if failed else None,
+        })
+    return M48BatchResp(model_id="m48-dnsl-fallas-maquinaria-pasteurizado", predictions=rows, output_path=None)
+
+
+def _m48_train(plugin: FakePlugin, *, data_path: str) -> M48TrainResp:
+    """Fake train response for the m48 model."""
+    return M48TrainResp(
+        detail="Entrenamiento completado exitosamente",
+        exact_match=0.98, accuracy=0.99, f1_macro=0.99, recall_macro=0.99,
+        n_train=3000, n_test=331, training_time_s=1.0, upload_warning=None,
     )
 
 
@@ -1881,6 +2002,7 @@ FAKE_FACTORIES: dict[str, tuple[Callable, Callable]] = {
     "ml40-meat-refrigeration-aeration-fault-diagnosis": (_ml40_meat_inline, _ml40_meat_batch),
     "ml35-dairy-ann-cleaning-cost": (_ml35_dairy_inline, _ml35_dairy_batch),
     "ml34-dairy-pasteurization-energy-ga": (_ml34_dairy_inline, _ml34_dairy_batch),
+    "ml36-dairy-dnl-co2-emissions-optimizer": (_ml36_dairy_inline, _ml36_dairy_batch),
     "ml17-meat-market-price-analysis": (_ml17_inline, _ml17_batch),
     "ml23-lactic-market-price-forecast": (_ml23_inline, _ml23_batch),
     "ml4-lactic-cnn-thermal-early-disease-detection": (_ml4_thermal_inline, _ml4_thermal_batch),
@@ -1894,6 +2016,7 @@ FAKE_FACTORIES: dict[str, tuple[Callable, Callable]] = {
     "ml8-cereals-img-anomaly-detector": (_ml8_cereals_inline, _ml8_cereals_batch),
     "ml5-meat-cow-behaviour": (_ml5_cow_inline, _ml5_cow_batch),
     "ml47-dairy-dnsl-pasteurization-fault-detection": (_ml47_dairy_inline, _ml47_dairy_batch),
+    "m48-dnsl-fallas-maquinaria-pasteurizado": (_m48_inline, _m48_batch),
     "ml45-cereals-dnsl-critical-point-detection": (_ml45_inline, _ml45_batch),
     "ml28-meat-neuroevolutionary-raw-materials-prediction": (_ml28_meat_inline, _ml28_meat_batch),
     "ml3-wine-disease-pest-forecast": (_ml3_wine_inline, _ml3_wine_batch),
@@ -1936,12 +2059,14 @@ TRAIN_FACTORIES: dict[str, Callable] = {
     "ml14-wine-phyto-price-forecast": _ml14_train,
     "ml18-meat-spatial-price-forecast": _ml18_train,
     "ml5-meat-cow-behaviour": _ml5_cow_train,
+    "m48-dnsl-fallas-maquinaria-pasteurizado": _m48_train,
     "ml46-dairy-fouling-clog-detection": _ml46_dairy_train,
     "ml40-meat-refrigeration-aeration-fault-diagnosis": _ml40_meat_train,
     "ml35-dairy-ann-cleaning-cost": _ml35_dairy_train,
     "ml34-dairy-pasteurization-energy-ga": _ml34_dairy_train,
     "ml10-dairy-disease-vector-detection": _ml10_dairy_train,
     "ml47-dairy-dnsl-pasteurization-fault-detection": _ml47_dairy_train,
+    "ml36-dairy-dnl-co2-emissions-optimizer": _ml36_dairy_train,
     "ml8-cereals-img-anomaly-detector": _ml8_cereals_train,
     "ml30-meat-traceability-detection": _ml30_trace_train,
     "ml7-cereals-grain-pest-detection": _ml7_grain_train,
@@ -2127,6 +2252,17 @@ TEST_REGISTRY: list[ModelEntry] = [
         train_response_type=Ml34DairyTrainResp,
     ),
     ModelEntry(
+        model_id="ml36-dairy-dnl-co2-emissions-optimizer",
+        prefix="/models/ml36-dairy-dnl-co2-emissions-optimizer",
+        version="1.0.0",
+        plugin_class=FakePlugin,
+        predict_request_type=Ml36Dairy_Request,
+        predict_response_type=Ml36Dairy_Response,
+        extra_predict_exceptions=(ThermalSafetyViolationError,),
+        train_request_type=Ml36Dairy_TrainReq,
+        train_response_type=Ml36DairyTrainResp,
+    ),
+    ModelEntry(
         model_id="ml46-dairy-fouling-clog-detection",
         prefix="/models/ml46-dairy-fouling-clog-detection",
         version="1.0.0",
@@ -2147,6 +2283,17 @@ TEST_REGISTRY: list[ModelEntry] = [
         extra_predict_exceptions=(),
         train_request_type=Ml47Dairy_TrainReq,
         train_response_type=Ml47DairyTrainResp,
+    ),
+    ModelEntry(
+        model_id="m48-dnsl-fallas-maquinaria-pasteurizado",
+        prefix="/models/m48-dnsl-fallas-maquinaria-pasteurizado",
+        version="1.0.0",
+        plugin_class=FakePlugin,
+        predict_request_type=M48_Request,
+        predict_response_type=M48_Response,
+        train_request_type=M48_TrainReq,
+        train_response_type=M48TrainResp,
+        extra_predict_exceptions=(),
     ),
     ModelEntry(
         model_id="ml40-meat-refrigeration-aeration-fault-diagnosis",
