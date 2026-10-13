@@ -1,0 +1,288 @@
+# -----------------------------------------------------------------------------
+# Manifest del modelo a48 - XAI (Grad-CAM + SHAP + CCP + motor prescriptivo) sobre el
+# modelo DNSL del entregable 47, para deteccion de puntos criticos de control (CCP)
+# en procesos y maquinaria de pasteurizado.
+#
+# Generado por manifest-extraction a partir de:
+#   - codigo/ (a48-dnsl-dairy-xai-deteccion-puntos-criticos-control.zip, descomprimido)
+#   - entregable/48 - ... - v1.3.docx (memoria vigente, version 1.3, 10/07/2026)
+#   - inbox/a47/manifest.yaml y app/plugins/m47_* (plugin del modelo base ya integrado)
+# -----------------------------------------------------------------------------
+
+model_id: lacteo-xai-puntos-criticos-control
+sector: lacteo
+nombre: "Implementación del modelo basado en XAI para la detección de puntos críticos de control en los procesos y la maquinaria"
+acronimo: XAI-DEFPAM-DNSL
+organismo: AIR Institute
+lote: 2
+version_memoria: "1.3"          # 10/07/2026 (v1.1 y v1.2 superadas)
+task_type: multi_label_classification_xai   # 4 componentes x 3 estados + explicabilidad + prescripcion
+framework: [pytorch, "shap>=0.51.0 (equipo: 0.51.0; verificado tambien con 0.52.0)", scikit-learn, pandas, numpy, joblib, pyyaml]
+
+relacion_con_otros_modelos:
+  base: "a47 v2.0 (plugin m47_dnsl_fallas_maquinaria_pasteurizado, ya integrado)"
+  nota: >
+    a48 NO entrena un modelo propio: reutiliza la arquitectura CNN_Pasteurizer del a47 y añade el paquete
+    src/xai/. Confirmado por el equipo de IA: en la v1.3 los artefactos neurosymbolic_cnn.pth (MD5 5b087a2c...),
+    scaler_cnn_dns.pkl (ddae8685...), ts1_mean_train.pkl (fb5a0361...) y feature_columns.pkl (517503ee...) son
+    los del Entregable 47 v2.0. Las v1.1/v1.2 del 48 usaban pesos de un entrenamiento anterior (30/04/2026,
+    MD5 f79fd471...). El plugin m48 mantiene sus propios artefactos (autocontenido) y no depende de los de m47.
+    Split identico al del 47 (1543/331/331, seed 42); cycle_splits.json guarda los IDs en el orden barajado
+    (ordenado, el test empieza por 20, 23, 29, 32...).
+
+arquitectura:
+  tipo: "1D-CNN multitarea (CNN_Pasteurizer) + Physics-Guided Loss (DNSL)"
+  backbone: "4 bloques Conv1d (k=7,5,3,3; 32->64->128->256) + BatchNorm + ReLU (+MaxPool 2 y Dropout en 1-3) + AdaptiveAvgPool1d(1)"
+  cabezas: "head_fouling, head_valvula, head_bomba, head_acumulador - Linear(256, 3) cada una, dropout_final"
+  entrada_tensor: "(batch, 28 canales, 600 pasos) - 7 sensores base + _rmean + _rstd + _lag1"
+  xai:
+    gradcam: "src/xai/gradcam.py - hooks en capa features.17 (ultima ReLU antes del pooling), CAM interpolado a 600 pasos y normalizado [0,1]"
+    shap: "src/xai/shap_explainer.py - shap.GradientExplainer por cabeza; importancia por canal agrupada por sensor base y normalizada"
+    ccp: "src/xai/critical_points.py - picos de CAM promedio >= 0.7 + sensor top SHAP + regla fisica + severidad agregada"
+    prescriptivo: "src/xai/prescriptive.py - acciones por componente x clase, parametrizables en config/maintenance_actions.yaml"
+
+artifacts:
+  folder: models/artifacts/
+  files:
+    - neurosymbolic_cnn.pth    # state_dict CNN_Pasteurizer (n_sensors=28, n_classes=3, dropout=0.2022) - MD5 5b087a2c16777300521b08e7514fa0e8 (v1.3 = E47 v2.0)
+    - scaler_cnn_dns.pkl       # StandardScaler (28 features). REGENERADO por nosotros con scikit-learn 1.5.2 (pin del repo) a partir del entregado por el equipo (MD5 entregado ddae8685a8571db6502364a43c7f701a, sklearn 1.6.1); atributos mean_/scale_/var_/n_samples_seen_ identicos - MD5 1149dc17cb04e243b7acc5b4cbacb980
+    - feature_columns.pkl      # orden de las 28 columnas - MD5 517503ee6313305c7ffec69321c92620 (sin cambios)
+    - ts1_mean_train.pkl       # media TS1 train (offset gemelo termico a 65 C) = 45.3110734 - MD5 fb5a036109839ee9ffe3fc3e3ec70a5a
+  config_files:
+    - config/config.yaml                  # hiperparametros, window_size, seccion xai
+    - config/maintenance_actions.yaml     # acciones prescriptivas por componente/clase
+  packaged_by_integration: ["shap_background.npy (50 ciclos de test escalados con el scaler v1.3)", "shap_background_meta.json"]
+  no_usados_en_inferencia: ["models/fine_tuning/*.csv", "models/metrics/*"]   # trazabilidad Optuna / metricas
+
+inputs:
+  fixed:      # 7 sensores obligatorios, series temporales de un ciclo (60 s @ 10 Hz = 600 pasos)
+    - {nombre: PS1,  tipo: "list[float]", unidad: bar,      descripcion: "Presión de entrada"}
+    - {nombre: PS3,  tipo: "list[float]", unidad: bar,      descripcion: "Presión de salida"}
+    - {nombre: EPS1, tipo: "list[float]", unidad: W,        descripcion: "Potencia activa del motor (regla física de la bomba)"}
+    - {nombre: FS1,  tipo: "list[float]", unidad: "L/min", descripcion: "Caudal volumétrico"}
+    - {nombre: TS1,  tipo: "list[float]", unidad: "°C",    descripcion: "Temperatura de entrada"}
+    - {nombre: TS2,  tipo: "list[float]", unidad: "°C",    descripcion: "Temperatura de salida"}
+    - {nombre: VS1,  tipo: "list[float]", unidad: "mm/s",  descripcion: "Vibración mecánica"}
+  complementary:
+    - {nombre: Time_Segundos, tipo: "list[float]", descripcion: "0.0-60.0 s; si falta se deriva de Time (round 1 decimal)"}
+    - {nombre: Cycle_ID, tipo: int, opcional: true, descripcion: "Agrupa ciclos en modo batch"}
+  derived_if_missing:
+    _rmean: "media móvil ventana 5 (min_periods=1)"
+    _rstd: "desv. típica móvil ventana 5, fillna(0)"
+    _lag1: "shift(1) con bfill"
+  digital_twin:
+    descripcion: "TS1/TS2 += 65.0 - ts1_mean_train. Solo para datos UCI de laboratorio. En planta real debe estar desactivado."
+    default_predict: false      # run_predict por defecto NO lo aplica
+    default_xai: true           # run_xai_analysis por defecto SI lo aplica (--no_digital_twin para desactivar)
+  xai_params:
+    n_samples: {default: 50, descripcion: "ciclos máx. del test para el análisis global CCP (muestra aleatoria seed 42)"}
+    cycle: {tipo: int, opcional: true, descripcion: "Cycle_ID para análisis local; error explícito si no existe"}
+
+outputs:
+  predict:    # src/predict/postprocess.py
+    - {nombre: Componente, valores: [Enfriador_Fouling, Válvula_Switch, Bomba_Leakage, Acumulador_Gas]}
+    - {nombre: Prediccion_Numerica, valores: "0=SANO, 1=WARNING, 2=CRÍTICO"}
+    - {nombre: Confianza, rango: "0-1", descripcion: "softmax de la clase ganadora"}
+  xai_local:  # xai_report_cycle.csv - por componente de un ciclo
+    columnas: [cycle_id, componente, prediccion, confianza, sensor_mas_relevante, importancia_sensor, ventana_critica_inicio_s, ventana_critica_fin_s, intensidad_ventana, accion, urgencia, intervalo_ciclos, riesgo_score, riesgo_nivel]
+    componente: [Fouling, Válvula, Bomba, Acumulador]
+    prediccion: [Sano, Warning, Crítico]
+    urgencia: [Alta, Media, Ninguna]
+    riesgo_nivel: [NORMAL, WARNING, CRÍTICO]
+    nota: "intervalo_ciclos es NaN en Sano. La memoria dice que riesgo_score no se serializa, pero el CSV entregado sí lo trae."
+  xai_global_ccp:    # xai_report.csv - una fila por ventana crítica detectada
+    columnas: [componente, sensor_critico, sensor_importancia, ventana_inicio, ventana_fin, ventana_inicio_s, ventana_fin_s, intensidad_media, regla_fisica, severidad, descripcion_operador, n_ciclos_analizados, ciclos_analizados]
+  xai_global_shap:   # xai_report_shap.csv - 28 filas (4 componentes x 7 sensores)
+    columnas: [componente, sensor, importancia, n_ciclos_agregados, ciclos_agregados]
+
+training:
+  supported: true
+  # El codigo entregado incluye src/training/trainer.py (entrenamiento con PhysicsGuidedLoss) y
+  # src/fine_tuning/fine_tuner.py (transfer learning, backbone congelado). La parte XAI NO reentrena.
+  target_column: [Target_Fouling, Target_Valvula, Target_Bomba, Target_Acumulador]   # nombres internos del codigo (0/1/2)
+  required_columns: [Cycle_ID, Time_Segundos, PS1, PS3, EPS1, FS1, TS1, TS2, VS1, Target_Fouling, Target_Valvula, Target_Bomba, Target_Acumulador]
+  hyperparams:    # config/config.yaml (optimos Optuna; models/fine_tuning/optuna_best_params_dns.csv)
+    optimizer: Adam
+    learning_rate: 0.0022243234786004373
+    dropout_rate: 0.20219689010649033
+    max_lambda: 3.7585293696964697
+    lambda_phys: 1.0
+    batch_size: 32
+    epochs: 300
+    patience: 15
+    warmup_epochs: 10
+    ramp_up_epochs: 80
+    window_size: 600
+    noise_level: 0.2
+    random_state: 42
+    split: {test_size_1: 0.30, test_size_2: 0.50}   # 70/15/15 por Cycle_ID
+  metrics_returned: [exact_match, accuracy, f1_macro, recall_macro]
+  fine_tuning:
+    supported_en_codigo: true
+    hyperparams: {epochs: 50, patience: 7, lr_divisor: 10, batch_size: 32, fluid_density_kg_l: 1.03, fluid_cp_kj_kgK: 3.93}
+    output: models/artifacts/neurosymbolic_cnn_finetuned.pth
+  source: codigo_entrenamiento    # config/config.yaml + src/training/trainer.py + src/fine_tuning/fine_tuner.py
+
+constraints:
+  window_size: "600 pasos; menos -> padding con ceros, más -> truncado"
+  features: "orden y número exacto de feature_columns.pkl (28)"
+  umbrales_xai:
+    gradcam_pico: 0.7
+    severidad_critico_pct_ciclos: 0.10   # >10 % de ciclos clase Critico -> CRITICO
+    severidad_warning_pct_ciclos: 0.20   # >20 % de ciclos clase Warning -> WARNING
+    risk_warning: 0.5
+    risk_critical: 0.8
+    severity_weights: {Sano: 0.0, Warning: 0.5, Crítico: 1.0}
+  shap: {n_background: 50, n_samples: 100, random_state: 42}
+  reglas_fisicas:
+    Bomba: "eff = PS1*FS1*1.6666/(|EPS1|+1) < 0.75 -> penaliza 'Sano'"
+    Fouling: "Heat = FS1*0.017*3.9*(TS2-TS1); eff = Heat/(FS1*0.017*3.9*2.0+0.1) < 0.80 -> penaliza 'Sano'"
+  uso: "Apoyo a la decisión técnica, no sustituto del criterio de mantenimiento (memoria s.11)"
+
+metrics_reported:
+  fuente: "models/metrics/test_metrics_confusion.csv (artefacto del código); memoria v1.3: Exact Match 98.79 %, F1 macro 99.70 %"
+  dataset: test_hold_out
+  n_test_ciclos: 331
+  exact_match_global: 0.9879
+  por_componente_accuracy: {Fouling: 1.0, Valvula: 1.0, Bomba: 0.9940, Acumulador: 0.9940}
+  errores_conocidos: "2 ciclos Sano->Warning en Bomba y 2 en Acumulador (falsas alarmas)"
+  baseline_mayoritaria_exact_match: 0.0906
+  cv_kfold_exact_match: [0.968, 0.977, 0.975, 0.971, 0.975]
+  memoria_v1_3: {exact_match: 0.9879, f1_macro: 0.9970}   # reproducidas por el equipo con los artefactos E47 v2.0 sobre el test de 331 ciclos
+
+# Golden cases - dos familias, ninguna inventada.
+#  (A) 20 ciclos de test_cycles (data/splits/cycle_splits.json), seleccion numpy seed 42 garantizando que
+#      las 12 parejas (componente, clase) aparecen al menos una vez.
+#      expected = ETIQUETA REAL de Dataset_Hydraulic/profile.txt mapeada con src/utils/target_mapping.py.
+#      NO se ha ejecutado el modelo para elegirlos: si el modelo falla alguno (esperable en ~1-2 % de ciclos
+#      de test: Bomba/Acumulador Sano->Warning) NO se ajusta nada, se documenta en verification.
+#      Entrada: codigo/golden/golden_cycles_10hz.csv (extraido de data/processed/hydraulic_10hz_raw.csv).
+#  (B) 1 caso XAI local: ciclo 123, Tabla 3 de la memoria y xai_report_cycle.csv entregado.
+golden_cases:
+  - id: cycle_1737
+    source: dataset_test_split   # Cycle_ID en test_cycles de data/splits/cycle_splits.json; etiquetas de Dataset_Hydraulic/profile.txt
+    input: {cycle_id: 1737, window_source: "codigo/golden/golden_cycles_10hz.csv filtrado por Cycle_ID=1737 (601 filas @10Hz (se trunca a 600), temperaturas UCI SIN desplazar - ejecutar con apply_digital_twin=true)"}
+    expected: {Fouling: 0, Valvula: 1, Bomba: 1, Acumulador: 0}
+  - id: cycle_1087
+    source: dataset_test_split   # Cycle_ID en test_cycles de data/splits/cycle_splits.json; etiquetas de Dataset_Hydraulic/profile.txt
+    input: {cycle_id: 1087, window_source: "codigo/golden/golden_cycles_10hz.csv filtrado por Cycle_ID=1087 (601 filas @10Hz (se trunca a 600), temperaturas UCI SIN desplazar - ejecutar con apply_digital_twin=true)"}
+    expected: {Fouling: 1, Valvula: 1, Bomba: 2, Acumulador: 1}
+  - id: cycle_0073
+    source: dataset_test_split   # Cycle_ID en test_cycles de data/splits/cycle_splits.json; etiquetas de Dataset_Hydraulic/profile.txt
+    input: {cycle_id: 73, window_source: "codigo/golden/golden_cycles_10hz.csv filtrado por Cycle_ID=73 (601 filas @10Hz (se trunca a 600), temperaturas UCI SIN desplazar - ejecutar con apply_digital_twin=true)"}
+    expected: {Fouling: 2, Valvula: 0, Bomba: 0, Acumulador: 0}
+  - id: cycle_1078
+    source: dataset_test_split   # Cycle_ID en test_cycles de data/splits/cycle_splits.json; etiquetas de Dataset_Hydraulic/profile.txt
+    input: {cycle_id: 1078, window_source: "codigo/golden/golden_cycles_10hz.csv filtrado por Cycle_ID=1078 (601 filas @10Hz (se trunca a 600), temperaturas UCI SIN desplazar - ejecutar con apply_digital_twin=true)"}
+    expected: {Fouling: 1, Valvula: 2, Bomba: 2, Acumulador: 1}
+  - id: cycle_0840
+    source: dataset_test_split   # Cycle_ID en test_cycles de data/splits/cycle_splits.json; etiquetas de Dataset_Hydraulic/profile.txt
+    input: {cycle_id: 840, window_source: "codigo/golden/golden_cycles_10hz.csv filtrado por Cycle_ID=840 (601 filas @10Hz (se trunca a 600), temperaturas UCI SIN desplazar - ejecutar con apply_digital_twin=true)"}
+    expected: {Fouling: 1, Valvula: 0, Bomba: 0, Acumulador: 2}
+  - id: cycle_0544
+    source: dataset_test_split   # Cycle_ID en test_cycles de data/splits/cycle_splits.json; etiquetas de Dataset_Hydraulic/profile.txt
+    input: {cycle_id: 544, window_source: "codigo/golden/golden_cycles_10hz.csv filtrado por Cycle_ID=544 (601 filas @10Hz (se trunca a 600), temperaturas UCI SIN desplazar - ejecutar con apply_digital_twin=true)"}
+    expected: {Fouling: 2, Valvula: 1, Bomba: 1, Acumulador: 1}
+  - id: cycle_1618
+    source: dataset_test_split   # Cycle_ID en test_cycles de data/splits/cycle_splits.json; etiquetas de Dataset_Hydraulic/profile.txt
+    input: {cycle_id: 1618, window_source: "codigo/golden/golden_cycles_10hz.csv filtrado por Cycle_ID=1618 (601 filas @10Hz (se trunca a 600), temperaturas UCI SIN desplazar - ejecutar con apply_digital_twin=true)"}
+    expected: {Fouling: 0, Valvula: 0, Bomba: 0, Acumulador: 2}
+  - id: cycle_1116
+    source: dataset_test_split   # Cycle_ID en test_cycles de data/splits/cycle_splits.json; etiquetas de Dataset_Hydraulic/profile.txt
+    input: {cycle_id: 1116, window_source: "codigo/golden/golden_cycles_10hz.csv filtrado por Cycle_ID=1116 (601 filas @10Hz (se trunca a 600), temperaturas UCI SIN desplazar - ejecutar con apply_digital_twin=true)"}
+    expected: {Fouling: 1, Valvula: 0, Bomba: 1, Acumulador: 1}
+  - id: cycle_1809
+    source: dataset_test_split   # Cycle_ID en test_cycles de data/splits/cycle_splits.json; etiquetas de Dataset_Hydraulic/profile.txt
+    input: {cycle_id: 1809, window_source: "codigo/golden/golden_cycles_10hz.csv filtrado por Cycle_ID=1809 (601 filas @10Hz (se trunca a 600), temperaturas UCI SIN desplazar - ejecutar con apply_digital_twin=true)"}
+    expected: {Fouling: 0, Valvula: 2, Bomba: 2, Acumulador: 1}
+  - id: cycle_0398
+    source: dataset_test_split   # Cycle_ID en test_cycles de data/splits/cycle_splits.json; etiquetas de Dataset_Hydraulic/profile.txt
+    input: {cycle_id: 398, window_source: "codigo/golden/golden_cycles_10hz.csv filtrado por Cycle_ID=398 (601 filas @10Hz (se trunca a 600), temperaturas UCI SIN desplazar - ejecutar con apply_digital_twin=true)"}
+    expected: {Fouling: 2, Valvula: 1, Bomba: 1, Acumulador: 1}
+  - id: cycle_0281
+    source: dataset_test_split   # Cycle_ID en test_cycles de data/splits/cycle_splits.json; etiquetas de Dataset_Hydraulic/profile.txt
+    input: {cycle_id: 281, window_source: "codigo/golden/golden_cycles_10hz.csv filtrado por Cycle_ID=281 (601 filas @10Hz (se trunca a 600), temperaturas UCI SIN desplazar - ejecutar con apply_digital_twin=true)"}
+    expected: {Fouling: 2, Valvula: 1, Bomba: 1, Acumulador: 0}
+  - id: cycle_1966
+    source: dataset_test_split   # Cycle_ID en test_cycles de data/splits/cycle_splits.json; etiquetas de Dataset_Hydraulic/profile.txt
+    input: {cycle_id: 1966, window_source: "codigo/golden/golden_cycles_10hz.csv filtrado por Cycle_ID=1966 (601 filas @10Hz (se trunca a 600), temperaturas UCI SIN desplazar - ejecutar con apply_digital_twin=true)"}
+    expected: {Fouling: 0, Valvula: 1, Bomba: 2, Acumulador: 1}
+  - id: cycle_0949
+    source: dataset_test_split   # Cycle_ID en test_cycles de data/splits/cycle_splits.json; etiquetas de Dataset_Hydraulic/profile.txt
+    input: {cycle_id: 949, window_source: "codigo/golden/golden_cycles_10hz.csv filtrado por Cycle_ID=949 (601 filas @10Hz (se trunca a 600), temperaturas UCI SIN desplazar - ejecutar con apply_digital_twin=true)"}
+    expected: {Fouling: 1, Valvula: 2, Bomba: 2, Acumulador: 0}
+  - id: cycle_1612
+    source: dataset_test_split   # Cycle_ID en test_cycles de data/splits/cycle_splits.json; etiquetas de Dataset_Hydraulic/profile.txt
+    input: {cycle_id: 1612, window_source: "codigo/golden/golden_cycles_10hz.csv filtrado por Cycle_ID=1612 (601 filas @10Hz (se trunca a 600), temperaturas UCI SIN desplazar - ejecutar con apply_digital_twin=true)"}
+    expected: {Fouling: 0, Valvula: 0, Bomba: 0, Acumulador: 2}
+  - id: cycle_1264
+    source: dataset_test_split   # Cycle_ID en test_cycles de data/splits/cycle_splits.json; etiquetas de Dataset_Hydraulic/profile.txt
+    input: {cycle_id: 1264, window_source: "codigo/golden/golden_cycles_10hz.csv filtrado por Cycle_ID=1264 (601 filas @10Hz (se trunca a 600), temperaturas UCI SIN desplazar - ejecutar con apply_digital_twin=true)"}
+    expected: {Fouling: 1, Valvula: 1, Bomba: 1, Acumulador: 1}
+  - id: cycle_1084
+    source: dataset_test_split   # Cycle_ID en test_cycles de data/splits/cycle_splits.json; etiquetas de Dataset_Hydraulic/profile.txt
+    input: {cycle_id: 1084, window_source: "codigo/golden/golden_cycles_10hz.csv filtrado por Cycle_ID=1084 (601 filas @10Hz (se trunca a 600), temperaturas UCI SIN desplazar - ejecutar con apply_digital_twin=true)"}
+    expected: {Fouling: 1, Valvula: 2, Bomba: 2, Acumulador: 1}
+  - id: cycle_1832
+    source: dataset_test_split   # Cycle_ID en test_cycles de data/splits/cycle_splits.json; etiquetas de Dataset_Hydraulic/profile.txt
+    input: {cycle_id: 1832, window_source: "codigo/golden/golden_cycles_10hz.csv filtrado por Cycle_ID=1832 (601 filas @10Hz (se trunca a 600), temperaturas UCI SIN desplazar - ejecutar con apply_digital_twin=true)"}
+    expected: {Fouling: 0, Valvula: 1, Bomba: 2, Acumulador: 1}
+  - id: cycle_0482
+    source: dataset_test_split   # Cycle_ID en test_cycles de data/splits/cycle_splits.json; etiquetas de Dataset_Hydraulic/profile.txt
+    input: {cycle_id: 482, window_source: "codigo/golden/golden_cycles_10hz.csv filtrado por Cycle_ID=482 (601 filas @10Hz (se trunca a 600), temperaturas UCI SIN desplazar - ejecutar con apply_digital_twin=true)"}
+    expected: {Fouling: 2, Valvula: 2, Bomba: 2, Acumulador: 1}
+  - id: cycle_0721
+    source: dataset_test_split   # Cycle_ID en test_cycles de data/splits/cycle_splits.json; etiquetas de Dataset_Hydraulic/profile.txt
+    input: {cycle_id: 721, window_source: "codigo/golden/golden_cycles_10hz.csv filtrado por Cycle_ID=721 (601 filas @10Hz (se trunca a 600), temperaturas UCI SIN desplazar - ejecutar con apply_digital_twin=true)"}
+    expected: {Fouling: 2, Valvula: 1, Bomba: 0, Acumulador: 2}
+  - id: cycle_1730
+    source: dataset_test_split   # Cycle_ID en test_cycles de data/splits/cycle_splits.json; etiquetas de Dataset_Hydraulic/profile.txt
+    input: {cycle_id: 1730, window_source: "codigo/golden/golden_cycles_10hz.csv filtrado por Cycle_ID=1730 (601 filas @10Hz (se trunca a 600), temperaturas UCI SIN desplazar - ejecutar con apply_digital_twin=true)"}
+    expected: {Fouling: 0, Valvula: 1, Bomba: 1, Acumulador: 0}
+golden_cases_xai:
+  - id: xai_local_cycle_123
+    source: "memoria v1.3 Tabla 3 + data/predictions/xai_report_cycle.csv (v1.3)"
+    input: {cycle_id: 123, window_source: "codigo/golden/golden_cycles_10hz.csv, Cycle_ID=123", apply_digital_twin: true, split_real: val}
+    etiqueta_real: {Fouling: 2, Valvula: 0, Bomba: 0, Acumulador: 0}    # profile.txt fila 124 = 3,100,0,130
+    expected:
+      Fouling:    {prediccion: Crítico, confianza: 0.9604, sensor_mas_relevante: FS1, importancia_sensor: 0.2876, ventana_s: [9.1, 11.1], intensidad: 0.9108, urgencia: Alta, intervalo_ciclos: 0, riesgo_score: 1.0, riesgo_nivel: CRÍTICO}
+      Válvula:    {prediccion: Sano, confianza: 1.0000, sensor_mas_relevante: FS1, importancia_sensor: 0.3119, ventana_s: [8.7, 10.5], intensidad: 0.8957, urgencia: Ninguna, riesgo_score: 0.0, riesgo_nivel: NORMAL}
+      Bomba:      {prediccion: Sano, confianza: 0.9999, sensor_mas_relevante: TS2, importancia_sensor: 0.2526, ventana_s: [37.6, 39.9], intensidad: 0.8957, urgencia: Ninguna, riesgo_score: 0.0, riesgo_nivel: NORMAL}
+      Acumulador: {prediccion: Sano, confianza: 0.9890, sensor_mas_relevante: TS2, importancia_sensor: 0.3550, ventana_s: [9.0, 11.0], intensidad: 0.8978, urgencia: Ninguna, riesgo_score: 0.0, riesgo_nivel: NORMAL}
+    tolerancia: "las 13 columnas del informe local deben coincidir (numericas con tolerancia 1e-4)"
+    verificado_plugin_m48: "2026-10-07 (Python 3.12, shap 0.52.0, artefactos v1.3): las 13 columnas coinciden con el xai_report_cycle.csv de la v1.3."
+  - id: xai_global_50_test_cycles
+    source: "memoria v1.3 Tablas 1/2 + data/predictions/xai_report.csv y xai_report_shap.csv (v1.3)"
+    input: {window_source: "los 331 ciclos de test (hydraulic_10hz_raw.csv filtrado por test_cycles)", apply_digital_twin: true, include_xai: true, include_shap: true, n_samples: 50}
+    expected: "6 filas CCP (Fouling x3, Válvula, Bomba, Acumulador) y 28 filas SHAP, con los mismos 50 ciclos de la columna ciclos_analizados (muestra aleatoria seed 42)"
+    verificado_plugin_m48: "2026-10-07: los 50 ciclos, las 6 filas CCP y las 28 importancias SHAP coinciden exactamente (diferencia maxima 0.0). Tarda ~10 min en CPU."
+
+known_issues:
+  - "RESUELTO por el equipo de IA (v1.3): el pin shap==0.42.0 del requirements v1.1 era un error de un merge del 09/06/2026; los CSV de v1.1/v1.2 se generaron con shap 0.51.0 y la v1.3 fija shap==0.51.0. El plugin reproduce los CSV con shap 0.52.0 (verificado) y el equipo confirma que 0.52.0 da salidas identicas. El repo exige shap>=0.51.0: NO usar shap 0.42.0 (da otro SHAP). Predicciones, confianzas, ventanas Grad-CAM y acciones no dependen de shap."
+  - "RESUELTO por el equipo de IA (v1.3): las Tablas 1/2 de la memoria v1.1 salieron de una ejecucion con un fallo de muestreo (tomaba los 50 ciclos de menor Cycle_ID); la v1.2 lo corrigio (muestra aleatoria seed 42) y la v1.3 regenera tablas, CSV y figuras con el modelo del E47 v2.0. El plugin reproduce exactamente el analisis global de la v1.3 (verificado)."
+  - "RESUELTO por el equipo de IA (v1.3): la mencion a 'version 1.2' dentro de la memoria v1.1 era un error de redaccion (la v1.2 existe, 10/07/2026); riesgo_score y riesgo_nivel SI se serializan en xai_report_cycle.csv (texto de las secciones 7.4 y 8.2 corregido)."
+  - "RESUELTO por el equipo de IA (v1.3): el codigo original fallaba con pandas 3.x (KeyError Cycle_ID en feature_engineering); corregido y verificado por ellos con pandas 2.2.3 y 3.0.6. El plugin no usa ese codigo."
+  - "RESUELTO por el equipo de IA: los pesos de las v1.1/v1.2 del 48 NO eran los del 47 vigente; la v1.3 usa los artefactos del E47 v2.0 (hashes en artifacts). El split del 48 coincide con el del 47. El equipo pide el fichero golden del 47 (con ciclos 20, 23, 210) para revisarlo: pendiente de enviarselo."
+  - "RESUELTO: scaler_cnn_dns.pkl entregado (v1.3) estaba serializado con scikit-learn 1.6.1 y el repo pinea 1.5.2 (InconsistentVersionWarning). Decision: regenerarlo con 1.5.2 (joblib.load + joblib.dump bajo 1.5.2); mean_, scale_, var_ y n_samples_seen_ son identicos y el nuevo pickle carga sin warning (MD5 1149dc17cb04e243b7acc5b4cbacb980; el entregado era ddae8685a8571db6502364a43c7f701a; copia del original fuera del repo). Con el scaler regenerado: 20/20 golden y las 13 columnas del ciclo 123 siguen coincidiendo. Informar al equipo de IA de que el artefacto desplegado difiere del entregado en la serializacion, no en los valores."
+  - "requirements del equipo (v1.3) fija torch==2.5.1, numpy==2.2.6, pandas==2.2.3, scikit-learn==1.6.1, shap==0.51.0 en Python 3.12 (CPU). El repo usa torch>=2.13 (probado), numpy 2.5.3, pandas 3.0.6, scikit-learn==1.5.2, shap>=0.51.0 (0.52.0 probado)."
+  - "Los splits de a48 siguen en el orden barajado en cycle_splits.json; para reproducir los primeros 50 ciclos de test hay que ordenar los IDs (el plugin lo hace en el fondo SHAP)."
+  - "Datos de laboratorio UCI (aceite hidraulico), NO leche real. Con datos UCI hay que aplicar gemelo digital (offset a 65 C); con datos de planta NO (confirmado por el equipo: predict sin --apply_digital_twin, xai con --no_digital_twin). El equipo no tiene datos reales de planta para validar este comportamiento, ni ha podido ejecutar fine_tune."
+  - "En modo global el codigo original reconstruye el test desde data/processed/hydraulic_10hz_raw.csv (101 MB); el plugin recibe ciclos por request y usa un fondo SHAP empaquetado (50 ciclos de test) para el SHAP local."
+  - "SHAP GradientExplainer cuesta ~5-8 s por ciclo en el modo local y ~10 min en el global (331 ciclos de entrada, 50 explicados) en CPU: por eso es opcional en el plugin."
+  - "Cycle_ID = indice 0-based de fila en profile.txt; cada ciclo tiene 601 filas (0.0-60.0 s) y el modelo trunca a 600."
+  - "Datos pesados (data/raw/hydraulic_raw.csv 1.7 GB y processed 101 MB) viven en codigo/ (ignorado por git); no copiar al repo ni a artifacts."
+  - "Los notebooks usan esquemas alternativos de sensores; la memoria indica que no forman parte de la ejecucion reproducible."
+  - "Artefactos v1.3 subidos a s3://xai/artifacts/fixed/a48_dnsl_fallas_maquinaria_pasteurizado/ el 2026-10-07 (6 ficheros, tamaños iguales a los locales; evidencia del usuario). Pendiente (acceso): carga real desde S3, /train con MLflow real, Docker real y entrenamiento completo: ver outputs/a48/verification_report.md."
+
+# ---------------------------------------------------------------------------
+# REWORK 2026-10-08 (patron 43/44) - PREVALECE sobre lo anterior en este fichero
+# ---------------------------------------------------------------------------
+# a48 deja de existir como modelo independiente: es la implementacion XAI de modelo-47.
+# - Clave funcional unica: modelo-47 (modelo-48 no existe). Plugin: MODEL=m48-dnsl-fallas-maquinaria-pasteurizado.
+# - Contrato: predict (inline y batch) devuelve la deteccion + xai_result / xai_error POR CICLO
+#   (claves de modelo-43: Estado_del_sistema.Estado_interpretativo, Bloques_principales, Variables_clave,
+#   Acciones_sugeridas / Mensaje_operativo, + Detalle_componentes). Un fallo de XAI de un ciclo no aborta el resto.
+# - Grad-CAM siempre por ciclo; SHAP opcional (include_shap); en batch limitado a los primeros n_samples ciclos.
+# - Se elimina el analisis global CCP/SHAP del batch (xai_global_ccp / campo `xai` de la respuesta) y la
+#   deteccion de CCP global: ya no se expone. Las menciones a xai_global_ccp / CCP global arriba son historicas.
+# - ODD, plataforma y fichas (a48_* en ml-files/modelo-47/) se referencian solo bajo modelo-47.
