@@ -1,4 +1,5 @@
 """Endpoint tests for ``ml21-cereals-price-spatial`` (ESP-CEREAL spatial cereal price)."""
+import pytest
 
 PREFIX = "/models/ml21-cereals-price-spatial"
 
@@ -41,6 +42,12 @@ def test_predict_batch(client):
     )
     assert resp.status_code == 200
     assert resp.json()["model_id"] == "ml21-cereals-price-spatial"
+
+
+def test_predict_batch_does_not_require_month(client):
+    """predict_batch never used month (each row has its own date); requiring it gave a 422."""
+    resp = client.post(f"{PREFIX}/predict", json={"mode": "batch", "data_path": "/tmp/cereal.csv"})
+    assert resp.status_code == 200
 
 
 def test_train_returns_501(client):
@@ -109,3 +116,27 @@ def test_stats_overwrites_legacy_per_horizon_keys_with_the_real_run_values():
     assert resp.metrics["H1_reg_Pearson"] == 0.62
     assert resp.metrics["H1_clf_DA"] == 0.58
     assert resp.metrics["H1_clf_AUC"] == 0.71
+
+
+def test_xai_feature_values_are_the_h3_model_input_row():
+    """xai_feature_values must be the H3 regressor's real input (one-hot columns included):
+    the explainability service feeds them straight to datagia_best_h3_reg."""
+    import joblib
+    import numpy as np
+
+    from app.plugins.ml21_cereals_price_spatial import model_loader
+    from app.plugins.ml21_cereals_price_spatial.plugin import Ml21CerealsPriceSpatialPlugin
+
+    local = model_loader._store.local_dir  # pylint: disable=protected-access
+    if not (local / "datagia_best_h3_reg.joblib").exists():
+        pytest.skip("ml21 artifacts not vendored locally")
+    plugin = Ml21CerealsPriceSpatialPlugin()
+    plugin.load()
+    resp = plugin.predict_inline(features={
+        "provincia": "Burgos", "cereal_predominante": "trigo", "date": "2024-03", "role": "comprador",
+    })
+    xai = resp.xai_feature_values
+    assert xai["cereal_predominante_trigo"] == 1.0
+    model = joblib.load(local / "datagia_best_h3_reg.joblib")
+    row = np.array([[xai.get(f, 0.0) for f in model.feature_names_in_]])
+    assert float(model.predict(row)[0]) == pytest.approx(resp.predictions["H3"]["expected_return"])

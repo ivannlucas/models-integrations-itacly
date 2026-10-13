@@ -79,6 +79,13 @@ class PredictInlineResponse(BaseModel):
     xai_feature_values: dict[str, float] | None = Field(
         default=None, description="Valores de la última fila de features usados — consumidos por el servicio de explicabilidad",
     )
+    xai_feature_window: list[list[float]] | None = Field(
+        default=None,
+        description=(
+            "Ventana real (12 semanas x features, sin escalar, en el orden de xai_feature_values) que "
+            "puntuó la GRU — el servicio de explicabilidad la explica en lugar de repetir la última fila."
+        ),
+    )
 
 
 PredictRequest = Annotated[

@@ -411,7 +411,10 @@ class Ml21CerealsPriceSpatialPlugin(ModelPluginPort):
                 causal_drivers=causal_drivers,
             )
 
-            xai_values = _xai_values_from_row(raw_row.iloc[0], expected_r) or None
+            # The H3 regression model's own input row (one-hot cereal/provincia columns included),
+            # not the raw panel row: the explainability service feeds these values straight to
+            # datagia_best_h3_reg, so any column missing here would be explained as 0.
+            xai_values = _xai_values_from_row(build_features_from_row(raw_row, expected_r).iloc[0], expected_r) or None
 
             elapsed_ms = (time.perf_counter() - t0) * 1000
             self._record(elapsed_ms)

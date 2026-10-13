@@ -344,6 +344,9 @@ def test_real_plugin_inline_operational_and_feature_window():
     resp = plugin.predict_inline(features={"lot": LOT, "readings": _readings(30), "feature_window": None})
     assert resp.lot_id == "LOT-T1" and resp.timestamp_index == 29
     assert resp.model_source == "fixed" and len(resp.xai_feature_values) == 22
+    # Same contract as the feature_window path: the model's engineered features, not raw columns.
+    assert list(resp.xai_feature_values) == plugin._model.feature_names  # pylint: disable=protected-access
+    assert len(resp.xai_feature_window) == 24 and resp.xai_feature_window[-1] == list(resp.xai_feature_values.values())
     resp_fw = plugin.predict_inline(features={"lot": None, "readings": None, "feature_window": [[0.1] * 22] * 24})
     assert resp_fw.lot_id is None
     assert plugin.stats().runtime_stats.total_predictions == 2

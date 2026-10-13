@@ -154,6 +154,13 @@ class PredictInlineResponse(LotPrediction):
         default=None,
         description="Las 22 features del último paso de la ventana — consumido por el servicio XAI",
     )
+    xai_feature_window: list[list[float]] | None = Field(
+        default=None,
+        description=(
+            "La ventana completa (24 pasos x 22 features, sin normalizar, en el orden de "
+            "xai_feature_values) que puntuó la GRU — el servicio XAI la explica tal cual."
+        ),
+    )
 
 
 class PredictBatchRequest(BaseModel):

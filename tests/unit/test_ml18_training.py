@@ -108,6 +108,11 @@ def test_train_uploads_only_to_mlflow_and_the_model_is_served_by_run(csv_path, f
     rows = _panel().query("CCAA == 'ANDALUCIA'").tail(12).to_dict("records")
     preds = instance.predict_inline(features={"rows": rows}, mlflow_run_id="run-1").predictions
     assert preds[0]["CCAA"] == "ANDALUCIA" and np.isfinite(preds[0]["predicted_price"])
+    # The explainability service explains the unscaled features of the window's last month.
+    assert list(preds[0]["xai_feature_values"]) == list(constants.FEATURE_COLUMNS)
+    assert preds[0]["xai_feature_values"]["Poblacion"] == 1e6
+    window = preds[0]["xai_feature_window"]  # the real window the GRU scored, last row = values
+    assert len(window) == constants.LOOKBACK and window[-1] == list(preds[0]["xai_feature_values"].values())
 
 
 def test_train_fails_when_mlflow_upload_fails(csv_path, fast, monkeypatch):

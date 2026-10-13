@@ -11,12 +11,10 @@ reproduces the audited windows exactly. The preprocessing is the AI team's, unch
 from __future__ import annotations
 
 import logging
-import math
 import shutil
 import tempfile
 import time
 from datetime import datetime, timezone
-from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -58,16 +56,6 @@ from app.plugins.ml26_wine_sulfite_gru_pso_forecast.predict_dto import (
 from app.plugins.ml26_wine_sulfite_gru_pso_forecast.train_dto import TrainResponse
 
 logger = logging.getLogger(__name__)
-
-
-def _clean(value: Any) -> Any:
-    """Convert numpy scalars to JSON-safe Python types."""
-    if isinstance(value, np.integer):
-        return int(value)
-    if isinstance(value, np.floating):
-        fv = float(value)
-        return fv if math.isfinite(fv) else None
-    return value
 
 
 class Ml26WineSulfiteGruPsoForecastPlugin(ModelPluginPort):
@@ -114,9 +102,10 @@ class Ml26WineSulfiteGruPsoForecastPlugin(ModelPluginPort):
     @staticmethod
     def _lot_predictions(
         model: model_loader.LoadedModel, lots: pd.DataFrame, readings: pd.DataFrame
-    ) -> tuple[list[LotPrediction], pd.DataFrame]:
+    ) -> tuple[list[LotPrediction], np.ndarray]:
+        """Predict every lot; also returns the (n_lots, window, n_features) model windows."""
         raw = preprocessing.build_raw_frame(lots, readings)
-        windows, meta, last_rows = preprocessing.prepare_windows(raw, model.feature_names)
+        windows, meta, _last_rows = preprocessing.prepare_windows(raw, model.feature_names)
         preds = postprocessing.predict_windows(model, windows)
         results = []
         for i, row in meta.iterrows():
@@ -131,7 +120,7 @@ class Ml26WineSulfiteGruPsoForecastPlugin(ModelPluginPort):
                     risk_band=postprocessing.risk_band(risk),
                 )
             )
-        return results, last_rows
+        return results, windows
 
     # ── predict_inline ────────────────────────────────────────────────────────
 
@@ -160,11 +149,16 @@ class Ml26WineSulfiteGruPsoForecastPlugin(ModelPluginPort):
                     risk_band=postprocessing.risk_band(risk),
                 )
                 xai = dict(zip(model.feature_names, (float(v) for v in window[0, -1])))
+                xai_window = np.asarray(window[0], dtype=float).tolist()
             else:
                 lots, readings = preprocessing.frames_from_inline(features)
-                predictions, last_rows = self._lot_predictions(model, lots, readings)
+                predictions, windows = self._lot_predictions(model, lots, readings)
                 prediction = predictions[0]
-                xai = {k: _clean(v) for k, v in last_rows.iloc[0].items()}
+                # Same contract as the feature_window path: the 22 engineered model features of
+                # the scored window's last step (what the explainability service explains), not
+                # the raw reading columns.
+                xai = dict(zip(model.feature_names, (float(v) for v in windows[0, -1])))
+                xai_window = np.asarray(windows[0], dtype=float).tolist()
             self._record(started)
             logger.info(
                 "predict_inline done — lot=%s so2=%.3f risk=%.3f source=%s",
@@ -179,6 +173,7 @@ class Ml26WineSulfiteGruPsoForecastPlugin(ModelPluginPort):
                 model_name=MODEL_ID,
                 model_source=model.source,
                 xai_feature_values=xai,
+                xai_feature_window=xai_window,
             )
         finally:
             if user_tmp:

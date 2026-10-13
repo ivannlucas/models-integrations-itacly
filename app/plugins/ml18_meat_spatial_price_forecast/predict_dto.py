@@ -61,7 +61,11 @@ class PredictInlineResponse(BaseModel):
     model_id: str
     predictions: list[dict[str, Any]] = Field(
         ...,
-        description="Lista de {CCAA, Producto, Fecha (mes predicho), predicted_price (€/kg)}.",
+        description=(
+            "Lista de {CCAA, Producto, Fecha (mes predicho), predicted_price (€/kg), "
+            "xai_feature_values (variables sin escalar del último mes de la ventana), "
+            "xai_feature_window (la ventana completa de 12 meses, sin escalar)}."
+        ),
     )
     n_predictions: int
 
