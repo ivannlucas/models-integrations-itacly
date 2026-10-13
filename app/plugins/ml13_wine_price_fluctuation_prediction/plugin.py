@@ -142,6 +142,10 @@ class Ml13WinePriceFluctuationPredictionPlugin(ModelPluginPort):
             for fecha, row in df_out.iterrows():
                 rec = {"fecha": None if pd.isna(fecha) else str(pd.Timestamp(fecha).date())}
                 rec.update({k: _clean(v) for k, v in row.items()})
+                # Same decision as predict_inline's alerta_subida (default threshold), so each
+                # batch row carries its own label; null on warm-up rows without pred_proba_up.
+                proba = rec.get("pred_proba_up")
+                rec["alerta_subida"] = None if proba is None else int(proba >= DECISION_THRESHOLD)
                 records.append(rec)
             n_pred = int(df_out["pred_proba_up"].notna().sum())
             self._record_prediction()

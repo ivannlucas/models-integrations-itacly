@@ -282,3 +282,11 @@ def test_real_predict_with_a_run_without_model_never_uses_the_base(real_plugin, 
                         MagicMock(return_value=MagicMock(download_artifacts=MagicMock(return_value=""))))
     with pytest.raises(UserModelUnavailableError, match="run-vacio"):
         real_plugin.predict_inline(features={"rows": _rows(30)}, mlflow_run_id="run-vacio")
+
+
+def test_real_batch_rows_carry_their_own_alert_label(real_plugin, train_csv):
+    """Each batch row gets alerta_subida like predict_inline does; warm-up rows stay null."""
+    rows = real_plugin.predict_batch(data_path=train_csv).predictions
+    scored = [r for r in rows if r["pred_proba_up"] is not None]
+    assert scored and all(r["alerta_subida"] == int(r["pred_proba_up"] >= 0.5) for r in scored)
+    assert all(r["alerta_subida"] is None for r in rows if r["pred_proba_up"] is None)

@@ -46,8 +46,9 @@ def run_inference(bundle: dict, rows: list[dict]) -> dict:
     """Derive features from a raw weekly history and run the GRU forecast.
 
     Returns a dict with predicted_price, current_price, drift_baseline, horizon_weeks,
-    last_observed_date, prediction_date, gap_warning, n_rows_used and xai_feature_values
-    (the last row's feature values, for the explainability service).
+    last_observed_date, prediction_date, gap_warning, n_rows_used, xai_feature_values (the last
+    row's feature values) and xai_feature_window (the unscaled SEQ_LEN x n_features window the GRU
+    scored) — both for the explainability service, which explains the real window.
     """
     features_df = build_modeling_features(rows)
     feature_columns: list[str] = bundle["feature_columns"]
@@ -103,4 +104,5 @@ def run_inference(bundle: dict, rows: list[dict]) -> dict:
         "gap_warning": _build_gap_warning(last_date),
         "n_rows_used": len(features_df),
         "xai_feature_values": {col: float(last_row[col]) for col in feature_columns},
+        "xai_feature_window": seq_df.to_numpy(dtype=float).tolist(),
     }

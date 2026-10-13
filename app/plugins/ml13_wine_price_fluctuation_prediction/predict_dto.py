@@ -44,8 +44,9 @@ class PredictBatchResponse(BaseModel):
         description=(
             "Una fila por fila de entrada: fecha (lunes de la semana ISO de referencia t), "
             "bulletin/campaign/week, price, las 6 features y pred_proba_up = P(media del precio en "
-            "t+1..t+4 > precio_t * 1.025). Las filas del warm-up inicial (~19 semanas) o sin "
-            "precio llevan pred_proba_up = null."
+            "t+1..t+4 > precio_t * 1.025) y alerta_subida = 1 si pred_proba_up >= "
+            "decision_threshold. Las filas del warm-up inicial (~19 semanas) o sin "
+            "precio llevan pred_proba_up = null y alerta_subida = null."
         ),
     )
     n_rows: int

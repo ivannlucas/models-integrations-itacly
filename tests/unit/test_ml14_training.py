@@ -109,6 +109,9 @@ def test_train_uploads_only_to_mlflow_and_the_model_is_served_by_run(instance, r
 
     out = instance.predict_inline(features={"rows": _raw().tail(30).to_dict("records")}, mlflow_run_id="run-1")
     assert np.isfinite(out.predicted_price)
+    # The real 12-week window the GRU scored travels with the response for the explainability service.
+    assert len(out.xai_feature_window) == constants.SEQ_LEN
+    assert out.xai_feature_window[-1] == list(out.xai_feature_values.values())
 
 
 def test_train_fails_when_mlflow_upload_fails(instance, raw_csv, fast, monkeypatch):

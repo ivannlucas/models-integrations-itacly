@@ -660,3 +660,23 @@ despliegue arrancarían con `loaded=false`. Los artefactos válidos son:
 - ml18: `inbox/a18/codigo/models/artifacts/best_gru_df_2008_con_renta/`.
 - ml26: `inbox/a26/codigo/models/artifacts/gru_pso.pkl` y `best_model.json`.
 - ml41: los 48 directorios `vit_tiny_*` de `inbox/a41/codigo/models/artifacts/`.
+
+## 11. Anexo (13 de octubre de 2026): salidas para explicabilidad y contrato con la plataforma
+
+Cambios en los plugins para integrar los modelos nuevos en el servicio de explicabilidad
+(`retech-lote2-xai-explicabilidad`) y dejar operativos modelo-13 y modelo-21 en la plataforma.
+Se han aplicado igual en el repo de producción (`itacyl-pan-modelsinference-svc`).
+
+| Plugin | Cambio | Motivo |
+|---|---|---|
+| ml14, ml18, ml26 | Nuevo campo `xai_feature_window`: la ventana real (sin escalar) que puntuó la GRU | El servicio de explicabilidad explica esa ventana, de modo que la explicación suma exactamente la predicción servida. Sin ella hay que repetir la última fila y la explicación no cuadra con la predicción (en ml26, 24,95 frente a 20,28) |
+| ml18 | Nuevo `xai_feature_values` por predicción (las 7 variables del último mes) | No devolvía ninguna entrada para explicabilidad |
+| ml26 | En la vía de lecturas crudas, `xai_feature_values` son ahora las 22 variables derivadas del último paso, como en la vía `feature_window` y como documenta el DTO | Devolvía las columnas crudas de la lectura, que no son la entrada del modelo |
+| ml21 | `xai_feature_values` sale de la fila ya construida para el regresor H3 (con los one-hot de provincia y cereal) | Salía de la fila cruda del panel, sin los one-hot: el SHAP los habría tratado como 0. Con la fila corregida, el regresor H3 reproduce exactamente `expected_return` |
+| ml21 | `month` pasa a ser opcional en `/predict` batch | `predict_batch` nunca lo usaba (cada fila lleva su fecha), pero lo exigía: un batch sin `month` devolvía 422 |
+| ml13 | Cada fila batch lleva `alerta_subida` (nula en el calentamiento inicial) | Misma decisión que el modo inline, para que la plataforma tenga una etiqueta por fila |
+
+Verificación: 912 tests en este repo y 966 en el de producción, flake8 limpio. Las ramas nuevas
+del servicio de explicabilidad se probaron con los artefactos reales de ml14, ml18, ml21 y ml26:
+en todas, la explicación suma exactamente la predicción del plugin. ml15 y ml41 se probaron con
+artefactos sintéticos con el formato real, porque sus artefactos no están disponibles en local.

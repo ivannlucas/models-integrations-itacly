@@ -129,6 +129,7 @@ class Ml14WinePhytoPriceForecastPlugin(ModelPluginPort):
             gap_warning=r["gap_warning"],
             n_rows_used=r["n_rows_used"],
             xai_feature_values=r["xai_feature_values"],
+            xai_feature_window=r["xai_feature_window"],
         )
 
     # ── predict_batch ─────────────────────────────────────────────────────────

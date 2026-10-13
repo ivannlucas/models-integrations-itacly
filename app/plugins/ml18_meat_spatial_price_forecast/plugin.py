@@ -204,7 +204,10 @@ class Ml18MeatSpatialPriceForecastPlugin(ModelPluginPort):
         outputs = [
             OutputField(
                 name="predictions", type="list[dict]",
-                description="Una entrada {CCAA, Producto, Fecha, predicted_price} por combinación con histórico suficiente.",
+                description=(
+                    "Una entrada {CCAA, Producto, Fecha, predicted_price, xai_feature_values, "
+                    "xai_feature_window} por combinación con histórico suficiente."
+                ),
             ),
         ]
         return StatsResponse(

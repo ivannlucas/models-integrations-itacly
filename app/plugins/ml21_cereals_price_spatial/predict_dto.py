@@ -12,12 +12,16 @@ class PredictBatchRequest(BaseModel):
     data_path: str = Field(
         ..., description="Ruta al CSV con filas del panel cerealístico"
     )
-    month: str = Field(
-        ..., description="Mes de predicción (YYYY-MM)"
+    # predict_batch never read month or role: each CSV row carries its own date/provincia/
+    # cereal_predominante, and the batch output is the raw per-horizon signals (no buyer/seller
+    # recommendation). month was required anyway, so a batch request without it got a 422.
+    # Both stay accepted for compatibility with callers that already send them.
+    month: str | None = Field(
+        default=None, description="Ignorado: cada fila del CSV lleva su propia fecha ('date')"
     )
     role: str = Field(
         default="comprador",
-        description="Rol del usuario: 'comprador' o 'vendedor'",
+        description="Ignorado en batch (la salida batch no incluye recomendación por rol)",
     )
 
 
