@@ -59,6 +59,23 @@ def _file_needs_download(local_path: Path, remote_size: int) -> bool:
     return local_path.stat().st_size != remote_size
 
 
+def _is_directory_marker(obj: dict, objects: list[dict]) -> bool:
+    """True for a folder placeholder, never a real artifact file.
+
+    Besides the usual "key/" convention, the platform's S3 proxy lists every folder created by an
+    upload as a 0-byte object WITHOUT a trailing slash ("…/vit_tiny_fan"). Downloading that as a
+    file makes the next "…/vit_tiny_fan/fan/…" fail with FileExistsError — ml41, whose checkpoints
+    live in subfolders, could never load. A 0-byte key that other keys hang from is a folder.
+    """
+    key = obj["Key"]
+    if key.endswith("/"):
+        return True
+    if obj.get("Size", 0) != 0:
+        return False
+    prefix = key + "/"
+    return any(other["Key"].startswith(prefix) for other in objects)
+
+
 def download_s3_file(s3_uri: str) -> str:
     """Download an ``s3://bucket/key`` object to a local temp file and return its path."""
     without_prefix = s3_uri[len("s3://"):]
@@ -150,11 +167,12 @@ class ArtifactStore:
 
         # Collect all remote objects under the model prefix
         paginator = s3.get_paginator("list_objects_v2")
-        remote_files = []
-        for page in paginator.paginate(Bucket=bucket, Prefix=remote_prefix):
-            for obj in page.get("Contents", []):
-                if not obj["Key"].endswith("/"):  # skip directory markers
-                    remote_files.append(obj)
+        objects = [
+            obj
+            for page in paginator.paginate(Bucket=bucket, Prefix=remote_prefix)
+            for obj in page.get("Contents", [])
+        ]
+        remote_files = [obj for obj in objects if not _is_directory_marker(obj, objects)]
 
         if not remote_files:
             logger.warning("No files found in S3 for model: %s", self._model_name)
