@@ -1,0 +1,639 @@
+model_id: ml19-cereals-cost-forecast
+sector: cerealista
+nombre: "DATAGIA-19 -- Desarrollo de un modelo predictivo de coste de materias primas, basado en redes neuronales recurrentes (CORE-CEREAL)"
+task_type: regression_classification_ensemble  # multi-horizonte: regresion (retorno %) + clasificacion (direccion) combinadas en una senal ensemble
+framework: [scikit-learn==1.8.0, xgboost==3.2.0, pandas, numpy]
+
+# -----------------------------------------------------------------------------
+# DECISION DE ARQUITECTURA (confirmada con el usuario antes de completar este
+# manifest -- ver hilo de la integracion): a diferencia de los modelos 13/14/18,
+# aqui NO tiene sentido que el cliente aporte un historico de precios en la
+# request. El pipeline de features depende de 7 fuentes externas heterogeneas
+# (MAPA, ESYRCE, clima via Google Earth Engine, FAO, Yahoo Finance, BCE) y usa
+# estadisticos expanding() (media/std desde 2006), que ningun caller de API
+# puede reproducir por si mismo. El propio codigo de produccion (predict.py)
+# confirma este diseno: no recibe datos del caller, lee la ultima fila (o una
+# fecha concreta) de un dataset_v7_fe.csv ya pre-calculado por el pipeline ETL
+# completo (src/data_processing/), y la memoria lo confirma explicitamente
+# (seccion 4.4 "Entradas del modelo": "La entrada esperada es el dataset
+# resultante del pipeline de ingenieria de caracteristicas (dataset_v7_fe.csv)").
+#
+# Decision: el plugin empaqueta data/processed/auto/dataset_v7_fe.csv (484 KB,
+# 238 filas) como artefacto estatico de referencia, igual que otros plugins
+# empaquetan un diccionario de vecindad o un scaler. predict_inline no exige
+# ningun campo obligatorio; admite un "date" opcional (YYYY-MM) para elegir un
+# mes historico, igual que el --date del CLI original; sin fecha, devuelve la
+# fila mas reciente del dataset empaquetado.
+#
+# LIMITACION IMPORTANTE (ver known_issues): este dataset queda CONGELADO en la
+# fecha de entrega (ultima fila real: 2026-01). No se actualiza solo -- mantenerlo
+# vivo exige credenciales GEE, descargas manuales de Excel del MAPA y llamadas a
+# Yahoo Finance, es decir, re-ejecutar el pipeline completo de
+# src/data_processing/, que queda fuera del alcance de este plugin.
+# -----------------------------------------------------------------------------
+
+artifacts:
+  folder: models/artifacts/     # ruta dentro del codigo entregado
+  files:
+    - training_meta.json          # features (lista de 48, orden vinculante), best_reg/best_clf por horizonte, train_end
+    - best_reg_h1m_ridge.pkl       # {model, scaler, model_name} -- Ridge(alpha=100)
+    - best_reg_h2m_xgboost.pkl     # {model, scaler, model_name} -- XGBoost regresor
+    - best_reg_h3m_xgboost.pkl     # {model, scaler, model_name} -- XGBoost regresor
+    - best_clf_h1m_logreg.pkl      # {model, scaler, model_name} -- LogisticRegression(C=0.1)
+    - best_clf_h2m_xgboost.pkl     # {model, scaler, model_name} -- XGBoost clasificador
+    - best_clf_h3m_xgboost.pkl     # {model, scaler, model_name} -- XGBoost clasificador
+  # Nota de integridad: el codigo original guarda sidecars *.sha256 por cada
+  # artefacto (src/utils/io.py::load_pickle/load_json, validate_integrity=True,
+  # strict_integrity=True) y valida ademas que training_meta["features"] case
+  # con cada scaler.n_features_in_ y cada model.n_features_in_ (ver
+  # validate_artifacts_compatibility). El plugin deberia portar al menos la
+  # validacion de compatibilidad (no necesariamente el sha256 estricto, que es
+  # un detalle de higiene del repo original); documentar en plugin-integration
+  # si se omite.
+  reference_dataset:
+    file: data/processed/auto/dataset_v7_fe.csv   # 238 filas x 145 columnas, 484 KB -- empaquetar junto al modelo
+    note: >
+      Dataset de features ya calculado (salida de src/data_processing/feature_engineering.py).
+      El motor de inferencia selecciona por NOMBRE las 48 columnas de
+      training_meta.json["features"]; el resto (incluidos los targets) se
+      ignora. CONGELADO a la fecha de entrega (ultima fila: 2026-01).
+
+inputs:
+  fixed: []        # no hay inputs fijos obligatorios -- ver decision de arquitectura arriba
+  control:
+    - name: date
+      type: str | null
+      format: "YYYY-MM"
+      required: false
+      description: >
+        Mes a consultar dentro del dataset_v7_fe.csv empaquetado (igual que
+        --date en el CLI original). Si se omite, se usa la fila mas reciente
+        del dataset (equivalente a --last). Si la fecha no existe en el
+        dataset empaquetado, error de dominio (ValueError en el codigo
+        original -- ver get_row_from_dataset).
+  derived_if_missing: {}   # no aplica: no hay features derivadas de input de cliente en este plugin
+
+outputs:
+  predict_inline:
+    - date_label: str          # mes "hoy" usado (fila de referencia), YYYY-MM
+    - mapa_month_used: str     # mes MAPA real que alimenta las features de esa fila (date_label desplazado -3 meses)
+    - train_cutoff: str        # artifacts["meta"]["train_end"], 2019-12-31
+    - horizons:                # uno por horizonte disponible (1, 2, 3)
+        - horizon: int            # 1, 2 o 3 (meses)
+          predicted_for: str       # mes calendario que predice este horizonte (date_label + horizon)
+          reg:
+            model_name: str        # Ridge | XGBoost
+            pred: float             # retorno % esperado
+            signal: int              # -1, 0, 1 (np.sign(pred), 0 solo si pred==0 exacto)
+            signal_str: str          # LONG | SHORT | FLAT
+          clf:
+            model_name: str        # LogReg | XGBoost
+            prob_up: float           # P(subida) de predict_proba
+            pred_class: int          # 0 | 1
+            signal: int               # -1 | 1
+            signal_str: str           # LONG | SHORT
+          ensemble_signal: int       # np.sign(signal_reg + signal_clf)
+          ensemble_str: str           # LONG | SHORT | FLAT
+          confidence: str              # ALTA (reg y clf coinciden en signo) | BAJA (discrepan)
+
+training:
+  supported: false
+  target_column: null
+  required_columns: null
+  hyperparams: null
+  metrics_returned: null
+  source: null
+  reason: >
+    El codigo de entrenamiento (src/training/train.py) SI existe, pero opera
+    exclusivamente sobre data/processed/auto/dataset_v7_fe.csv -- no acepta un
+    CSV de usuario como data_path (a diferencia de los modelos 13/14/18). Para
+    regenerar ese dataset hace falta ejecutar el pipeline ETL completo
+    (src/data_processing/), que requiere autenticacion Google Earth Engine,
+    descarga manual de ficheros Excel del MAPA/ESYRCE y llamadas en vivo a
+    Yahoo Finance -- infraestructura externa fuera del alcance de un endpoint
+    de reentrenamiento de plugin. No se inventa un contrato de
+    train(data_path=<csv_usuario>) que el equipo de IA no definio para este
+    modelo. La memoria (seccion 10.4, "Protocolo de reentrenamiento") confirma
+    que el reentrenamiento es una operacion manual semestral
+    (`python -m src.main all`), no un servicio expuesto.
+
+constraints: {}   # no se han encontrado restricciones duras de negocio tipo "PU >= X" en el codigo
+
+metrics_reported:
+  # Tabla 38 + Tabla 39 de la memoria v6.1 -- "Resultados en el periodo de
+  # prueba (Test Out-of-sample)", periodo walk-forward 2020-01..2025-09.
+  # Coincide con models/artifacts/model_selection_audit.json (best_reg/best_clf
+  # seleccionados por Sharpe maximo / AUC maximo respectivamente).
+  regresion:
+    h1m: {modelo: Ridge, pearson_r: 0.604, dir_accuracy_pct: 80.9, sharpe: 2.61}
+    h2m: {modelo: XGBoost, pearson_r: 0.559, dir_accuracy_pct: 71.6, sharpe: 1.66}
+    h3m: {modelo: XGBoost, pearson_r: 0.611, dir_accuracy_pct: 77.3, sharpe: 2.71}
+  clasificacion:
+    h1m: {modelo: LogReg, auc_roc: 0.802, accuracy_pct: 68.1}
+    h2m: {modelo: XGBoost, auc_roc: 0.778, accuracy_pct: 71.0}
+    h3m: {modelo: XGBoost, auc_roc: 0.842, accuracy_pct: 78.3}
+  criterios_exito_memoria:
+    direction_accuracy_h1_min: 60    # %
+    sharpe_h1_min: 1.0
+    auc_roc_clasificacion_min: 0.65
+    da_alta_confianza_min: 65         # %
+  kpi_contractual: "Todos los umbrales de la Tabla 35 superados en h=1m; h=2m y h=3m son senal orientativa (menor N independiente: ~34 y ~22 obs.)"
+
+golden_cases:
+  # 18 casos repartidos trimestralmente sobre el periodo de test (2020-01..2024-04,
+  # dentro de data/splits/test.csv). "expected" es la salida REAL de ejecutar
+  # load_artifacts_src() + predict_next_month() del codigo entregado tal cual,
+  # contra los artefactos .pkl reales y el dataset_v7_fe.csv real (no inventado,
+  # no generado sinteticamente) -- verifica el wiring del plugin, no "si el
+  # modelo acierta el mercado" (para eso estan metrics_reported arriba).
+  - id: caso_2020-01
+    input: {date: "2020-01"}
+    expected:
+      h1:
+        reg: {model_name: Ridge, pred: 1.024653, signal: 1, signal_str: LONG}
+        clf: {model_name: LogReg, prob_up: 0.545627, pred_class: 1, signal: 1, signal_str: LONG}
+        ensemble_signal: 1
+        ensemble_str: LONG
+        confidence: ALTA
+      h2:
+        reg: {model_name: XGBoost, pred: 0.688030, signal: 1, signal_str: LONG}
+        clf: {model_name: XGBoost, prob_up: 0.606622, pred_class: 1, signal: 1, signal_str: LONG}
+        ensemble_signal: 1
+        ensemble_str: LONG
+        confidence: ALTA
+      h3:
+        reg: {model_name: XGBoost, pred: 0.055783, signal: 1, signal_str: LONG}
+        clf: {model_name: XGBoost, prob_up: 0.779348, pred_class: 1, signal: 1, signal_str: LONG}
+        ensemble_signal: 1
+        ensemble_str: LONG
+        confidence: ALTA
+    source: dataset_test_split
+
+  - id: caso_2020-04
+    input: {date: "2020-04"}
+    expected:
+      h1:
+        reg: {model_name: Ridge, pred: -0.035588, signal: -1, signal_str: SHORT}
+        clf: {model_name: LogReg, prob_up: 0.284651, pred_class: 0, signal: -1, signal_str: SHORT}
+        ensemble_signal: -1
+        ensemble_str: SHORT
+        confidence: ALTA
+      h2:
+        reg: {model_name: XGBoost, pred: -3.138930, signal: -1, signal_str: SHORT}
+        clf: {model_name: XGBoost, prob_up: 0.173987, pred_class: 0, signal: -1, signal_str: SHORT}
+        ensemble_signal: -1
+        ensemble_str: SHORT
+        confidence: ALTA
+      h3:
+        reg: {model_name: XGBoost, pred: -3.845091, signal: -1, signal_str: SHORT}
+        clf: {model_name: XGBoost, prob_up: 0.132301, pred_class: 0, signal: -1, signal_str: SHORT}
+        ensemble_signal: -1
+        ensemble_str: SHORT
+        confidence: ALTA
+    source: dataset_test_split
+
+  - id: caso_2020-07
+    input: {date: "2020-07"}
+    expected:
+      h1:
+        reg: {model_name: Ridge, pred: 0.529847, signal: 1, signal_str: LONG}
+        clf: {model_name: LogReg, prob_up: 0.488080, pred_class: 0, signal: -1, signal_str: SHORT}
+        ensemble_signal: 0
+        ensemble_str: FLAT
+        confidence: BAJA
+      h2:
+        reg: {model_name: XGBoost, pred: 1.757459, signal: 1, signal_str: LONG}
+        clf: {model_name: XGBoost, prob_up: 0.923678, pred_class: 1, signal: 1, signal_str: LONG}
+        ensemble_signal: 1
+        ensemble_str: LONG
+        confidence: ALTA
+      h3:
+        reg: {model_name: XGBoost, pred: 6.700910, signal: 1, signal_str: LONG}
+        clf: {model_name: XGBoost, prob_up: 0.923336, pred_class: 1, signal: 1, signal_str: LONG}
+        ensemble_signal: 1
+        ensemble_str: LONG
+        confidence: ALTA
+    source: dataset_test_split
+
+  - id: caso_2020-10
+    input: {date: "2020-10"}
+    expected:
+      h1:
+        reg: {model_name: Ridge, pred: 2.479238, signal: 1, signal_str: LONG}
+        clf: {model_name: LogReg, prob_up: 0.936612, pred_class: 1, signal: 1, signal_str: LONG}
+        ensemble_signal: 1
+        ensemble_str: LONG
+        confidence: ALTA
+      h2:
+        reg: {model_name: XGBoost, pred: 5.062689, signal: 1, signal_str: LONG}
+        clf: {model_name: XGBoost, prob_up: 0.937907, pred_class: 1, signal: 1, signal_str: LONG}
+        ensemble_signal: 1
+        ensemble_str: LONG
+        confidence: ALTA
+      h3:
+        reg: {model_name: XGBoost, pred: 8.271610, signal: 1, signal_str: LONG}
+        clf: {model_name: XGBoost, prob_up: 0.947035, pred_class: 1, signal: 1, signal_str: LONG}
+        ensemble_signal: 1
+        ensemble_str: LONG
+        confidence: ALTA
+    source: dataset_test_split
+
+  - id: caso_2021-01
+    input: {date: "2021-01"}
+    expected:
+      h1:
+        reg: {model_name: Ridge, pred: 2.290933, signal: 1, signal_str: LONG}
+        clf: {model_name: LogReg, prob_up: 0.866985, pred_class: 1, signal: 1, signal_str: LONG}
+        ensemble_signal: 1
+        ensemble_str: LONG
+        confidence: ALTA
+      h2:
+        reg: {model_name: XGBoost, pred: 4.665113, signal: 1, signal_str: LONG}
+        clf: {model_name: XGBoost, prob_up: 0.960165, pred_class: 1, signal: 1, signal_str: LONG}
+        ensemble_signal: 1
+        ensemble_str: LONG
+        confidence: ALTA
+      h3:
+        reg: {model_name: XGBoost, pred: 8.744989, signal: 1, signal_str: LONG}
+        clf: {model_name: XGBoost, prob_up: 0.957694, pred_class: 1, signal: 1, signal_str: LONG}
+        ensemble_signal: 1
+        ensemble_str: LONG
+        confidence: ALTA
+    source: dataset_test_split
+
+  - id: caso_2021-04
+    input: {date: "2021-04"}
+    expected:
+      h1:
+        reg: {model_name: Ridge, pred: 3.191981, signal: 1, signal_str: LONG}
+        clf: {model_name: LogReg, prob_up: 0.948235, pred_class: 1, signal: 1, signal_str: LONG}
+        ensemble_signal: 1
+        ensemble_str: LONG
+        confidence: ALTA
+      h2:
+        reg: {model_name: XGBoost, pred: 3.125839, signal: 1, signal_str: LONG}
+        clf: {model_name: XGBoost, prob_up: 0.942894, pred_class: 1, signal: 1, signal_str: LONG}
+        ensemble_signal: 1
+        ensemble_str: LONG
+        confidence: ALTA
+      h3:
+        reg: {model_name: XGBoost, pred: 4.047223, signal: 1, signal_str: LONG}
+        clf: {model_name: XGBoost, prob_up: 0.967425, pred_class: 1, signal: 1, signal_str: LONG}
+        ensemble_signal: 1
+        ensemble_str: LONG
+        confidence: ALTA
+    source: dataset_test_split
+
+  - id: caso_2021-07
+    input: {date: "2021-07"}
+    expected:
+      h1:
+        reg: {model_name: Ridge, pred: 2.465281, signal: 1, signal_str: LONG}
+        clf: {model_name: LogReg, prob_up: 0.749818, pred_class: 1, signal: 1, signal_str: LONG}
+        ensemble_signal: 1
+        ensemble_str: LONG
+        confidence: ALTA
+      h2:
+        reg: {model_name: XGBoost, pred: 7.248952, signal: 1, signal_str: LONG}
+        clf: {model_name: XGBoost, prob_up: 0.949988, pred_class: 1, signal: 1, signal_str: LONG}
+        ensemble_signal: 1
+        ensemble_str: LONG
+        confidence: ALTA
+      h3:
+        reg: {model_name: XGBoost, pred: 14.335695, signal: 1, signal_str: LONG}
+        clf: {model_name: XGBoost, prob_up: 0.967808, pred_class: 1, signal: 1, signal_str: LONG}
+        ensemble_signal: 1
+        ensemble_str: LONG
+        confidence: ALTA
+    source: dataset_test_split
+
+  - id: caso_2021-10
+    input: {date: "2021-10"}
+    expected:
+      h1:
+        reg: {model_name: Ridge, pred: 2.450675, signal: 1, signal_str: LONG}
+        clf: {model_name: LogReg, prob_up: 0.840633, pred_class: 1, signal: 1, signal_str: LONG}
+        ensemble_signal: 1
+        ensemble_str: LONG
+        confidence: ALTA
+      h2:
+        reg: {model_name: XGBoost, pred: 7.021894, signal: 1, signal_str: LONG}
+        clf: {model_name: XGBoost, prob_up: 0.857576, pred_class: 1, signal: 1, signal_str: LONG}
+        ensemble_signal: 1
+        ensemble_str: LONG
+        confidence: ALTA
+      h3:
+        reg: {model_name: XGBoost, pred: 7.294889, signal: 1, signal_str: LONG}
+        clf: {model_name: XGBoost, prob_up: 0.940812, pred_class: 1, signal: 1, signal_str: LONG}
+        ensemble_signal: 1
+        ensemble_str: LONG
+        confidence: ALTA
+    source: dataset_test_split
+
+  - id: caso_2022-01
+    input: {date: "2022-01"}
+    expected:
+      h1:
+        reg: {model_name: Ridge, pred: 1.239211, signal: 1, signal_str: LONG}
+        clf: {model_name: LogReg, prob_up: 0.434297, pred_class: 0, signal: -1, signal_str: SHORT}
+        ensemble_signal: 0
+        ensemble_str: FLAT
+        confidence: BAJA
+      h2:
+        reg: {model_name: XGBoost, pred: 15.238453, signal: 1, signal_str: LONG}
+        clf: {model_name: XGBoost, prob_up: 0.788066, pred_class: 1, signal: 1, signal_str: LONG}
+        ensemble_signal: 1
+        ensemble_str: LONG
+        confidence: ALTA
+      h3:
+        reg: {model_name: XGBoost, pred: 22.462124, signal: 1, signal_str: LONG}
+        clf: {model_name: XGBoost, prob_up: 0.809145, pred_class: 1, signal: 1, signal_str: LONG}
+        ensemble_signal: 1
+        ensemble_str: LONG
+        confidence: ALTA
+    source: dataset_test_split
+
+  - id: caso_2022-04
+    input: {date: "2022-04"}
+    expected:
+      h1:
+        reg: {model_name: Ridge, pred: 1.190999, signal: 1, signal_str: LONG}
+        clf: {model_name: LogReg, prob_up: 0.320169, pred_class: 0, signal: -1, signal_str: SHORT}
+        ensemble_signal: 0
+        ensemble_str: FLAT
+        confidence: BAJA
+      h2:
+        reg: {model_name: XGBoost, pred: 2.334261, signal: 1, signal_str: LONG}
+        clf: {model_name: XGBoost, prob_up: 0.628836, pred_class: 1, signal: 1, signal_str: LONG}
+        ensemble_signal: 1
+        ensemble_str: LONG
+        confidence: ALTA
+      h3:
+        reg: {model_name: XGBoost, pred: 0.454068, signal: 1, signal_str: LONG}
+        clf: {model_name: XGBoost, prob_up: 0.122837, pred_class: 0, signal: -1, signal_str: SHORT}
+        ensemble_signal: 0
+        ensemble_str: FLAT
+        confidence: BAJA
+    source: dataset_test_split
+
+  - id: caso_2022-07
+    input: {date: "2022-07"}
+    expected:
+      h1:
+        reg: {model_name: Ridge, pred: -2.025116, signal: -1, signal_str: SHORT}
+        clf: {model_name: LogReg, prob_up: 0.027447, pred_class: 0, signal: -1, signal_str: SHORT}
+        ensemble_signal: -1
+        ensemble_str: SHORT
+        confidence: ALTA
+      h2:
+        reg: {model_name: XGBoost, pred: 0.325668, signal: 1, signal_str: LONG}
+        clf: {model_name: XGBoost, prob_up: 0.281091, pred_class: 0, signal: -1, signal_str: SHORT}
+        ensemble_signal: 0
+        ensemble_str: FLAT
+        confidence: BAJA
+      h3:
+        reg: {model_name: XGBoost, pred: 2.738874, signal: 1, signal_str: LONG}
+        clf: {model_name: XGBoost, prob_up: 0.270673, pred_class: 0, signal: -1, signal_str: SHORT}
+        ensemble_signal: 0
+        ensemble_str: FLAT
+        confidence: BAJA
+    source: dataset_test_split
+
+  - id: caso_2022-10
+    input: {date: "2022-10"}
+    expected:
+      h1:
+        reg: {model_name: Ridge, pred: -1.752937, signal: -1, signal_str: SHORT}
+        clf: {model_name: LogReg, prob_up: 0.068489, pred_class: 0, signal: -1, signal_str: SHORT}
+        ensemble_signal: -1
+        ensemble_str: SHORT
+        confidence: ALTA
+      h2:
+        reg: {model_name: XGBoost, pred: -5.423251, signal: -1, signal_str: SHORT}
+        clf: {model_name: XGBoost, prob_up: 0.074071, pred_class: 0, signal: -1, signal_str: SHORT}
+        ensemble_signal: -1
+        ensemble_str: SHORT
+        confidence: ALTA
+      h3:
+        reg: {model_name: XGBoost, pred: -7.389459, signal: -1, signal_str: SHORT}
+        clf: {model_name: XGBoost, prob_up: 0.030356, pred_class: 0, signal: -1, signal_str: SHORT}
+        ensemble_signal: -1
+        ensemble_str: SHORT
+        confidence: ALTA
+    source: dataset_test_split
+
+  - id: caso_2023-01
+    input: {date: "2023-01"}
+    expected:
+      h1:
+        reg: {model_name: Ridge, pred: -2.881133, signal: -1, signal_str: SHORT}
+        clf: {model_name: LogReg, prob_up: 0.025760, pred_class: 0, signal: -1, signal_str: SHORT}
+        ensemble_signal: -1
+        ensemble_str: SHORT
+        confidence: ALTA
+      h2:
+        reg: {model_name: XGBoost, pred: -5.291079, signal: -1, signal_str: SHORT}
+        clf: {model_name: XGBoost, prob_up: 0.066597, pred_class: 0, signal: -1, signal_str: SHORT}
+        ensemble_signal: -1
+        ensemble_str: SHORT
+        confidence: ALTA
+      h3:
+        reg: {model_name: XGBoost, pred: -8.472891, signal: -1, signal_str: SHORT}
+        clf: {model_name: XGBoost, prob_up: 0.061120, pred_class: 0, signal: -1, signal_str: SHORT}
+        ensemble_signal: -1
+        ensemble_str: SHORT
+        confidence: ALTA
+    source: dataset_test_split
+
+  - id: caso_2023-04
+    input: {date: "2023-04"}
+    expected:
+      h1:
+        reg: {model_name: Ridge, pred: -4.331855, signal: -1, signal_str: SHORT}
+        clf: {model_name: LogReg, prob_up: 0.008866, pred_class: 0, signal: -1, signal_str: SHORT}
+        ensemble_signal: -1
+        ensemble_str: SHORT
+        confidence: ALTA
+      h2:
+        reg: {model_name: XGBoost, pred: -8.011656, signal: -1, signal_str: SHORT}
+        clf: {model_name: XGBoost, prob_up: 0.032838, pred_class: 0, signal: -1, signal_str: SHORT}
+        ensemble_signal: -1
+        ensemble_str: SHORT
+        confidence: ALTA
+      h3:
+        reg: {model_name: XGBoost, pred: -11.056545, signal: -1, signal_str: SHORT}
+        clf: {model_name: XGBoost, prob_up: 0.029187, pred_class: 0, signal: -1, signal_str: SHORT}
+        ensemble_signal: -1
+        ensemble_str: SHORT
+        confidence: ALTA
+    source: dataset_test_split
+
+  - id: caso_2023-07
+    input: {date: "2023-07"}
+    expected:
+      h1:
+        reg: {model_name: Ridge, pred: -2.489644, signal: -1, signal_str: SHORT}
+        clf: {model_name: LogReg, prob_up: 0.030439, pred_class: 0, signal: -1, signal_str: SHORT}
+        ensemble_signal: -1
+        ensemble_str: SHORT
+        confidence: ALTA
+      h2:
+        reg: {model_name: XGBoost, pred: -4.536053, signal: -1, signal_str: SHORT}
+        clf: {model_name: XGBoost, prob_up: 0.041556, pred_class: 0, signal: -1, signal_str: SHORT}
+        ensemble_signal: -1
+        ensemble_str: SHORT
+        confidence: ALTA
+      h3:
+        reg: {model_name: XGBoost, pred: -5.258287, signal: -1, signal_str: SHORT}
+        clf: {model_name: XGBoost, prob_up: 0.039937, pred_class: 0, signal: -1, signal_str: SHORT}
+        ensemble_signal: -1
+        ensemble_str: SHORT
+        confidence: ALTA
+    source: dataset_test_split
+
+  - id: caso_2023-10
+    input: {date: "2023-10"}
+    expected:
+      h1:
+        reg: {model_name: Ridge, pred: -0.875264, signal: -1, signal_str: SHORT}
+        clf: {model_name: LogReg, prob_up: 0.374814, pred_class: 0, signal: -1, signal_str: SHORT}
+        ensemble_signal: -1
+        ensemble_str: SHORT
+        confidence: ALTA
+      h2:
+        reg: {model_name: XGBoost, pred: -2.082461, signal: -1, signal_str: SHORT}
+        clf: {model_name: XGBoost, prob_up: 0.214184, pred_class: 0, signal: -1, signal_str: SHORT}
+        ensemble_signal: -1
+        ensemble_str: SHORT
+        confidence: ALTA
+      h3:
+        reg: {model_name: XGBoost, pred: -3.474706, signal: -1, signal_str: SHORT}
+        clf: {model_name: XGBoost, prob_up: 0.048798, pred_class: 0, signal: -1, signal_str: SHORT}
+        ensemble_signal: -1
+        ensemble_str: SHORT
+        confidence: ALTA
+    source: dataset_test_split
+
+  - id: caso_2024-01
+    input: {date: "2024-01"}
+    expected:
+      h1:
+        reg: {model_name: Ridge, pred: -1.517924, signal: -1, signal_str: SHORT}
+        clf: {model_name: LogReg, prob_up: 0.106467, pred_class: 0, signal: -1, signal_str: SHORT}
+        ensemble_signal: -1
+        ensemble_str: SHORT
+        confidence: ALTA
+      h2:
+        reg: {model_name: XGBoost, pred: -5.348886, signal: -1, signal_str: SHORT}
+        clf: {model_name: XGBoost, prob_up: 0.043108, pred_class: 0, signal: -1, signal_str: SHORT}
+        ensemble_signal: -1
+        ensemble_str: SHORT
+        confidence: ALTA
+      h3:
+        reg: {model_name: XGBoost, pred: -6.577773, signal: -1, signal_str: SHORT}
+        clf: {model_name: XGBoost, prob_up: 0.060544, pred_class: 0, signal: -1, signal_str: SHORT}
+        ensemble_signal: -1
+        ensemble_str: SHORT
+        confidence: ALTA
+    source: dataset_test_split
+
+  - id: caso_2024-04
+    input: {date: "2024-04"}
+    expected:
+      h1:
+        reg: {model_name: Ridge, pred: 0.592011, signal: 1, signal_str: LONG}
+        clf: {model_name: LogReg, prob_up: 0.474449, pred_class: 0, signal: -1, signal_str: SHORT}
+        ensemble_signal: 0
+        ensemble_str: FLAT
+        confidence: BAJA
+      h2:
+        reg: {model_name: XGBoost, pred: 0.471756, signal: 1, signal_str: LONG}
+        clf: {model_name: XGBoost, prob_up: 0.770851, pred_class: 1, signal: 1, signal_str: LONG}
+        ensemble_signal: 1
+        ensemble_str: LONG
+        confidence: ALTA
+      h3:
+        reg: {model_name: XGBoost, pred: -2.393356, signal: -1, signal_str: SHORT}
+        clf: {model_name: XGBoost, prob_up: 0.232141, pred_class: 0, signal: -1, signal_str: SHORT}
+        ensemble_signal: -1
+        ensemble_str: SHORT
+        confidence: ALTA
+    source: dataset_test_split
+
+known_issues:
+  - id: arquitectura_dataset_congelado
+    detail: >
+      El plugin empaqueta data/processed/auto/dataset_v7_fe.csv como artefacto
+      estatico (ver nota de arquitectura al inicio de este manifest). La ultima
+      fila real es 2026-01 -- el plugin NUNCA avanzara mas alla de esa fecha
+      salvo que alguien regenere el dataset ejecutando el pipeline ETL completo
+      (credenciales GEE, descargas manuales MAPA/ESYRCE, llamadas Yahoo
+      Finance) fuera del plugin y se vuelva a desplegar con el CSV actualizado.
+      Esto debe quedar explicito en la ficha funcional: no es un modelo que
+      "siga el mercado en vivo" salvo mantenimiento manual periodico.
+  - id: discrepancia_memoria_vs_codigo_mitigacion_riesgos
+    detail: >
+      La memoria (Tabla 48, seccion "Plan de mitigacion de riesgos") describe
+      dos mecanismos operativos que NO existen en el codigo entregado: (1) un
+      "Gate automatico en predict.py: si la volatilidad > threshold, se emite
+      el flag ALTA VOLATILIDAD" -- no hay ningun flag ni gate de volatilidad en
+      src/predict/predict.py; (2) un "Filtro de confianza: Solo se actuan
+      senales con probabilidad > 0.65 o < 0.35" -- el codigo real no filtra
+      senales por prob_up, siempre devuelve el resultado de los 3 horizontes.
+      Las constantes 0.65/0.35 que SI existen en el codigo
+      (REL_CLF_STRONG.auc=0.65, REL_REG_STRONG.r=0.35, src/utils/constants.py)
+      son umbrales de un veredicto de FIABILIDAD para los reportes de
+      get_stats, no un filtro operativo de predict.py. El plugin NO debe
+      inventar estos mecanismos para "cumplir" la memoria -- debe replicar
+      fielmente predict_next_month() tal cual esta, y esta discrepancia debe
+      quedar senalada para revision humana (igual que el caso RNN-vs-modelo-
+      tabular de otros modelos de este repo).
+  - id: discrepancia_memoria_modelo_clasificacion_h1
+    detail: >
+      La memoria es inconsistente consigo misma sobre el modelo ganador de
+      clasificacion en H1: el resumen inicial (seccion "Objetivos", parrafo de
+      alcance) dice en un sitio "RandomForest para H1, H2 y H3 en
+      clasificacion" pero mas adelante, en el mismo parrafo, corrige a "LogReg
+      gana en h=1m y XGBoost en h=2m y h=3m". La Tabla 39 (resultados de test,
+      autoritativa) y los artefactos realmente entregados (best_clf_h1m_logreg.pkl,
+      training_meta.json["best_clf"]["1"]="LogReg") confirman LogReg en H1 --
+      es la version correcta; la mencion a RandomForest en el resumen inicial
+      parece una frase no actualizada de una iteracion anterior de la memoria.
+  - id: discrepancia_metricas_tabla35_vs_tabla38
+    detail: >
+      Tabla 36 (seccion "Evaluacion de cumplimiento") reporta "Direction
+      Accuracy H1 (Ridge) 78.8%" y "AUC-ROC H1 (XGBoost) 0.877", mientras que
+      Tabla 38/39 (seccion "Resultados en el periodo de prueba", la que se usa
+      en metrics_reported de este manifest) reportan DA=80.9% para Ridge H1 y
+      AUC=0.802 para LogReg H1 (no XGBoost). Los numeros y hasta el modelo
+      citado no coinciden entre ambas tablas de la misma memoria. Se ha tomado
+      Tabla 38/39 como referencia por estar mas proxima a la seccion de
+      resultados oficiales y coincidir con model_selection_audit.json, pero
+      la discrepancia debe quedar documentada, no silenciada.
+  - id: requirements_encoding
+    detail: >
+      requirements.txt viene con BOM UTF-8 y terminadores CRLF (Windows). Se
+      normalizo a UTF-8/LF en requirements_fixed.txt para esta extraccion;
+      aplicar la misma normalizacion antes de usarlo en cualquier pipeline
+      (pip install, pip-audit, etc.) en plugin-integration.
+  - id: version_pins_pickle
+    detail: >
+      Los artefactos .pkl se serializaron con scikit-learn==1.8.0 y
+      xgboost==3.2.0 (ver requirements.txt). Cargarlos con scikit-learn 1.9.1
+      emite InconsistentVersionWarning (no error) para Ridge/StandardScaler/
+      LogisticRegression; xgboost emite un UserWarning de formato de
+      serializacion con xgboost 3.4.1. Verificado que las predicciones no
+      cambian (18 golden cases arriba generados exactamente con estas
+      versiones no-pineadas y coinciden con model_selection_audit.json), pero
+      el plugin deberia pinear scikit-learn==1.8.0 y xgboost==3.2.0 en su
+      propio requirements para eliminar el riesgo en vez de confiar en que la
+      compatibilidad se mantenga.
+  - id: golden_cases_fuente
+    detail: >
+      Los 18 golden_cases de arriba son la salida real de ejecutar
+      load_artifacts_src()+predict_next_month() (codigo entregado, sin
+      modificar) contra los 6 artefactos .pkl reales y
+      data/processed/auto/dataset_v7_fe.csv real, para 18 fechas de
+      data/splits/test.csv repartidas trimestralmente (2020-01..2024-04). No
+      son casos de la memoria ni inventados -- son trazables y reproducibles
+      con el comando usado en esta extraccion.
