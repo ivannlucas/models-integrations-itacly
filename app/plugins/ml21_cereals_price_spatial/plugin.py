@@ -669,15 +669,15 @@ class Ml21CerealsPriceSpatialPlugin(ModelPluginPort):
 
             upload_warning = None
             if tracker:
-                tracker.log_params({
-                    "model_type": "extra_trees+xgb+logistic",
-                    "horizons": "1,2,3",
-                    "cut_date": "2021-01-01",
-                    "random_state": "42",
-                })
                 flat_metrics = {k: v for k, v in all_metrics.items() if not (isinstance(v, float) and np.isnan(v))}
-                tracker.log_metrics(flat_metrics)
                 try:
+                    tracker.log_params({
+                        "model_type": "extra_trees+xgb+logistic",
+                        "horizons": "1,2,3",
+                        "cut_date": "2021-01-01",
+                        "random_state": "42",
+                    })
+                    tracker.log_metrics(flat_metrics)
                     tracker.upload_artifacts(tmp_dir, artifact_path="model")
                 except Exception as exc:
                     logger.error("MLflow artifact upload failed: %s", exc)
@@ -690,8 +690,8 @@ class Ml21CerealsPriceSpatialPlugin(ModelPluginPort):
                 all_metrics.get("mae_h3", 0), elapsed, bool(mlflow_run_id),
             )
 
-            self.load()
-
+            # The retrained models live only in their MLflow run (predict with that
+            # mlflow_run_id). The served base bundle stays as is: no reload here.
             from app.plugins.ml21_cereals_price_spatial.train_dto import TrainResponse
 
             return TrainResponse(
