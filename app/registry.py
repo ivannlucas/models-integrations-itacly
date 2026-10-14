@@ -534,7 +534,7 @@ REGISTRY: list[ModelEntry] = [
         plugin_class=Ml36DairyDnlCo2EmissionsOptimizerPlugin,
         predict_request_type=Ml36Dairy_Request,
         predict_response_type=Ml36Dairy_Response,
-        extra_predict_exceptions=(ThermalSafetyViolationError,),
+        extra_predict_exceptions=(),
         train_request_type=Ml36Dairy_TrainReq,
         train_response_type=Ml36Dairy_TrainResp,
     ),

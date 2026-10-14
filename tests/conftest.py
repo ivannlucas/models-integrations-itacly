@@ -1197,12 +1197,13 @@ def _ml36_dairy_batch(plugin: FakePlugin, *, data_path: str, model_key: str | No
 
 
 def _ml36_dairy_train(plugin: FakePlugin, *, data_path: str) -> Ml36DairyTrainResp:
-    """Fake fine-tuning response for the ml36 plugin."""
+    """Fake retraining response for ml36 (figures of the real retrain on the delivered master dataset)."""
     return Ml36DairyTrainResp(
-        detail="Fine-tuning completado",
-        mae_t_out=0.0191, mse_t_out=0.000592, r2_t_out=0.9995,
-        mae_co2=0.3076, mse_co2=0.147651, r2_co2=0.8951,
-        n_samples=500, epochs_executed=60,
+        detail="Reentrenamiento completado (procedimiento train del equipo de IA); métricas sobre el split de test",
+        mae_t_out=0.0191, mse_t_out=0.000591, r2_t_out=0.9995,
+        mae_co2=0.3076, mse_co2=0.147652, r2_co2=0.8951,
+        n_samples=51389, n_train=35930, n_val=7755, n_test=7704, epochs_executed=131,
+        best_val_loss=0.00081977, training_time_s=59.8,
     )
 
 
@@ -2259,7 +2260,7 @@ TEST_REGISTRY: list[ModelEntry] = [
         plugin_class=FakePlugin,
         predict_request_type=Ml36Dairy_Request,
         predict_response_type=Ml36Dairy_Response,
-        extra_predict_exceptions=(ThermalSafetyViolationError,),
+        extra_predict_exceptions=(),
         train_request_type=Ml36Dairy_TrainReq,
         train_response_type=Ml36DairyTrainResp,
     ),

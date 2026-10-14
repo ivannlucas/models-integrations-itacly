@@ -746,3 +746,32 @@ known_issues:
   pierden formato).'
 - 'Hallazgo en el código original: en realtime_decision_pipeline._run_adaptive_ga_for_row los individuos semilla (política + operación actual) se añaden a la población y justo después se trunca a pop_size, descartándolos. En la práctica "hybrid" == "adaptive". El plugin lo replica fielmente para reproducir los resultados del equipo de IA; confirmar con ellos si es intencionado.'
 - 'Versiones: los .pkl de scalers vienen de scikit-learn 1.8.0 / numpy 2.x pero el requirements.txt del repo fija scikit-learn==1.5.2 y numpy>=1.24 (y deap==1.4.4 vs 1.4.3). Hay que comprobar la carga de scaler_X/scaler_Y en el entorno real (verification).'
+
+# ---------------------------------------------------------------------------
+# REVISION 2026-10-14 (codigo/ actualizado con el original) - PREVALECE sobre lo anterior
+# ---------------------------------------------------------------------------
+revision_2026_10_14:
+  artefactos: "MD5 de MLP_Final_Best_From_Search.pt, scaler_X.pkl, scaler_Y.pkl, ga_policy_global.json y final_model_config.json identicos entre codigo/ y s3://xai/artifacts/fixed/ml36_dairy_dnl_co2_emissions_optimizer/."
+  inferencia: "Sin cambios. Re-verificado con artefactos de S3: predict 18/18 (diff <= 5e-5, redondeo a 4 decimales), test completo MAE/R2 = memoria (0.019092/0.999492 T_out, 0.307588/0.895145 CO2), optimize 4/4 (diff <= 5e-5) y predict_batch optimize = realtime_decisions.csv en 25 filas (semilla 43 + fila)."
+  restriccion_termica: >
+    [RESUELTO] El original (realtime_decision_pipeline.run_realtime_decision_pipeline) nunca rechaza: devuelve el mejor
+    individuo aunque T_out < 72.5 (la restriccion solo penaliza el fitness). El plugin hace lo mismo: recommended_factible
+    es informativo y la plataforma debe validarlo. Se retira el ThermalSafetyViolationError -> 422 que tenia la version
+    del repo GitHub (anterior, 05/10); la de Bitbucket (06/10, confirmada con el equipo de IA) ya era la fiel.
+  unidades: "[RESUELTO] Delta_P en bar (el simulador synthetic_data_model1.py calcula la potencia de bomba con delta_p*100000 Pa) y Viscosity en cP = mPa·s (≈2 para leche). La memoria no las declara."
+  contrato_mlflow: "[CORREGIDO en GitHub] mlflow_run_id obligatorio (MlflowRunId); run sin modelo completo -> 422 (@require_user_model, sin caer al modelo base, temp dir limpio); fallo de subida -> 502 (ModelPersistenceError); el modelo del usuario se resuelve en locales, nunca en self."
+  training: >
+    [CORREGIDO] /train hacia fine-tuning de los pesos servidos con los scalers servidos, validacion = ultimo 15 %
+    y metricas sobre todo el CSV. Ahora es el port de split_normalization.py + trainer.py (use_precomputed_best_config):
+    split 70/15/15 por ciclo (cycle_id o reinicios de t_ciclo) equilibrado por estacion (season/month/date) con
+    default_rng(42); StandardScaler/MinMaxScaler ajustados en train; MLP NUEVO 1x64 ReLU dropout 0.1 con semilla 1+500,
+    Adam 1e-4, MSE, batch 128, max 400 epocas, paciencia 30; metricas en el split de test en unidades reales.
+    El modelo y SUS scalers se suben al run de MLflow. Con df_pasteurizacion_master.csv: split = train/val/test_raw.csv
+    (35930/7755/7704; diferencia 6.6e-24 del round-trip CSV), scalers identicos, 131 epocas y best val_loss 0.00081977
+    como el entregado; test T_out MAE 0.019090 / R2 0.999492, CO2 MAE 0.307590 / R2 0.895144 (entregado 0.019092 /
+    0.999492 / 0.307587 / 0.895145). Pesos con diferencia max 4e-3: aritmetica float32 de otra version de torch/BLAS
+    (entradas identicas en float32). 60 s en CPU.
+    Desviaciones deliberadas: las 11 features son FEATURE_ORDER fijo (no 'todas las columnas no excluidas'), CPU siempre,
+    sin torch.use_deterministic_algorithms (global al proceso), se descarta un ultimo batch de 1 muestra (BatchNorm) y la
+    politica global GA no se recalcula (optimize_policy es otro paso; el modo optimize usa la de los artefactos base).
+  metrics_returned: [mae_t_out, mse_t_out, r2_t_out, mae_co2, mse_co2, r2_co2, n_samples, n_train, n_val, n_test, epochs_executed, best_val_loss, training_time_s]

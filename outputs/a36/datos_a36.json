@@ -1,0 +1,80 @@
+{
+  "model_id": "a36",
+  "model_slug": "dairy-dnl-co2-emissions-optimizer",
+  "fecha": "Octubre 2026",
+  "model_key": "ml36-dairy-dnl-co2-emissions-optimizer",
+  "version": "1.3 (entrega IA) · plugin 1.0.0",
+  "descripcion": "Modelo de optimización neuroevolutiva (DNL) para reducir las emisiones de CO2 de la pasteurización de leche: una red neuronal actúa como gemelo digital del proceso (predice la temperatura de salida y las emisiones de CO2 a partir de 8 variables de proceso) y un algoritmo genético recomienda, para cada escenario de leche y limpieza, los valores de T_serv, Delta_P y Regeneration_perc que minimizan el CO2 penalizando una temperatura de salida inferior a 72,5 °C.",
+  "task_type": "regression_prescriptive (regresión multisalida + optimización por algoritmo genético)",
+  "framework": "PyTorch (MLP con BatchNorm y Dropout) + DEAP (algoritmo genético) + scikit-learn (StandardScaler / MinMaxScaler) + pandas / numpy",
+  "artefacto": "MLP_Final_Best_From_Search.pt + final_model_config.json + scaler_X.pkl + scaler_Y.pkl + ga_policy_global.json (~13 KB en total)",
+  "objetivo": "Reducir la huella de carbono de la pasteurización de leche proponiendo consignas operativas (temperatura del fluido de servicio, presión diferencial y regeneración térmica) que emitan menos CO2 que la operación histórica sin bajar de la temperatura de salida de 72,5 °C (límite legal de 72 °C del Codex más 0,5 °C de margen). El criterio de éxito del proyecto era una mejora mínima del 10 % del consumo específico.",
+  "caso_uso": "Modo estimación (estimate): se introducen las 8 variables de proceso y se obtienen T_out y CO2_emissions previstos. Modo recomendación de consignas (optimize): se introducen las 5 variables no controlables (F_milk, T_in, Fat_perc, Viscosity, t_ciclo) y, opcionalmente, la operación actual (T_serv, Delta_P, Regeneration_perc); el sistema devuelve las consignas recomendadas con su CO2 y T_out previstos y el ahorro frente a la política global y a la operación actual. Modo batch: el mismo contrato sobre un CSV, una recomendación por fila; el modo de decisión por defecto es hybrid.",
+  "inputs": [
+    {"nombre": "T_serv", "tipo": "float", "descripcion": "Temperatura del fluido de servicio (°C). Variable de control; rango de entrenamiento 75,3–84,3 °C. En optimize es opcional (operación actual)", "obligatorio": "Sí (estimate)", "valor_defecto": "-"},
+    {"nombre": "F_milk", "tipo": "float", "descripcion": "Caudal volumétrico de leche (L/h). Rango de entrenamiento 4.470–5.856 L/h", "obligatorio": "Sí", "valor_defecto": "-"},
+    {"nombre": "T_in", "tipo": "float", "descripcion": "Temperatura de entrada de la leche (°C). Rango de entrenamiento 3,4–7,7 °C", "obligatorio": "Sí", "valor_defecto": "-"},
+    {"nombre": "Fat_perc", "tipo": "float", "descripcion": "Porcentaje de grasa del lote de leche (%). Rango de entrenamiento 3,2–4,19 %", "obligatorio": "Sí", "valor_defecto": "-"},
+    {"nombre": "Viscosity", "tipo": "float", "descripcion": "Viscosidad dinámica de la leche (cP). Rango de entrenamiento 1,89–2,26 cP", "obligatorio": "Sí", "valor_defecto": "-"},
+    {"nombre": "Regeneration_perc", "tipo": "float", "descripcion": "Eficiencia de regeneración térmica del proceso (%). Variable de control; rango 86,9–93,5 %. En optimize es opcional (operación actual)", "obligatorio": "Sí (estimate)", "valor_defecto": "-"},
+    {"nombre": "Delta_P", "tipo": "float", "descripcion": "Consigna de presión de impulsión de las bombas (bar). Variable de control; rango 0,60–1,60 bar. En optimize es opcional (operación actual)", "obligatorio": "Sí (estimate)", "valor_defecto": "-"},
+    {"nombre": "t_ciclo", "tipo": "float", "descripcion": "Tiempo transcurrido desde la última limpieza CIP (min). Rango de entrenamiento 5–610 min", "obligatorio": "Sí", "valor_defecto": "-"},
+    {"nombre": "model_key", "tipo": "string", "descripcion": "Con el valor \"optimize\" el modelo recomienda consignas en lugar de estimar T_out y CO2", "obligatorio": "No", "valor_defecto": "estimate"},
+    {"nombre": "decision_mode", "tipo": "string", "descripcion": "Modo de decisión en optimize: static (política global), adaptive (GA por escenario) o hybrid", "obligatorio": "No", "valor_defecto": "hybrid"},
+    {"nombre": "seed", "tipo": "int", "descripcion": "Semilla del GA adaptativo; hace reproducible la recomendación de un escenario", "obligatorio": "No", "valor_defecto": "43"},
+    {"nombre": "data_path", "tipo": "string", "descripcion": "Modo batch: ruta del CSV (local o s3://) con las columnas de entrada", "obligatorio": "Sí (batch)", "valor_defecto": "-"}
+  ],
+  "outputs": [
+    {"nombre": "T_out_pred", "tipo": "float (°C)", "descripcion": "Temperatura de salida de la leche prevista (modo estimate)", "rango": "aprox. 74,2–82,6 °C (rango de entrenamiento)", "interpretacion": "Por debajo de 72,5 °C el escenario no alcanza el umbral de pasteurización"},
+    {"nombre": "CO2_emissions_pred", "tipo": "float (kg)", "descripcion": "Emisiones de CO2 previstas (modo estimate)", "rango": "aprox. 15,6–25,2 kg (rango de entrenamiento)", "interpretacion": "Valores más bajos implican menos emisiones por registro"},
+    {"nombre": "recommended_T_serv / _Delta_P / _Regeneration_perc", "tipo": "float (°C / bar / %)", "descripcion": "Consignas recomendadas por el optimizador (modo optimize)", "rango": "T_serv 73,4–84,31; Delta_P 0,6–1,6; Regeneration_perc 86,9–93,4", "interpretacion": "Delta_P y Regeneration_perc son variables objetivo, no siempre accionables directamente en planta"},
+    {"nombre": "recommended_CO2_pred", "tipo": "float (kg)", "descripcion": "CO2 previsto con las consignas recomendadas", "rango": "aprox. 15,6–25,2 kg (rango de entrenamiento)", "interpretacion": "Comparar con policy_CO2_pred y current_CO2_pred para medir el ahorro"},
+    {"nombre": "recommended_T_out_pred", "tipo": "float (°C)", "descripcion": "Temperatura de salida prevista con las consignas recomendadas", "rango": ">= 72,5 °C en la práctica totalidad de los casos", "interpretacion": "El umbral es una penalización del GA, no una regla dura: debe comprobarse antes de aplicar"},
+    {"nombre": "recommended_factible", "tipo": "bool", "descripcion": "Indica si recommended_T_out_pred >= 72,5 °C", "rango": "true / false", "interpretacion": "Informativo: false no rechaza la respuesta; la plataforma muestra el aviso"},
+    {"nombre": "policy_* (T_serv, Delta_P, Regeneration_perc, CO2_pred, T_out_pred)", "tipo": "float", "descripcion": "Valores de la política global estática, línea base del optimizador", "rango": "-", "interpretacion": "Referencia para medir la mejora del GA adaptativo"},
+    {"nombre": "co2_saving_vs_policy", "tipo": "float (kg)", "descripcion": "Ahorro de CO2 frente a la política global", "rango": "valor ~0 en modo static", "interpretacion": "Mejora adicional aportada por la optimización adaptativa"},
+    {"nombre": "current_CO2_pred / current_T_out_pred / co2_saving_vs_current", "tipo": "float (kg / °C / kg)", "descripcion": "Resultado de la operación actual y ahorro frente a ella (solo si se informan T_serv, Delta_P y Regeneration_perc)", "rango": "-", "interpretacion": "Mide el ahorro real frente a cómo opera hoy la planta"}
+  ],
+  "metricas": [
+    {"nombre": "MAE de T_out (test)", "valor": "0,019 °C", "descripcion": "Error absoluto medio de la temperatura de salida en el hold-out de test (7.704 registros); R² = 0,9995, MSE = 0,0006", "interpretacion": "El modelo acierta la temperatura de salida con un error medio inferior a 0,02 °C"},
+    {"nombre": "MAE de CO2_emissions (test)", "valor": "0,31 kg", "descripcion": "Error absoluto medio de las emisiones en el hold-out de test; R² = 0,895, MSE = 0,148", "interpretacion": "La estimación de CO2 es menos precisa que la de temperatura; explica ~90 % de la variación"},
+    {"nombre": "Reducción de CO2 del GA (validación)", "valor": "21,68 %", "descripcion": "De 156.067 kg a 122.231 kg en 7.755 instancias (3,34 millones de litros); 10,14 g CO2/L evitados; 100 % de instancias mejoradas", "interpretacion": "Mejora sobre la operación histórica, en simulación; el objetivo del proyecto era >= 10 %"},
+    {"nombre": "Verificación post-integración: predicción", "valor": "18/18 casos", "descripcion": "Plugin frente a las predicciones del propio modelo del equipo de IA sobre casos reales del split de test; diferencia máxima 5e-5; sobre las 7.704 filas MAE 0,01909 °C y 0,30759 kg, R² idénticos a la memoria", "interpretacion": "El plugin integrado reproduce el modelo original; la diferencia frente al valor real es el error propio del modelo"},
+    {"nombre": "Verificación post-integración: optimizador", "valor": "4/4 casos", "descripcion": "Política estática y operación actual deterministas dentro de 1e-3; GA adaptativo idéntico a realtime_decisions.csv del equipo con semilla 43 + fila y reproducible", "interpretacion": "El optimizador integrado produce las mismas recomendaciones que el original"},
+    {"nombre": "Verificación post-integración: reentrenamiento", "valor": "MAE 0,0191 °C / 0,3076 kg", "descripcion": "El reentrenamiento del servicio aplica el procedimiento del equipo de IA (split por ciclos equilibrado por estación, escaladores ajustados en entrenamiento, red nueva con parada temprana). Con el dataset maestro entregado (51.389 registros) reproduce el mismo split (35.930 / 7.755 / 7.704), los mismos escaladores y las mismas 131 épocas; R² de test 0,9995 y 0,895, como el modelo entregado", "interpretacion": "Reentrenar con datos propios sigue el método original; las métricas devueltas son del 15 % de test que el modelo no ha visto"}
+  ],
+  "limitaciones": [
+    {"tipo": "Datos sintéticos (brecha Sim2Real)", "descripcion": "El modelo se entrenó con un simulador de intercambiador de placas, sin ruido de sensores. Las métricas y el ahorro del 21,68 % requieren validación con datos reales de planta antes de su despliegue; con datos reales cabe esperar una degradación de las métricas."},
+    {"tipo": "Umbral térmico blando", "descripcion": "T_out >= 72,5 °C es una penalización dentro del GA, no una restricción dura: en validación 9 de 7.755 recomendaciones quedaron por debajo (por menos de 0,002 °C). El servicio devuelve la solución sin rechazarla; la plataforma muestra el aviso y debe comprobarse antes de aplicar."},
+    {"tipo": "Accionabilidad de las variables", "descripcion": "Delta_P y Regeneration_perc son variables objetivo del optimizador, no consignas siempre aplicables en planta; no hay restricción conjunta entre ellas, por lo que pueden proponerse combinaciones no realistas."},
+    {"tipo": "Rango de validez", "descripcion": "Usar solo dentro del rango de entrenamiento (F_milk 4.470–5.856 L/h, T_in 3,4–7,7 °C, Fat_perc 3,2–4,19 %, Viscosity 1,89–2,26 cP, t_ciclo 5–610 min). Fuera de él son extrapolaciones no validadas."},
+    {"tipo": "Tiempo de retención y ciclos CIP", "descripcion": "No se modela el tiempo de retención térmica (muestreo de 5 min frente a segundos reales) ni la optimización de ciclos CIP; el alcance se limita a la fase de producción."}
+  ],
+  "fichero_nombre": "test_raw.csv (split de test del equipo de IA)",
+  "fichero_registros": "7.704",
+  "fichero_resultado": "MAE de T_out 0,019 °C (R² 0,9995) y MAE de CO2_emissions 0,31 kg (R² 0,895); plugin y modelo original coinciden en todas las filas (diferencia máxima 6e-5, por el redondeo a 4 decimales de la respuesta)",
+  "observaciones_tecnicas": "Ejecución en CPU, sin GPU. Dependencias: PyTorch, DEAP, scikit-learn, pandas y numpy; los .pkl de los escaladores se serializaron con numpy 2.x y scikit-learn 1.8 y cargan con scikit-learn 1.5.2 (aviso de versión, transformaciones idénticas), por lo que requieren numpy >= 2. Artefactos en s3://<bucket>/artifacts/fixed/ml36_dairy_dnl_co2_emissions_optimizer/ (~13 KB). El GA adaptativo cuesta del orden de 1,6 s por escenario en CPU. El reentrenamiento (/train) entrena un modelo nuevo con sus propios escaladores en ~1 min de CPU para el dataset completo y lo guarda solo en su run de MLflow; el modelo servido no cambia y la política global del GA no se recalcula. Monitorización: ODD sobre las 8 variables de entrada, SHAP sobre CO2_emissions y alerta de reentrenamiento si el MAE de T_out supera 0,15 °C durante más de 5 ciclos consecutivos.",
+  "que_no_responde": "No te dice qué consigna aplicar de forma automática ni garantiza que el resultado cumpla la seguridad alimentaria: propone valores para que tú decidas.",
+  "entradas_contexto": "Los datos proceden del estado de la línea de pasteurización: el caudal y la temperatura de la leche, su grasa y viscosidad, y el tiempo desde la última limpieza; opcionalmente, los valores con los que la planta opera hoy.",
+  "ejemplo_interpretacion": "Si introduces un caudal de 4.915 L/h, leche a 3,85 °C con un 3,57 % de grasa, viscosidad 2,04 y 5 minutos desde la última limpieza, el modelo recomienda unas consignas de unos 73,4 °C de fluido de servicio, 0,61 bar y un 93,4 % de regeneración, con unas emisiones previstas de unos 15,6 kg de CO2 y una temperatura de salida de unos 72,7 °C. Si además indicas tu operación actual (79,5 °C, 0,75 bar y 91,9 %), que emitiría unos 18,1 kg, verás un ahorro de unos 2,6 kg de CO2 por registro.",
+  "margen_error": "La temperatura de salida se estima con un error medio inferior a 0,02 °C, por debajo de la precisión de un sensor. Las emisiones de CO2 se estiman con un error medio de unos 0,3 kg, así que diferencias menores de esa magnitud entre dos escenarios no son significativas.",
+  "revisar_manualmente": [
+    "Cuando la temperatura de salida recomendada quede por debajo de 72,5 °C: comprueba la recomendación antes de aplicarla, aunque el modelo la devuelva.",
+    "Cuando tus datos queden fuera de los rangos con los que se entrenó el modelo (caudal, temperatura de entrada, grasa, viscosidad o minutos desde la limpieza).",
+    "Cuando las consignas de presión y regeneración recomendadas no sean directamente aplicables en tu planta: valida con producción cómo traducirlas a acciones reales.",
+    "Cuando los resultados difieran claramente de lo que ves en planta: puede indicar que el modelo se ha desajustado y necesita revisión."
+  ],
+  "que_no_hace": [
+    "No aplica las consignas ni controla la planta: es una ayuda a la decisión.",
+    "No garantiza que la temperatura de salida cumpla 72,5 °C en todos los casos: es un objetivo que el optimizador intenta respetar, no una regla estricta.",
+    "No modela el tiempo que la leche permanece a la temperatura de pasteurización ni optimiza los ciclos de limpieza.",
+    "No sustituye la validación con datos reales de planta: sus cifras proceden de un simulador."
+  ],
+  "puede_equivocarse": "Sí. El modelo se entrenó con datos de un simulador, no de una planta real, así que sus cifras de ahorro (21,68 % de reducción de CO2 en simulación) y de precisión pueden ser peores en producción. La estimación de emisiones es menos precisa que la de temperatura, y en casos muy puntuales la recomendación puede quedar marginalmente por debajo de 72,5 °C. Es una ayuda a la decisión, no una garantía.",
+  "kpis": [
+    {"kpi": "Reducción de emisiones de CO2 frente a la operación histórica", "valor_umbral": ">= 10 % (alcanzado 21,68 % en simulación)", "descripcion": "Porcentaje de CO2 que se evita con las consignas recomendadas respecto a cómo operaba la planta."},
+    {"kpi": "Instancias que mejoran", "valor_umbral": "100 % (7.755 de 7.755 en validación)", "descripcion": "Proporción de escenarios en los que la recomendación emite menos CO2 que la operación histórica."},
+    {"kpi": "Precisión de la temperatura de salida", "valor_umbral": "error medio < 0,02 °C", "descripcion": "Cuánto se desvía de media la temperatura prevista de la real; muy por debajo de la precisión de un sensor."},
+    {"kpi": "Cumplimiento del umbral de pasteurización", "valor_umbral": "T_out >= 72,5 °C (9 de 7.755 marginalmente por debajo)", "descripcion": "La recomendación apunta a mantener la leche de salida en o por encima de 72,5 °C; se avisa si no lo logra."}
+  ]
+}

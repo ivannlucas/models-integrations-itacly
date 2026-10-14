@@ -4,11 +4,12 @@ from __future__ import annotations
 import json
 import logging
 import os
+import shutil
 
 import joblib
 import torch
 
-from app.domain.services.mlflow_tracker import BaseMLflowTracker
+from app.domain.services.mlflow_tracker import BaseMLflowTracker, require_user_model
 from app.plugins.ml36_dairy_dnl_co2_emissions_optimizer.constants import (
     MODEL_CONFIG_FILENAME,
     MODEL_FILENAME,
@@ -20,10 +21,12 @@ from app.plugins.ml36_dairy_dnl_co2_emissions_optimizer.model_loader import buil
 logger = logging.getLogger(__name__)
 
 
+@require_user_model
 def download_user_model_from_mlflow(run_id: str):
     """Download a user fine-tuned MLP from MLflow.
 
-    Returns (model, scaler_X, scaler_Y, config, temp_dir).
+    Returns (model, scaler_X, scaler_Y, config, temp_dir); a run without a complete model
+    raises UserModelUnavailableError (@require_user_model) instead of using the base model.
     Caller MUST shutil.rmtree(temp_dir) after inference — use try/finally.
 
     The architecture is rebuilt dynamically from the downloaded
@@ -33,25 +36,30 @@ def download_user_model_from_mlflow(run_id: str):
     """
     import tempfile  # pylint: disable=import-outside-toplevel
     tmp = tempfile.mkdtemp(prefix="mlflow_ml36_")
-    local_path = BaseMLflowTracker(run_id).download_artifacts(tmp, artifact_path="model")
-    if not local_path:
-        return None
+    try:
+        local_path = BaseMLflowTracker(run_id).download_artifacts(tmp, artifact_path="model")
+        if not local_path:
+            shutil.rmtree(tmp, ignore_errors=True)
+            return None
 
-    with open(os.path.join(local_path, MODEL_CONFIG_FILENAME), "r", encoding="utf-8") as f:
-        config = json.load(f)
+        with open(os.path.join(local_path, MODEL_CONFIG_FILENAME), "r", encoding="utf-8") as f:
+            config = json.load(f)
 
-    model = build_model_from_config(config)
-    model.load_state_dict(
-        torch.load(
-            os.path.join(local_path, MODEL_FILENAME),
-            map_location="cpu",
-            weights_only=True,
+        model = build_model_from_config(config)
+        model.load_state_dict(
+            torch.load(
+                os.path.join(local_path, MODEL_FILENAME),
+                map_location="cpu",
+                weights_only=True,
+            )
         )
-    )
-    model.eval()
+        model.eval()
 
-    scaler_X = joblib.load(os.path.join(local_path, SCALER_X_FILENAME))  # pylint: disable=invalid-name
-    scaler_Y = joblib.load(os.path.join(local_path, SCALER_Y_FILENAME))  # pylint: disable=invalid-name
+        scaler_X = joblib.load(os.path.join(local_path, SCALER_X_FILENAME))  # pylint: disable=invalid-name
+        scaler_Y = joblib.load(os.path.join(local_path, SCALER_Y_FILENAME))  # pylint: disable=invalid-name
 
-    logger.info("Downloaded user model from MLflow run_id=%s", run_id)
-    return model, scaler_X, scaler_Y, config, tmp
+        logger.info("Downloaded user model from MLflow run_id=%s", run_id)
+        return model, scaler_X, scaler_Y, config, tmp
+    except BaseException:
+        shutil.rmtree(tmp, ignore_errors=True)
+        raise

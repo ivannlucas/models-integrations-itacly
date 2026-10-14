@@ -1,6 +1,4 @@
 """Endpoint tests for ``ml36-dairy-dnl-co2-emissions-optimizer``."""
-from app.domain.services.exceptions import ThermalSafetyViolationError
-
 MODEL = "ml36-dairy-dnl-co2-emissions-optimizer"
 PREFIX = f"/models/{MODEL}"
 
@@ -81,15 +79,6 @@ def test_predict_optimize_missing_context_field(client):
     assert client.post(f"{PREFIX}/predict", json=payload).status_code == 422
 
 
-def test_predict_optimize_thermal_violation_maps_to_422(client, fake_plugins):
-    """ThermalSafetyViolationError raised by the plugin must map to HTTP 422."""
-    plugin = fake_plugins[MODEL]
-    plugin.raise_on_inline = ThermalSafetyViolationError(
-        "La recomendación no cumple la restricción térmica."
-    )
-    assert client.post(f"{PREFIX}/predict", json=OPTIMIZE_PAYLOAD).status_code == 422
-
-
 def test_predict_batch(client):
     resp = client.post(f"{PREFIX}/predict", json={"mode": "batch", "data_path": "/tmp/pasteurizacion.csv"})
     assert resp.status_code == 200
@@ -115,10 +104,11 @@ def test_predict_batch_optimize(client):
 
 
 def test_train(client):
-    resp = client.post(f"{PREFIX}/train", json={"data_path": "/tmp/train.csv"})
+    resp = client.post(f"{PREFIX}/train", json={"data_path": "/tmp/train.csv", "mlflow_run_id": "run-1"})
     assert resp.status_code == 200
     body = resp.json()
-    assert body["detail"] == "Fine-tuning completado"
+    assert body["detail"].startswith("Reentrenamiento completado")
+    assert {"n_train", "n_val", "n_test", "best_val_loss"} <= set(body)
     assert isinstance(body["mae_co2"], float)
     assert isinstance(body["r2_t_out"], float)
     assert isinstance(body["n_samples"], int)
