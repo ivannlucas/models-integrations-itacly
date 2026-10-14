@@ -1,7 +1,7 @@
 import os
 
-MODEL_ID = "m48-dnsl-fallas-maquinaria-pasteurizado"
-ARTIFACT_FOLDER_NAME = "a48_dnsl_fallas_maquinaria_pasteurizado"
+MODEL_ID = "ml48-dairy-dnsl-critical-point-detection"
+ARTIFACT_FOLDER_NAME = "ml48_dairy_dnsl_critical_point_detection"
 
 # ── Digital Twin ──────────────────────────────────────────────────────────────
 # Offset térmico que desplaza TS1/TS2 al baseline de 65 °C usando ts1_mean_train.
@@ -59,6 +59,17 @@ TRAIN_HYPERPARAMS = {
     "random_state": 42,
 }
 TARGET_COLUMNS = ["Target_Fouling", "Target_Valvula", "Target_Bomba", "Target_Acumulador"]
+# Nombres cortos que exigía el trainer anterior; se siguen aceptando (igual que ml47).
+LEGACY_TARGET_COLUMNS = ["Fouling", "Valvula", "Bomba", "Acumulador"]
+
+# mode="fine_tune" (por defecto) — fine_tuning.* de config/config.yaml, usado por
+# src/fine_tuning/fine_tuner.py (backbone congelado, solo las 4 cabezas, LR = learning_rate / lr_divisor).
+FINE_TUNE_HYPERPARAMS = {
+    "epochs": 50,
+    "patience": 7,
+    "lr_divisor": 10,
+    "batch_size": 32,
+}
 
 # Métricas de referencia (models/metrics/test_metrics_confusion.csv, 331 ciclos de test)
 REPORTED_METRICS = {

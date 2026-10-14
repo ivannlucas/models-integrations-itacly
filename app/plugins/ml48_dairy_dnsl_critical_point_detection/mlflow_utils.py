@@ -8,8 +8,8 @@ import joblib
 import numpy as np
 import torch
 
-from app.domain.services.mlflow_tracker import BaseMLflowTracker
-from app.plugins.m48_dnsl_fallas_maquinaria_pasteurizado.constants import (
+from app.domain.services.mlflow_tracker import BaseMLflowTracker, require_user_model
+from app.plugins.ml48_dairy_dnsl_critical_point_detection.constants import (
     ARTIFACT_FOLDER_NAME,
     FEATURE_COLUMNS_FILENAME,
     MODEL_FILENAME,
@@ -24,38 +24,44 @@ from app.plugins.m48_dnsl_fallas_maquinaria_pasteurizado.constants import (
 logger = logging.getLogger(__name__)
 
 
+@require_user_model
 def download_user_model_from_mlflow(run_id: str):
     """Descarga un modelo reentrenado por el usuario desde MLflow.
 
-    Devuelve (model, scaler, feature_cols, ts1_mean_train, shap_background, temp_dir) o None.
+    Devuelve (model, scaler, feature_cols, ts1_mean_train, shap_background, temp_dir); si el run no
+    tiene un modelo completo, @require_user_model lanza UserModelUnavailableError (nunca el modelo base).
     El caller DEBE hacer shutil.rmtree(temp_dir) tras la inferencia (try/finally).
     """
     import tempfile
-    tmp = tempfile.mkdtemp(prefix="mlflow_m48_")
-    local_path = BaseMLflowTracker(run_id).download_artifacts(tmp, artifact_path="model")
-    if not local_path:
+    tmp = tempfile.mkdtemp(prefix="mlflow_ml48_")
+    try:
+        local_path = BaseMLflowTracker(run_id).download_artifacts(tmp, artifact_path="model")
+        if not local_path:
+            shutil.rmtree(tmp, ignore_errors=True)
+            return None
+
+        from app.plugins.ml48_dairy_dnsl_critical_point_detection.model_loader import CNN_Pasteurizer
+
+        scaler = joblib.load(os.path.join(local_path, SCALER_FILENAME))
+        feature_cols = joblib.load(os.path.join(local_path, FEATURE_COLUMNS_FILENAME))
+        ts1_mean_train = joblib.load(os.path.join(local_path, TS1_MEAN_FILENAME))
+
+        # Arquitectura reconstruida a partir de feature_columns (n canales), no asumida fija.
+        model = CNN_Pasteurizer(n_sensors=len(feature_cols), n_classes=N_CLASSES,
+                                dropout_prob=TRAIN_HYPERPARAMS["dropout_rate"])
+        model.load_state_dict(
+            torch.load(os.path.join(local_path, MODEL_FILENAME), map_location="cpu", weights_only=True)
+        )
+        model.eval()
+
+        bg_path = os.path.join(local_path, SHAP_BACKGROUND_FILENAME)
+        shap_background = np.load(bg_path) if os.path.exists(bg_path) else None
+
+        logger.info("Downloaded user model from MLflow run_id=%s", run_id)
+        return model, scaler, feature_cols, ts1_mean_train, shap_background, tmp
+    except BaseException:
         shutil.rmtree(tmp, ignore_errors=True)
-        return None
-
-    from app.plugins.m48_dnsl_fallas_maquinaria_pasteurizado.model_loader import CNN_Pasteurizer
-
-    scaler = joblib.load(os.path.join(local_path, SCALER_FILENAME))
-    feature_cols = joblib.load(os.path.join(local_path, FEATURE_COLUMNS_FILENAME))
-    ts1_mean_train = joblib.load(os.path.join(local_path, TS1_MEAN_FILENAME))
-
-    # Arquitectura reconstruida a partir de feature_columns (n canales), no asumida fija.
-    model = CNN_Pasteurizer(n_sensors=len(feature_cols), n_classes=N_CLASSES,
-                            dropout_prob=TRAIN_HYPERPARAMS["dropout_rate"])
-    model.load_state_dict(
-        torch.load(os.path.join(local_path, MODEL_FILENAME), map_location="cpu", weights_only=True)
-    )
-    model.eval()
-
-    bg_path = os.path.join(local_path, SHAP_BACKGROUND_FILENAME)
-    shap_background = np.load(bg_path) if os.path.exists(bg_path) else None
-
-    logger.info("Downloaded user model from MLflow run_id=%s", run_id)
-    return model, scaler, feature_cols, ts1_mean_train, shap_background, tmp
+        raise
 
 
 def upload_artifacts_to_mlflow(
@@ -66,7 +72,7 @@ def upload_artifacts_to_mlflow(
     """Upload training artifacts to MLflow and return the run_id.
 
     If mlflow_run_id is provided, logs to that existing run.
-    Otherwise starts a new run under the m48 experiment.
+    Otherwise starts a new run under the ml48 experiment.
     """
     return _upload_with_uri(BaseMLflowTracker.TRACKING_URI, artifact_dir, mlflow_run_id, metrics)
 

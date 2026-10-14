@@ -20,7 +20,7 @@ import torch
 import torch.nn.functional as F
 import yaml
 
-from app.plugins.m48_dnsl_fallas_maquinaria_pasteurizado.constants import (
+from app.plugins.ml48_dairy_dnsl_critical_point_detection.constants import (
     CLASS_NAMES,
     GRADCAM_LAYER,
     GRADCAM_PEAK_THRESHOLD,

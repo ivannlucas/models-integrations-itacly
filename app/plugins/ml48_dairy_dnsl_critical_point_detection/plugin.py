@@ -12,11 +12,11 @@ import torch
 
 from app.application.dto.stats_dto import InputField, OutputField, RuntimeStats, StatsResponse
 from app.domain.ports.model_plugin_port import ModelPluginPort
-from app.domain.services.exceptions import ModelNotLoadedError
+from app.domain.services.exceptions import ModelNotLoadedError, ModelPersistenceError
 from app.domain.services.mlflow_tracker import BaseMLflowTracker
 from app.infrastructure.artifact_store import ARTIFACTS_ROOT, local_file_path
-from app.plugins.m48_dnsl_fallas_maquinaria_pasteurizado import xai
-from app.plugins.m48_dnsl_fallas_maquinaria_pasteurizado.constants import (
+from app.plugins.ml48_dairy_dnsl_critical_point_detection import xai
+from app.plugins.ml48_dairy_dnsl_critical_point_detection.constants import (
     APPLY_DIGITAL_TWIN,
     ARTIFACT_FOLDER_NAME,
     COMPONENT_NAMES,
@@ -27,31 +27,32 @@ from app.plugins.m48_dnsl_fallas_maquinaria_pasteurizado.constants import (
     SENSOR_COLUMNS,
     VERSION,
 )
-from app.plugins.m48_dnsl_fallas_maquinaria_pasteurizado.mlflow_utils import (
+from app.plugins.ml48_dairy_dnsl_critical_point_detection.mlflow_utils import (
     download_user_model_from_mlflow,
     upload_artifacts_to_mlflow,
 )
-from app.plugins.m48_dnsl_fallas_maquinaria_pasteurizado.model_loader import (
+from app.plugins.ml48_dairy_dnsl_critical_point_detection.model_loader import (
     load_artifacts_from_dir,
     load_shap_background,
 )
-from app.plugins.m48_dnsl_fallas_maquinaria_pasteurizado.postprocessing import (
+from app.plugins.ml48_dairy_dnsl_critical_point_detection.postprocessing import (
     format_batch_row,
     format_inline_response,
     run_inference,
 )
-from app.plugins.m48_dnsl_fallas_maquinaria_pasteurizado.predict_dto import (
+from app.plugins.ml48_dairy_dnsl_critical_point_detection.predict_dto import (
     PredictBatchResponse,
     PredictInlineResponse,
 )
-from app.plugins.m48_dnsl_fallas_maquinaria_pasteurizado.preprocessing import (
+from app.plugins.ml48_dairy_dnsl_critical_point_detection.preprocessing import (
     build_dataframe_from_csv,
     build_dataframe_from_sensors,
 )
-from app.plugins.m48_dnsl_fallas_maquinaria_pasteurizado.train_dto import TrainResponse
-from app.plugins.m48_dnsl_fallas_maquinaria_pasteurizado.trainer import (
+from app.plugins.ml48_dairy_dnsl_critical_point_detection.train_dto import TrainResponse
+from app.plugins.ml48_dairy_dnsl_critical_point_detection.trainer import (
+    fine_tune,
     save_training_artifacts,
-    train_model_from_csv,
+    train_full,
 )
 
 logger = logging.getLogger(__name__)
@@ -59,7 +60,7 @@ logger = logging.getLogger(__name__)
 _ARTIFACT_DIR = ARTIFACTS_ROOT / ARTIFACT_FOLDER_NAME
 
 
-class M48DnsFallMaquinariaPasteurizadoPlugin(ModelPluginPort):
+class Ml48DairyDnslCriticalPointDetectionPlugin(ModelPluginPort):
     def __init__(self) -> None:
         self._model = None
         self._scaler = None
@@ -84,7 +85,7 @@ class M48DnsFallMaquinariaPasteurizadoPlugin(ModelPluginPort):
         self._feature_columns = feature_cols
         self._ts1_mean_train = ts1_mean_train
         self._shap_background = load_shap_background(_ARTIFACT_DIR)
-        logger.info("M48 plugin loaded: %s (device=%s)", MODEL_ID, self._device)
+        logger.info("ml48 plugin loaded: %s (device=%s)", MODEL_ID, self._device)
 
     def is_loaded(self) -> bool:
         return self._model is not None
@@ -101,14 +102,14 @@ class M48DnsFallMaquinariaPasteurizadoPlugin(ModelPluginPort):
         """Contexto de inferencia: modelo estándar o modelo del usuario (MLflow). temp_dir != None => limpiar."""
         if mlflow_run_id:
             logger.info("Using user-trained model from MLflow run_id=%s", mlflow_run_id)
-            loaded = download_user_model_from_mlflow(mlflow_run_id)
-            if loaded is not None:
-                model, scaler, feature_cols, ts1_mean_train, shap_bg, temp_dir = loaded
-                return {
-                    "model": model.to(self._device), "scaler": scaler, "feature_cols": feature_cols,
-                    "ts1_mean_train": ts1_mean_train, "shap_background": shap_bg, "temp_dir": temp_dir,
-                }
-            logger.warning("MLflow download failed for %s, falling back to standard model", mlflow_run_id)
+            # Never falls back to the base model: a run without a loadable model raises (422).
+            model, scaler, feature_cols, ts1_mean_train, shap_bg, temp_dir = download_user_model_from_mlflow(
+                mlflow_run_id,
+            )
+            return {
+                "model": model.to(self._device), "scaler": scaler, "feature_cols": feature_cols,
+                "ts1_mean_train": ts1_mean_train, "shap_background": shap_bg, "temp_dir": temp_dir,
+            }
         self._require_loaded()
         return {
             "model": self._model, "scaler": self._scaler, "feature_cols": self._feature_columns,
@@ -236,27 +237,58 @@ class M48DnsFallMaquinariaPasteurizadoPlugin(ModelPluginPort):
             if ctx["temp_dir"]:
                 shutil.rmtree(ctx["temp_dir"], ignore_errors=True)
 
-    def train(self, *, data_path: str, mlflow_run_id: str) -> TrainResponse:
-        logger.info("Training m48 model from data_path=%s, mlflow_run_id=%s", data_path, mlflow_run_id)
-        with local_file_path(data_path) as local_path:
-            model, scaler, feature_cols, ts1_mean_train, metrics, shap_bg = train_model_from_csv(local_path)
+    def train(self, *, data_path: str, mlflow_run_id: str, mode: str = "fine_tune") -> TrainResponse:
+        """Retrain with one of the AI team's two procedures (see trainer.py), like ml47.
 
-        temp_dir = Path(tempfile.mkdtemp(prefix="m48_train_"))
+        fine_tune (default — the platform sends a few hundred plant cycles at most) recalibrates a
+        copy of the served model; full trains a new CNN from scratch. Either way the result, with its
+        own SHAP background, lives only in its MLflow run — the served model is never touched.
+        """
+        logger.info("ml48 train mode=%s data_path=%s mlflow_run_id=%s", mode, data_path, mlflow_run_id)
+        with local_file_path(data_path) as local_path:
+            if mode == "full":
+                result = train_full(local_path)
+            else:
+                self._require_loaded()
+                result = fine_tune(
+                    local_path, base_model=self._model, scaler=self._scaler,
+                    feature_cols=self._feature_columns, ts1_mean_train=self._ts1_mean_train,
+                )
+        metrics = result.metrics
+
+        temp_dir = Path(tempfile.mkdtemp(prefix="ml48_train_"))
         try:
-            save_training_artifacts(temp_dir, model, scaler, feature_cols, ts1_mean_train, shap_bg)
-            upload_artifacts_to_mlflow(str(temp_dir), mlflow_run_id=mlflow_run_id, metrics=metrics)
+            save_training_artifacts(temp_dir, result)
+            try:
+                new_run_id = upload_artifacts_to_mlflow(
+                    str(temp_dir), mlflow_run_id=mlflow_run_id, metrics={**metrics, "mode_full": float(mode == "full")},
+                )
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                logger.error("MLflow artifact upload failed: %s", exc)
+                raise ModelPersistenceError(f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}") from exc
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
 
+        logger.info("ml48 training complete (mode=%s). MLflow run_id=%s", mode, new_run_id)
+        detail = (
+            "Reentrenamiento completo desde cero (procedimiento train del equipo de IA)."
+            if mode == "full" else
+            "Calibración a planta de las 4 cabezas del modelo servido (procedimiento fine_tune del equipo de IA)."
+        )
         return TrainResponse(
-            detail="Entrenamiento completado exitosamente",
+            detail=detail,
+            mode=mode,
             exact_match=metrics["exact_match"],
             accuracy=metrics["accuracy"],
-            f1_macro=metrics["f1_macro"],
+            precision_macro=metrics["precision_macro"],
             recall_macro=metrics["recall_macro"],
+            f1_macro=metrics["f1_macro"],
             n_train=metrics["n_train"],
+            n_val=metrics["n_val"],
             n_test=metrics["n_test"],
+            epochs_run=metrics["epochs_run"],
             training_time_s=metrics["training_time_s"],
+            mlflow_run_id=new_run_id or mlflow_run_id,
             upload_warning=None,
         )
 

@@ -223,14 +223,14 @@ from app.plugins.ml47_dairy_dnsl_pasteurization_fault_detection.train_dto import
     TrainRequest as Ml47Dairy_TrainReq,
     TrainResponse as Ml47Dairy_TrainResp,
 )
-from app.plugins.m48_dnsl_fallas_maquinaria_pasteurizado.plugin import M48DnsFallMaquinariaPasteurizadoPlugin
-from app.plugins.m48_dnsl_fallas_maquinaria_pasteurizado.predict_dto import (
-    PredictRequest as M48_Request,
-    PredictResponse as M48_Response,
+from app.plugins.ml48_dairy_dnsl_critical_point_detection.plugin import Ml48DairyDnslCriticalPointDetectionPlugin
+from app.plugins.ml48_dairy_dnsl_critical_point_detection.predict_dto import (
+    PredictRequest as Ml48Dairy_Request,
+    PredictResponse as Ml48Dairy_Response,
 )
-from app.plugins.m48_dnsl_fallas_maquinaria_pasteurizado.train_dto import (
-    TrainRequest as M48_TrainReq,
-    TrainResponse as M48_TrainResp,
+from app.plugins.ml48_dairy_dnsl_critical_point_detection.train_dto import (
+    TrainRequest as Ml48Dairy_TrainReq,
+    TrainResponse as Ml48Dairy_TrainResp,
 )
 from app.plugins.ml45_cereals_dnsl_critical_point_detection.plugin import (
     Ml45CerealsDnslCriticalPointDetectionPlugin,
@@ -561,14 +561,14 @@ REGISTRY: list[ModelEntry] = [
         train_response_type=Ml47Dairy_TrainResp,
     ),
     ModelEntry(
-        model_id="m48-dnsl-fallas-maquinaria-pasteurizado",
-        prefix="/models/m48-dnsl-fallas-maquinaria-pasteurizado",
+        model_id="ml48-dairy-dnsl-critical-point-detection",
+        prefix="/models/ml48-dairy-dnsl-critical-point-detection",
         version="1.0.0",
-        plugin_class=M48DnsFallMaquinariaPasteurizadoPlugin,
-        predict_request_type=M48_Request,
-        predict_response_type=M48_Response,
-        train_request_type=M48_TrainReq,
-        train_response_type=M48_TrainResp,
+        plugin_class=Ml48DairyDnslCriticalPointDetectionPlugin,
+        predict_request_type=Ml48Dairy_Request,
+        predict_response_type=Ml48Dairy_Response,
+        train_request_type=Ml48Dairy_TrainReq,
+        train_response_type=Ml48Dairy_TrainResp,
         extra_predict_exceptions=(),
     ),
     ModelEntry(

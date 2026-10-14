@@ -7,7 +7,7 @@ import torch
 import torch.nn as nn
 
 from app.infrastructure.artifact_store import ArtifactStore
-from app.plugins.m48_dnsl_fallas_maquinaria_pasteurizado.constants import (
+from app.plugins.ml48_dairy_dnsl_critical_point_detection.constants import (
     ARTIFACT_FOLDER_NAME,
     FEATURE_COLUMNS_FILENAME,
     MODEL_FILENAME,
@@ -21,6 +21,19 @@ from app.plugins.m48_dnsl_fallas_maquinaria_pasteurizado.constants import (
 logger = logging.getLogger(__name__)
 
 _store = ArtifactStore(ARTIFACT_FOLDER_NAME)
+
+
+def safe_device() -> torch.device:
+    """CUDA solo si puede ejecutar una convolución real (mismo autotest que ml47)."""
+    if not torch.cuda.is_available():
+        return torch.device("cpu")
+    try:
+        probe = torch.nn.Conv1d(1, 1, 1).cuda()
+        probe(torch.zeros(1, 1, 4).cuda())
+        return torch.device("cuda")
+    except Exception:  # pylint: disable=broad-exception-caught
+        logger.warning("CUDA detectada pero no funcional — usando CPU.")
+        return torch.device("cpu")
 
 
 class CNN_Pasteurizer(nn.Module):
@@ -113,7 +126,7 @@ def load_artifacts_from_dir(artifact_dir: Path):
     )
     model.load_state_dict(state_dict)
     model.eval()
-    logger.info("M48 artifacts loaded from %s — n_sensors=%d", artifact_dir, n_sensors)
+    logger.info("ml48 artifacts loaded from %s — n_sensors=%d", artifact_dir, n_sensors)
     return model, scaler, feature_cols, ts1_mean_train
 
 

@@ -1,12 +1,12 @@
 import numpy as np
 import torch
 
-from app.plugins.m48_dnsl_fallas_maquinaria_pasteurizado.constants import (
+from app.plugins.ml48_dairy_dnsl_critical_point_detection.constants import (
     COMPONENT_NAMES,
     MODEL_ID,
     STATE_LABELS,
 )
-from app.plugins.m48_dnsl_fallas_maquinaria_pasteurizado.preprocessing import pad_or_truncate
+from app.plugins.ml48_dairy_dnsl_critical_point_detection.preprocessing import pad_or_truncate
 
 
 def build_input_tensor(scaler, feature_cols, x_df, label: str = ""):

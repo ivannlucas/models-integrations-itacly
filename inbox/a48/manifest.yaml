@@ -286,3 +286,33 @@ known_issues:
 # - Se elimina el analisis global CCP/SHAP del batch (xai_global_ccp / campo `xai` de la respuesta) y la
 #   deteccion de CCP global: ya no se expone. Las menciones a xai_global_ccp / CCP global arriba son historicas.
 # - ODD, plataforma y fichas (a48_* en ml-files/modelo-47/) se referencian solo bajo modelo-47.
+
+# ---------------------------------------------------------------------------
+# REVISION 2026-10-14 (codigo/ actualizado con el original v1.3) - PREVALECE sobre lo anterior
+# ---------------------------------------------------------------------------
+# - [CORREGIDO] Nomenclatura: el plugin pasa a app/plugins/ml48_dairy_dnsl_critical_point_detection/,
+#   MODEL_ID / MODEL=ml48-dairy-dnsl-critical-point-detection, ARTIFACT_FOLDER_NAME=ml48_dairy_dnsl_critical_point_detection
+#   (igual que en Bitbucket, el overlay de int y la base_url de modelo-47 del orquestador). Las menciones a
+#   m48-dnsl-fallas-maquinaria-pasteurizado y a s3://xai/artifacts/fixed/a48_dnsl_fallas_maquinaria_pasteurizado/
+#   de arriba son historicas: esa carpeta de S3 ya no existe; los 6 artefactos estan en .../ml48_dairy_dnsl_critical_point_detection/
+#   con los MD5 de `artifacts` (scaler 1149dc17..., regenerado con sklearn 1.5.2).
+# - [CORREGIDO] Contrato MLflow (como en Bitbucket): mlflow_run_id obligatorio (MlflowRunId), un run sin modelo
+#   completo da 422 (@require_user_model, nunca cae al modelo base) y un fallo de subida da 502 (ModelPersistenceError).
+# - Codigo v1.3 revisado frente al plugin: preprocess/predictor, gradcam, shap_explainer, critical_points
+#   (riesgo, reglas fisicas, picos >= 0.7), prescriptive (acciones y maintenance_actions.yaml identico) y
+#   config.yaml coinciden. Golden repetidos con los artefactos de S3: 20/20 (clases y confianzas identicas a
+#   predictor.run_inference del original, diferencia 0.0), ciclo 123 (12 columnas de xai_report_cycle.csv) y
+#   shap_background.npy reconstruido desde hydraulic_10hz_raw.csv con diferencia 0.0.
+# - [CORREGIDO] training: el trainer del plugin era un port anterior al de ml47 (ruido de augmentation con
+#   default_rng en vez del np.random.normal global del original, gemelo termico siempre aplicado al reentrenar,
+#   IDs aumentados + 50000, sin fine_tune). El codigo de entrenamiento del a48 es el mismo que el del a47
+#   (src/training/, src/fine_tuning/, preprocess.py; solo feature_engineering reescrito para pandas 3 con igual
+#   resultado), asi que /train es ahora el port de ml47: `mode` = fine_tune (por defecto, fine_tuner.py) o full
+#   (trainer.py), gemelo termico solo con APPLY_DIGITAL_TWIN (el mismo interruptor que la inferencia), y el
+#   modelo reentrenado lleva su propio fondo SHAP (50 primeros ciclos de test). En CPU produce pesos identicos
+#   bit a bit a los de ml47. Con los datos entregados (2205 ciclos, split == cycle_splits.json):
+#   fine_tune = 0.9970 exact match (26 epocas, 24 s); full (gemelo on, GPU RTX 2070 SUPER) = 0.9849 exact match /
+#   0.9963 f1_macro (94 epocas, 122 s). El modelo entregado da 0.9879 / 0.9970 sobre el mismo test. En GPU el
+#   entrenamiento no es bit a bit reproducible (cuDNN): el trainer de ml47 en la misma maquina dio 0.9879 en
+#   106 epocas (el a47 registra 89); la diferencia es de 1 ciclo de test de 331.
+#   metrics_returned: [mode, exact_match, accuracy, precision_macro, recall_macro, f1_macro, n_train, n_val, n_test, epochs_run, training_time_s, mlflow_run_id]

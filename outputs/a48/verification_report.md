@@ -251,3 +251,50 @@ Este addendum **prevalece** sobre las secciones anteriores cuando se contradicen
 - Batch: XAI Grad-CAM en **todos** los ciclos; SHAP opcional (`include_shap`) limitado a `n_samples`; un fallo de XAI en un ciclo no aborta el resto (cubierto por test unitario con fallo inyectado).
 - Se **elimina** el análisis global CCP/SHAP del batch y el campo `xai` de la respuesta; los resultados "Global, 50 ciclos" y el endpoint batch con CCP de las secciones anteriores describen el contrato antiguo y quedan como histórico (la XAI local del ciclo 123 se sigue verificando contra la referencia del equipo de IA).
 - Fichas regeneradas con el contrato nuevo y servidas desde `ml-files/modelo-47/a48_*`.
+
+## Addendum — Revisión contra el código original actualizado y renombrado ml48 (2026-10-14)
+
+`inbox/a48/codigo/` se ha actualizado con el código original v1.3 del equipo de IA (mismos artefactos: MD5 de `neurosymbolic_cnn.pth`, `feature_columns.pkl` y `ts1_mean_train.pkl` iguales a los del manifest). El repo GitHub había recibido el plugin con su nombre antiguo (`m48_dnsl_fallas_maquinaria_pasteurizado`) en el merge de los modelos 36/48; se recupera la nomenclatura y se cierran los gaps encontrados.
+
+**Nomenclatura y contrato MLflow**
+
+- [CORREGIDO] Plugin en `app/plugins/ml48_dairy_dnsl_critical_point_detection/`, `MODEL_ID` `ml48-dairy-dnsl-critical-point-detection`, `ARTIFACT_FOLDER_NAME` `ml48_dairy_dnsl_critical_point_detection`, clase `Ml48DairyDnslCriticalPointDetectionPlugin`; registry, conftest y test renombrados. Es el nombre ya desplegado (overlay de int, base_url de modelo-47 en el orquestador, carpeta de S3). Las menciones anteriores a `m48-dnsl-fallas-maquinaria-pasteurizado` y a `a48_dnsl_fallas_maquinaria_pasteurizado` son históricas.
+- [CORREGIDO] Contrato MLflow igual que en Bitbucket: `mlflow_run_id` obligatorio, run sin modelo completo → 422 (`@require_user_model`, sin caer al modelo base), fallo de subida → 502 (`ModelPersistenceError`).
+
+**Inferencia y XAI frente al original (artefactos descargados de S3)**
+
+| Comprobación | Resultado |
+|---|---|
+| Artefactos en `s3://xai/artifacts/fixed/ml48_dairy_dnsl_critical_point_detection/` | **PASS** — 6 ficheros, MD5 de pesos, columnas y ts1 iguales a los entregados; scaler = el regenerado con sklearn 1.5.2 (`1149dc17…`) |
+| Revisión de código: preprocesado, `predictor.run_inference`, Grad-CAM, SHAP, `critical_points` (riesgo, reglas físicas, picos ≥ 0,7), `prescriptive`, `maintenance_actions.yaml`, `config.yaml` | **PASS** — sin diferencias de lógica |
+| Golden 20 ciclos (`predict_batch`, gemelo on) | **PASS 20/20**; clases y confianzas idénticas a `predictor.run_inference` del original (diferencia máxima 0,0) |
+| XAI local ciclo 123 con SHAP vs `xai_report_cycle.csv` | **PASS** — 12 columnas × 4 componentes (tolerancia 1e-4) |
+| `shap_background.npy` reconstruido desde `hydraulic_10hz_raw.csv` (50 primeros ciclos de test ordenados) | **PASS** — diferencia 0,0 |
+| Modelo servido sobre los 331 ciclos de test | exact match 0,9879, f1_macro 0,9970 (= memoria v1.3) |
+
+**Reentrenamiento — [CORREGIDO]**
+
+El código de entrenamiento del a48 es el mismo que el del a47 (`src/training/`, `src/fine_tuning/`, `preprocess.py`; solo `feature_engineering` se reescribió para pandas 3, con el mismo resultado). El `trainer.py` de ml48 era un port anterior al corregido de ml47 y se apartaba del original:
+
+- el ruido de augmentation salía de `np.random.default_rng(42)`, no del `np.random.normal` global tras `seed_everything(42)`;
+- aplicaba siempre el gemelo térmico al reentrenar, aunque la inferencia lo tenga desactivado por defecto (datos de planta);
+- usaba IDs + 50000 para los ciclos aumentados, que pueden chocar con IDs reales;
+- no ofrecía el procedimiento `fine_tune` (`src/fine_tuning/fine_tuner.py`).
+
+Ahora `/train` es el port de ml47, con `mode` = `fine_tune` (por defecto) o `full`, y el modelo reentrenado lleva su propio fondo SHAP. Respuesta: `mode`, `exact_match`, `accuracy`, `precision_macro`, `recall_macro`, `f1_macro`, `n_train`, `n_val`, `n_test`, `epochs_run`, `training_time_s`, `mlflow_run_id`.
+
+| Comprobación (datos entregados, 2205 ciclos) | Resultado |
+|---|---|
+| Split 70/15/15 | **PASS** — idéntico a `cycle_splits.json` (mismo orden) |
+| Equivalencia con el trainer de ml47 (CPU, 120 ciclos, 3 épocas) | **PASS** — pesos idénticos bit a bit en `full` y `fine_tune` |
+| `fine_tune` real (GPU) | exact match 0,9970, f1_macro 0,9992 (26 épocas, 24 s) |
+| `full` real (GPU RTX 2070 SUPER, gemelo on) | exact match 0,9849, f1_macro 0,9963 (94 épocas, 122 s) frente a 0,9879 / 0,9970 del modelo entregado |
+| `train()` → MLflow (carpeta) → `predict` con ese run | **PASS** en ambos modos (`tests/unit/test_ml48_training.py`): 6 artefactos subidos, el run carga el modelo reentrenado y su fondo SHAP, el modelo servido no cambia |
+
+**KNOWN ISSUE — reentrenamiento en GPU no reproducible bit a bit.** En la misma máquina el trainer de ml47 dio 0,9879 en 106 épocas (el a47 registra 89) y el de ml48 0,9849 en 94; la diferencia es 1 ciclo de test de 331 y viene de cuDNN, no del port (en CPU ambos son idénticos). No se fija `torch.use_deterministic_algorithms` porque es global al proceso y el servidor es compartido.
+
+**Tests:** `tests/unit/test_ml48_training.py` (nuevo, 18 tests) y `tests/unit/test_ml48_dairy_dnsl_critical_point_detection.py`: 39/39 PASS. Suite completa: 982 passed, 5 failed, todos de ml36 (ver abajo). flake8 limpio en los ficheros tocados.
+
+**Fuera de ml48:** `ml36_dairy_dnl_co2_emissions_optimizer` llegó al repo GitHub en el mismo merge sin los arreglos del contrato MLflow que tiene en Bitbucket. Esto rompe 5 tests transversales (`test_mlflow_persistence_contract`, `test_user_model_download_hygiene`). Además GitHub tiene un cambio que Bitbucket no tiene (`ThermalSafetyViolationError` → 422). Queda pendiente reconciliarlo; no se ha tocado aquí.
+
+**Pendiente:** `/train` contra un servidor MLflow real; PDF de las fichas (los `.docx` se han regenerado con la plantilla, sin conversor a PDF en este equipo).

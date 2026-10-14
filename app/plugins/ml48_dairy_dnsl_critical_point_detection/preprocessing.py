@@ -3,7 +3,7 @@ import logging
 import pandas as pd
 import numpy as np
 
-from app.plugins.m48_dnsl_fallas_maquinaria_pasteurizado.constants import SENSOR_COLUMNS, WINDOW_SIZE
+from app.plugins.ml48_dairy_dnsl_critical_point_detection.constants import SENSOR_COLUMNS, WINDOW_SIZE
 
 logger = logging.getLogger(__name__)
 

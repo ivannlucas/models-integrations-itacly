@@ -2,7 +2,7 @@
   "model_id": "a48",
   "model_slug": "dnsl-fallas-maquinaria-pasteurizado-xai",
   "fecha": "Octubre 2026",
-  "model_key": "m48-dnsl-fallas-maquinaria-pasteurizado",
+  "model_key": "ml48-dairy-dnsl-critical-point-detection",
   "version": "1.3 (entrega IA) · plugin 1.0.0",
   "descripcion": "Modelo que sirve modelo-47 (detección de fallos en pasteurización con XAI integrada): red convolucional 1D multitarea con pérdida físico-informada (DNSL) que diagnostica el estado de cuatro componentes de un pasteurizador (enfriador, válvula, bomba y acumulador) a partir de un ciclo de 60 s de siete sensores a 10 Hz, y añade explicabilidad integrada: ventanas temporales críticas (Grad-CAM), importancia por sensor (SHAP opcional), riesgo por componente y acciones de mantenimiento priorizadas.",
   "task_type": "Clasificación multietiqueta (4 componentes × 3 estados) con explicabilidad y recomendación prescriptiva",
@@ -196,7 +196,7 @@
     {
       "nombre": "Verificación tras integración: golden",
       "valor": "20/20 ciclos",
-      "descripcion": "20 ciclos de test (semilla 42, cubren las 12 parejas componente/clase); etiqueta real de profile.txt; plugin m48 con apply_digital_twin=true",
+      "descripcion": "20 ciclos de test (semilla 42, cubren las 12 parejas componente/clase); etiqueta real de profile.txt; plugin ml48 con apply_digital_twin=true",
       "interpretacion": "El plugin reproduce las clases esperadas de los 20 ciclos (cableado y preprocesado correctos); no sustituye a las métricas de test"
     },
     {
@@ -229,13 +229,13 @@
     },
     {
       "tipo": "Pendiente de validación de infraestructura",
-      "descripcion": "Reentrenamiento completo (300 épocas) y /train contra un MLflow real no verificados; el plugin reentrena con los hiperparámetros del equipo, pero sus métricas a escala completa no se han comprobado."
+      "descripcion": "/train contra un MLflow real no verificado. El reentrenamiento sí está verificado con los datos entregados (14/10/2026): calibración fine_tune (por defecto) 0,9970 de exact match en el 15 % de test; reentrenamiento full desde cero 0,9849 de exact match en GPU (94 épocas), frente al 0,9879 del modelo entregado: en GPU el entrenamiento no es bit a bit reproducible y varía ±1 ciclo de test entre ejecuciones."
     }
   ],
   "fichero_nombre": "golden_cycles_10hz.csv (ciclos extraídos de data/processed/hydraulic_10hz_raw.csv)",
   "fichero_registros": "21 ciclos × 601 filas a 10 Hz: 20 ciclos del split de test y el ciclo 123 (validación)",
   "fichero_resultado": "predict_batch con apply_digital_twin=true reproduce las etiquetas reales de los 20 ciclos de test (20/20) y el informe local del ciclo 123 (13/13 columnas del xai_report_cycle.csv de la v1.3), con shap 0.52.0 y scikit-learn 1.5.2",
-  "observaciones_tecnicas": "Python 3.12; PyTorch ≥ 2.13 (CPU suficiente, sin GPU), scikit-learn 1.5.2 (el scaler se regeneró con esta versión), shap ≥ 0,51 (verificado 0,52.0), pandas / numpy. Artefactos ≈ 4 MB (pesos 592 KB + fondo SHAP 3,4 MB) en s3://xai/artifacts/fixed/a48_dnsl_fallas_maquinaria_pasteurizado/. Grad-CAM < 0,1 s por ciclo (20 ciclos con XAI en < 1 s); SHAP ≈ 5–8 s por ciclo, opcional y limitado por n_samples en batch. El plugin se despliega con MODEL=m48-dnsl-fallas-maquinaria-pasteurizado y sirve modelo-47; monitorizar deriva con el detector ODD (modelo-47) y revisar umbrales y acciones al disponer de datos reales.",
+  "observaciones_tecnicas": "Python 3.12; PyTorch ≥ 2.13 (CPU suficiente, sin GPU), scikit-learn 1.5.2 (el scaler se regeneró con esta versión), shap ≥ 0,51 (verificado 0,52.0), pandas / numpy. Artefactos ≈ 4 MB (pesos 592 KB + fondo SHAP 3,4 MB) en s3://xai/artifacts/fixed/ml48_dairy_dnsl_critical_point_detection/. Grad-CAM < 0,1 s por ciclo (20 ciclos con XAI en < 1 s); SHAP ≈ 5–8 s por ciclo, opcional y limitado por n_samples en batch. El plugin se despliega con MODEL=ml48-dairy-dnsl-critical-point-detection y sirve modelo-47; monitorizar deriva con el detector ODD (modelo-47) y revisar umbrales y acciones al disponer de datos reales.",
   "que_no_responde": "No te dice cuánto tiempo falta exactamente para que falle un componente ni sustituye la inspección del técnico: te indica el estado actual de cada componente, en qué momento del ciclo aparece la anomalía y qué actuación se recomienda.",
   "entradas_contexto": "Los datos son las lecturas de siete sensores del pasteurizador durante un ciclo completo de 60 segundos (diez lecturas por segundo), que llegan del sistema de planta o de un archivo CSV con varios ciclos.",
   "ejemplo_interpretacion": "Si para un ciclo el estado del sistema sale «Crítico» porque el enfriador está en «Crítico» con una confianza del 96 %, la acción sugerida es «Fouling: Detener producción y ejecutar limpieza CIP inmediata», debes parar y limpiar; si válvula, bomba y acumulador salen «Sano», no requieren intervención en ese ciclo.",

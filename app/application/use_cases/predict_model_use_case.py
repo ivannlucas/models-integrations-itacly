@@ -62,7 +62,7 @@ class PredictModelUseCase:
             # Only ml40's predict_batch declares system (refrigeracion/aireado chosen by the user).
             if "system" in batch_params:
                 batch_kwargs["system"] = getattr(request, "system", None)
-            # Only m48's predict_batch declares the XAI options (CCP analysis, SHAP, digital twin).
+            # Only ml48's predict_batch declares the XAI options (CCP analysis, SHAP, digital twin).
             for opt in ("apply_digital_twin", "include_xai", "include_shap", "n_samples"):
                 if opt in batch_params:
                     batch_kwargs[opt] = getattr(request, opt)
