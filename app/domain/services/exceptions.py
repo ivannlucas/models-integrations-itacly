@@ -117,10 +117,13 @@ class UserModelUnavailableError(RuntimeError):
 
 
 class ModelPersistenceError(RuntimeError):
-    """Raised when a retrained model cannot be saved to its MLflow run.
+    """Raised when a retrained model cannot be persisted, so the training result would be lost
+    and the request must fail instead of answering 200 (→ 502).
 
-    The retrained model only lives in MLflow, so if the upload fails the training result
-    is lost and the request must fail instead of answering 200 (→ 502).
+    Most models keep the retrained model only in its MLflow run: a failed upload raises this.
+    Models with BASE_ARTIFACT_FOLDER (ml13, 14, 15, 16, 17, 18, 21, 23) publish it as a new
+    base version instead: only a failed publish raises this (the base does not change); a failed
+    MLflow upload is just an upload_warning (see base_model_publisher.persist_retrained_bundle).
     """
 
 

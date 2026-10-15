@@ -181,6 +181,10 @@ Available endpoints (from current implementation):
   `{"version": "v2"}`) y reiniciando.
 - ml15 acepta además `reference_prices_path` y `reference_financial_path` (juntos) para renovar
   sus históricos exógenos de referencia; ml21 publica el CSV de entrenamiento como su panel.
+- `/train` solo lo llama un entorno controlado (un script con una secuencia fija según la
+  degradación esperada de cada modelo). Desde la plataforma estos modelos solo predicen, y no
+  tienen explicabilidad (SHAP) ni detección de drift (ODD). Operación y baja en los demás repos:
+  §9 de `docs/superpowers/specs/2026-10-14-reentreno-actualiza-base-design.md`.
 
 ## Tests
 

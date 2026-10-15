@@ -16,6 +16,12 @@ nada — nunca asumas una ruta de front por defecto ni "adivines" qué plugin in
 
 ## Requisito previo
 
+> ⚠ **Excepción: modelos con `BASE_ARTIFACT_FOLDER`** (ml13, 14, 15, 16, 17, 18, 21 y 23). En el
+> front solo se exponen para **predecir**: no llevan acción de entrenamiento (la reentrena un
+> entorno controlado fuera de la plataforma), `createTrainTask` debe rechazarlos y tras predecir no
+> se llama a explicabilidad ni a drift. Ver §9 de
+> `docs/superpowers/specs/2026-10-14-reentreno-actualiza-base-design.md`.
+
 El plugin debe estar integrado (skill `plugin-integration`) y verificado en verde (skill
 `verification`) en **este** repo. Si `outputs/<model_id>/verification_report.md` no existe o no
 dice "LISTO PARA PR", para y avisa — este skill nunca conecta al front un plugin a medio terminar.

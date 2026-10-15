@@ -1,7 +1,8 @@
 # Reentreno que actualiza el modelo base (ml13, 14, 15, 16, 17, 18, 21, 23)
 
 **Fecha:** 14 de octubre de 2026 · **Rama:** `feature/retrain-updates-base-model` (desde `main` 1c2ebe6)
-**Estado:** diseño aprobado en conversación, pendiente de revisión de esta spec
+**Estado:** implementado (commit e34bb9d). Revisado el 15 de octubre de 2026: decisiones de operación
+y baja en otros servicios en el §9
 
 ---
 
@@ -13,6 +14,13 @@ reentrenar según la frecuencia de cada modelo (semanal en 13, 16 y 17; mensual 
 para el reentreno completo de 15, 18 y 21). Se quiere que **cada `/train` correcto de estos modelos
 deje el modelo reentrenado como modelo base**, el que se usa sin `mlflow_run_id`, para que nadie
 tenga que guardar un `run_id` para usarlo.
+
+Ese calendario sale de la degradación esperada de cada modelo. Se conoce la frecuencia con la que
+se actualizan sus fuentes de datos y su ventana de predicción, así que se puede estimar cada cuánto
+dejan de ser representativas sus predicciones y fijar ahí el reentreno. `/train` solo lo lanza un
+entorno controlado: un script recopila la última versión de los datasets en esa secuencia fija y
+llama a `/train` con ellos. Los usuarios de la plataforma no reentrenan estos modelos: solo
+predicen, siempre con la versión base vigente. Ver §9.
 
 Toma de `docs/propuesta_actualizacion_continua_series_temporales.md` (§6.3 opción B y §7.1) el
 principio *"la base nunca se sobrescribe en el sitio: se publica una versión nueva y se mueve un
@@ -31,7 +39,8 @@ puntero"*, versionado y reversible.
 ### Fuera de alcance
 
 - Scrapers, orquestador, monitorización del error y champion/challenger (resto de la propuesta).
-- Regenerar el baseline de ODD y los datos de fondo de SHAP tras promover.
+- Explicabilidad (SHAP) y detección de drift (ODD): dejan de aplicar a estos 8 modelos y se dan
+  de baja en esos servicios (§9).
 - Recarga entre réplicas, listado de versiones (`GET /versions`) y limpieza de versiones antiguas.
 - Integración con el entrenamiento asíncrono (`feature/async-train`, no está en `main`). Ver §8.
 - Distinguir reentreno "mínimo" y "completo": cada modelo tiene un único `train()`, el portado del
@@ -114,20 +123,21 @@ Cambios, manteniendo la API que usan hoy los `model_loader.py` (`path()`, `local
 Las versiones se tratan solo con `current.json`. Para los demás modelos, que nunca publican, no
 existe y todo sigue exactamente igual que hoy.
 
-### 3.2 Helper común de persistencia (`app/domain/services/base_model_publisher.py`)
+### 3.2 Helper común de persistencia (`app/infrastructure/base_model_publisher.py`)
 
-Un único helper que usan los 8 `train()`:
+Un único helper que usan los 8 `train()`. Vive en infraestructura porque usa `ArtifactStore`:
 
 ```python
 def persist_retrained_bundle(
-    bundle_dir: str, *, artifact_folder: str, mlflow_run_id: str = "",
-    data_path: str, metrics: dict, params: dict | None = None,
-) -> PersistResult:   # base_version: VersionInfo, upload_warning: str | None
+    bundle_dir: str | Path, *, artifact_folder: str, data_path: str, metrics: dict,
+    mlflow_run_id: str = "", upload_to_mlflow: Callable[[], None] | None = None,
+) -> PersistResult:   # base_version: dict (VersionInfo), upload_warning: str | None
 ```
 
-1. Si hay `mlflow_run_id`: `log_params`, `log_metrics` y `upload_artifacts(bundle_dir, "model")`.
-   Si falla, **no aborta**: `upload_warning` con el error. Ahora la base es la persistencia que
-   importa; el run es trazabilidad.
+1. Si hay `mlflow_run_id`, llama a `upload_to_mlflow`: la subida propia de cada plugin
+   (`log_params`, `log_metrics` y `upload_artifacts(bundle_dir, "model")`). Si falla, **no
+   aborta**: `upload_warning` con el error. Ahora la base es la persistencia que importa; el run es
+   trazabilidad.
 2. `ArtifactStore(artifact_folder).publish_version(bundle_dir, info)`. Si falla →
    `ModelPersistenceError` (502), la base no cambia.
 
@@ -246,7 +256,15 @@ Se adaptan los tests actuales de estos 8 modelos que comprueban "run obligatorio
 toca". Los de los demás modelos no cambian. Se mantiene en verde el test de `main` "ningún `train()`
 recarga el modelo servido".
 
-**Sin probar:** S3 y MLflow reales y el servicio arrancado en INT.
+**Recarga real por modelo** (`tests/unit/test_base_reload_per_model.py`, ml14 en
+`test_ml14_training.py`): para ml13, 15, 16, 17, 18, 21 y 23, un `ModelContainer` real arranca en
+v0 (copia de `artifacts/<carpeta>/` en un directorio temporal; ml13, que solo está en S3, con una v0
+sintética en el mismo formato), `/train` pasa por el contenedor y la instancia nueva debe leer
+todos sus ficheros de `versions/v1/` (los heredados de v0 + el bundle) y predecir con ellos. ml15
+comprueba además que sirve los CSV de referencia heredados, y ml21 que su panel incluye el mes
+nuevo. Los modelos cuyos artefactos no están en local se saltan.
+
+**Sin probar:** S3 y MLflow reales y el servicio arrancado en INT (ver §9.3).
 
 ---
 
@@ -262,6 +280,102 @@ recarga el modelo servido".
   `reload()` (o `refresh()`) al ver el job terminado. El lock tendría que cubrir también ese caso.
 - **Más de una réplica.** Fuera de alcance (D3). Si cambia, añadir la comprobación periódica de
   `current.json`.
-- **ODD y SHAP** siguen calculados sobre los datos de la v0 hasta que se regeneren a mano.
+- **ODD y SHAP** se calcularían sobre la v0 (el servicio de explicabilidad descarga su propia
+  copia de la raíz `artifacts/fixed/<carpeta>/`, sin leer `current.json`). No se corrige: dejan
+  de aplicar a estos modelos y se dan de baja (§9).
+- **ml15 lee sus CSV de referencia en cada predict** desde la versión activa del proceso, no
+  desde la instancia. Mientras dura una recarga, o si la recarga falla y se restaura el puntero,
+  la instancia vieja puede leer los históricos de la versión nueva. Es una ventana corta y el
+  resto de modelos fija todo al cargar.
 - **Espacio en S3.** Cada versión es una copia completa. Con la frecuencia de reentreno de estos
   modelos son unas decenas de versiones al año por modelo; la limpieza queda para más adelante.
+
+---
+
+## 9. Operación y baja en otros servicios (revisión del 15/10/2026)
+
+### 9.1 Decisiones de operación
+
+| Tema | Decisión |
+|---|---|
+| Quién reentrena | Solo un entorno controlado, fuera de la plataforma. Un script recopila la última versión de los datasets y llama a `POST /models/<id>/train` con ellos |
+| Cuándo | En una secuencia fija por modelo, que sale de su degradación esperada: la frecuencia de actualización de sus fuentes y su ventana de predicción (§1) |
+| Usuarios de la plataforma | Solo predicen, siempre con la versión base vigente. No pueden reentrenar estos modelos |
+| Explicabilidad (SHAP) | Deja de aplicar a los 8 modelos |
+| Detección de drift (ODD) | Deja de aplicar a los 8 modelos |
+
+Por eso `/train` y `/rollback` no llevan autenticación propia en este repo: el control es el
+entorno desde el que se llaman. Queda abierto añadir un token como defensa adicional si el API
+sigue siendo accesible desde la misma red que la plataforma.
+
+### 9.2 Baja en otros repos
+
+Inventario hecho sobre `develop` de cada repo el 15/10/2026. Los nombres con los que cada
+servicio conoce a los modelos no coinciden con el `MODEL_ID` de este repo: se listan tal cual.
+
+| Modelo (`MODEL_ID`) | Front (predicción) | Explicabilidad (`TABULAR_MODELS`) | ODD (`models_config.json`) |
+|---|---|---|---|
+| ml13-wine-price-fluctuation-prediction | Se mantiene | `wine_price_fluctuation` | `modelo-13` |
+| ml14-wine-phyto-price-forecast | Se mantiene | `ml14_wine_phyto_price_forecast` | `modelo-14` |
+| ml15-wine-ipi-price-forecast | Se mantiene | `ml15_wine_ipi_price_forecast` | `modelo-15` |
+| ml16-meat-raw-material-price-alert | Se mantiene | `ml16_meat_price_alert` | `modelo-16` |
+| ml17-meat-market-price-analysis | Se mantiene | `meat_price_forecast` | — (no registrado) |
+| ml18-meat-spatial-price-forecast | Se mantiene | `ml18_meat_spatial_price_forecast` | `modelo-18` |
+| ml21-cereals-price-spatial | Se mantiene | `modelo21_cereales` | `modelo-21` |
+| ml23-lactic-market-price-forecast | Se mantiene | `dairy_price_forecast` | — (no registrado) |
+
+**Front: `retech-lote2-xai-plataforma`**
+
+1. Quitar la acción de entrenamiento de estos modelos en la interfaz: la opción "Training" de
+   `static/js/vue/costs-price-predict.js` (ya existe `isTrainActionDisabled()`) y la de cualquier
+   otra pantalla que los muestre. Regenerar los bundles (`bundle.js`, `bundle-shared.js`).
+2. Rechazar en el servidor los `model_key` de estos modelos en `createTrainTask`
+   (`src/controllers/intelligence-controller.ts`). Ocultar el botón no basta: la API de la
+   plataforma seguiría aceptando la tarea.
+3. Saltar explicabilidad y drift tras predecir con estos modelos en
+   `src/service/predict-task-manager.ts`, que hoy llama a `XaiService` y `DriftService` después de
+   cada predicción. La predicción se mantiene tal cual.
+4. Quitar la opción de explicación o drift de la interfaz para estos modelos, si alguna pantalla la
+   ofrece.
+5. Actualizar `test/modelo-13-21-wiring.js` y `test/modelo-36-integration.js` (ml23).
+
+**Explicabilidad: `retech-lote2-xai-explicabilidad`**
+
+1. Quitar las 8 entradas de `TABULAR_MODELS` en `app/infrastructure/http/dependencies/container.py`
+   (claves de la tabla).
+2. Quitar sus ramas en `app/domain/services/plugins/tabular/plugin.py` (`_load()`, `_ml14_*`,
+   `_ml15_explain`, `_ml16_explain`, `_ml17_predict_fn`, `_ml18_*`…) y los submódulos que solo usan
+   ellos: `tabular/ml14_wine_phyto_price_forecast/`, `tabular/ml16_meat_price_alert/` y
+   `tabular/gru_model.py` (ml23), tras comprobar que ningún otro modelo los importa.
+3. Quitar las referencias en `app/infrastructure/storage/artifact_store.py` (ml13), los datos de
+   fondo `data/background/` de estos modelos y sus tests (`test_explain.py`,
+   `test_new_models_xai.py`, `test_ml16_meat_price_alert.py`, `test_renamed_artifact_folders.py`).
+
+Motivo, además de la decisión: este servicio descarga su propia copia de
+`artifacts/fixed/<carpeta>/` (la raíz, es decir, la v0) sin leer `current.json`. Tras la primera
+promoción explicaría un modelo distinto del que se sirve.
+
+**ODD: `retech-lote2-xai-odd-detection`**
+
+1. Quitar de `models_config.json` las entradas `modelo-13`, `modelo-14`, `modelo-15`, `modelo-16`,
+   `modelo-18` y `modelo-21`.
+2. Borrar sus baselines ya generados en S3 (`baselines/modelo-NN/baseline.json`) y sus datos
+   `datasets/modelo-NN/train.csv`, para que el servicio no los use ni los regenere.
+
+**Skills de este repo**
+
+`front-integration`, `explainability-integration` y `odd-integration` llevan una nota que excluye
+estos 8 modelos, para que no se vuelvan a dar de alta.
+
+### 9.3 Pendiente de verificar en INT
+
+- **Código de error del proxy S3 sin `current.json`.** `refresh()` solo trata como "no existe"
+  `NoSuchKey`, `404` y `NotFound`. Si el proxy de la plataforma responde otra cosa (por ejemplo,
+  403), los 8 modelos no cargan en el primer despliegue (503).
+- **Permiso de escritura** de las credenciales del pod en `artifacts/fixed/` (`put_object` y
+  `upload_file`). Hasta ahora ese prefijo solo se leía.
+- **Una sola réplica** por pod de estos modelos, sin autoescalado (decisión D3). Con dos réplicas,
+  un `/train` fallido en una restaura el puntero a la versión que sirve ella y deshace la promoción
+  de la otra.
+- **Primer `/train` de cada modelo** contra S3 y MLflow reales: `versions/v1/` completa,
+  `current.json` movido y `/stats` con `base_version` v1.
