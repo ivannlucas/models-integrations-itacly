@@ -20,11 +20,13 @@ import pandas as pd
 
 from app.application.dto.stats_dto import InputField, OutputField, RuntimeStats, StatsResponse
 from app.domain.ports.model_plugin_port import ModelPluginPort
-from app.domain.services.exceptions import ModelNotLoadedError, ModelPersistenceError
+from app.domain.services.exceptions import ModelNotLoadedError
 from app.domain.services.mlflow_tracker import BaseMLflowTracker
 from app.infrastructure.artifact_store import local_file_path
+from app.infrastructure.base_model_publisher import persist_retrained_bundle
 from app.plugins.ml16_meat_raw_material_price_alert import model_loader, postprocessing, preprocessing, training
 from app.plugins.ml16_meat_raw_material_price_alert.constants import (
+    ARTIFACT_FOLDER_NAME,
     BAGGING_FILENAMES,
     FRAMEWORK,
     METRICS_REPORTED,
@@ -48,6 +50,8 @@ logger = logging.getLogger(__name__)
 
 class Ml16MeatRawMaterialPriceAlertPlugin(ModelPluginPort):
     """Dual-target price-alert classifier: XGBoost (animales) + LogisticRegression (insumos)."""
+
+    BASE_ARTIFACT_FOLDER = ARTIFACT_FOLDER_NAME   # every /train publishes the new base model
 
     def __init__(self) -> None:
         """Initialize an unloaded plugin with empty runtime counters."""
@@ -203,10 +207,9 @@ class Ml16MeatRawMaterialPriceAlertPlugin(ModelPluginPort):
 
         Follows the AI team's original procedure exactly (config/config.yaml hyperparams,
         walk-forward CV threshold search with manual override for target_insumos, bootstrap
-        bagging). Trains into fresh model objects — the served fixed artifacts are never
-        mutated nor overwritten. The retrained bundle lives only in its own MLflow run
-        (artifact_path="model", canonical filenames so mlflow_utils can rebuild it with that
-        mlflow_run_id); nothing is written to the local artifacts folder.
+        bagging). Trains into fresh model objects — self._models etc. are never mutated. The
+        bundle (canonical filenames) is published as the new base model version and, if
+        mlflow_run_id is given, also saved to that run (artifact_path="model").
         """
         self._require_loaded()
         with local_file_path(data_path) as local_path:
@@ -229,35 +232,34 @@ class Ml16MeatRawMaterialPriceAlertPlugin(ModelPluginPort):
             "n_bagging": len(next(iter(result["bagging_models"].values()), [])),
         }
 
-        upload_warning = None
-        if not mlflow_run_id:
-            raise ModelPersistenceError("Sin run de MLflow: el modelo reentrenado no se ha guardado.")
-        else:
-            tracker = BaseMLflowTracker(mlflow_run_id)
-            try:
+        flat_metrics = {
+            f"{target}_{k}": v for target, m in result["metrics"].items() for k, v in m.items()
+        }
+        tracker = BaseMLflowTracker(mlflow_run_id)
+        bundle_dir = tempfile.mkdtemp(prefix="ml16_train_")
+        try:
+            for target in TARGETS:
+                joblib.dump(result["models"][target], f"{bundle_dir}/{MODEL_FILENAMES[target]}")
+                joblib.dump(result["scalers"][target], f"{bundle_dir}/{SCALER_FILENAMES[target]}")
+                joblib.dump(result["bagging_models"][target], f"{bundle_dir}/{BAGGING_FILENAMES[target]}")
+            with open(f"{bundle_dir}/{TRAIN_CONFIG_FILENAME}", "w", encoding="utf-8") as fh:
+                json.dump(train_config, fh, indent=2, ensure_ascii=False)
+
+            def _upload_to_mlflow() -> None:
                 tracker.log_params({
                     "seed": training.DEFAULT_SEED,
                     "lookback": training.DEFAULT_LOOKBACK,
                     "n_bagging": training.DEFAULT_N_BAGGING,
                 })
-                flat_metrics = {
-                    f"{target}_{k}": v for target, m in result["metrics"].items() for k, v in m.items()
-                }
                 tracker.log_metrics(flat_metrics)
-                mlflow_tmp = tempfile.mkdtemp(prefix="ml16_mlflow_")
-                try:
-                    for target in TARGETS:
-                        joblib.dump(result["models"][target], f"{mlflow_tmp}/{MODEL_FILENAMES[target]}")
-                        joblib.dump(result["scalers"][target], f"{mlflow_tmp}/{SCALER_FILENAMES[target]}")
-                        joblib.dump(result["bagging_models"][target], f"{mlflow_tmp}/{BAGGING_FILENAMES[target]}")
-                    with open(f"{mlflow_tmp}/{TRAIN_CONFIG_FILENAME}", "w", encoding="utf-8") as fh:
-                        json.dump(train_config, fh, indent=2, ensure_ascii=False)
-                    tracker.upload_artifacts(mlflow_tmp, artifact_path="model")
-                finally:
-                    shutil.rmtree(mlflow_tmp, ignore_errors=True)
-            except Exception as exc:  # pylint: disable=broad-exception-caught
-                logger.error("MLflow artifact upload failed: %s", exc)
-                raise ModelPersistenceError(f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}") from exc
+                tracker.upload_artifacts(bundle_dir, artifact_path="model")
+
+            persisted = persist_retrained_bundle(
+                bundle_dir, artifact_folder=ARTIFACT_FOLDER_NAME, data_path=data_path,
+                metrics=flat_metrics, mlflow_run_id=mlflow_run_id, upload_to_mlflow=_upload_to_mlflow,
+            )
+        finally:
+            shutil.rmtree(bundle_dir, ignore_errors=True)
 
         m = result["metrics"]
         logger.info(
@@ -266,7 +268,10 @@ class Ml16MeatRawMaterialPriceAlertPlugin(ModelPluginPort):
             bool(mlflow_run_id),
         )
         return TrainResponse(
-            detail="Reentrenamiento completado (XGBoost + LogisticRegression, procedimiento original).",
+            detail=(
+                "Reentrenamiento completado (XGBoost + LogisticRegression, procedimiento original). "
+                f"Modelo base {persisted.base_version['version']}."
+            ),
             n_train_rows=result["n_train"],
             n_test_rows=result["n_test"],
             target_animales_threshold=m["target_animales"]["threshold"],
@@ -281,7 +286,8 @@ class Ml16MeatRawMaterialPriceAlertPlugin(ModelPluginPort):
             target_insumos_recall=m["target_insumos"]["recall"],
             target_insumos_f1=m["target_insumos"]["f1"],
             target_insumos_auc=m["target_insumos"]["auc"],
-            upload_warning=upload_warning,
+            upload_warning=persisted.upload_warning,
+            base_version=persisted.base_version,
         )
 
     # ── stats ─────────────────────────────────────────────────────────────────

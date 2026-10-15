@@ -2,7 +2,7 @@
 # pylint: disable=too-few-public-methods  # Pydantic DTOs carry no behaviour
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.application.dto.train_dto import MlflowRunId
+from app.application.dto.base_version_dto import VersionInfo
 
 
 class TrainRequest(BaseModel):
@@ -19,10 +19,10 @@ class TrainRequest(BaseModel):
             "70/15/15 por fecha; cada combinación necesita más de 12 meses."
         ),
     )
-    mlflow_run_id: MlflowRunId = Field(
-        ...,
-        description="Run de MLflow donde se persiste el modelo reentrenado. Obligatorio: el "
-        "artefacto base nunca se sobrescribe.",
+    mlflow_run_id: str = Field(
+        default="",
+        description="Run de MLflow opcional: si se indica, el modelo reentrenado también se guarda "
+        "en él (trazabilidad). Con o sin run, el modelo reentrenado pasa a ser el modelo base.",
     )
 
 
@@ -49,8 +49,11 @@ class TrainResponse(BaseModel):
     epochs_run: int
     best_epoch: int
     training_time_s: float
-    mlflow_run_id: str
+    mlflow_run_id: str = ""
     upload_warning: str | None = Field(
         default=None,
-        description="Compatibilidad con la plataforma: siempre None (un fallo de subida es un 502)",
+        description="Aviso si falló la subida a MLflow; el modelo base se publica igualmente (502 solo si falla la publicación del base)",
+    )
+    base_version: VersionInfo | None = Field(
+        default=None, description="Versión del modelo base publicada por este reentreno"
     )

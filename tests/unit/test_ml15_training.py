@@ -15,11 +15,11 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from app.domain.services.exceptions import ModelPersistenceError
 from app.plugins.ml15_wine_ipi_price_forecast import history, training
 from app.plugins.ml15_wine_ipi_price_forecast import plugin as plugin_mod
 from app.plugins.ml15_wine_ipi_price_forecast.constants import (
-    ANCHOR_COLUMN, FEATURE_COLUMNS, MODEL_FILENAME, TARGET_COLUMN, TEST_MONTHS, VALIDATION_MONTHS,
+    ANCHOR_COLUMN, FEATURE_COLUMNS, MODEL_FILENAME, REFERENCE_FINANCIAL_FILENAME, REFERENCE_PRICES_FILENAME,
+    TARGET_COLUMN, TEST_MONTHS, VALIDATION_MONTHS,
 )
 
 CODE = Path(__file__).resolve().parents[2] / "inbox" / "a15" / "codigo"
@@ -111,7 +111,7 @@ def instance():
     return plugin
 
 
-def test_train_uploads_only_to_mlflow(instance, monkeypatch, tmp_path):
+def test_train_publishes_the_new_base_and_uploads_to_the_run(instance, monkeypatch, tmp_path, isolated_base_store):
     csv = tmp_path / "panel.csv"
     _panel().to_csv(csv, index=False)
     store = tmp_path / "mlflow"
@@ -123,15 +123,85 @@ def test_train_uploads_only_to_mlflow(instance, monkeypatch, tmp_path):
     assert resp.n_train_rows == 29 and resp.n_test_rows == 7 and resp.train_end_date == "2020-11-01"
     payload = joblib.load(store / "model" / MODEL_FILENAME)
     assert payload["feature_columns"] == list(FEATURE_COLUMNS) and payload["train_end_date"] == "2020-11-01"
+    assert resp.base_version.version == "v1" and resp.base_version.mlflow_run_id == "run-1"
+    v1 = isolated_base_store / "ml15_wine_ipi_price_forecast" / "versions" / "v1"
+    assert joblib.load(v1 / MODEL_FILENAME)["train_end_date"] == "2020-11-01"
+    assert "históricos exógenos" in resp.upload_warning   # no reference CSVs were given
 
 
-def test_train_fails_when_mlflow_upload_fails(instance, monkeypatch, tmp_path):
+def test_train_without_run_publishes_the_base(instance, tmp_path):
+    csv = tmp_path / "panel.csv"
+    _panel().to_csv(csv, index=False)
+    resp = instance.train(data_path=str(csv), mlflow_run_id="")
+    assert resp.base_version.version == "v1" and resp.base_version.mlflow_run_id is None
+
+
+def test_mlflow_failure_is_a_warning(instance, monkeypatch, tmp_path):
     csv = tmp_path / "panel.csv"
     _panel().to_csv(csv, index=False)
     tracker = MagicMock(upload_artifacts=MagicMock(side_effect=ConnectionError("mlflow caído")))
     monkeypatch.setattr(plugin_mod, "BaseMLflowTracker", MagicMock(return_value=tracker))
-    with pytest.raises(ModelPersistenceError, match="mlflow caído"):
-        instance.train(data_path=str(csv), mlflow_run_id="run-1")
+    resp = instance.train(data_path=str(csv), mlflow_run_id="run-1")
+    assert "mlflow caído" in resp.upload_warning and resp.base_version.version == "v1"
+
+
+@pytest.fixture
+def reference_env(monkeypatch, tmp_path):
+    """Synthetic 'current' reference CSVs + a tracked mkstemp dir (to detect leaked temp copies)."""
+    dates = pd.date_range("2023-01-01", periods=6, freq="MS").strftime("%Y-%m-%d")
+    current_prices = tmp_path / "cur_prices.csv"
+    current_financial = tmp_path / "cur_fin.csv"
+    pd.DataFrame({"date": dates, "spain": range(6)}).to_csv(current_prices, index=False)
+    pd.DataFrame({"date": dates, "copper": range(6)}).to_csv(current_financial, index=False)
+    monkeypatch.setattr(plugin_mod.model_loader, "reference_data_paths",
+                        lambda: (str(current_prices), str(current_financial)))
+    temp_dir = tmp_path / "tmpcopies"
+    temp_dir.mkdir()
+    real_mkstemp = plugin_mod.tempfile.mkstemp
+    monkeypatch.setattr(
+        plugin_mod.tempfile, "mkstemp",
+        lambda suffix="", **kw: real_mkstemp(suffix=suffix, dir=str(temp_dir) if suffix == ".csv" else None, **kw),
+    )
+    return current_prices, current_financial, temp_dir
+
+
+def test_reference_csvs_travel_with_the_new_base(instance, tmp_path, isolated_base_store, reference_env):
+    current_prices, current_financial, temp_dir = reference_env
+    csv = tmp_path / "panel.csv"
+    _panel().to_csv(csv, index=False)
+
+    resp = instance.train(data_path=str(csv), reference_prices_path=str(current_prices),
+                          reference_financial_path=str(current_financial))
+    v1 = isolated_base_store / "ml15_wine_ipi_price_forecast" / "versions" / "v1"
+    assert (v1 / REFERENCE_PRICES_FILENAME).exists() and (v1 / REFERENCE_FINANCIAL_FILENAME).exists()
+    assert resp.upload_warning is None
+    assert list(temp_dir.iterdir()) == []
+
+
+def test_reference_csv_with_wrong_columns_is_rejected_before_training(instance, tmp_path, monkeypatch, reference_env):
+    current_prices, _, temp_dir = reference_env
+    train_model = MagicMock(side_effect=AssertionError("must not train"))
+    monkeypatch.setattr(plugin_mod.training, "train_model", train_model)
+    bad = tmp_path / "bad.csv"
+    pd.DataFrame({"date": ["2024-01-01"], "x": [1]}).to_csv(bad, index=False)
+    with pytest.raises(ValueError, match="faltan las columnas"):
+        instance.train(data_path=str(tmp_path / "panel.csv"), reference_prices_path=str(current_prices),
+                       reference_financial_path=str(bad))
+    train_model.assert_not_called()
+    assert list(temp_dir.iterdir()) == []
+
+
+def test_missing_reference_csv_is_a_value_error_naming_the_field(instance, tmp_path, reference_env):
+    current_prices, _, temp_dir = reference_env
+    with pytest.raises(ValueError, match="reference_financial_path"):
+        instance.train(data_path=str(tmp_path / "panel.csv"), reference_prices_path=str(current_prices),
+                       reference_financial_path=str(tmp_path / "nope.csv"))
+    assert list(temp_dir.iterdir()) == []
+
+
+def test_only_one_reference_csv_is_rejected(instance, tmp_path):
+    with pytest.raises(ValueError, match="juntos"):
+        instance.train(data_path=str(tmp_path / "panel.csv"), reference_prices_path="/tmp/p.csv")
 
 
 # ── prediction metadata (y_true / feature_status / feature_notes) ─────────────

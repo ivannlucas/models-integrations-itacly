@@ -77,5 +77,7 @@ def test_train_returns_200_with_metrics(client):
     assert {"test_mape_pct", "test_r2", "val_mape_pct", "n_train", "epochs_run"} <= body.keys()
 
 
-def test_train_without_mlflow_run_id_returns_422(client):
-    assert client.post(f"{PREFIX}/train", json={"data_path": "/tmp/x.csv"}).status_code == 422
+def test_train_without_mlflow_run_id_is_accepted(client):
+    """mlflow_run_id is optional: every /train publishes the new base model (spec 2026-10-14)."""
+    resp = client.post(f"{PREFIX}/train", json={"data_path": "/tmp/x.csv"})
+    assert resp.status_code == 200

@@ -1,7 +1,7 @@
 """Train DTOs for ml23 — GRU dairy price forecast refit."""
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.application.dto.train_dto import MlflowRunId
+from app.application.dto.base_version_dto import VersionInfo
 
 
 class TrainRequest(BaseModel):
@@ -19,12 +19,11 @@ class TrainRequest(BaseModel):
             "data/processed/dataset_forecast_ready.csv del equipo de IA."
         ),
     )
-    mlflow_run_id: MlflowRunId = Field(
-        ...,
+    mlflow_run_id: str = Field(
+        default="",
         description=(
-            "Run de MLflow donde se persiste el GRU reentrenado. Obligatorio: el artefacto "
-            "fijo servido (gru_model.pt) nunca se sobrescribe con un reentrenamiento de "
-            "usuario — el resultado de este train() solo vive en este run de MLflow."
+            "Run de MLflow opcional: si se indica, el modelo reentrenado también se guarda en él "
+            "(trazabilidad). Con o sin run, el modelo reentrenado pasa a ser el modelo base."
         ),
     )
 
@@ -47,4 +46,7 @@ class TrainResponse(BaseModel):
     training_time_s: float = Field(..., description="Tiempo de entrenamiento (todas las seeds)")
     upload_warning: str | None = Field(
         default=None, description="Aviso si el modelo reentrenado no se ha podido guardar en MLflow"
+    )
+    base_version: VersionInfo | None = Field(
+        default=None, description="Versión del modelo base publicada por este reentreno"
     )

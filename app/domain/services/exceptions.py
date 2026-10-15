@@ -129,3 +129,15 @@ class ArchiveLimitExceededError(ValueError):
     size, file-count or compression-ratio limits, or holds a path outside its destination (→ 413).
     See app/infrastructure/archive.py::safe_extract_zip.
     """
+
+
+class BaseVersionNotFoundError(LookupError):
+    """The requested base model version does not exist in the artifact store (→ 404)."""
+
+
+class NoPreviousBaseVersionError(RuntimeError):
+    """Rollback asked with no target and the current base is v0, which has no parent (→ 409)."""
+
+
+class BaseReloadError(RuntimeError):
+    """The newly activated base version could not be loaded; the pointer was restored (→ 500)."""

@@ -18,10 +18,13 @@ import pandas as pd
 
 from app.application.dto.stats_dto import InputField, OutputField, RuntimeStats, StatsResponse
 from app.domain.ports.model_plugin_port import ModelPluginPort
-from app.domain.services.exceptions import ModelNotLoadedError, ModelPersistenceError
+from app.domain.services.exceptions import ModelNotLoadedError
 from app.domain.services.mlflow_tracker import BaseMLflowTracker
 from app.infrastructure.artifact_store import local_file_path
+from app.infrastructure.base_model_publisher import persist_retrained_bundle
 from app.plugins.ml21_cereals_price_spatial.constants import (
+    ARTIFACT_FOLDER_NAME,
+    DATASET_FILENAME,
     FRAMEWORK,
     GEO_RISK_DEFAULT_PROVINCES,
     MODEL_ID,
@@ -210,6 +213,8 @@ def _xai_values_from_row(row: pd.Series, feature_cols: list[str]) -> dict[str, f
 
 class Ml21CerealsPriceSpatialPlugin(ModelPluginPort):
     """ESP-CEREAL plugin for spatial cereal price prediction across Spanish provinces."""
+
+    BASE_ARTIFACT_FOLDER = ARTIFACT_FOLDER_NAME   # every /train publishes the new base model
 
     def __init__(self) -> None:
         self._models: dict[str, dict[str, Any]] | None = None
@@ -490,12 +495,19 @@ class Ml21CerealsPriceSpatialPlugin(ModelPluginPort):
             if user_temp_dir:
                 shutil.rmtree(user_temp_dir, ignore_errors=True)
 
-    def train(self, *, data_path: str = "", mlflow_run_id: str) -> Any:
-        """Train 6 models (3 horizons × reg+clf) from a CSV and upload to MLflow.
+    def train(self, *, data_path: str = "", mlflow_run_id: str = "") -> Any:
+        """Train 6 models (3 horizons × reg+clf) from a CSV and publish them as the new base version.
+
+        The bundle is also uploaded to the MLflow run when *mlflow_run_id* is given.
 
         Training CSV must contain raw panel rows with columns:
           date, provincia, cereal_predominante, precio_provincial_lag_1,
           precio_provincial_TARGET_H1/H2/H3, plus all raw feature columns.
+
+        The 6 models, model_metadata.json and the training CSV itself (as the new
+        dataset_entrenamiento_final.csv panel, so predict_inline finds the new months) are
+        published as the new base model version; if mlflow_run_id is given they are also
+        saved to that run. The CSV must have every column of the current panel (400 if not).
         """
         import hashlib
         import json
@@ -516,21 +528,40 @@ class Ml21CerealsPriceSpatialPlugin(ModelPluginPort):
 
         t0 = time.perf_counter()
 
-        with local_file_path(data_path) as local_path:
-            df = pd.read_csv(local_path)
+        tmp_dir = tempfile.mkdtemp(prefix="ml21_train_")
+        try:
+            with local_file_path(data_path) as local_path:
+                df = pd.read_csv(local_path)
+                shutil.copyfile(local_path, os.path.join(tmp_dir, DATASET_FILENAME))
+        except BaseException:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+            raise
+
+        if self._panel_df is not None:
+            missing = [c for c in self._panel_df.columns if c not in df.columns]
+            if missing:
+                shutil.rmtree(tmp_dir, ignore_errors=True)
+                raise ValueError(
+                    f"El CSV de entrenamiento pasa a ser el panel del modelo base y le faltan "
+                    f"columnas del panel vigente: {missing}"
+                )
 
         if "date" not in df.columns:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
             raise ValueError("El CSV debe contener la columna 'date'.")
-        df["date"] = pd.to_datetime(df["date"], errors="coerce")
-        df = df.dropna(subset=["date"]).copy()
-        df = df.sort_values(["date", "provincia", "cereal_predominante"], kind="mergesort")
-        df = df.reset_index(drop=True)
+        try:
+            df["date"] = pd.to_datetime(df["date"], errors="coerce")
+            df = df.dropna(subset=["date"]).copy()
+            df = df.sort_values(["date", "provincia", "cereal_predominante"], kind="mergesort")
+            df = df.reset_index(drop=True)
 
-        tracker: BaseMLflowTracker | None = None
-        if mlflow_run_id:
-            tracker = BaseMLflowTracker(mlflow_run_id)
+            tracker: BaseMLflowTracker | None = None
+            if mlflow_run_id:
+                tracker = BaseMLflowTracker(mlflow_run_id)
+        except BaseException:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+            raise
 
-        tmp_dir = tempfile.mkdtemp(prefix="ml21_train_")
         all_metrics: dict[str, Any] = {}
         metadata: dict[str, Any] = {
             "run_started_at_utc": datetime.now(timezone.utc).isoformat(),
@@ -667,21 +698,30 @@ class Ml21CerealsPriceSpatialPlugin(ModelPluginPort):
             with open(meta_path, "w", encoding="utf-8") as fh:
                 json.dump(metadata, fh, indent=2, ensure_ascii=False, default=str)
 
-            upload_warning = None
-            if tracker:
-                flat_metrics = {k: v for k, v in all_metrics.items() if not (isinstance(v, float) and np.isnan(v))}
+            def _upload_to_mlflow() -> None:
+                tracker.log_params({
+                    "model_type": "extra_trees+xgb+logistic",
+                    "horizons": "1,2,3",
+                    "cut_date": "2021-01-01",
+                    "random_state": "42",
+                })
+                tracker.log_metrics(
+                    {k: v for k, v in all_metrics.items() if not (isinstance(v, float) and np.isnan(v))}
+                )
+                # The run keeps only the models + metadata; the training CSV goes to the base version.
+                run_dir = tempfile.mkdtemp(prefix="ml21_run_")
                 try:
-                    tracker.log_params({
-                        "model_type": "extra_trees+xgb+logistic",
-                        "horizons": "1,2,3",
-                        "cut_date": "2021-01-01",
-                        "random_state": "42",
-                    })
-                    tracker.log_metrics(flat_metrics)
-                    tracker.upload_artifacts(tmp_dir, artifact_path="model")
-                except Exception as exc:
-                    logger.error("MLflow artifact upload failed: %s", exc)
-                    raise ModelPersistenceError(f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}") from exc
+                    shutil.copytree(tmp_dir, run_dir, dirs_exist_ok=True,
+                                    ignore=shutil.ignore_patterns(DATASET_FILENAME))
+                    tracker.upload_artifacts(run_dir, artifact_path="model")
+                finally:
+                    shutil.rmtree(run_dir, ignore_errors=True)
+
+            persisted = persist_retrained_bundle(
+                tmp_dir, artifact_folder=ARTIFACT_FOLDER_NAME, data_path=data_path,
+                metrics=all_metrics, mlflow_run_id=mlflow_run_id,
+                upload_to_mlflow=_upload_to_mlflow if tracker else None,
+            )
 
             elapsed = time.perf_counter() - t0
             logger.info(
@@ -690,12 +730,11 @@ class Ml21CerealsPriceSpatialPlugin(ModelPluginPort):
                 all_metrics.get("mae_h3", 0), elapsed, bool(mlflow_run_id),
             )
 
-            # The retrained models live only in their MLflow run (predict with that
-            # mlflow_run_id). The served base bundle stays as is: no reload here.
+            # The container swaps in a fresh plugin on the new base; train() never reloads itself.
             from app.plugins.ml21_cereals_price_spatial.train_dto import TrainResponse
 
             return TrainResponse(
-                detail="Training completado — 6 modelos entrenados (3H × reg+clf)",
+                detail=f"Training completado — 6 modelos entrenados (3H × reg+clf). Modelo base {persisted.base_version['version']}.",
                 mae_h1=all_metrics.get("mae_h1"),
                 mae_h2=all_metrics.get("mae_h2"),
                 mae_h3=all_metrics.get("mae_h3"),
@@ -710,7 +749,8 @@ class Ml21CerealsPriceSpatialPlugin(ModelPluginPort):
                 auc_h3=all_metrics.get("auc_h3"),
                 n_train=len(df[df["date"] < pd.Timestamp("2021-01-01")]),
                 n_test=len(df[df["date"] >= pd.Timestamp("2021-01-01")]),
-                upload_warning=upload_warning,
+                upload_warning=persisted.upload_warning,
+                base_version=persisted.base_version,
             )
 
         except ValueError:

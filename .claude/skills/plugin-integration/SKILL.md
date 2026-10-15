@@ -98,7 +98,7 @@ resultado es un 500 en *todas* las llamadas reales (pasó en ml21).
 | `predict_dto.py` | Sí | `PredictBatchRequest/Response`, `PredictInlineRequest/Response`, `PredictRequest = Annotated[Union[...], Field(discriminator="mode")]` |
 | `model_loader.py` | Sí | `ArtifactStore(ARTIFACT_FOLDER_NAME)` con carga perezosa (ver Artefactos) |
 | `mlflow_utils.py` | **Sí, siempre** | Descarga y subida reales (plantilla abajo). En modelos sin entrenamiento, un stub documentado |
-| `train_dto.py` | Si `train()` es real | `TrainRequest` (con `mlflow_run_id` **obligatorio**) y `TrainResponse` |
+| `train_dto.py` | Si `train()` es real | `TrainRequest` (con `mlflow_run_id` **obligatorio**, salvo en los modelos que promueven su base (ver «Modelos que promueven su base»), donde es opcional) y `TrainResponse` |
 | `training.py` | Si el entrenamiento es largo | Lógica de entrenamiento portada del código original (ml5, ml23) |
 | `preprocessing.py` / `postprocessing.py` | Si aplica | Transformación de entrada y salida |
 
@@ -127,17 +127,26 @@ sin motivo. Antes de fijar `training.supported`:
   (tipo común de `app.application.dto.train_dto`, `min_length=1` tras quitar espacios), sin
   valor por defecto, y `train(self, *, data_path, mlflow_run_id)` sin `= ""`. `/train` sin
   `mlflow_run_id`, o con `""`, devuelve 422. Con `str` a secas, `""` pasaba la validación: se
-  entrenaba y el modelo se descartaba. Lo exigen los 23 plugins entrenables.
+  entrenaba y el modelo se descartaba. Lo exigen los 23 plugins entrenables, salvo en los modelos que promueven su base (ver «Modelos que promueven su base»): ahí es
+  opcional (`str = ""`).
+- ⚠ **Excepción: modelos que promueven su base** (ver el párrafo "Modelos que promueven su
+  base" más abajo). El artefacto base nunca se sobrescribe **en el sitio**. En los modelos con
+  `BASE_ARTIFACT_FOLDER` (ml13, 14, 15, 16, 17, 18, 21 y 23) cada `/train` publica una versión
+  nueva en `artifacts/fixed/<carpeta>/versions/<vN>/` y mueve `current.json`; `POST /rollback`
+  vuelve atrás. En el resto, el modelo reentrenado vive solo en su run de MLflow. Diseño:
+  `docs/superpowers/specs/2026-10-14-reentreno-actualiza-base-design.md`.
 - ⚠ **El modelo reentrenado se guarda SOLO en MLflow** (directorio temporal →
-  `upload_artifacts` → `rmtree`). Nunca se escribe en `artifacts/<ARTIFACT_FOLDER_NAME>/` ni en
-  S3, y el ajuste fino parte siempre del modelo base, nunca de un reentrenamiento anterior. En
+  `upload_artifacts` → `rmtree`), salvo en los modelos que promueven su base (ver «Modelos que promueven su base»), que además publican una
+  versión nueva bajo `artifacts/fixed/<carpeta>/versions/<vN>/` (nunca sobrescriben). Nunca se
+  escribe en `artifacts/<ARTIFACT_FOLDER_NAME>/` ni en S3 fuera de ese mecanismo, y el ajuste fino parte siempre del modelo base, nunca de un reentrenamiento anterior. En
   ml25, un `train()` antiguo generó el artefacto que acabó sirviéndose como "base", con un
   protocolo distinto del del equipo de IA; ml41 sobrescribía el checkpoint base local y
   ml15/16/3/40/9 dejaban copias `user_*` en local.
 - ⚠ **Si no se puede guardar en MLflow, `/train` falla**: el `except` de la subida hace
   `raise ModelPersistenceError(...) from exc` (→ 502). Nunca se responde 200 con un aviso: como
   el modelo solo vive en MLflow, el resultado del entrenamiento se habría perdido sin que la
-  plataforma lo supiera.
+  plataforma lo supiera. Excepción: salvo en los modelos que promueven su base (ver «Modelos que promueven su base»): un fallo de MLflow se responde 200 con
+  `upload_warning` (la base se publica igualmente); solo es 502 si falla publicar la base.
 - **No mutar `self._model`**: se entrena sobre una instancia nueva (`copy.deepcopy`, un
   `YOLO(path)` fresco o `load_*()`). Una petición de predict concurrente nunca debe ver un
   modelo a medio entrenar.
@@ -186,7 +195,8 @@ sin motivo. Antes de fijar `training.supported`:
 reporta la memoria, para poder compararlas), los conteos (`n_train`/`n_test`),
 `training_time_s` y `upload_warning: str | None`. `upload_warning` se mantiene solo por
 compatibilidad con la plataforma (`train-task-manager.ts` lo lee) y siempre vale `None`: un
-fallo de subida es un `ModelPersistenceError`, no un aviso. Si el plugin no tiene DTO propio,
+fallo de subida es un `ModelPersistenceError`, no un aviso (en los modelos que promueven su
+base sí es un `upload_warning` con 200; ver «Modelos que promueven su base»). Si el plugin no tiene DTO propio,
 usa el genérico `app.application.dto.train_dto.TrainResponse`.
 
 ```python
@@ -194,8 +204,16 @@ class TrainRequest(BaseModel):
     model_config = ConfigDict(protected_namespaces=())
     data_path: str = Field(..., description="Ruta (local o s3://) a <contrato real del dataset>")
     mlflow_run_id: MlflowRunId = Field(..., description="Run de MLflow donde se persiste el modelo "
-                                       "reentrenado. Obligatorio: el artefacto base nunca se sobrescribe.")
+                                       "reentrenado. Obligatorio (salvo en modelos que promueven su base, donde es opcional): el artefacto base nunca se sobrescribe en el sitio.")
 ```
+
+**Modelos que promueven su base.** Si el modelo debe reemplazar su base en cada reentreno
+(decisión de producto, hoy ml13/14/15/16/17/18/21/23): declarar en la clase
+`BASE_ARTIFACT_FOLDER = ARTIFACT_FOLDER_NAME`, `mlflow_run_id: str = ""` en el `TrainRequest`,
+`base_version: VersionInfo | None` en el `TrainResponse`, y persistir con
+`app.infrastructure.base_model_publisher.persist_retrained_bundle(bundle_dir, …,
+upload_to_mlflow=…)` usando los nombres de fichero canónicos de la base. `train()` nunca recarga
+el plugin: lo hace el contenedor con una instancia nueva.
 
 ### Duración: `/train` es síncrono
 
@@ -344,8 +362,13 @@ aunque la suite pasaba en verde.
 | `/train` | `TrainingNotSupportedError` | 501 |
 | `/predict`, `/train` | `ArchiveLimitExceededError` (ZIP por encima de los límites de `safe_extract_zip`) | 413 |
 | `/train` | `ValueError` o `FileNotFoundError` (datos inválidos o ausentes, ZIP corrupto) | 400 |
-| `/train` | `ModelPersistenceError` (no se pudo guardar el modelo en MLflow) | 502 |
+| `/train` | `ModelPersistenceError` (no se pudo guardar el modelo en MLflow; en modelos que promueven su base solo si falla publicar la base, un fallo de MLflow da `upload_warning` con 200) | 502 |
 | `/train` | Cualquier otra excepción | 500 |
+| `/train` (modelos que promueven su base) | La base nueva no carga | 500 |
+| `/rollback` | Versión inexistente | 404 |
+| `/rollback` | La vigente es v0 (no hay anterior) | 409 |
+| `/rollback` | La versión no carga (se restaura la anterior) | 500 |
+| `/rollback` | Modelo sin base versionada | 501 |
 | `/health` | Modelo sin cargar | 503 |
 
 Las excepciones de dominio nuevas (una restricción de negocio, un historial insuficiente) van
@@ -420,7 +443,8 @@ La correctitud numérica se valida después, en el skill `verification`, contra 
 [ ] predict_inline/predict_batch devuelven el DTO tipado (nunca dict)
 [ ] mlflow_run_id usado de verdad en predict/stats, sin mutar self._model, con rmtree en finally
 [ ] training.supported decidido con el código real (qué entrena y si es el motor desplegado)
-[ ] Si es entrenable: mlflow_run_id obligatorio, guardado solo en MLflow, procedimiento
+[ ] Si es entrenable: mlflow_run_id obligatorio, guardado solo en MLflow (salvo modelos que
+    promueven su base: opcional, versión nueva en artifacts/fixed/), procedimiento
     original portado fielmente y métricas reportadas reproducidas con una ejecución real
 [ ] Si no lo es: TrainingNotSupportedError explicado y sin train types en registry
 [ ] Ningún zf.extractall: los ZIPs del usuario pasan por safe_extract_zip

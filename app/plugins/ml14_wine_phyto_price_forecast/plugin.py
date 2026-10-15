@@ -22,11 +22,13 @@ import pandas as pd
 
 from app.application.dto.stats_dto import InputField, OutputField, RuntimeStats, StatsResponse
 from app.domain.ports.model_plugin_port import ModelPluginPort
-from app.domain.services.exceptions import ModelNotLoadedError, ModelPersistenceError
+from app.domain.services.exceptions import ModelNotLoadedError
 from app.domain.services.mlflow_tracker import BaseMLflowTracker
 from app.infrastructure.artifact_store import local_file_path
+from app.infrastructure.base_model_publisher import persist_retrained_bundle
 from app.plugins.ml14_wine_phyto_price_forecast import model_loader, preprocessing, training
 from app.plugins.ml14_wine_phyto_price_forecast.constants import (
+    ARTIFACT_FOLDER_NAME,
     FRAMEWORK,
     HORIZON_WEEKS,
     METRICS_REPORTED,
@@ -57,6 +59,8 @@ logger = logging.getLogger(__name__)
 
 class Ml14WinePhytoPriceForecastPlugin(ModelPluginPort):
     """GRU plugin for the national phytosanitary price index (t+16 weeks)."""
+
+    BASE_ARTIFACT_FOLDER = ARTIFACT_FOLDER_NAME   # every /train publishes the new base model
 
     def __init__(self) -> None:
         """Initialize an unloaded plugin with empty runtime counters."""
@@ -168,36 +172,35 @@ class Ml14WinePhytoPriceForecastPlugin(ModelPluginPort):
 
         The original reads a fixed dataset path and also trains XGBoost/LSTM to compare; here the
         data comes from data_path and only the selected GRU is refit. The served model is never
-        touched; the result lives only in its MLflow run (ModelPersistenceError → 502 if the
-        upload fails).
+        mutated: the bundle (gru_model.pt + scalers.json) is published as the new base model
+        version and, if mlflow_run_id is given, also saved to that run.
         """
         self._require_loaded()   # the served model defines the feature contract
         with local_file_path(data_path) as local_path:
             result = training.train_gru(local_path, list(self._bundle["feature_columns"]))
 
         artifact_tmp = tempfile.mkdtemp(prefix="ml14_train_")
+        params = {"model": MODEL_NAME, "horizon_weeks": HORIZON_WEEKS, "seq_len": SEQ_LEN,
+                  "epochs_max": TRAIN_EPOCHS, "batch_size": TRAIN_BATCH_SIZE,
+                  "test_ratio": TEST_RATIO, "n_seeds": TRAIN_N_SEEDS,
+                  "canonical_seed": TRAIN_SEED_BASE, "target_mode": "drift_residual_h"}
         try:
             model_loader.save_user_bundle(Path(artifact_tmp), result.model, result.feature_columns,
                                           result.input_scaler, result.target_scaler)
-            upload_artifacts_to_mlflow(
-                artifact_tmp, mlflow_run_id, metrics=result.metrics,
-                params={"model": MODEL_NAME, "horizon_weeks": HORIZON_WEEKS, "seq_len": SEQ_LEN,
-                        "epochs_max": TRAIN_EPOCHS, "batch_size": TRAIN_BATCH_SIZE,
-                        "test_ratio": TEST_RATIO, "n_seeds": TRAIN_N_SEEDS,
-                        "canonical_seed": TRAIN_SEED_BASE, "target_mode": "drift_residual_h"},
+            persisted = persist_retrained_bundle(
+                artifact_tmp, artifact_folder=ARTIFACT_FOLDER_NAME, data_path=data_path,
+                metrics=result.metrics, mlflow_run_id=mlflow_run_id,
+                upload_to_mlflow=lambda: upload_artifacts_to_mlflow(
+                    artifact_tmp, mlflow_run_id, metrics=result.metrics, params=params),
             )
-        except Exception as exc:
-            logger.error("ml14: MLflow upload failed: %s", exc)
-            raise ModelPersistenceError(
-                f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}"
-            ) from exc
         finally:
             shutil.rmtree(artifact_tmp, ignore_errors=True)
 
         return TrainResponse(
             detail=("GRU reentrenada con el procedimiento del equipo de IA (semilla 42; métricas "
                     "media ± std de 3 semillas en el test 80/20)"),
-            **result.metrics, mlflow_run_id=mlflow_run_id, upload_warning=None,
+            **result.metrics, mlflow_run_id=mlflow_run_id, upload_warning=persisted.upload_warning,
+            base_version=persisted.base_version,
         )
 
     @staticmethod

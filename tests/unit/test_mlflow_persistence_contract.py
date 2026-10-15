@@ -1,6 +1,7 @@
 """Contract tests for the MLflow persistence rules shared by every trainable plugin.
 
-1. ``mlflow_run_id`` is mandatory and non-empty on every /train (→ 422).
+1. ``mlflow_run_id`` is mandatory and non-empty on every /train (→ 422), except on the 8 models
+   whose /train publishes the new base model (PROMOTING_MODEL_IDS), where it is optional.
 2. If the retrained model cannot be saved to MLflow, /train fails (→ 502) instead of
    answering 200 with a warning and silently discarding the model.
 3. If predict/stats are asked for a run whose model cannot be loaded, they fail (→ 422)
@@ -16,7 +17,15 @@ from app.domain.services.exceptions import ModelPersistenceError, UserModelUnava
 from app.domain.services.mlflow_tracker import require_user_model
 from tests.conftest import TEST_REGISTRY
 
-TRAINABLE = [entry for entry in TEST_REGISTRY if entry.train_request_type is not None]
+PROMOTING_MODEL_IDS = {
+    "ml13-wine-price-fluctuation-prediction", "ml14-wine-phyto-price-forecast",
+    "ml15-wine-ipi-price-forecast", "ml16-meat-raw-material-price-alert",
+    "ml17-meat-market-price-analysis", "ml18-meat-spatial-price-forecast",
+    "ml21-cereals-price-spatial", "ml23-lactic-market-price-forecast",
+}
+# The 8 models whose /train publishes the new base accept /train without a run (spec D4).
+TRAINABLE = [entry for entry in TEST_REGISTRY
+             if entry.train_request_type is not None and entry.model_id not in PROMOTING_MODEL_IDS]
 
 
 # ── 1. mlflow_run_id obligatorio y no vacío ───────────────────────────────────
@@ -113,7 +122,7 @@ def ml15(monkeypatch, tmp_path):
     return plugin, mlflow_utils, instance, str(data)
 
 
-def test_ml15_train_fails_when_mlflow_upload_fails(ml15, monkeypatch):
+def test_ml15_train_mlflow_failure_is_a_warning_and_the_base_is_published(ml15, monkeypatch):
     plugin, _, instance, data = ml15
 
     class UnreachableTracker:
@@ -130,8 +139,9 @@ def test_ml15_train_fails_when_mlflow_upload_fails(ml15, monkeypatch):
             raise ConnectionError("MLflow unreachable")
 
     monkeypatch.setattr(plugin, "BaseMLflowTracker", UnreachableTracker)
-    with pytest.raises(ModelPersistenceError, match="MLflow unreachable"):
-        instance.train(data_path=data, mlflow_run_id="run-1")
+    resp = instance.train(data_path=data, mlflow_run_id="run-1")
+    assert "MLflow unreachable" in resp.upload_warning
+    assert resp.base_version.version == "v1"
 
 
 def test_ml15_predict_fails_instead_of_serving_base_model(ml15, monkeypatch):

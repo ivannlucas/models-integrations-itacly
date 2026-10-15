@@ -5,7 +5,6 @@ unit tests exercise the real plugin modules on small deterministic synthetic ser
 wiring and invariants, not correctness (golden cases live in inbox/a13/manifest.yaml and are
 checked by the verification skill).
 """
-import pathlib
 from datetime import date, timedelta
 
 import numpy as np
@@ -241,35 +240,58 @@ def train_csv(tmp_path):
     return str(path)
 
 
-def test_real_train_uploads_only_to_mlflow(real_plugin, train_csv, monkeypatch):
+def test_real_train_publishes_the_new_base_and_uploads_to_the_run(real_plugin, train_csv, monkeypatch,
+                                                                  isolated_base_store):
     from unittest.mock import MagicMock
 
     from app.plugins.ml13_wine_price_fluctuation_prediction import model_loader
     from app.plugins.ml13_wine_price_fluctuation_prediction import plugin as plugin_mod
+    from app.plugins.ml13_wine_price_fluctuation_prediction.constants import (
+        ARTIFACT_FOLDER_NAME, FEATURE_SCHEMA_FILENAME, MODEL_CONFIG_FILENAME, MODEL_FILENAME, SCALER_FILENAME,
+    )
 
-    local_dir = model_loader._store.local_dir  # pylint: disable=protected-access
-    before = set(local_dir.rglob("*")) if local_dir.exists() else set()
+    repo_dir = model_loader._store.local_dir  # pylint: disable=protected-access
+    before = set(repo_dir.rglob("*")) if repo_dir.exists() else set()
     tracker = MagicMock()
     monkeypatch.setattr(plugin_mod, "BaseMLflowTracker", MagicMock(return_value=tracker))
     resp = real_plugin.train(data_path=train_csv, mlflow_run_id="run-1")
     assert resp.n_test_rows == 24 and resp.upload_warning is None
-    uploaded_dir = tracker.upload_artifacts.call_args.args[0]
+    assert resp.base_version.version == "v1" and resp.base_version.mlflow_run_id == "run-1"
     assert tracker.upload_artifacts.call_args.kwargs["artifact_path"] == "model"
-    assert not pathlib.Path(uploaded_dir).exists()  # temp dir removed after upload
-    after = set(local_dir.rglob("*")) if local_dir.exists() else set()
-    assert after == before  # nothing written under artifacts/
+    v1 = isolated_base_store / ARTIFACT_FOLDER_NAME / "versions" / "v1"
+    for name in (MODEL_FILENAME, SCALER_FILENAME, FEATURE_SCHEMA_FILENAME, MODEL_CONFIG_FILENAME):
+        assert (v1 / name).exists()
+    after = set(repo_dir.rglob("*")) if repo_dir.exists() else set()
+    assert after == before  # nothing written under the repo's artifacts/
 
 
-def test_real_train_fails_when_mlflow_upload_fails(real_plugin, train_csv, monkeypatch):
+def test_real_train_without_run_publishes_the_base(real_plugin, train_csv):
+    resp = real_plugin.train(data_path=train_csv, mlflow_run_id="")
+    assert resp.base_version.version == "v1" and resp.base_version.mlflow_run_id is None
+
+
+def test_real_train_mlflow_failure_is_a_warning(real_plugin, train_csv, monkeypatch):
     from unittest.mock import MagicMock
 
-    from app.domain.services.exceptions import ModelPersistenceError
     from app.plugins.ml13_wine_price_fluctuation_prediction import plugin as plugin_mod
 
     tracker = MagicMock(upload_artifacts=MagicMock(side_effect=ConnectionError("mlflow caído")))
     monkeypatch.setattr(plugin_mod, "BaseMLflowTracker", MagicMock(return_value=tracker))
-    with pytest.raises(ModelPersistenceError, match="mlflow caído"):
-        real_plugin.train(data_path=train_csv, mlflow_run_id="run-1")
+    resp = real_plugin.train(data_path=train_csv, mlflow_run_id="run-1")
+    assert "mlflow caído" in resp.upload_warning and resp.base_version.version == "v1"
+
+
+def test_declares_its_base_folder():
+    from app.plugins.ml13_wine_price_fluctuation_prediction.constants import ARTIFACT_FOLDER_NAME
+    from app.plugins.ml13_wine_price_fluctuation_prediction.plugin import (
+        Ml13WinePriceFluctuationPredictionPlugin,
+    )
+    assert Ml13WinePriceFluctuationPredictionPlugin.BASE_ARTIFACT_FOLDER == ARTIFACT_FOLDER_NAME
+
+
+def test_train_without_mlflow_run_id_is_accepted(client):
+    resp = client.post(f"{PREFIX}/train", json={"data_path": "/tmp/wine_prices.csv"})
+    assert resp.status_code == 200
 
 
 def test_real_predict_with_a_run_without_model_never_uses_the_base(real_plugin, monkeypatch):

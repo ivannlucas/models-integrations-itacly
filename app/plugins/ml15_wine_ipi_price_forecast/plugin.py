@@ -13,6 +13,7 @@ scoped out in the manifest known_issues; this plugin only serves the national t+
 from __future__ import annotations
 
 import logging
+import os
 import shutil
 import tempfile
 from datetime import datetime, timezone
@@ -26,18 +27,21 @@ from app.domain.ports.model_plugin_port import ModelPluginPort
 from app.domain.services.exceptions import (
     MissingRequiredFeatureError,
     ModelNotLoadedError,
-    ModelPersistenceError,
 )
 from app.domain.services.mlflow_tracker import BaseMLflowTracker
 from app.infrastructure.artifact_store import local_file_path
+from app.infrastructure.base_model_publisher import persist_retrained_bundle
 from app.plugins.ml15_wine_ipi_price_forecast import history, model_loader, preprocessing, training
 from app.plugins.ml15_wine_ipi_price_forecast.constants import (
     ALPHA,
+    ARTIFACT_FOLDER_NAME,
     CALENDAR_DERIVED_COLUMNS,
     FRAMEWORK,
     METRICS_REPORTED,
     MODEL_FILENAME,
     MODEL_ID,
+    REFERENCE_FINANCIAL_FILENAME,
+    REFERENCE_PRICES_FILENAME,
     VERSION,
 )
 from app.plugins.ml15_wine_ipi_price_forecast.mlflow_utils import download_user_model_from_mlflow
@@ -52,6 +56,8 @@ logger = logging.getLogger(__name__)
 
 class Ml15WineIpiPriceForecastPlugin(ModelPluginPort):
     """Ridge regression plugin for the national phytosanitary price index (t+6)."""
+
+    BASE_ARTIFACT_FOLDER = ARTIFACT_FOLDER_NAME   # every /train publishes the new base model
 
     def __init__(self) -> None:
         """Initialize an unloaded plugin with empty runtime counters."""
@@ -290,17 +296,65 @@ class Ml15WineIpiPriceForecastPlugin(ModelPluginPort):
 
     # ── train (retraining with the original procedure) ────────────────────────
 
-    def train(self, *, data_path: str, mlflow_run_id: str) -> TrainResponse:
+    @staticmethod
+    def _validated_reference_csvs(prices_path: str, financial_path: str) -> list[tuple[str, str]]:
+        """Check the optional reference CSVs against the current ones' columns, before training.
+
+        Returns [(local copy, canonical filename)] to add to the new base bundle; [] if none
+        were given. The local copies are temp files the caller removes.
+        """
+        if not prices_path and not financial_path:
+            return []
+        if not (prices_path and financial_path):
+            raise ValueError(
+                "reference_prices_path y reference_financial_path se indican juntos: el histórico de "
+                "referencia del modelo base se renueva entero."
+            )
+        # Compare raw file against raw file: load_reference_data() derives extra columns.
+        current_prices_path, current_financial_path = model_loader.reference_data_paths()
+        current_prices = history.load_monthly_csv(current_prices_path)
+        current_financial = history.load_monthly_csv(current_financial_path)
+        checked: list[tuple[str, str]] = []
+        try:
+            for field, path, current, filename in (
+                ("reference_prices_path", prices_path, current_prices, REFERENCE_PRICES_FILENAME),
+                ("reference_financial_path", financial_path, current_financial, REFERENCE_FINANCIAL_FILENAME),
+            ):
+                fd, copy_path = tempfile.mkstemp(suffix=".csv")
+                os.close(fd)
+                checked.append((copy_path, filename))  # registered first so the cleanup below sees it
+                try:
+                    with local_file_path(path) as local_path:
+                        shutil.copyfile(local_path, copy_path)
+                    frame = history.load_monthly_csv(copy_path)
+                except Exception as exc:  # pylint: disable=broad-exception-caught
+                    raise ValueError(f"{field}: no se puede leer como histórico mensual ({exc}).") from exc
+                missing = [col for col in current.columns if col not in frame.columns]
+                if missing:
+                    raise ValueError(f"{field}: faltan las columnas del histórico vigente {missing}.")
+        except BaseException:
+            for copy_path, _ in checked:
+                if os.path.exists(copy_path):
+                    os.unlink(copy_path)
+            raise
+        return checked
+
+    def train(
+        self, *, data_path: str, mlflow_run_id: str = "",
+        reference_prices_path: str = "", reference_financial_path: str = "",
+    ) -> TrainResponse:
         """Retrain a fresh Pipeline(StandardScaler + Ridge(alpha=25.0)) from a model-ready panel.
 
         The AI team's original procedure (training.py: frozen train/validation/test splits by
         origin date, trainer.py's train filter and get_stats.py's test metrics) — on the delivered
-        panel it reproduces horizon_6_ridge.pkl and final_evaluation.json exactly. The retrained artifact
-        lives only in its own MLflow run (artifact_path="model", canonical filename so
-        mlflow_utils can reload it with that mlflow_run_id); the served fixed artifact and
-        its local copy are never mutated nor overwritten.
+        panel it reproduces horizon_6_ridge.pkl and final_evaluation.json exactly. The retrained
+        payload is published as the new base model version (and saved to the MLflow run if
+        mlflow_run_id is given). reference_prices_path/reference_financial_path, if given, are
+        validated before training and replace the bundled reference histories in the new
+        version; otherwise they are inherited and upload_warning says so.
         """
         self._require_loaded()
+        references = self._validated_reference_csvs(reference_prices_path, reference_financial_path)
         with local_file_path(data_path) as local_path:
             df = pd.read_csv(local_path)
 
@@ -319,31 +373,41 @@ class Ml15WineIpiPriceForecastPlugin(ModelPluginPort):
             "training_origin_end": str(result["train_origin_end"].date()),
         })
 
-        upload_warning = None
-        if not mlflow_run_id:
-            raise ModelPersistenceError("Sin run de MLflow: el modelo reentrenado no se ha guardado.")
-        else:
-            tracker = BaseMLflowTracker(mlflow_run_id)
-            mlflow_tmp = None
-            try:
+        tracker = BaseMLflowTracker(mlflow_run_id)
+        bundle_dir = tempfile.mkdtemp(prefix="ml15_train_")
+        try:
+            joblib.dump(new_payload, f"{bundle_dir}/{MODEL_FILENAME}")
+            for copy_path, filename in references:
+                shutil.copyfile(copy_path, f"{bundle_dir}/{filename}")
+
+            def _upload_to_mlflow() -> None:
                 tracker.log_params({"model_kind": "ridge", "alpha": ALPHA})
                 tracker.log_metrics({k: v for k, v in metrics.items() if v is not None})
-                mlflow_tmp = tempfile.mkdtemp(prefix="ml15_mlflow_")
-                joblib.dump(new_payload, f"{mlflow_tmp}/{MODEL_FILENAME}")
-                tracker.upload_artifacts(mlflow_tmp, artifact_path="model")
-            except Exception as exc:  # pylint: disable=broad-exception-caught
-                logger.error("MLflow artifact upload failed: %s", exc)
-                raise ModelPersistenceError(f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}") from exc
-            finally:
-                if mlflow_tmp:
-                    shutil.rmtree(mlflow_tmp, ignore_errors=True)
+                tracker.upload_artifacts(bundle_dir, artifact_path="model")
+
+            persisted = persist_retrained_bundle(
+                bundle_dir, artifact_folder=ARTIFACT_FOLDER_NAME, data_path=data_path,
+                metrics=metrics, mlflow_run_id=mlflow_run_id, upload_to_mlflow=_upload_to_mlflow,
+            )
+        finally:
+            shutil.rmtree(bundle_dir, ignore_errors=True)
+            for copy_path, _ in references:
+                os.unlink(copy_path)
+
+        warnings = [persisted.upload_warning] if persisted.upload_warning else []
+        if not references:
+            warnings.append(
+                "No se han renovado los históricos exógenos de referencia (reference_prices_path / "
+                "reference_financial_path): el modelo base nuevo hereda los de la versión anterior."
+            )
+        upload_warning = " ".join(warnings) or None
 
         logger.info(
             "ml15 train() done — n_train=%d n_test=%d rmse=%s mlflow_run_id=%s",
             result["n_train"], result["n_test"], metrics["rmse"], mlflow_run_id,
         )
         return TrainResponse(
-            detail="Reentrenamiento completado (Ridge, procedimiento original).",
+            detail=f"Reentrenamiento completado (Ridge, procedimiento original). Modelo base {persisted.base_version['version']}.",
             n_train_rows=result["n_train"],
             n_test_rows=result["n_test"],
             train_end_date=str(result["train_end_date"].date()),
@@ -356,6 +420,7 @@ class Ml15WineIpiPriceForecastPlugin(ModelPluginPort):
             mape_reduction_pct=result["mape_reduction_pct"],
             training_time_s=result["training_time_s"],
             upload_warning=upload_warning,
+            base_version=persisted.base_version,
         )
 
     # ── stats ─────────────────────────────────────────────────────────────────
