@@ -117,10 +117,13 @@ class UserModelUnavailableError(RuntimeError):
 
 
 class ModelPersistenceError(RuntimeError):
-    """Raised when a retrained model cannot be saved to its MLflow run.
+    """Raised when a retrained model cannot be persisted, so the training result would be lost
+    and the request must fail instead of answering 200 (→ 502).
 
-    The retrained model only lives in MLflow, so if the upload fails the training result
-    is lost and the request must fail instead of answering 200 (→ 502).
+    Most models keep the retrained model only in its MLflow run: a failed upload raises this.
+    Models with BASE_ARTIFACT_FOLDER (ml13, 14, 15, 16, 17, 18, 21, 23) publish it as a new
+    base version instead: only a failed publish raises this (the base does not change); a failed
+    MLflow upload is just an upload_warning (see base_model_publisher.persist_retrained_bundle).
     """
 
 
@@ -129,3 +132,15 @@ class ArchiveLimitExceededError(ValueError):
     size, file-count or compression-ratio limits, or holds a path outside its destination (→ 413).
     See app/infrastructure/archive.py::safe_extract_zip.
     """
+
+
+class BaseVersionNotFoundError(LookupError):
+    """The requested base model version does not exist in the artifact store (→ 404)."""
+
+
+class NoPreviousBaseVersionError(RuntimeError):
+    """Rollback asked with no target and the current base is v0, which has no parent (→ 409)."""
+
+
+class BaseReloadError(RuntimeError):
+    """The newly activated base version could not be loaded; the pointer was restored (→ 500)."""

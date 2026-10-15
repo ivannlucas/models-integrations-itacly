@@ -57,6 +57,12 @@ def test_train_returns_501(client):
     assert resp.status_code in (200, 501)
 
 
+def test_train_without_mlflow_run_id_is_accepted(client):
+    """mlflow_run_id is optional: every /train publishes the new base model (spec 2026-10-14)."""
+    resp = client.post(f"{PREFIX}/train", json={"data_path": "/tmp/x.csv"})
+    assert resp.status_code == 200
+
+
 def test_train_returns_metrics(client):
     resp = client.post(
         f"{PREFIX}/train", json={"data_path": "/tmp/x.csv", "mlflow_run_id": "test-run-id"}

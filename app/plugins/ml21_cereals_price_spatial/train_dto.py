@@ -1,7 +1,7 @@
 """Pydantic DTOs for ml21 (ESP-CEREAL) /train endpoint."""
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.application.dto.train_dto import MlflowRunId
+from app.application.dto.base_version_dto import VersionInfo
 
 
 class TrainRequest(BaseModel):
@@ -9,7 +9,14 @@ class TrainRequest(BaseModel):
     data_path: str = Field(
         ..., description="Path to CSV with raw panel rows + target columns"
     )
-    mlflow_run_id: MlflowRunId
+    mlflow_run_id: str = Field(
+        default="",
+        description=(
+            "Run de MLflow opcional: si se indica, el modelo reentrenado también se guarda en él "
+            "(trazabilidad). Con o sin run, el modelo reentrenado pasa a ser el modelo base y "
+            "este CSV su panel (dataset_entrenamiento_final.csv)."
+        ),
+    )
 
 
 class TrainResponse(BaseModel):
@@ -30,3 +37,4 @@ class TrainResponse(BaseModel):
     n_train: int | None = None
     n_test: int | None = None
     upload_warning: str | None = None
+    base_version: VersionInfo | None = None

@@ -62,6 +62,11 @@ borrado es correcto y se commitea.
   o de una tabla de resultados auditada en la memoria — nunca de la imaginación del agente.
 - Si un caso del golden dataset falla la tolerancia, no se silencia ni se ajusta la tolerancia
   para que pase — se investiga y se documenta.
+- El artefacto base nunca se sobrescribe **en el sitio**. En los modelos con
+  `BASE_ARTIFACT_FOLDER` (ml13, 14, 15, 16, 17, 18, 21 y 23) cada `/train` publica una versión
+  nueva en `artifacts/fixed/<carpeta>/versions/<vN>/` y mueve `current.json`; `POST /rollback`
+  vuelve atrás. En el resto, el modelo reentrenado vive solo en su run de MLflow. Diseño:
+  `docs/superpowers/specs/2026-10-14-reentreno-actualiza-base-design.md`.
 - La ficha técnica y la ficha funcional se generan siempre con la plantilla paramétrica fija
   (`docs-generation/ficha-modelo/`, ver su `SKILL.md`), nunca redactando o editando el .docx
   del modelo anterior a mano — así se garantiza el mismo formato para los 48 modelos.

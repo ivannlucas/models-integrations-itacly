@@ -11,7 +11,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from app.domain.services.exceptions import ModelPersistenceError, UserModelUnavailableError
+from app.domain.services.exceptions import UserModelUnavailableError
 from app.plugins.ml18_meat_spatial_price_forecast import constants, mlflow_utils, preprocessing, training
 from app.plugins.ml18_meat_spatial_price_forecast import plugin as plugin_mod
 
@@ -88,7 +88,7 @@ def test_too_short_history_is_a_clear_error(tmp_path, months, match):
         training.train_gru(str(path), epochs=1)
 
 
-def test_train_uploads_only_to_mlflow_and_the_model_is_served_by_run(csv_path, fast, monkeypatch, tmp_path):
+def test_train_uploads_only_to_mlflow_and_the_model_is_served_by_run(csv_path, fast, monkeypatch, tmp_path, isolated_base_store):
     captured = tmp_path / "mlflow_store"
     tracker = MagicMock()
     tracker.upload_artifacts.side_effect = lambda d, artifact_path: shutil.copytree(d, captured / artifact_path)
@@ -101,6 +101,7 @@ def test_train_uploads_only_to_mlflow_and_the_model_is_served_by_run(csv_path, f
     instance = plugin_mod.Ml18MeatSpatialPriceForecastPlugin()   # no base model loaded: train never needs it
     resp = instance.train(data_path=csv_path, mlflow_run_id="run-1")
     assert resp.mlflow_run_id == "run-1" and resp.upload_warning is None
+    assert resp.base_version.version == "v1"
     assert resp.epochs_run == 2 and resp.n_test > 0
     assert set(plugin_mod.model_loader._store.local_dir.rglob("*")) == local_before  # pylint: disable=protected-access
     assert {"model.joblib", "x_scaler.json", "y_scaler.json", "metrics.json"} <= {p.name for p in (captured / "model").iterdir()}
@@ -115,11 +116,11 @@ def test_train_uploads_only_to_mlflow_and_the_model_is_served_by_run(csv_path, f
     assert len(window) == constants.LOOKBACK and window[-1] == list(preds[0]["xai_feature_values"].values())
 
 
-def test_train_fails_when_mlflow_upload_fails(csv_path, fast, monkeypatch):
+def test_mlflow_failure_is_a_warning(csv_path, fast, monkeypatch):
     tracker = MagicMock(upload_artifacts=MagicMock(side_effect=ConnectionError("mlflow caído")))
     monkeypatch.setattr(mlflow_utils, "BaseMLflowTracker", MagicMock(return_value=tracker))
-    with pytest.raises(ModelPersistenceError, match="mlflow caído"):
-        plugin_mod.Ml18MeatSpatialPriceForecastPlugin().train(data_path=csv_path, mlflow_run_id="run-1")
+    resp = plugin_mod.Ml18MeatSpatialPriceForecastPlugin().train(data_path=csv_path, mlflow_run_id="run-1")
+    assert "mlflow caído" in resp.upload_warning and resp.base_version.version == "v1"
 
 
 def test_predict_with_a_run_without_model_never_uses_the_base(monkeypatch):

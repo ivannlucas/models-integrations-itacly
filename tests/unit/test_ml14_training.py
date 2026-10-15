@@ -12,7 +12,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from app.domain.services.exceptions import ModelPersistenceError, UserModelUnavailableError
+from app.domain.services.exceptions import UserModelUnavailableError
 from app.plugins.ml14_wine_phyto_price_forecast import constants, mlflow_utils, training
 from app.plugins.ml14_wine_phyto_price_forecast import plugin as plugin_mod
 from app.plugins.ml14_wine_phyto_price_forecast.feature_engineering import build_modeling_features
@@ -91,7 +91,9 @@ def test_wrong_csv_is_a_clear_error(tmp_path):
         training.load_training_frame(str(path), _features())
 
 
-def test_train_uploads_only_to_mlflow_and_the_model_is_served_by_run(instance, raw_csv, fast, monkeypatch, tmp_path):
+def test_train_uploads_only_to_mlflow_and_the_model_is_served_by_run(
+    instance, raw_csv, fast, monkeypatch, tmp_path, isolated_base_store
+):
     store = tmp_path / "mlflow_store"
     tracker = MagicMock()
     tracker.upload_artifacts.side_effect = lambda d, artifact_path: shutil.copytree(d, store / artifact_path)
@@ -112,13 +114,35 @@ def test_train_uploads_only_to_mlflow_and_the_model_is_served_by_run(instance, r
     # The real 12-week window the GRU scored travels with the response for the explainability service.
     assert len(out.xai_feature_window) == constants.SEQ_LEN
     assert out.xai_feature_window[-1] == list(out.xai_feature_values.values())
+    assert resp.base_version.version == "v1" and resp.base_version.mlflow_run_id == "run-1"
+    v1 = isolated_base_store / "ml14_wine_phyto_price_forecast" / "versions" / "v1"
+    assert (v1 / "gru_model.pt").exists() and (v1 / "scalers.json").exists()
 
 
-def test_train_fails_when_mlflow_upload_fails(instance, raw_csv, fast, monkeypatch):
+def test_mlflow_failure_is_a_warning_and_the_base_is_published(instance, raw_csv, fast, monkeypatch):
     tracker = MagicMock(upload_artifacts=MagicMock(side_effect=ConnectionError("mlflow caído")))
     monkeypatch.setattr(mlflow_utils, "BaseMLflowTracker", MagicMock(return_value=tracker))
-    with pytest.raises(ModelPersistenceError, match="mlflow caído"):
-        instance.train(data_path=raw_csv, mlflow_run_id="run-1")
+    resp = instance.train(data_path=raw_csv, mlflow_run_id="run-1")
+    assert "mlflow caído" in resp.upload_warning and resp.base_version.version == "v1"
+
+
+def test_train_without_run_publishes_the_base(instance, raw_csv, fast):
+    resp = instance.train(data_path=raw_csv, mlflow_run_id="")
+    assert resp.base_version.version == "v1" and resp.base_version.mlflow_run_id is None
+
+
+def test_a_promoted_base_loads_with_its_own_scalers(instance, raw_csv, fast, monkeypatch, isolated_base_store):
+    from app.infrastructure.artifact_store import ArtifactStore
+    from app.plugins.ml14_wine_phyto_price_forecast import model_loader
+
+    resp = instance.train(data_path=raw_csv, mlflow_run_id="")
+    store = ArtifactStore("ml14_wine_phyto_price_forecast", root=isolated_base_store, use_s3=False)
+    assert store.active_version() == resp.base_version.version   # shared with the publisher
+    monkeypatch.setattr(model_loader, "_store", store)
+    monkeypatch.setattr(model_loader, "_build_scalers_and_features",
+                        MagicMock(side_effect=AssertionError("v1 must not refit scalers")))
+    bundle = model_loader.load_artifact_bundle()
+    assert bundle["feature_columns"] == _features()
 
 
 def test_predict_with_a_run_without_model_never_uses_the_base(instance, monkeypatch):

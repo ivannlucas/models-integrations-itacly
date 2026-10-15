@@ -16,6 +16,11 @@ nada — nunca asumas una ruta del servicio de ODD por defecto ni "adivines" qu�
 
 ## Requisito previo
 
+> ⚠ **No aplica a los modelos con `BASE_ARTIFACT_FOLDER`** (ml13, 14, 15, 16, 17, 18, 21 y 23).
+> No tienen detección de drift: su modelo base cambia con cada reentreno. Si alguno sigue
+> registrado en `models_config.json`, se da de baja. Ver §9 de
+> `docs/superpowers/specs/2026-10-14-reentreno-actualiza-base-design.md`.
+
 El plugin debe estar integrado (skill `plugin-integration`) y verificado en verde (skill
 `verification`) en **este** repo. Si `outputs/<model_id>/verification_report.md` no existe o no
 dice "LISTO PARA PR", para y avisa.

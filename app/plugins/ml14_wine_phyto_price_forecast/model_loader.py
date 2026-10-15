@@ -1,10 +1,10 @@
 """Artifact loading for ml14 — GRU wine phytosanitary price forecast.
 
 Faithful port of src/predict/predictor.py::_build_scalers_and_features() from the delivered
-code: the input/target scalers are NOT loaded from a serialized artifact (this delivery ships
-none) — they are refit at load time from the bundled reference dataset, exactly like the
-original CLI does on every prediction. See inbox/a14/manifest.yaml known_issues for why this
-plugin bundles the dataset instead of a frozen scaler artifact.
+code: the delivery ships no serialized scalers, so the v0 base refits them at load time from
+the bundled reference dataset, exactly like the original CLI does on every prediction. A base
+version published by /train carries scalers.json instead (see load_user_bundle). See
+inbox/a14/manifest.yaml known_issues for why v0 bundles the dataset instead of frozen scalers.
 """
 from __future__ import annotations
 
@@ -81,12 +81,23 @@ def _build_scalers_and_features() -> tuple[list[str], StandardScaler, StandardSc
 
 
 def load_artifact_bundle() -> dict:
-    """Load the GRU model and refit the input/target scalers from the bundled reference dataset.
+    """Load the base GRU of the active version.
+
+    A version published by /train carries its own scalers (scalers.json, see save_user_bundle)
+    and is loaded as such. The delivered v0 has none: its input/target scalers are refit from
+    the bundled reference dataset, as the AI team's predict did.
 
     _store.path(filename) only reaches out to S3 for a given file if it isn't already present
     locally (and only if STORAGE_BUCKET is set) — matches the pattern used by other forecast
     plugins in this repo (e.g. ml16, ml23).
     """
+    try:
+        scalers_path = _store.path(USER_SCALERS_FILENAME)
+    except FileNotFoundError:
+        scalers_path = None
+    if scalers_path is not None and scalers_path.exists():
+        return load_user_bundle(_store.local_dir)
+
     feature_columns, input_scaler, target_scaler = _build_scalers_and_features()
 
     model = GRUModel(

@@ -2538,3 +2538,21 @@ def wine_so2_inline_payload() -> dict:
 def lacteo_inline_payload() -> dict:
     """Return a sample inline payload for the Ml10DairyDiseaseVectorDetection plugin."""
     return {"mode": "inline", "image_base64": "dGVzdC1pbWFnZQ=="}
+
+
+# ── Versioned base model: never publish into the repo's artifacts/ ─────────
+
+@pytest.fixture(autouse=True)
+def isolated_base_store(monkeypatch, tmp_path_factory):
+    """train() of the models that promote their base publishes a new version. In tests it goes
+    to a temp folder without S3, never to the repo's artifacts/ or the real bucket. The
+    container uses the same _store_for, so promotion/rollback tests see the same store."""
+    from app.infrastructure import artifact_store, base_model_publisher
+
+    root = tmp_path_factory.mktemp("base_store")
+    monkeypatch.setattr(artifact_store, "_ACTIVE_VERSIONS", {})
+    monkeypatch.setattr(
+        base_model_publisher, "_store_for",
+        lambda folder: artifact_store.ArtifactStore(folder, root=root, use_s3=False),
+    )
+    return root
