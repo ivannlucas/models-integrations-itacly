@@ -637,3 +637,55 @@ known_issues:
       data/splits/test.csv repartidas trimestralmente (2020-01..2024-04). No
       son casos de la memoria ni inventados -- son trazables y reproducibles
       con el comando usado en esta extraccion.
+  - id: bug_real_sklearn_version_pin_corregido
+    detail: >
+      (Revision PR #20, post-merge) El known_issue "version_pins_pickle" de
+      arriba avisaba del riesgo pero la verificacion original nunca se probo
+      contra la version REALMENTE pineada en requirements.txt del repo
+      (scikit-learn==1.5.2, fijada para que coincida con el pin de
+      retech-lote2-xai-explicabilidad -- no se puede subir sin romper esa
+      integracion). Con sklearn==1.5.2 real, cargar best_clf_h1m_logreg.pkl
+      (serializado con sklearn==1.8.0 por el equipo de IA) y llamar a
+      predict()/predict_proba() lanzaba
+      "AttributeError: 'LogisticRegression' object has no attribute
+      'multi_class'" -- LogisticRegression.multi_class dejo de ser atributo
+      de instancia en 1.8.0, pero el codigo de prediccion de 1.5.2 todavia lo
+      lee. Esto rompia el 100% de las predicciones (el horizonte h1 de
+      clasificacion esta siempre presente). Corregido en model_loader.py:
+      tras cargar el bundle, si el modelo es una LogisticRegression sin el
+      atributo, se restaura a 'auto'. Para un clasificador estrictamente
+      binario (classes_ == [0, 1], los tres clasificadores entregados lo son)
+      'ovr'/'multinomial'/'auto' calculan la misma funcion sigmoide -- se
+      verifico que los 18 golden_cases siguen coincidiendo exactamente con
+      sklearn==1.5.2 tras el parche.
+  - id: bug_real_batch_fecha_vacia_corregido
+    detail: >
+      (Revision PR #20, post-merge) Una celda vacia/NA en la columna 'date'
+      de un CSV de predict_batch se parsea como float NaN (incluso con
+      dtype=str en pandas). El codigo pasaba ese NaN a
+      BatchPrediction.date_requested (tipo str), y Pydantic lo rechazaba con
+      ValidationError -- una excepcion que el try/except de la fila (que solo
+      capturaba DataContractError) no atrapaba, asi que se propagaba fuera de
+      la funcion y abortaba TODO el batch, incluidas las filas validas ya
+      procesadas antes -- contradiciendo el propio docstring de
+      predict_batch ("one bad month must not hide the others"). Corregido en
+      plugin.py: la fecha de cada fila se sanea (NaN -> None) antes de usarla,
+      y una fecha vacia se reporta como un DataContractError normal de esa
+      fila (date_requested="", error="..."), sin tocar el resto del batch.
+  - id: bug_real_mlflow_run_id_ignorado_corregido
+    detail: >
+      (Revision PR #20, post-merge) predict_inline/predict_batch hacian
+      `_ = mlflow_run_id` y nunca llamaban a
+      mlflow_utils.download_user_model_from_mlflow: cualquier mlflow_run_id
+      (valido, inexistente o con typo) se ignoraba en silencio y se serivia
+      siempre el modelo fijo con HTTP 200 -- un cliente pidiendo su modelo
+      reentrenado recibia, sin aviso, las predicciones del modelo base.
+      Corregido: mlflow_utils.download_user_model_from_mlflow ahora usa el
+      decorador compartido @require_user_model
+      (app/domain/services/mlflow_tracker.py, el mismo mecanismo que ya usan
+      otros plugins de este repo), y predict_inline/predict_batch lo invocan
+      cuando mlflow_run_id no esta vacio. Como ml19 no tiene ruta de
+      reentrenamiento, cualquier run_id no vacio devuelve ahora
+      UserModelUnavailableError (422) en vez de un 200 enganoso. Nota: ml18
+      (ya en main) tiene el mismo patron `_ = mlflow_run_id` sin corregir --
+      fuera del alcance de este PR, pendiente de que su autor lo revise.

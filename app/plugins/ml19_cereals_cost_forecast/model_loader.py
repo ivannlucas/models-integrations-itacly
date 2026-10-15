@@ -26,6 +26,21 @@ from app.plugins.ml19_cereals_cost_forecast.constants import (
 _store = ArtifactStore(ARTIFACT_FOLDER_NAME)
 
 
+def _patch_sklearn_version_gap(model) -> None:
+    """Repo review finding (PR #20): the repo pins scikit-learn==1.5.2 (must match
+    retech-lote2-xai-explicabilidad's pin, see requirements.txt), but these artifacts were
+    serialized with scikit-learn==1.8.0, where LogisticRegression.multi_class is no longer an
+    instance attribute. 1.5.2's predict()/predict_proba() still reads self.multi_class, so
+    unpickling the artifact as-is raises AttributeError on every single prediction that touches
+    the h1 classifier. For a strictly binary classifier (classes_ == [0, 1], verified for every
+    best_clf_*.pkl shipped with this model) 'ovr' and 'multinomial' compute the identical
+    sigmoid decision function, so restoring the attribute does not change any prediction --
+    verified against the manifest's golden_cases (bit-identical pred/prob_up).
+    """
+    if type(model).__name__ == "LogisticRegression" and not hasattr(model, "multi_class"):
+        model.multi_class = "auto"
+
+
 def _get_model_expected_n_features(model) -> int | None:
     """io.py::_get_model_expected_n_features — n_features_in_ of a sklearn/xgboost model."""
     val = getattr(model, "n_features_in_", None)
@@ -75,11 +90,13 @@ def load_artifact_bundle() -> dict:
     for h, mname in best_reg.items():
         path = _store.path(f"best_reg_h{h}m_{mname.lower()}.pkl")
         reg_artifacts[h] = joblib.load(path)
+        _patch_sklearn_version_gap(reg_artifacts[h]["model"])
 
     clf_artifacts: dict[int, dict] = {}
     for h, mname in best_clf.items():
         path = _store.path(f"best_clf_h{h}m_{mname.lower()}.pkl")
         clf_artifacts[h] = joblib.load(path)
+        _patch_sklearn_version_gap(clf_artifacts[h]["model"])
 
     _validate_artifacts_compatibility(features, reg_artifacts, clf_artifacts)
 

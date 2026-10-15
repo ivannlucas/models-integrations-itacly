@@ -117,3 +117,41 @@ Resultado: **18/18 casos dentro de tolerancia.**
 **LISTO PARA PR**, con una salvedad explícita: `pip-audit` no se pudo ejecutar en este entorno de
 desarrollo concreto (limitación de sandbox, no del código) — debe correr sin problemas en el
 pipeline de CI real y se recomienda confirmarlo ahí antes del merge final.
+
+## Correcciones tras revisión externa (post-merge, PR #20)
+
+Un compañero probó la rama desplegada y reportó tres síntomas. Investigados y confirmados los
+tres contra el código real (no solo contra el informe del compañero):
+
+1. **Toda predicción fallaba con el `requirements.txt` real del repo.** La verificación original
+   de este informe se ejecutó con una versión de scikit-learn distinta a la realmente pineada
+   en el repo (`scikit-learn==1.5.2`, fijada para no romper la integración con
+   `retech-lote2-xai-explicabilidad`). Los artefactos se serializaron con `scikit-learn==1.8.0`.
+   Reproducido: con `scikit-learn==1.5.2` real, `best_clf_h1m_logreg.pkl` lanza
+   `AttributeError: 'LogisticRegression' object has no attribute 'multi_class'` en **toda**
+   petición (h1 de clasificación está siempre presente). **Corregido** en `model_loader.py`:
+   se restaura el atributo a `'auto'` tras cargar el modelo si falta — matemáticamente
+   equivalente para un clasificador binario, verificado reproduciendo los 18 golden cases con
+   `scikit-learn==1.5.2` real tras el parche (0 diferencia, igual que antes).
+2. **Una fecha vacía en el CSV de `predict_batch` tiraba todo el lote.** Confirmado: pandas
+   parsea una celda vacía como `NaN` (float) pese a `dtype=str`; ese valor llegaba a
+   `BatchPrediction.date_requested` (tipo `str`), Pydantic lo rechazaba con `ValidationError`
+   (no capturado por el `except DataContractError` de la fila), y la excepción se propagaba
+   fuera de la función — abortando también las filas válidas ya procesadas, al contrario de lo
+   que decía el propio docstring. **Corregido** en `plugin.py`: la fecha de cada fila se sanea
+   antes de usarse; una celda vacía se reporta como error de esa fila sin afectar al resto.
+3. **`mlflow_run_id` se ignoraba siempre.** Confirmado: `predict_inline`/`predict_batch` hacían
+   `_ = mlflow_run_id` y nunca llamaban a `download_user_model_from_mlflow`; cualquier run_id
+   (válido, inexistente o con typo) servía el modelo fijo con HTTP 200 sin avisar. **Corregido**:
+   `mlflow_utils.py` ahora usa el decorador compartido `@require_user_model`
+   (`app/domain/services/mlflow_tracker.py`), y los dos métodos lo invocan cuando `mlflow_run_id`
+   no está vacío — un run_id inexistente da ahora `422 UserModelUnavailableError`.
+
+Re-verificación tras los tres parches: `flake8` 0 errores, `pylint` 9.65/10, 8/8 tests de wiring,
+18/18 golden cases exactos vía HTTP real con **`scikit-learn==1.5.2` real** (no una versión
+aproximada), las dos fecha-vacía sin afectar al resto del lote, y `mlflow_run_id` inexistente
+devolviendo 422.
+
+**Nota para ml18**: el mismo patrón de `mlflow_run_id` ignorado (`_ = mlflow_run_id` sin llamar a
+`download_user_model_from_mlflow`) existe en `app/plugins/ml18_meat_spatial_price_forecast/plugin.py`
+(ya en `main`) — fuera del alcance de este PR, señalado para que su autor lo revise.

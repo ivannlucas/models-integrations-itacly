@@ -22,6 +22,7 @@ from app.domain.services.exceptions import DataContractError, ModelNotLoadedErro
 from app.infrastructure.artifact_store import local_file_path
 from app.plugins.ml19_cereals_cost_forecast import inference, model_loader
 from app.plugins.ml19_cereals_cost_forecast.constants import FRAMEWORK, METRICS_REPORTED, MODEL_ID, VERSION
+from app.plugins.ml19_cereals_cost_forecast.mlflow_utils import download_user_model_from_mlflow
 from app.plugins.ml19_cereals_cost_forecast.predict_dto import (
     BatchPrediction,
     ClfResult,
@@ -84,6 +85,17 @@ class Ml19CerealsCostForecastPlugin(ModelPluginPort):
         self._predict_count += 1
         self._last_predict_at = datetime.now(tz=timezone.utc).isoformat()
 
+    @staticmethod
+    def _reject_unservable_mlflow_run_id(mlflow_run_id: str) -> None:
+        """Repo review finding (PR #20): predict_inline/predict_batch discarded mlflow_run_id
+        entirely, so a request for a retrained model that does not exist (or any run_id at all)
+        silently served the base model with HTTP 200. ml19 has no retraining path, so any
+        non-empty run_id is unservable — this raises UserModelUnavailableError (-> 422) via
+        mlflow_utils.download_user_model_from_mlflow's @require_user_model decorator instead of
+        pretending the base model is what was asked for."""
+        if mlflow_run_id:
+            download_user_model_from_mlflow(mlflow_run_id)
+
     # ── predict_inline ────────────────────────────────────────────────────────
 
     def predict_inline(
@@ -95,8 +107,9 @@ class Ml19CerealsCostForecastPlugin(ModelPluginPort):
         mlflow_run_id: str = "",
     ) -> PredictInlineResponse:
         """Score one month (the latest available, or 'date' if given) of the bundled dataset."""
-        _ = model_key, threshold, mlflow_run_id
+        _ = model_key, threshold
         self._require_loaded()
+        self._reject_unservable_mlflow_run_id(mlflow_run_id)
         date_str = features.get("date") if features else None
 
         row, date_label = inference.get_row_from_dataset(
@@ -120,16 +133,24 @@ class Ml19CerealsCostForecastPlugin(ModelPluginPort):
         """Score every month listed in a CSV's 'date' column (YYYY-MM) against the bundled
         reference dataset. Unknown months are reported per-row as an error, not silently
         dropped — one bad month in a batch must not hide the others nor pass as a null result."""
-        _ = mlflow_run_id
         self._require_loaded()
+        self._reject_unservable_mlflow_run_id(mlflow_run_id)
         with local_file_path(data_path) as local_path:
             df = pd.read_csv(local_path, dtype=str)
         if "date" not in df.columns:
             raise DataContractError("El CSV de entrada debe traer una columna 'date' (YYYY-MM).")
 
         predictions: list[BatchPrediction] = []
-        for date_str in df["date"]:
+        for raw_date in df["date"]:
+            # Repo review finding (PR #20): a blank/NaN cell in the CSV's 'date' column (pandas
+            # parses it as float NaN even with dtype=str) must not reach date_requested — a
+            # Pydantic str field rejects a float and raises ValidationError, which is not
+            # DataContractError and was escaping this try/except entirely, aborting the whole
+            # batch (including the valid rows already processed) instead of just this row.
+            date_str = None if pd.isna(raw_date) else str(raw_date)
             try:
+                if date_str is None:
+                    raise DataContractError("La columna 'date' tiene una celda vacía en esta fila.")
                 row, date_label = inference.get_row_from_dataset(
                     self._bundle["dataset"], self._bundle["features"], date_str,
                 )
@@ -143,7 +164,9 @@ class Ml19CerealsCostForecastPlugin(ModelPluginPort):
                     )
                 )
             except DataContractError as exc:
-                predictions.append(BatchPrediction(date_requested=date_str, error=str(exc)))
+                predictions.append(
+                    BatchPrediction(date_requested=date_str or "", error=str(exc))
+                )
 
         n_predictions = sum(1 for p in predictions if p.error is None)
         self._record_prediction()
