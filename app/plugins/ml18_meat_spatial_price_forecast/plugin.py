@@ -20,11 +20,13 @@ import pandas as pd
 
 from app.application.dto.stats_dto import InputField, OutputField, RuntimeStats, StatsResponse
 from app.domain.ports.model_plugin_port import ModelPluginPort
-from app.domain.services.exceptions import ModelNotLoadedError, ModelPersistenceError
+from app.domain.services.exceptions import ModelNotLoadedError
 from app.domain.services.mlflow_tracker import BaseMLflowTracker
 from app.infrastructure.artifact_store import local_file_path
+from app.infrastructure.base_model_publisher import persist_retrained_bundle
 from app.plugins.ml18_meat_spatial_price_forecast import inference, model_loader, training
 from app.plugins.ml18_meat_spatial_price_forecast.constants import (
+    ARTIFACT_FOLDER_NAME,
     FRAMEWORK,
     LOOKBACK,
     METRICS_REPORTED,
@@ -52,6 +54,8 @@ logger = logging.getLogger(__name__)
 
 class Ml18MeatSpatialPriceForecastPlugin(ModelPluginPort):
     """GRU plugin for the spatial meat price forecast (t+1 month)."""
+
+    BASE_ARTIFACT_FOLDER = ARTIFACT_FOLDER_NAME   # every /train publishes the new base model
 
     def __init__(self) -> None:
         """Initialize an unloaded plugin with empty runtime counters."""
@@ -141,8 +145,8 @@ class Ml18MeatSpatialPriceForecastPlugin(ModelPluginPort):
         """Retrain the GRU from scratch with the AI team's procedure (see training.py).
 
         The data comes from data_path (the original reads a fixed config path; the procedure
-        is the same). A new model is trained: the served one is never touched. The result
-        lives only in its MLflow run; if it cannot be uploaded, ModelPersistenceError (→ 502).
+        is the same). A new model is trained (the served one is never mutated) and published
+        as the new base model version; if mlflow_run_id is given it is also saved to that run.
         """
         with local_file_path(data_path) as local_path:
             history: list[tuple[int, dict]] = []
@@ -151,20 +155,17 @@ class Ml18MeatSpatialPriceForecastPlugin(ModelPluginPort):
             )
 
         artifact_tmp = tempfile.mkdtemp(prefix="ml18_train_")
+        params = {"model": "GRU", "lookback": LOOKBACK, "epochs_max": TRAIN_EPOCHS,
+                  "batch_size": TRAIN_BATCH_SIZE, "train_ratio": TRAIN_RATIO,
+                  "val_ratio": VAL_RATIO, "seed": TRAIN_SEED}
         try:
             training.save_training_artifacts(Path(artifact_tmp), result)
-            upload_artifacts_to_mlflow(
-                artifact_tmp, mlflow_run_id, metrics=result.metrics,
-                params={"model": "GRU", "lookback": LOOKBACK, "epochs_max": TRAIN_EPOCHS,
-                        "batch_size": TRAIN_BATCH_SIZE, "train_ratio": TRAIN_RATIO,
-                        "val_ratio": VAL_RATIO, "seed": TRAIN_SEED},
-                history=history,
+            persisted = persist_retrained_bundle(
+                artifact_tmp, artifact_folder=ARTIFACT_FOLDER_NAME, data_path=data_path,
+                metrics=result.metrics, mlflow_run_id=mlflow_run_id,
+                upload_to_mlflow=lambda: upload_artifacts_to_mlflow(
+                    artifact_tmp, mlflow_run_id, metrics=result.metrics, params=params, history=history),
             )
-        except Exception as exc:
-            logger.error("ml18: MLflow upload failed: %s", exc)
-            raise ModelPersistenceError(
-                f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}"
-            ) from exc
         finally:
             shutil.rmtree(artifact_tmp, ignore_errors=True)
 
@@ -172,7 +173,8 @@ class Ml18MeatSpatialPriceForecastPlugin(ModelPluginPort):
             detail="GRU reentrenada desde cero con el procedimiento del equipo de IA",
             **result.metrics,
             mlflow_run_id=mlflow_run_id,
-            upload_warning=None,
+            upload_warning=persisted.upload_warning,
+            base_version=persisted.base_version,
         )
 
     # ── stats ─────────────────────────────────────────────────────────────────

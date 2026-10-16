@@ -76,5 +76,13 @@ TRAIN_LR = 0.0001
 TRAIN_EPOCHS = 400
 TRAIN_BATCH_SIZE = 128
 TRAIN_PATIENCE = 30
-TRAIN_SEED = 1
-TRAIN_VAL_FRACTION = 0.15
+TRAIN_SEED = 1                # training_model1.seed
+TRAIN_SEED_OFFSET = 500       # training_model1.final_model.seed_offset (final seed = 501)
+TRAIN_ARCHITECTURE = {"num_layers": 1, "neurons": 64, "activation": "ReLU", "dropout_rate": 0.1}
+
+# Split — config.yaml: split_model1 (by cycle, balanced by season, 70/15/15)
+SPLIT_SEED = 42
+CYCLE_COL_CANDIDATES = ["cycle_id", "Cycle_id", "cycle", "Cycle", "ciclo", "Ciclo", "id_ciclo"]
+SEASON_COL_CANDIDATES = ["season", "Season", "estacion", "estación", "Estacion", "Estación"]
+MONTH_COL_CANDIDATES = ["month", "Month", "mes", "Mes"]
+DATE_COL_CANDIDATES = ["timestamp", "Timestamp", "date", "Date", "fecha", "Fecha", "datetime", "Datetime"]

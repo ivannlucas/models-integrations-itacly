@@ -17,16 +17,12 @@ import shutil
 from datetime import datetime, timezone
 from typing import Any
 
-import numpy as np
 import pandas as pd
 import torch
 
 from app.application.dto.stats_dto import InputField, OutputField, RuntimeStats, StatsResponse
 from app.domain.ports.model_plugin_port import ModelPluginPort
-from app.domain.services.exceptions import (
-    ModelNotLoadedError,
-    ThermalSafetyViolationError,
-)
+from app.domain.services.exceptions import ModelNotLoadedError, ModelPersistenceError
 from app.domain.services.mlflow_tracker import BaseMLflowTracker
 from app.infrastructure.artifact_store import local_file_path
 from app.plugins.ml36_dairy_dnl_co2_emissions_optimizer.constants import (
@@ -49,13 +45,10 @@ from app.plugins.ml36_dairy_dnl_co2_emissions_optimizer.constants import (
     T_OUT_IDX,
     T_OUT_MIN,
     CO2_IDX,
-    TARGETS,
     TRAIN_BATCH_SIZE,
     TRAIN_EPOCHS,
     TRAIN_LR,
     TRAIN_PATIENCE,
-    TRAIN_SEED,
-    TRAIN_VAL_FRACTION,
     VERSION,
 )
 from app.plugins.ml36_dairy_dnl_co2_emissions_optimizer.ga_optimizer import (
@@ -65,10 +58,7 @@ from app.plugins.ml36_dairy_dnl_co2_emissions_optimizer.ga_optimizer import (
 from app.plugins.ml36_dairy_dnl_co2_emissions_optimizer.mlflow_utils import (
     download_user_model_from_mlflow,
 )
-from app.plugins.ml36_dairy_dnl_co2_emissions_optimizer.model_loader import (
-    build_model_from_config,
-    load_artifacts,
-)
+from app.plugins.ml36_dairy_dnl_co2_emissions_optimizer.model_loader import load_artifacts
 from app.plugins.ml36_dairy_dnl_co2_emissions_optimizer.predict_dto import (
     PredictBatchResponse,
     PredictInlineResponse,
@@ -76,6 +66,7 @@ from app.plugins.ml36_dairy_dnl_co2_emissions_optimizer.predict_dto import (
 )
 from app.plugins.ml36_dairy_dnl_co2_emissions_optimizer.preprocessing import build_feature_frame
 from app.plugins.ml36_dairy_dnl_co2_emissions_optimizer.train_dto import TrainResponse
+from app.plugins.ml36_dairy_dnl_co2_emissions_optimizer.training import train_model
 
 logger = logging.getLogger(__name__)
 
@@ -130,6 +121,19 @@ class Ml36DairyDnlCo2EmissionsOptimizerPlugin(ModelPluginPort):
         self._predict_count += 1
         self._last_predict_at = datetime.now(tz=timezone.utc).isoformat()
 
+    def _resolve_model(self, mlflow_run_id: str) -> tuple[tuple, str | None]:
+        """(model, scaler_X, scaler_Y) for this request and the temp dir to remove afterwards.
+
+        The user's model is resolved into locals, never into self (shared across concurrent
+        requests), and a run without a loadable model raises — never falls back to the base.
+        """
+        self._require_loaded()  # the GA policy always comes from the base artifacts
+        if not mlflow_run_id:
+            return (self._model, self._scaler_X, self._scaler_Y), None
+        logger.info("Using user model from MLflow run_id=%s", mlflow_run_id)
+        model, scaler_x, scaler_y, _config, temp_dir = download_user_model_from_mlflow(mlflow_run_id)
+        return (model, scaler_x, scaler_y), temp_dir
+
     # ── predict_inline ────────────────────────────────────────────────────────
 
     def predict_inline(
@@ -141,40 +145,34 @@ class Ml36DairyDnlCo2EmissionsOptimizerPlugin(ModelPluginPort):
         mlflow_run_id: str = "",
     ) -> PredictInlineResponse | PredictOptimizeResponse:
         """Dispatch to MLP predict or GA optimize based on model_key."""
-        user_temp_dir = None
-        saved = (self._model, self._scaler_X, self._scaler_Y, self._config)
-        if mlflow_run_id:
-            logger.info("predict_inline — using user model from MLflow run_id=%s", mlflow_run_id)
-            loaded = download_user_model_from_mlflow(mlflow_run_id)
-            if loaded:
-                self._model, self._scaler_X, self._scaler_Y, self._config, user_temp_dir = loaded
+        bundle, user_temp_dir = self._resolve_model(mlflow_run_id)
         try:
-            self._require_loaded()
             if model_key == "optimize":
-                result = self._run_optimize(features)
+                result = self._run_optimize(features, bundle)
             else:
-                result = self._run_predict(features)
+                result = self._run_predict(features, bundle)
             self._record()
             return result
         finally:
             if user_temp_dir:
                 shutil.rmtree(user_temp_dir, ignore_errors=True)
-                self._model, self._scaler_X, self._scaler_Y, self._config = saved
 
-    def _run_predict(self, features: dict) -> PredictInlineResponse:
+    @staticmethod
+    def _run_predict(features: dict, bundle: tuple) -> PredictInlineResponse:
         """MLP digital-twin single-sample inference in real units."""
+        model, scaler_x, scaler_y = bundle
         row = pd.DataFrame([{f: float(features[f]) for f in BASE_FEATURES}])
-        x_scaled = self._scaler_X.transform(build_feature_frame(row))
+        x_scaled = scaler_x.transform(build_feature_frame(row))
         with torch.no_grad():
-            y_scaled = self._model(torch.tensor(x_scaled, dtype=torch.float32)).cpu().numpy()
-        y_real = self._scaler_Y.inverse_transform(y_scaled)[0]
+            y_scaled = model(torch.tensor(x_scaled, dtype=torch.float32)).cpu().numpy()
+        y_real = scaler_y.inverse_transform(y_scaled)[0]
         return PredictInlineResponse(
             model_id=MODEL_ID,
             T_out_pred=round(float(y_real[T_OUT_IDX]), 4),
             CO2_emissions_pred=round(float(y_real[CO2_IDX]), 4),
         )
 
-    def _run_optimize(self, features: dict) -> PredictOptimizeResponse:
+    def _run_optimize(self, features: dict, bundle: tuple) -> PredictOptimizeResponse:
         """Static / adaptive / hybrid decision for one context row (deterministic per seed)."""
         decision_mode = str(features.get("decision_mode") or DEFAULT_DECISION_MODE).lower()
         if decision_mode not in DECISION_MODES:
@@ -188,29 +186,32 @@ class Ml36DairyDnlCo2EmissionsOptimizerPlugin(ModelPluginPort):
 
         policy = self._policy
         policy_co2, policy_t_out = predict_scenario(
-            self._model, self._scaler_X, self._scaler_Y, context, policy)
+            *bundle, context, policy)
 
         selected = list(policy)
         used_adaptive = decision_mode in ("adaptive", "hybrid")
         if used_adaptive:
             seeds = [list(policy)] + ([current] if current else [])
             selected = run_adaptive_ga(
-                self._model, self._scaler_X, self._scaler_Y, context, seeds, seed)
+                *bundle, context, seeds, seed)
 
         opt_co2, opt_t_out = predict_scenario(
-            self._model, self._scaler_X, self._scaler_Y, context, selected)
+            *bundle, context, selected)
+        # As in the delivered pipeline, T_out >= T_OUT_MIN is only a soft penalty inside the
+        # GA: the best individual is returned as-is (confirmed by the AI team). The platform
+        # must check recommended_T_out_pred before applying the setpoints; the flag below
+        # is informational only.
         feasible = opt_t_out >= T_OUT_MIN
         if not feasible:
-            raise ThermalSafetyViolationError(
-                f"La recomendación no cumple la restricción térmica para el escenario "
-                f"{context}: T_out predicha = {opt_t_out:.2f} °C < {T_OUT_MIN} °C. "
-                f"Revise que el escenario esté dentro del rango de entrenamiento."
+            logger.warning(
+                "optimize — recomendación con T_out=%.2f °C < %.1f °C (devuelta sin rechazo) para %s",
+                opt_t_out, T_OUT_MIN, context,
             )
 
         current_co2 = current_t_out = saving_vs_current = None
         if current is not None:
             current_co2, current_t_out = predict_scenario(
-                self._model, self._scaler_X, self._scaler_Y, context, current)
+                *bundle, context, current)
             saving_vs_current = round(current_co2 - opt_co2, 4)
             current_co2, current_t_out = round(current_co2, 4), round(current_t_out, 4)
 
@@ -250,22 +251,15 @@ class Ml36DairyDnlCo2EmissionsOptimizerPlugin(ModelPluginPort):
         Same dispatch as predict_inline, keyed off model_key: "optimize" runs one
         decision per CSV row (reusing _run_optimize), anything else runs the MLP.
         """
-        user_temp_dir = None
-        saved = (self._model, self._scaler_X, self._scaler_Y, self._config)
-        if mlflow_run_id:
-            logger.info("predict_batch — using user model from MLflow run_id=%s", mlflow_run_id)
-            loaded = download_user_model_from_mlflow(mlflow_run_id)
-            if loaded:
-                self._model, self._scaler_X, self._scaler_Y, self._config, user_temp_dir = loaded
+        bundle, user_temp_dir = self._resolve_model(mlflow_run_id)
         try:
-            self._require_loaded()
             with local_file_path(data_path) as local_path:
                 df = pd.read_csv(local_path)
 
             if model_key == "optimize":
-                predictions = self._predict_batch_optimize(df)
+                predictions = self._predict_batch_optimize(df, bundle)
             else:
-                predictions = self._predict_batch_estimate(df)
+                predictions = self._predict_batch_estimate(df, bundle)
 
             self._record()
             logger.info(
@@ -276,9 +270,8 @@ class Ml36DairyDnlCo2EmissionsOptimizerPlugin(ModelPluginPort):
         finally:
             if user_temp_dir:
                 shutil.rmtree(user_temp_dir, ignore_errors=True)
-                self._model, self._scaler_X, self._scaler_Y, self._config = saved
 
-    def _predict_batch_estimate(self, df: pd.DataFrame) -> list[dict]:
+    def _predict_batch_estimate(self, df: pd.DataFrame, bundle: tuple) -> list[dict]:
         """MLP digital-twin inference, one CSV row = one sample."""
         missing = [c for c in BASE_FEATURES if c not in df.columns]
         if missing:
@@ -287,7 +280,7 @@ class Ml36DairyDnlCo2EmissionsOptimizerPlugin(ModelPluginPort):
         for idx, row in df.iterrows():
             try:
                 row_dict = row.to_dict()
-                pred = self._run_predict(row_dict)
+                pred = self._run_predict(row_dict, bundle)
                 predictions.append({
                     "row": int(idx),
                     "T_out_pred": pred.T_out_pred,
@@ -299,7 +292,7 @@ class Ml36DairyDnlCo2EmissionsOptimizerPlugin(ModelPluginPort):
                 predictions.append({"row": int(idx), "error": str(exc)})
         return predictions
 
-    def _predict_batch_optimize(self, df: pd.DataFrame) -> list[dict]:
+    def _predict_batch_optimize(self, df: pd.DataFrame, bundle: tuple) -> list[dict]:
         """One decision per context row — same per-row loop as the delivered
         realtime_decision_pipeline (row seed = 42 + i, i from 1 → 43 + row index).
 
@@ -324,7 +317,7 @@ class Ml36DairyDnlCo2EmissionsOptimizerPlugin(ModelPluginPort):
                 for g in GENE_ORDER:
                     if g in df.columns and _present(row[g]):
                         features[g] = float(row[g])
-                pred = self._run_optimize(features).model_dump()
+                pred = self._run_optimize(features, bundle).model_dump()
                 pred.update({"row": int(idx), **{c: features[c] for c in CONTEXT_COLS}})
                 predictions.append(pred)
             except Exception as exc:  # pylint: disable=broad-exception-caught
@@ -334,169 +327,65 @@ class Ml36DairyDnlCo2EmissionsOptimizerPlugin(ModelPluginPort):
 
     # ── train ─────────────────────────────────────────────────────────────────
 
-    @staticmethod
-    def _split_validation(df: pd.DataFrame) -> int:
-        """Return the index where the validation tail starts (rows ``[idx:]`` are hold-out).
+    def train(self, *, data_path: str, mlflow_run_id: str) -> TrainResponse:
+        """Retrain the MLP with the AI team's procedure (see training.py).
 
-        With a ``cycle_id`` column whole cycles stay together (last 15% of cycles);
-        otherwise the last 15% of rows. Tiny datasets validate on the training data.
+        Split by cycle (balanced by season), scalers refitted on train, a new 1x64 MLP trained from
+        scratch with early stopping, metrics on the test split in real units. The model and its
+        scalers live only in their MLflow run (predict with that mlflow_run_id); the served model
+        and its artifacts are never replaced.
         """
-        n = len(df)
-        if "cycle_id" in df.columns:
-            cycles = df["cycle_id"].drop_duplicates().tolist()
-            if len(cycles) >= 3:
-                n_val_cycles = max(1, int(round(len(cycles) * TRAIN_VAL_FRACTION)))
-                val_cycles = set(cycles[-n_val_cycles:])
-                first_val = int(np.argmax(df["cycle_id"].isin(val_cycles).to_numpy()))
-                if 0 < first_val < n:
-                    return first_val
-        if n >= 10:
-            return n - max(1, int(n * TRAIN_VAL_FRACTION))
-        return n
-
-    def train(self, *, data_path: str, mlflow_run_id: str = "") -> TrainResponse:  # noqa: C901  # pylint: disable=too-many-locals,too-many-statements,too-many-branches
-        """Fine-tune the MLP on user data (8 base features + 2 targets required).
-
-        Follows the original recipe (training_model1.final_model): Adam lr=1e-4,
-        MSELoss over both targets, batch_size=128, max 400 epochs, early-stopping
-        patience 30 on a validation hold-out (last 15% of cycles/rows).
-        """
-        import copy  # pylint: disable=import-outside-toplevel
         import json  # pylint: disable=import-outside-toplevel
         import tempfile  # pylint: disable=import-outside-toplevel
         import joblib  # pylint: disable=import-outside-toplevel
-        from torch import nn, optim  # pylint: disable=import-outside-toplevel
-        from torch.utils.data import (  # pylint: disable=import-outside-toplevel
-            DataLoader,
-            TensorDataset,
-        )
 
-        tracker: BaseMLflowTracker | None = None
-        if mlflow_run_id:
+        with local_file_path(data_path) as local_path:
+            df = pd.read_csv(local_path)
+        result = train_model(df)
+        metrics = result["metrics"]
+        flat = {
+            f"{name}_{key}": metrics[target][name]
+            for target, key in (("T_out", "t_out"), ("CO2_emissions", "co2"))
+            for name in ("mae", "mse", "r2")
+        }
+
+        mlflow_tmp = tempfile.mkdtemp(prefix="ml36_mlflow_")
+        try:
             tracker = BaseMLflowTracker(mlflow_run_id)
             tracker.log_params({
                 "epochs_max": TRAIN_EPOCHS, "lr": TRAIN_LR, "optimizer": "Adam",
                 "batch_size": TRAIN_BATCH_SIZE, "patience": TRAIN_PATIENCE,
             })
+            tracker.log_metrics({**flat, "n_train": result["n_train"], "n_val": result["n_val"],
+                                 "n_test": result["n_test"], "epochs_run": result["epochs_run"]})
+            torch.save(result["model"].state_dict(), os.path.join(mlflow_tmp, MODEL_FILENAME))
+            with open(os.path.join(mlflow_tmp, MODEL_CONFIG_FILENAME), "w", encoding="utf-8") as f:
+                json.dump(result["config"], f, indent=4)
+            joblib.dump(result["scaler_x"], os.path.join(mlflow_tmp, SCALER_X_FILENAME))
+            joblib.dump(result["scaler_y"], os.path.join(mlflow_tmp, SCALER_Y_FILENAME))
+            tracker.upload_artifacts(mlflow_tmp, artifact_path="model")
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            logger.error("MLflow artifact upload failed: %s", exc)
+            raise ModelPersistenceError(f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}") from exc
+        finally:
+            shutil.rmtree(mlflow_tmp, ignore_errors=True)
 
-        with local_file_path(data_path) as local_path:
-            df = pd.read_csv(local_path)
-        missing = [c for c in BASE_FEATURES + TARGETS if c not in df.columns]
-        if missing:
-            raise ValueError(f"CSV falta columnas requeridas: {missing}")
-        if len(df) < 2:
-            raise ValueError("Se necesitan al menos 2 filas para el fine-tuning.")
-
-        self._require_loaded()
-        torch.manual_seed(TRAIN_SEED)
-        np.random.seed(TRAIN_SEED)
-
-        x_scaled = self._scaler_X.transform(build_feature_frame(df))
-        y_scaled = self._scaler_Y.transform(df[TARGETS].values)
-
-        split = self._split_validation(df)
-        if split < len(df):
-            x_tr, y_tr = x_scaled[:split], y_scaled[:split]
-            x_val, y_val = x_scaled[split:], y_scaled[split:]
-        else:
-            x_tr, y_tr = x_scaled, y_scaled
-            x_val, y_val = x_scaled, y_scaled
-
-        # Clone weights into a new model instance to avoid mutating the live model
-        fine_model = build_model_from_config(self._config)
-        fine_model.load_state_dict(self._model.state_dict())
-
-        optimizer = optim.Adam(fine_model.parameters(), lr=TRAIN_LR)
-        criterion = nn.MSELoss()
-        loader = DataLoader(
-            TensorDataset(torch.FloatTensor(x_tr), torch.FloatTensor(y_tr)),
-            batch_size=TRAIN_BATCH_SIZE, shuffle=True,
-            # BatchNorm cannot train on a batch of one sample
-            drop_last=len(x_tr) % TRAIN_BATCH_SIZE == 1 and len(x_tr) > 1,
-            generator=torch.Generator().manual_seed(TRAIN_SEED),
-        )
-        x_val_t = torch.FloatTensor(x_val)
-        y_val_t = torch.FloatTensor(y_val)
-
-        best_val = float("inf")
-        best_state = copy.deepcopy(fine_model.state_dict())
-        no_improve = 0
-        epochs_executed = 0
-        for epoch in range(TRAIN_EPOCHS):
-            fine_model.train()
-            for x_batch, y_batch in loader:
-                optimizer.zero_grad()
-                loss = criterion(fine_model(x_batch), y_batch)
-                loss.backward()
-                optimizer.step()
-            fine_model.eval()
-            with torch.no_grad():
-                val_loss = criterion(fine_model(x_val_t), y_val_t).item()
-            if val_loss < best_val:
-                best_val = val_loss
-                best_state = copy.deepcopy(fine_model.state_dict())
-                no_improve = 0
-            else:
-                no_improve += 1
-            epochs_executed = epoch + 1
-            if no_improve >= TRAIN_PATIENCE:
-                break
-
-        fine_model.load_state_dict(best_state)
-        fine_model.eval()
-
-        with torch.no_grad():
-            y_pred_scaled = fine_model(torch.FloatTensor(x_scaled)).numpy()
-        y_pred = self._scaler_Y.inverse_transform(y_pred_scaled)
-        y_real = df[TARGETS].values
-
-        metrics: dict[str, float] = {}
-        for i, key in enumerate(("t_out", "co2")):
-            err = y_real[:, i] - y_pred[:, i]
-            ss_res = float(np.sum(err ** 2))
-            ss_tot = float(np.sum((y_real[:, i] - np.mean(y_real[:, i])) ** 2))
-            metrics[f"mae_{key}"] = float(np.mean(np.abs(err)))
-            metrics[f"mse_{key}"] = float(np.mean(err ** 2))
-            metrics[f"r2_{key}"] = float(1 - ss_res / ss_tot) if ss_tot else 0.0
-
-        # The retrained model lives only in its own MLflow run (predict with that
-        # mlflow_run_id); the served base model and its local artifacts are never replaced.
-        upload_warning = None
-        if not tracker:
-            upload_warning = "Sin run de MLflow: el modelo reentrenado no se ha guardado."
-        else:
-            tracker.log_metrics({**metrics, "n_samples": len(df)})
-            mlflow_tmp = None
-            try:
-                mlflow_tmp = tempfile.mkdtemp(prefix="ml36_mlflow_")
-                torch.save(fine_model.state_dict(), os.path.join(mlflow_tmp, MODEL_FILENAME))
-                with open(os.path.join(mlflow_tmp, MODEL_CONFIG_FILENAME), "w", encoding="utf-8") as f:
-                    json.dump(self._config, f, indent=4)
-                joblib.dump(self._scaler_X, os.path.join(mlflow_tmp, SCALER_X_FILENAME))
-                joblib.dump(self._scaler_Y, os.path.join(mlflow_tmp, SCALER_Y_FILENAME))
-                tracker.upload_artifacts(mlflow_tmp, artifact_path="model")
-            except Exception as exc:  # pylint: disable=broad-exception-caught
-                logger.error("MLflow artifact upload failed: %s", exc)
-                upload_warning = f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}"
-            finally:
-                if mlflow_tmp:
-                    shutil.rmtree(mlflow_tmp, ignore_errors=True)
-
-        logger.info(
-            "train() done — mae_co2=%.4f r2_co2=%.4f n=%d epochs=%d mlflow=%s",
-            metrics["mae_co2"], metrics["r2_co2"], len(df), epochs_executed, bool(mlflow_run_id),
-        )
         return TrainResponse(
-            detail="Fine-tuning completado",
-            mae_t_out=round(metrics["mae_t_out"], 4),
-            mse_t_out=round(metrics["mse_t_out"], 6),
-            r2_t_out=round(metrics["r2_t_out"], 4),
-            mae_co2=round(metrics["mae_co2"], 4),
-            mse_co2=round(metrics["mse_co2"], 6),
-            r2_co2=round(metrics["r2_co2"], 4),
+            detail="Reentrenamiento completado (procedimiento train del equipo de IA); métricas sobre el split de test",
+            mae_t_out=round(flat["mae_t_out"], 4),
+            mse_t_out=round(flat["mse_t_out"], 6),
+            r2_t_out=round(flat["r2_t_out"], 4),
+            mae_co2=round(flat["mae_co2"], 4),
+            mse_co2=round(flat["mse_co2"], 6),
+            r2_co2=round(flat["r2_co2"], 4),
             n_samples=int(len(df)),
-            epochs_executed=int(epochs_executed),
-            upload_warning=upload_warning,
+            n_train=result["n_train"],
+            n_val=result["n_val"],
+            n_test=result["n_test"],
+            epochs_executed=result["epochs_run"],
+            best_val_loss=result["best_val_loss"],
+            training_time_s=result["training_time_s"],
+            upload_warning=None,
         )
 
     # ── stats ─────────────────────────────────────────────────────────────────
@@ -509,8 +398,9 @@ class Ml36DairyDnlCo2EmissionsOptimizerPlugin(ModelPluginPort):
                 "Gemelo digital MLP (PyTorch) + algoritmo genético por instancia (DEAP) para "
                 "reducir las emisiones de CO2 en la pasteurización láctea sin comprometer la "
                 "seguridad térmica. Modo inline: predice T_out y CO2_emissions. Modo optimize: "
-                "recomienda setpoints (T_serv, Delta_P, Regeneration_perc) con restricción "
-                "T_out >= 72.5 °C."
+                "recomienda setpoints (T_serv, Delta_P, Regeneration_perc) penalizando T_out < "
+                "72.5 °C dentro del GA; la plataforma debe validar recommended_T_out_pred >= "
+                "72.5 °C antes de aplicar los setpoints."
             ),
             task_type="regression_prescriptive",
             framework=FRAMEWORK,
@@ -522,14 +412,14 @@ class Ml36DairyDnlCo2EmissionsOptimizerPlugin(ModelPluginPort):
                 InputField(name="Fat_perc", type="float",
                            description="% de grasa del lote [inline y optimize]"),
                 InputField(name="Viscosity", type="float",
-                           description="Viscosidad dinámica de la leche [inline y optimize]"),
+                           description="Viscosidad dinámica de la leche (cP) [inline y optimize]"),
                 InputField(name="t_ciclo", type="float",
                            description="Tiempo desde el inicio del ciclo (min) [inline y optimize]"),
                 InputField(name="T_serv", type="float",
                            description="Temperatura del líquido de calentamiento (°C) "
                                        "[inline; en optimize opcional = operación actual]"),
                 InputField(name="Delta_P", type="float",
-                           description="Presión de impulsión de las bombas "
+                           description="Presión de impulsión de las bombas (bar) "
                                        "[inline; en optimize opcional = operación actual]"),
                 InputField(name="Regeneration_perc", type="float",
                            description="Eficiencia de regeneración térmica (%) "

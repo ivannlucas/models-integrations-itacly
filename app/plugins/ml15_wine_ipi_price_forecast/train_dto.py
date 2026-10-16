@@ -1,7 +1,7 @@
 """Pydantic request/response DTOs for the ml15 /train endpoint."""
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.application.dto.train_dto import MlflowRunId
+from app.application.dto.base_version_dto import VersionInfo
 
 
 class TrainRequest(BaseModel):
@@ -21,11 +21,26 @@ class TrainRequest(BaseModel):
             "Ridge(alpha=25.0)) con las filas cuyo objetivo cae antes de la validación."
         ),
     )
-    mlflow_run_id: MlflowRunId = Field(
-        ...,
+    mlflow_run_id: str = Field(
+        default="",
         description=(
-            "Run de MLflow donde se persiste el modelo reentrenado. Obligatorio: el artefacto "
-            "base nunca se sobrescribe."
+            "Run de MLflow opcional: si se indica, el modelo reentrenado también se guarda en él "
+            "(trazabilidad). Con o sin run, el modelo reentrenado pasa a ser el modelo base."
+        ),
+    )
+    reference_prices_path: str = Field(
+        default="",
+        description=(
+            "Opcional, junto con reference_financial_path: CSV mensual con el mismo formato que "
+            "global_phytosanitary_prices_b2020.csv. Si se indica, pasa a ser el histórico de "
+            "referencia del modelo base nuevo (lags del IPI y exógenas al predecir solo con el IPI)."
+        ),
+    )
+    reference_financial_path: str = Field(
+        default="",
+        description=(
+            "Opcional, junto con reference_prices_path: CSV mensual con el mismo formato que "
+            "financial_proxies_monthly.csv (cobre, Brent, EUR/USD, IYM)."
         ),
     )
 
@@ -55,3 +70,4 @@ class TrainResponse(BaseModel):
     mape_reduction_pct: float | None = None
     training_time_s: float
     upload_warning: str | None = None
+    base_version: VersionInfo | None = None

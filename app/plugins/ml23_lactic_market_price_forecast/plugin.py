@@ -22,10 +22,12 @@ import torch
 
 from app.application.dto.stats_dto import InputField, OutputField, RuntimeStats, StatsResponse
 from app.domain.ports.model_plugin_port import ModelPluginPort
-from app.domain.services.exceptions import ModelNotLoadedError, ModelPersistenceError
+from app.domain.services.exceptions import ModelNotLoadedError
 from app.domain.services.mlflow_tracker import BaseMLflowTracker
 from app.infrastructure.artifact_store import local_file_path
+from app.infrastructure.base_model_publisher import persist_retrained_bundle
 from app.plugins.ml23_lactic_market_price_forecast.constants import (
+    ARTIFACT_FOLDER_NAME,
     FRAMEWORK,
     MODEL_ID,
     TRAIN_BATCH_SIZE,
@@ -109,6 +111,8 @@ def _xai_values_from_row(row, feature_cols: list[str]) -> dict[str, float]:
 
 class Ml23LacticMarketPriceForecastPlugin(ModelPluginPort):
     """GRU plugin for monthly dairy price forecasting at 6-month horizon."""
+
+    BASE_ARTIFACT_FOLDER = ARTIFACT_FOLDER_NAME   # every /train publishes the new base model
 
     def __init__(self) -> None:
         """Initialize unloaded plugin with empty runtime counters."""
@@ -304,11 +308,9 @@ class Ml23LacticMarketPriceForecastPlugin(ModelPluginPort):
 
         Does not re-run the full model search (Naive/Drift/XGBoost/LSTM/GRU compared
         across CV folds) that originally selected GRU — see training.py module docstring.
-        The refit checkpoint is written only to a temp dir and uploaded to MLflow; the
-        served artifacts/.../gru_model.pt is never overwritten.
+        The refit bundle is published as the new base model version (never overwriting a previous one) and, if mlflow_run_id is given, also uploaded to that run.
         """
         upload_dir = Path(tempfile.mkdtemp(prefix="ml23_train_upload_"))
-        upload_warning = None
         try:
             with local_file_path(data_path) as local_path:
                 raw_df = pd.read_csv(local_path, parse_dates=["fecha"])
@@ -362,22 +364,17 @@ class Ml23LacticMarketPriceForecastPlugin(ModelPluginPort):
             n_train = int(len(train_X))
             n_test = int(len(test_X))
 
-            if not mlflow_run_id:
-                raise ModelPersistenceError("Sin run de MLflow: el modelo reentrenado no se ha guardado.")
-            else:
-                try:
-                    upload_artifacts_to_mlflow(
-                        str(upload_dir), mlflow_run_id,
-                        metrics={
-                            "mae": test_metrics["MAE"], "rmse": test_metrics["RMSE"],
-                            "mape_pct": test_metrics["MAPE_pct"], "r2": test_metrics["R2"],
-                            "direction_acc_pct": test_metrics["direction_acc_pct"],
-                            "n_train": n_train, "n_test": n_test,
-                        },
-                    )
-                except Exception as exc:  # pylint: disable=broad-exception-caught
-                    logger.error("MLflow artifact upload failed: %s", exc)
-                    raise ModelPersistenceError(f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}") from exc
+            metrics = {
+                "mae": test_metrics["MAE"], "rmse": test_metrics["RMSE"],
+                "mape_pct": test_metrics["MAPE_pct"], "r2": test_metrics["R2"],
+                "direction_acc_pct": test_metrics["direction_acc_pct"],
+                "n_train": n_train, "n_test": n_test,
+            }
+            persisted = persist_retrained_bundle(
+                str(upload_dir), artifact_folder=ARTIFACT_FOLDER_NAME, data_path=data_path,
+                metrics=metrics, mlflow_run_id=mlflow_run_id,
+                upload_to_mlflow=lambda: upload_artifacts_to_mlflow(str(upload_dir), mlflow_run_id, metrics=metrics),
+            )
 
             logger.info(
                 "train() done — mae=%.4f rmse=%.4f r2=%.4f n_train=%d n_test=%d time=%.1fs",
@@ -385,7 +382,7 @@ class Ml23LacticMarketPriceForecastPlugin(ModelPluginPort):
                 n_train, n_test, elapsed_s,
             )
             return TrainResponse(
-                detail="Reentrenamiento completado",
+                detail=f"Reentrenamiento completado — modelo base {persisted.base_version['version']}.",
                 mae=round(test_metrics["MAE"], 4),
                 rmse=round(test_metrics["RMSE"], 4),
                 mape_pct=test_metrics["MAPE_pct"],
@@ -394,7 +391,8 @@ class Ml23LacticMarketPriceForecastPlugin(ModelPluginPort):
                 n_train=n_train,
                 n_test=n_test,
                 training_time_s=round(elapsed_s, 1),
-                upload_warning=upload_warning,
+                upload_warning=persisted.upload_warning,
+                base_version=persisted.base_version,
             )
         finally:
             shutil.rmtree(upload_dir, ignore_errors=True)

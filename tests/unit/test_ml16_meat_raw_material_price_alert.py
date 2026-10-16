@@ -81,8 +81,7 @@ def test_train(client):
     assert body["n_test_rows"] > 0
 
 
-def test_train_requires_mlflow_run_id(client):
-    """mlflow_run_id is mandatory — every retrain must be persisted to a specific MLflow
-    run (never discarded, never overwriting the fixed base artifact)."""
+def test_train_without_mlflow_run_id_is_accepted(client):
+    """mlflow_run_id is optional: every /train publishes the new base model (spec 2026-10-14)."""
     resp = client.post(f"{PREFIX}/train", json={"data_path": "/tmp/dataset_base.csv"})
-    assert resp.status_code == 422
+    assert resp.status_code == 200

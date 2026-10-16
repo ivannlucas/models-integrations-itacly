@@ -1,7 +1,7 @@
 """Pydantic request/response DTOs for the ml16 /train endpoint."""
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.application.dto.train_dto import MlflowRunId
+from app.application.dto.base_version_dto import VersionInfo
 
 
 class TrainRequest(BaseModel):
@@ -19,7 +19,13 @@ class TrainRequest(BaseModel):
             "(walk-forward CV + búsqueda de umbral + bagging bootstrap)."
         ),
     )
-    mlflow_run_id: MlflowRunId
+    mlflow_run_id: str = Field(
+        default="",
+        description=(
+            "Run de MLflow opcional: si se indica, el modelo reentrenado también se guarda en él "
+            "(trazabilidad). Con o sin run, el modelo reentrenado pasa a ser el modelo base."
+        ),
+    )
 
 
 class TrainResponse(BaseModel):
@@ -42,3 +48,4 @@ class TrainResponse(BaseModel):
     target_insumos_f1: float
     target_insumos_auc: float
     upload_warning: str | None = None
+    base_version: VersionInfo | None = None

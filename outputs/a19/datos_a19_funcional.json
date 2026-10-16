@@ -1,0 +1,42 @@
+{
+  "model_id": "a19",
+  "model_slug": "cereals-cost-forecast",
+  "fecha": "Octubre 2026",
+  "descripcion": "Te da una señal mensual sobre hacia dónde puede moverse el precio del cereal a granel (trigo, cebada, maíz) en el mercado español, a 1, 2 y 3 meses vista: si es previsible que suba, que baje, o que se mantenga estable, junto con un indicador de cuánta confianza tiene esa señal.",
+  "objetivo": "Ayudarte a decidir cuándo comprar, cubrir riesgo o esperar en tus operaciones de materia prima cerealista, anticipando con antelación de 1 a 3 meses si el precio tiende a subir o a bajar, en vez de reaccionar solo cuando el movimiento ya ha ocurrido.",
+  "caso_uso": "Consultas el servicio (sin necesidad de aportar ningún dato tuyo) y te devuelve, para el mes más reciente disponible o para un mes concreto que le indiques, una señal por cada horizonte (1, 2 y 3 meses): una previsión de subida o bajada esperada, y si esa previsión viene respaldada con alta o baja confianza. Lo normal es consultarlo de forma periódica, como un indicador más dentro de tu proceso de decisión de compra o cobertura — nunca como una orden automática.",
+  "que_no_responde": "No te da un precio exacto futuro ni una garantía de que el movimiento vaya a ocurrir — da una señal de ayuda a la decisión, con su propio indicador de confianza, no una certeza.",
+  "entradas_contexto": "No necesitas aportar ningún dato tuyo: el servicio consulta internamente un conjunto de datos de mercado ya preparado (precios pagados al agricultor, clima, costes de producción, mercados internacionales) y actualizado hasta la fecha de la última entrega del modelo.",
+  "inputs": [
+    {"nombre": "Mes a consultar (opcional)", "descripcion": "Si quieres la señal del mes más reciente disponible, no hace falta que indiques nada. Si quieres consultar un mes concreto del histórico, lo indicas en formato año-mes."}
+  ],
+  "outputs": [
+    {"nombre": "Previsión de magnitud (retorno esperado)", "descripcion": "Un porcentaje que estima cuánto puede moverse el precio medio del cereal en ese horizonte.", "interpretacion": "Un valor positivo apunta a subida, uno negativo a bajada; cuanto mayor el valor absoluto, mayor el movimiento esperado."},
+    {"nombre": "Probabilidad de subida", "descripcion": "Un porcentaje que estima cuán probable es que el precio suba en ese horizonte.", "interpretacion": "Por encima del 50% apunta a subida, por debajo a bajada; cuanto más se aleje del 50%, más clara es la tendencia estimada."},
+    {"nombre": "Señal final y confianza", "descripcion": "La conclusión combinada: LONG (subida esperada), SHORT (bajada esperada) o FLAT (sin tendencia clara), junto con un indicador de confianza ALTA o BAJA.", "interpretacion": "Confianza ALTA significa que la previsión de magnitud y la de probabilidad apuntan en la misma dirección; BAJA significa que discrepan entre sí, así que conviene tratar esa señal con más cautela."}
+  ],
+  "ejemplo_interpretacion": "Si para el horizonte de 1 mes el servicio devuelve una señal LONG con confianza ALTA, significa que tanto la estimación de magnitud como la de probabilidad coinciden en que el precio tenderá a subir el próximo mes — es la situación en la que más puedes apoyarte en la señal. Si en cambio devuelve FLAT con confianza BAJA, las dos estimaciones no se ponen de acuerdo: trátalo como 'sin tendencia clara' y apóyate en tu propio criterio o en otras fuentes.",
+  "margen_error": "En el horizonte de 1 mes, la dirección prevista acierta en torno al 81% de los meses analizados en el histórico de prueba (2020-2025); en los horizontes de 2 y 3 meses el acierto es algo menor y además se apoya en menos observaciones independientes, así que trátalos como una referencia orientativa, más que como el horizonte de mayor fiabilidad.",
+  "revisar_manualmente": [
+    "Cuando la confianza sea BAJA (la previsión de magnitud y la de probabilidad discrepan): no actúes solo con esa señal, contrástala con otro criterio.",
+    "Durante crisis de mercado evidentes (conflictos bélicos en zonas productoras clave, cambios normativos importantes como reformas de la PAC o nuevos aranceles): el modelo no detecta estos eventos y su señal puede quedar desactualizada hasta el siguiente reentrenamiento.",
+    "Si notas que el servicio lleva meses sin actualizar su fecha más reciente: el dataset que usa internamente se actualiza de forma manual y periódica, no en tiempo real — confirma con el equipo responsable cuándo fue la última actualización antes de confiar en la señal para decisiones importantes."
+  ],
+  "que_no_hace": [
+    "No ejecuta compras, ventas ni coberturas por ti — solo te da una señal informativa.",
+    "No sustituye el análisis fundamental de mercado ni el criterio de un experto en materias primas.",
+    "No se actualiza en tiempo real: la señal se basa en un dataset que requiere mantenimiento manual periódico, no en un flujo de datos en vivo.",
+    "No avisa automáticamente de picos de volatilidad extrema ni filtra sus propias señales por nivel de probabilidad — a pesar de que la documentación del proyecto menciona estas salvaguardas, no están implementadas en el motor de predicción que usa este servicio; revísalo manualmente en los casos de la lista anterior."
+  ],
+  "puede_equivocarse": "Sí, puede equivocarse — en el histórico de prueba acierta la dirección del precio entre 7 y 8 de cada 10 meses según el horizonte, lo que es claramente mejor que el azar, pero no es infalible. Es una ayuda para apoyar tu decisión, no una garantía de resultado.",
+  "kpis": [
+    {"kpi": "Exactitud direccional a 1 mes", "valor_umbral": ">= 60%", "descripcion": "El umbral mínimo para que la señal aporte una ventaja real frente a decidir al azar; el resultado obtenido (80,9%) lo supera con amplio margen."},
+    {"kpi": "Ratio de rentabilidad ajustada al riesgo (Sharpe) a 1 mes", "valor_umbral": ">= 1.0", "descripcion": "Garantiza que seguir la señal compensa la volatilidad de actuar sobre ella; el resultado obtenido (2,61) lo supera con amplio margen."},
+    {"kpi": "Capacidad discriminativa de la clasificación (AUC-ROC)", "valor_umbral": ">= 0.65", "descripcion": "Asegura que el modelo distingue subida de bajada de forma consistentemente mejor que el azar en los tres horizontes."}
+  ],
+  "limitaciones": [
+    {"tipo": "El dato de mercado que usa no se actualiza solo", "descripcion": "El servicio consulta un conjunto de datos ya preparado que se queda fijo en la fecha de la última entrega del modelo. Mantenerlo al día requiere una actualización manual periódica por parte del equipo responsable, no ocurre automáticamente."},
+    {"tipo": "No hay reentrenamiento bajo demanda", "descripcion": "No puedes pedirle al servicio que se reentrene con tus propios datos — el procedimiento de entrenamiento original siempre usa su propio conjunto de datos de mercado, nunca uno que tú aportes."},
+    {"tipo": "Los horizontes de 2 y 3 meses son más orientativos", "descripcion": "Se apoyan en menos casos históricos independientes que el de 1 mes, así que trátalos con algo más de cautela."}
+  ]
+}

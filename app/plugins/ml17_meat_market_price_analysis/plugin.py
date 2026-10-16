@@ -2,7 +2,7 @@
 
 Predicts pork class E Spain price at t+1 (€/100 kg) from 6 exogenous features
 plus auto-computed month_sin/cos derived from a reference date. ``train()`` refits the
-Ridge pipeline on user data and persists the result exclusively to MLflow (see train()).
+Ridge pipeline and publishes it as the new base model (see train()).
 """
 from __future__ import annotations
 
@@ -19,10 +19,12 @@ import pandas as pd
 
 from app.application.dto.stats_dto import InputField, OutputField, RuntimeStats, StatsResponse
 from app.domain.ports.model_plugin_port import ModelPluginPort
-from app.domain.services.exceptions import ModelNotLoadedError, ModelPersistenceError
+from app.domain.services.exceptions import ModelNotLoadedError
 from app.domain.services.mlflow_tracker import BaseMLflowTracker
 from app.infrastructure.artifact_store import local_file_path
+from app.infrastructure.base_model_publisher import persist_retrained_bundle
 from app.plugins.ml17_meat_market_price_analysis.constants import (
+    ARTIFACT_FOLDER_NAME,
     FEATURE_COLUMNS,
     FRAMEWORK,
     IMPUTER_STRATEGY,
@@ -114,6 +116,8 @@ def _seasonal_from_row(row: dict) -> tuple[float, float]:
 
 class Ml17MeatMarketPriceAnalysisPlugin(ModelPluginPort):
     """Ridge regression plugin for pork price forecasting (official_v1_4)."""
+
+    BASE_ARTIFACT_FOLDER = ARTIFACT_FOLDER_NAME   # every /train publishes the new base model
 
     def __init__(self) -> None:
         """Initialize unloaded plugin with empty runtime counters."""
@@ -267,9 +271,9 @@ class Ml17MeatMarketPriceAnalysisPlugin(ModelPluginPort):
         src/cu05/models/ridge.py::build_ridge_pipeline from the delivered code): a fresh
         ColumnTransformer(SimpleImputer(median) -> StandardScaler) + Ridge(alpha=RIDGE_ALPHA)
         pipeline fit on X=features[:-1], y=target[1:]. The refit pipeline is a brand-new
-        object — self._model (the fixed S3 artifact served by default) is never mutated.
-        The result is persisted ONLY to the caller's MLflow run — the fixed base artifact is
-        never overwritten, matching the repo-wide convention for user retraining.
+        object — self._model is never mutated. It is published as the new base model version
+        (persist_retrained_bundle) and, if mlflow_run_id is given, also saved to that run; the
+        container then serves the new base.
         """
         # pylint: disable=import-outside-toplevel
         from sklearn.compose import ColumnTransformer
@@ -281,11 +285,6 @@ class Ml17MeatMarketPriceAnalysisPlugin(ModelPluginPort):
         # pylint: enable=import-outside-toplevel
 
         tracker = BaseMLflowTracker(mlflow_run_id)
-        tracker.log_params({
-            "alpha": RIDGE_ALPHA,
-            "imputer_strategy": IMPUTER_STRATEGY,
-            "scaler": "StandardScaler",
-        })
 
         with local_file_path(data_path) as local_path:
             df = pd.read_csv(local_path)
@@ -340,38 +339,48 @@ class Ml17MeatMarketPriceAnalysisPlugin(ModelPluginPort):
             if np.any(valid_mask) else None
         )
 
-        upload_warning = None
-        tracker.log_metrics({
+        metrics = {
             "mae": mae,
             "rmse": rmse,
             "n_samples": len(X_train),
             **({"mase": mase} if mase is not None else {}),
             **({"r2_train": r2_train} if r2_train is not None else {}),
             **({"directional_accuracy": directional_accuracy} if directional_accuracy is not None else {}),
-        })
+        }
+        bundle_dir = tempfile.mkdtemp(prefix="ml17_train_")
         try:
-            mlflow_tmp = tempfile.mkdtemp(prefix="ml17_mlflow_")
-            joblib.dump(new_model, f"{mlflow_tmp}/{MODEL_FILENAME}")
-            tracker.upload_artifacts(mlflow_tmp, artifact_path="model")
-            shutil.rmtree(mlflow_tmp, ignore_errors=True)
-        except Exception as exc:  # pylint: disable=broad-exception-caught
-            logger.error("MLflow artifact upload failed: %s", exc)
-            raise ModelPersistenceError(f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}") from exc
+            joblib.dump(new_model, f"{bundle_dir}/{MODEL_FILENAME}")
+
+            def _upload_to_mlflow() -> None:
+                tracker.log_params({
+                    "alpha": RIDGE_ALPHA,
+                    "imputer_strategy": IMPUTER_STRATEGY,
+                    "scaler": "StandardScaler",
+                })
+                tracker.log_metrics(metrics)
+                tracker.upload_artifacts(bundle_dir, artifact_path="model")
+
+            persisted = persist_retrained_bundle(
+                bundle_dir, artifact_folder=ARTIFACT_FOLDER_NAME, data_path=data_path,
+                metrics=metrics, mlflow_run_id=mlflow_run_id, upload_to_mlflow=_upload_to_mlflow,
+            )
+        finally:
+            shutil.rmtree(bundle_dir, ignore_errors=True)
 
         logger.info(
             "train() done — mae=%.4f rmse=%.4f n=%d mlflow_run_id=%s",
             mae, rmse, len(X_train), mlflow_run_id,
         )
         return TrainResponse(
-            detail="Reentrenamiento completado — modelo persistido en MLflow run "
-                   f"{mlflow_run_id} (el artefacto fijo S3 no se ha modificado).",
+            detail=f"Reentrenamiento completado — modelo base {persisted.base_version['version']}.",
             mae=round(mae, 4),
             rmse=round(rmse, 4),
             mase=round(mase, 4) if mase is not None else None,
             r2_train=round(r2_train, 4) if r2_train is not None else None,
             directional_accuracy=round(directional_accuracy, 4) if directional_accuracy is not None else None,
             n_samples=int(len(X_train)),
-            upload_warning=upload_warning,
+            upload_warning=persisted.upload_warning,
+            base_version=persisted.base_version,
         )
 
     def stats(self, mlflow_run_id: str = "") -> StatsResponse:

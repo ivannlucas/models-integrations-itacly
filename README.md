@@ -167,6 +167,25 @@ Available endpoints (from current implementation):
 
 - `GET /` → returns a JSON welcome message.
 
+### Modelo base versionado (ml13, 14, 15, 16, 17, 18, 21, 23)
+
+- `POST /models/<id>/train` — `mlflow_run_id` opcional. Cada reentreno correcto se publica como
+  nueva versión del modelo base (`artifacts/fixed/<carpeta>/versions/<vN>/`, puntero
+  `current.json`) y se sirve al momento. La respuesta incluye `base_version`. Si la subida al run
+  de MLflow falla, la base se publica igual y `upload_warning` lo indica.
+- `POST /models/<id>/rollback` — cuerpo opcional `{"version": "v2"}`; sin cuerpo vuelve a la
+  versión anterior. 404 si la versión no existe, 409 si la vigente es v0, 501 en los demás modelos.
+- `GET /models/<id>/stats` — incluye `base_version` (versión, padre, run, fecha, métricas).
+- Si la versión vigente no carga al arrancar, el modelo responde 503 (no hay `/rollback` posible):
+  se recupera apuntando `artifacts/fixed/<carpeta>/current.json` a la versión anterior (p. ej.
+  `{"version": "v2"}`) y reiniciando.
+- ml15 acepta además `reference_prices_path` y `reference_financial_path` (juntos) para renovar
+  sus históricos exógenos de referencia; ml21 publica el CSV de entrenamiento como su panel.
+- `/train` solo lo llama un entorno controlado (un script con una secuencia fija según la
+  degradación esperada de cada modelo). Desde la plataforma estos modelos solo predicen, y no
+  tienen explicabilidad (SHAP) ni detección de drift (ODD). Operación y baja en los demás repos:
+  §9 de `docs/superpowers/specs/2026-10-14-reentreno-actualiza-base-design.md`.
+
 ## Tests
 
 **Use one test file for each module. It should be named test_your_module_name.**

@@ -17,6 +17,11 @@ integrar.
 
 ## Requisito previo
 
+> ⚠ **No aplica a los modelos con `BASE_ARTIFACT_FOLDER`** (ml13, 14, 15, 16, 17, 18, 21 y 23).
+> No tienen explicabilidad: su modelo base cambia con cada reentreno y este servicio solo lee la
+> v0. Si alguno sigue registrado, se da de baja. Ver §9 de
+> `docs/superpowers/specs/2026-10-14-reentreno-actualiza-base-design.md`.
+
 El plugin debe estar integrado (skill `plugin-integration`) y verificado en verde (skill
 `verification`) en **este** repo. Si `outputs/<model_id>/verification_report.md` no existe o no
 dice "LISTO PARA PR", para y avisa.

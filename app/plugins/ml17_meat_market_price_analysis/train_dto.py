@@ -1,11 +1,11 @@
 """Train DTOs for ml17 — Ridge pork price forecast retraining."""
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.application.dto.train_dto import MlflowRunId
+from app.application.dto.base_version_dto import VersionInfo
 
 
 class TrainRequest(BaseModel):
-    """Retrain request: CSV with the 8 official_v1_4 columns + mandatory MLflow run."""
+    """Retrain request: CSV with the 8 official_v1_4 columns; MLflow run optional."""
 
     model_config = ConfigDict(protected_namespaces=())
     data_path: str = Field(
@@ -18,12 +18,11 @@ class TrainRequest(BaseModel):
             "cronológicamente, mínimo 2 filas (supervisión one-step-ahead t -> t+1)."
         ),
     )
-    mlflow_run_id: MlflowRunId = Field(
-        ...,
+    mlflow_run_id: str = Field(
+        default="",
         description=(
-            "Run de MLflow donde se persiste el modelo reentrenado. Obligatorio: el "
-            "artefacto fijo servido desde S3 nunca se sobrescribe con un reentrenamiento "
-            "de usuario — el resultado de este train() solo vive en este run de MLflow."
+            "Run de MLflow opcional: si se indica, el modelo reentrenado también se guarda en él "
+            "(trazabilidad). Con o sin run, el modelo reentrenado pasa a ser el modelo base."
         ),
     )
 
@@ -46,4 +45,7 @@ class TrainResponse(BaseModel):
     n_samples: int = Field(..., description="Número de pares (t, t+1) usados para el ajuste")
     upload_warning: str | None = Field(
         default=None, description="Aviso si el modelo reentrenado no se ha podido guardar en MLflow"
+    )
+    base_version: VersionInfo | None = Field(
+        default=None, description="Versión del modelo base publicada por este reentreno"
     )

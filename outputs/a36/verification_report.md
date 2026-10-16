@@ -55,3 +55,44 @@ numpy no está fijado en `requirements.txt`; confirmar en el build real de CI.
 ## Aclaración sobre el manifest
 La nota de los casos `optimize_*` decía que el CO2 recomendado era <= al de la política. Es incorrecto (corregido en el manifest):
 el GA adaptativo se reproduce exactamente con la semilla 43 + índice de fila.
+
+## Addendum — Revisión contra el código original actualizado (2026-10-14)
+
+`inbox/a36/codigo/` se ha actualizado con el código original. El repo GitHub tenía una versión de ml36 anterior a la de Bitbucket (merge de los modelos 36/48), sin los arreglos del contrato MLflow; se alinean y se cierran los gaps.
+
+**Contrato MLflow — [CORREGIDO en GitHub]:** `mlflow_run_id` obligatorio; un run sin modelo completo da 422 (`@require_user_model`, sin caer al modelo base y limpiando el directorio temporal); un fallo de subida da 502 (`ModelPersistenceError`); el modelo del usuario se resuelve en variables locales, nunca en `self` (peticiones concurrentes). Los 5 tests transversales que fallaban (`test_mlflow_persistence_contract`, `test_user_model_download_hygiene`) pasan.
+
+**Restricción térmica — [RESUELTO]:** la versión GitHub rechazaba con 422 (`ThermalSafetyViolationError`) las recomendaciones con `T_out < 72,5 °C`. El original no lo hace: `run_realtime_decision_pipeline` devuelve siempre el mejor individuo del GA (la restricción solo penaliza el fitness). Se mantiene el comportamiento de Bitbucket (06/10, confirmado con el equipo de IA): `recommended_factible` es informativo y la plataforma debe validarlo. ml34 conserva su 422.
+
+**Unidades:** `Delta_P` en bar y `Viscosity` en cP, confirmadas por el simulador (`potencia_bomba = Q · delta_p · 100000 Pa`; viscosidad ≈ 2 mPa·s).
+
+**Inferencia (artefactos de S3, MD5 = entregados):**
+
+| Comprobación | Resultado |
+|---|---|
+| Predict 18 golden vs modelo del equipo | **PASS 18/18** (dif. ≤ 5e-5, redondeo a 4 decimales) |
+| Test completo (7704 filas) vía `predict_batch` | **PASS** — T_out MAE 0,019092 / R² 0,999492; CO2 MAE 0,307588 / R² 0,895145 (= memoria) |
+| Optimize 4 golden (política estática y GA hybrid, semilla 43 + fila) | **PASS 4/4** (dif. ≤ 5e-5) |
+| `predict_batch` optimize, 25 primeras filas de validación vs `realtime_decisions.csv` | **PASS** (dif. ≤ 5e-5) |
+
+**Reentrenamiento — [CORREGIDO]:** `/train` hacía un *fine-tuning* de los pesos servidos con los scalers servidos, validaba con el último 15 % de filas y calculaba las métricas sobre todo el CSV (sin test aparte). Ahora es el port de `split_normalization.py` + `trainer.py` (`training.py`):
+
+- split 70/15/15 por ciclo (`cycle_id` o reinicios de `t_ciclo`), equilibrado por estación si hay columna de estación, mes o fecha, con `default_rng(42)`;
+- StandardScaler y MinMaxScaler ajustados en train; el modelo y sus scalers se suben al run de MLflow;
+- MLP nuevo 1×64 ReLU, dropout 0,1, semilla 1 + 500, Adam 1e-4, MSE, batch 128, hasta 400 épocas con paciencia 30;
+- métricas en el split de test en unidades reales; la respuesta añade `n_train`, `n_val`, `n_test`, `best_val_loss` y `training_time_s`.
+
+| Comprobación con `df_pasteurizacion_master.csv` (51 389 filas) | Resultado |
+|---|---|
+| Split vs `train/val/test_raw.csv` | **PASS** — 35 930 / 7 755 / 7 704, mismas filas y orden (dif. 6,6e-24, round-trip CSV) |
+| `scaler_X` / `scaler_Y` vs entregados | **PASS** — idénticos |
+| Épocas y mejor val_loss | **PASS** — 131 épocas, 0,00081977 (= `final_training_history.json`) |
+| Métricas de test vs `final_test_metrics.json` | **PASS** — T_out MAE 0,019090 / R² 0,999492; CO2 MAE 0,307590 / R² 0,895144 (entregado 0,019092 / 0,999492 / 0,307587 / 0,895145) |
+| Pesos vs `MLP_Final_Best_From_Search.pt` | dif. máx. 4e-3: entradas idénticas en float32; la diferencia es de la aritmética de otra versión de torch/BLAS |
+| `train()` → MLflow (simulado) | **PASS** — sube pesos, config y los scalers nuevos; un fallo de subida da `ModelPersistenceError` |
+
+Duración: 60 s en CPU. Desviaciones deliberadas (documentadas en `training.py`): features = `FEATURE_ORDER` fijo; siempre CPU; sin `torch.use_deterministic_algorithms` (global al proceso); se descarta un último batch de 1 muestra (BatchNorm); la política global GA no se recalcula (el modo optimize usa la de los artefactos base).
+
+**Tests:** `tests/unit/test_ml36_training.py` (nuevo, 11 tests, incluido el de reproducción con los datos entregados) y el de cableado: 24/24. Suite GitHub: 997 passed. Bitbucket (copia): 1003 passed, 3 skipped. flake8 limpio.
+
+**Pendiente:** `/train` contra un servidor MLflow real. [CORREGIDO] Las fichas de a36 sí estaban en S3 (`ml-files/modelo-36/`): se han revisado contra el código y los datos (cifras verificadas) y se han regenerado en `.docx` con la plantilla (`datos_a36.json`), añadiendo la verificación del reentrenamiento a la ficha técnica.

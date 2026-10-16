@@ -5,6 +5,8 @@ from typing import Any, Optional
 
 from pydantic import BaseModel, ConfigDict
 
+from app.application.dto.base_version_dto import VersionInfo
+
 
 class InputField(BaseModel):
     """Describes a single input feature expected by the model."""
@@ -47,3 +49,4 @@ class StatsResponse(BaseModel):
     outputs: list[OutputField]
     metrics: dict[str, Any]
     runtime_stats: RuntimeStats
+    base_version: Optional[VersionInfo] = None

@@ -137,3 +137,18 @@ def test_download_cleans_temp_dir_when_run_has_no_model(module, func_name, empty
     assert created, f"{func_name} did not create a temp dir — test no longer exercises it"
     leaked = [p for p in created if pathlib.Path(p).exists()]
     assert not leaked, f"{func_name} left temp dirs behind: {leaked}"
+
+
+@pytest.mark.parametrize("plugin_file", sorted(PLUGINS_DIR.glob("*/plugin.py")), ids=lambda p: p.parent.name)
+def test_train_never_reloads_the_served_model(plugin_file):
+    """train() must leave the served model alone: the retrained one lives only in its MLflow run.
+
+    A self.load() at the end of train() reloads the base artifacts, not the new model, so it only
+    re-downloads/rebuilds state that concurrent predictions are reading, and turns a successful
+    retraining into an error if the base artifacts are briefly unavailable.
+    """
+    offenders = []
+    for cls in (n for n in ast.parse(plugin_file.read_text(encoding="utf-8")).body if isinstance(n, ast.ClassDef)):
+        for fn in (n for n in cls.body if isinstance(n, ast.FunctionDef) and n.name == "train"):
+            offenders += [f"self.{name}()" for name in _self_method_calls(fn) if name in ("load", "_load", "reload")]
+    assert not offenders, f"{plugin_file.parent.name}.train() recarga el modelo servido: {offenders}"

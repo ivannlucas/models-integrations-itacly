@@ -59,13 +59,13 @@ class PredictInlineRequest(BaseModel):
     F_milk: float = Field(..., description="Caudal volumétrico de leche (L/h)")
     T_in: float = Field(..., description="Temperatura de entrada de la leche (°C)")
     Fat_perc: float = Field(..., description="% de grasa del lote de leche")
-    Viscosity: float = Field(..., description="Viscosidad dinámica de la leche")
+    Viscosity: float = Field(..., description="Viscosidad dinámica de la leche (cP)")
     t_ciclo: float = Field(..., description="Tiempo transcurrido desde el inicio del ciclo (min)")
 
     # Controllable variables — all three required for the MLP prediction; optional in
     # optimize (the GA decides them; if given, they are the current operation).
     T_serv: float | None = Field(default=None, description="Temperatura del líquido de calentamiento (°C)")
-    Delta_P: float | None = Field(default=None, description="Presión de impulsión de las bombas")
+    Delta_P: float | None = Field(default=None, description="Presión de impulsión de las bombas (bar)")
     Regeneration_perc: float | None = Field(default=None, description="Eficiencia de regeneración térmica (%)")
 
     # Optimize-only knobs
@@ -118,7 +118,7 @@ class PredictOptimizeResponse(BaseModel):
     recommended_Regeneration_perc: float = Field(..., description="Setpoint óptimo de regeneración (%)")
     recommended_CO2_pred: float = Field(..., description="CO2 predicho con los setpoints recomendados (kg)")
     recommended_T_out_pred: float = Field(..., description="T_out predicha con los setpoints recomendados (°C)")
-    recommended_factible: bool = Field(..., description="True si recommended_T_out_pred >= 72.5 °C")
+    recommended_factible: bool = Field(..., description="Informativo: True si recommended_T_out_pred >= 72.5 °C. No se rechaza la respuesta si es False; la plataforma debe validarlo")
     policy_T_serv: float = Field(..., description="T_serv de la política global estática")
     policy_Delta_P: float = Field(..., description="Delta_P de la política global estática")
     policy_Regeneration_perc: float = Field(..., description="Regeneración de la política global estática")

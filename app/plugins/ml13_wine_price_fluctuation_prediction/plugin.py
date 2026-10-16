@@ -23,11 +23,13 @@ import pandas as pd
 
 from app.application.dto.stats_dto import InputField, OutputField, RuntimeStats, StatsResponse
 from app.domain.ports.model_plugin_port import ModelPluginPort
-from app.domain.services.exceptions import ModelNotLoadedError, ModelPersistenceError
+from app.domain.services.exceptions import ModelNotLoadedError
 from app.domain.services.mlflow_tracker import BaseMLflowTracker
 from app.infrastructure.artifact_store import local_file_path
+from app.infrastructure.base_model_publisher import persist_retrained_bundle
 from app.plugins.ml13_wine_price_fluctuation_prediction import model_loader, preprocessing, training
 from app.plugins.ml13_wine_price_fluctuation_prediction.constants import (
+    ARTIFACT_FOLDER_NAME,
     BULLETIN_COLUMN,
     CAMPAIGN_COLUMN,
     DECISION_THRESHOLD,
@@ -83,6 +85,8 @@ def _week_or_none(value) -> int | None:
 
 class Ml13WinePriceFluctuationPredictionPlugin(ModelPluginPort):
     """Price-rise alert (>2.5% over the next 4 weeks) for bulk red wine — LogisticRegression."""
+
+    BASE_ARTIFACT_FOLDER = ARTIFACT_FOLDER_NAME   # every /train publishes the new base model
 
     def __init__(self) -> None:
         """Initialize an unloaded plugin with empty runtime counters."""
@@ -220,10 +224,10 @@ class Ml13WinePriceFluctuationPredictionPlugin(ModelPluginPort):
         """Retrain with the AI team's original procedure on a raw weekly price CSV.
 
         Walk-forward CV (LogReg vs XGBoost) -> Smart Score selection -> final fit on train+val ->
-        hold-out metrics on the last 24 weeks. Fresh objects are trained; the served fixed
-        artifacts are never mutated nor overwritten. The retrained bundle lives only in its MLflow
-        run (artifact_path="model", canonical filenames so mlflow_utils can rebuild it); if it
-        cannot be uploaded, ModelPersistenceError (→ 502).
+        hold-out metrics on the last 24 weeks. Fresh objects are trained (self._bundle is never
+        mutated). The bundle (canonical filenames) is published as the new base model version
+        and, if mlflow_run_id is given, also saved to that run (artifact_path="model"); a
+        failed MLflow upload is only an upload_warning, a failed publish is ModelPersistenceError.
         """
         self._require_loaded()
         with local_file_path(data_path) as local_path:
@@ -250,44 +254,47 @@ class Ml13WinePriceFluctuationPredictionPlugin(ModelPluginPort):
         scores = result["cv"]["scores"]
         test_m = result["test_metrics"]
         tracker = BaseMLflowTracker(mlflow_run_id)
-        mlflow_tmp = tempfile.mkdtemp(prefix="ml13_mlflow_")
+        metrics = {
+            **{f"test_{k}": v for k, v in test_m.items()},
+            **{f"cv_{name}_{k}": v for name, m in cv_m.items() for k, v in m.items()},
+            **{f"smart_score_{k}": v for k, v in scores.items()},
+            "n_trainval": result["n_trainval"],
+            "n_test": result["n_test"],
+        }
+        bundle_dir = tempfile.mkdtemp(prefix="ml13_train_")
         try:
-            tracker.log_params({
-                "best_model_type": result["model_type"],
-                "return_threshold": RETURN_THRESHOLD,
-                "target_window": TARGET_WINDOW,
-                "test_size": TEST_SIZE,
-                "n_folds": N_FOLDS,
-                "random_seed": RANDOM_SEED,
-                **{f"logreg_{k}": v for k, v in LOGREG_PARAMS.items()},
-                **{f"xgb_{k}": v for k, v in XGB_PARAMS.items()},
-            })
-            tracker.log_metrics({
-                **{f"test_{k}": v for k, v in test_m.items()},
-                **{f"cv_{name}_{k}": v for name, m in cv_m.items() for k, v in m.items()},
-                **{f"smart_score_{k}": v for k, v in scores.items()},
-                "n_trainval": result["n_trainval"],
-                "n_test": result["n_test"],
-            })
-            joblib.dump(result["model"], f"{mlflow_tmp}/{MODEL_FILENAME}")
-            joblib.dump(result["scaler"], f"{mlflow_tmp}/{SCALER_FILENAME}")
-            with open(f"{mlflow_tmp}/{FEATURE_SCHEMA_FILENAME}", "w", encoding="utf-8") as fh:
+            joblib.dump(result["model"], f"{bundle_dir}/{MODEL_FILENAME}")
+            joblib.dump(result["scaler"], f"{bundle_dir}/{SCALER_FILENAME}")
+            with open(f"{bundle_dir}/{FEATURE_SCHEMA_FILENAME}", "w", encoding="utf-8") as fh:
                 json.dump(schema, fh, indent=2, ensure_ascii=False)
-            with open(f"{mlflow_tmp}/{MODEL_CONFIG_FILENAME}", "w", encoding="utf-8") as fh:
+            with open(f"{bundle_dir}/{MODEL_CONFIG_FILENAME}", "w", encoding="utf-8") as fh:
                 json.dump(model_config, fh, indent=2)
-            tracker.upload_artifacts(mlflow_tmp, artifact_path=MLFLOW_ARTIFACT_PATH)
-        except Exception as exc:
-            logger.error("MLflow artifact upload failed: %s", exc)
-            raise ModelPersistenceError(
-                f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}"
-            ) from exc
+
+            def _upload_to_mlflow() -> None:
+                tracker.log_params({
+                    "best_model_type": result["model_type"],
+                    "return_threshold": RETURN_THRESHOLD,
+                    "target_window": TARGET_WINDOW,
+                    "test_size": TEST_SIZE,
+                    "n_folds": N_FOLDS,
+                    "random_seed": RANDOM_SEED,
+                    **{f"logreg_{k}": v for k, v in LOGREG_PARAMS.items()},
+                    **{f"xgb_{k}": v for k, v in XGB_PARAMS.items()},
+                })
+                tracker.log_metrics(metrics)
+                tracker.upload_artifacts(bundle_dir, artifact_path=MLFLOW_ARTIFACT_PATH)
+
+            persisted = persist_retrained_bundle(
+                bundle_dir, artifact_folder=ARTIFACT_FOLDER_NAME, data_path=data_path,
+                metrics=metrics, mlflow_run_id=mlflow_run_id, upload_to_mlflow=_upload_to_mlflow,
+            )
         finally:
-            shutil.rmtree(mlflow_tmp, ignore_errors=True)
+            shutil.rmtree(bundle_dir, ignore_errors=True)
 
         return TrainResponse(
             detail=(
                 "Reentrenamiento completado (procedimiento original; modelo seleccionado: "
-                f"{result['model_type']})."
+                f"{result['model_type']}). Modelo base {persisted.base_version['version']}."
             ),
             best_model_type=result["model_type"],
             n_trainval_rows=result["n_trainval"],
@@ -306,7 +313,8 @@ class Ml13WinePriceFluctuationPredictionPlugin(ModelPluginPort):
             cv_xgboost_f1_mean=cv_m["xgboost"]["f1_mean"],
             smart_score_logreg=scores["logreg"],
             smart_score_xgboost=scores["xgboost"],
-            upload_warning=None,
+            upload_warning=persisted.upload_warning,
+            base_version=persisted.base_version,
         )
 
     # ── stats ─────────────────────────────────────────────────────────────────

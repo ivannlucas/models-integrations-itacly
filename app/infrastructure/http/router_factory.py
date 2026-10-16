@@ -5,11 +5,15 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.responses import JSONResponse
 
+from app.application.dto.base_version_dto import RollbackRequest, RollbackResponse
 from app.application.dto.stats_dto import StatsResponse
 from app.application.dto.train_dto import TrainRequest as _DefaultTrainRequest, TrainResponse as _DefaultTrainResponse
 from app.domain.services.exceptions import (
     ArchiveLimitExceededError,
+    BaseReloadError,
+    BaseVersionNotFoundError,
     ModelPersistenceError,
+    NoPreviousBaseVersionError,
     TrainingNotSupportedError,
     UserModelUnavailableError,
 )
@@ -28,7 +32,7 @@ def make_model_router(
 ) -> APIRouter:
     """Create a FastAPI router for a model plugin.
 
-    All endpoints share the same contract (health / stats / predict / train).
+    All endpoints share the same contract (health / stats / predict / train / rollback).
     The concrete request/response Pydantic types are injected per model so that
     Swagger docs reflect each model's actual schema.
 
@@ -133,12 +137,46 @@ def make_model_router(
                 status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
             ) from exc
         except ModelPersistenceError as exc:
-            logger.error("Retrained model for '%s' could not be saved to MLflow: %s", model_id, exc)
+            logger.error(
+                "Retrained model for '%s' could not be persisted (MLflow run or new base version): %s",
+                model_id, exc,
+            )
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)
             ) from exc
+        except BaseReloadError as exc:
+            logger.error("Retrained base of '%s' does not load: %s", model_id, exc)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)
+            ) from exc
         except Exception as exc:
             logger.exception("Unexpected error during training for model '%s'", model_id)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)
+            ) from exc
+
+    @router.post("/rollback")
+    def rollback(request: Request, body: RollbackRequest | None = None) -> RollbackResponse:
+        """Serve a previous base version (the current one's parent unless body.version is given)."""
+        container = _get_container(request)
+        if not getattr(container, "promotes_base", False):
+            raise HTTPException(
+                status_code=status.HTTP_501_NOT_IMPLEMENTED,
+                detail=f"El modelo '{model_id}' no versiona su modelo base: no admite rollback.",
+            )
+        try:
+            return RollbackResponse(**container.rollback(body.version if body else None))
+        except BaseVersionNotFoundError as exc:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+        except NoPreviousBaseVersionError as exc:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+        except BaseReloadError as exc:
+            logger.error("Rollback of '%s' failed to load: %s", model_id, exc)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)
+            ) from exc
+        except Exception as exc:
+            logger.exception("Unexpected error during rollback for model '%s'", model_id)
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)
             ) from exc

@@ -61,8 +61,7 @@ def test_train_returns_200_with_metrics(client):
     assert body["n_samples"] > 0
 
 
-def test_train_without_mlflow_run_id_returns_422(client):
-    """mlflow_run_id is mandatory (no default) — the base S3 artifact must never be
-    overwritten by a retrain, so every /train call must be tied to a specific MLflow run."""
+def test_train_without_mlflow_run_id_is_accepted(client):
+    """mlflow_run_id is optional: every /train publishes the new base model (spec 2026-10-14)."""
     resp = client.post(f"{PREFIX}/train", json={"data_path": "/tmp/x.csv"})
-    assert resp.status_code == 422
+    assert resp.status_code == 200
