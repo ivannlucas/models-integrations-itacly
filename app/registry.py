@@ -363,6 +363,21 @@ from app.plugins.ml13_wine_price_fluctuation_prediction.train_dto import (
     TrainResponse as Ml13_TrainResp,
 )
 
+from app.plugins.ml24_dairy_spatial_price_forecast.exceptions import (
+    InsufficientPriceHistoryError,
+    SeriesContractError,
+    UnknownCcaaError,
+)
+from app.plugins.ml24_dairy_spatial_price_forecast.plugin import Ml24DairySpatialPriceForecastPlugin
+from app.plugins.ml24_dairy_spatial_price_forecast.predict_dto import (
+    PredictRequest as Ml24_Request,
+    PredictResponse as Ml24_Response,
+)
+from app.plugins.ml24_dairy_spatial_price_forecast.train_dto import (
+    TrainRequest as Ml24_TrainReq,
+    TrainResponse as Ml24_TrainResp,
+)
+
 
 # ── Registry entry dataclass ──────────────────────────────────────────────────
 
@@ -742,5 +757,16 @@ REGISTRY: list[ModelEntry] = [
         extra_predict_exceptions=(InsufficientSequenceHistoryError, InvalidWineryInputError),
         train_request_type=Ml26_TrainReq,
         train_response_type=Ml26_TrainResp,
+    ),
+    ModelEntry(
+        model_id="ml24-dairy-spatial-price-forecast",
+        prefix="/models/ml24-dairy-spatial-price-forecast",
+        version="1.0.0",
+        plugin_class=Ml24DairySpatialPriceForecastPlugin,
+        predict_request_type=Ml24_Request,
+        predict_response_type=Ml24_Response,
+        extra_predict_exceptions=(SeriesContractError, UnknownCcaaError, InsufficientPriceHistoryError),
+        train_request_type=Ml24_TrainReq,
+        train_response_type=Ml24_TrainResp,
     ),
 ]

@@ -509,6 +509,31 @@ def ml18(monkeypatch, tmp_path):
 
 
 @pytest.fixture
+def ml24(monkeypatch, tmp_path):
+    from app.plugins.ml24_dairy_spatial_price_forecast import plugin
+
+    probe = Probe()
+    monkeypatch.setattr(plugin.model_loader, "load_model_bundle", lambda: {"model": _FakeModel(BASE, probe)})
+    monkeypatch.setattr(plugin.model_loader, "load_reference_data", lambda: {"series": pd.DataFrame()})
+    monkeypatch.setattr(plugin, "download_user_model_from_mlflow",
+                        lambda run_id: ({"model": _FakeModel(f"USER-{run_id}", probe)}, tempfile.mkdtemp()))
+    monkeypatch.setattr(plugin.preprocessing, "read_series_csv", lambda path: pd.DataFrame())
+
+    def run_inference(bundle, _reference, _series, **_kwargs):
+        bundle["model"].probe.touch(bundle["model"].name)
+        raise _Stop
+
+    monkeypatch.setattr(plugin.inference, "run_inference", run_inference)
+    instance = plugin.Ml24DairySpatialPriceForecastPlugin()
+    instance.load()
+    csv = _csv_with(tmp_path, ["anio"])
+    return probe, {
+        "predict_inline": lambda run_id: instance.predict_inline(features={}, mlflow_run_id=run_id),
+        "predict_batch": lambda run_id: instance.predict_batch(data_path=csv, mlflow_run_id=run_id),
+    }
+
+
+@pytest.fixture
 def ml26(monkeypatch, tmp_path):
     from app.plugins.ml26_wine_sulfite_gru_pso_forecast import plugin
 
@@ -537,7 +562,7 @@ def ml26(monkeypatch, tmp_path):
 CASES = [("ml9", "predict_inline"), ("ml9", "predict_batch"),
          ("ml2", "predict_inline"), ("ml2", "predict_batch"), ("ml2", "stats")] + [
     (name, method)
-    for name in ("ml4", "ml8", "ml13", "ml14", "ml17", "ml18", "ml21", "ml25", "ml26", "ml30", "ml34", "ml35", "ml46")
+    for name in ("ml4", "ml8", "ml13", "ml14", "ml17", "ml18", "ml21", "ml24", "ml25", "ml26", "ml30", "ml34", "ml35", "ml46")
     for method in ("predict_inline", "predict_batch")
 ]
 
