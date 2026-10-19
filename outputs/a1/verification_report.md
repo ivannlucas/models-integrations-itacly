@@ -30,10 +30,10 @@ se usó `KERAS_BACKEND=torch` y se cargaron los 3 backbones reales sin TensorFlo
       contra el plugin/artefactos reales se valida en la Parte B de este informe, no aquí.
 - [x] `pytest tests/unit/ -q --ignore=tests/unit/test_base_reload_per_model.py` (repo completo,
       excluyendo el único fichero que no se puede ni importar por el `timm`/`albumentations` que
-      le falta a ml4 en este entorno): **1137 passed, 9 failed, 4 skipped**. Los 9 fallos son
-      preexistentes y ajenos a ml1 — `timm` faltante (ml4), y tests de aislamiento
-      MLflow/entrenamiento de ml3/ml4/ml47/ml48 que dependen de infraestructura no disponible en
-      este sandbox. Verificado caso por caso: ninguno menciona ni toca ml1. 0 fallos nuevos.
+      le falta a ml4 en este entorno): **1145 passed, 5 failed, 4 skipped**. Los 5 fallos son
+      preexistentes y ajenos a ml1 — `albumentations` faltante (ml4, 4 tests de aislamiento) y un
+      test de higiene de descarga de ml3 que depende de infraestructura no disponible en este
+      sandbox. Verificado caso por caso: ninguno menciona ni toca ml1. 0 fallos nuevos.
 - [x] `pylint app/plugins/ml1_wine_pest_disease_detection/ --disable=import-error`: **8.48/10**.
       Avisos: `line-too-long` (igual que el resto del repo, que no fija `max-line-length` en
       pylint pero sí en `.flake8`=120), `too-many-locals` en `inference.py::run_inference` (fiel
@@ -45,6 +45,16 @@ se usó `KERAS_BACKEND=torch` y se cargaron los 3 backbones reales sin TensorFlo
       Python 3.14 está incompleto en esta máquina — `python3.14-venv` no instalado, requiere
       `sudo`). Misma limitación que en la verificación de ml19. Pendiente de confirmar en el
       pipeline de CI real, donde sí corre con normalidad.
+- [x] `md5sum` de los 7 ficheros de `artifacts/ml1_wine_pest_disease_detection/` contra los
+      mismos ficheros en `inbox/a1/codigo/models/artifacts/`: **idénticos byte a byte**
+      (`best.pt`, `class_mapping_no_gases.json`, los 3 `*.weights.h5` del ensemble y los 2
+      `*_no_gases.joblib` de los expertos RF) — la copia local no diverge del entregable.
+- [x] `tests/unit/test_user_model_isolation.py`: se añadió el fixture `ml1` (monkeypatcheando
+      `model_loader.load_model_bundle` y `download_user_model_from_mlflow` con un `_FakeModel`
+      que expone `.predict()`, igual que el resto de plugins con expertos sklearn) y se incluyó
+      en `CASES` para `predict_inline`/`predict_batch`. **4/4 passed**: un request sin
+      `mlflow_run_id` nunca ve el par RF de otro usuario en vuelo, y dos requests solapadas con
+      runs distintos no dejan el modelo base sustituido al terminar.
 - [x] Arranque + health + predict + stats + train, vía app FastAPI mínima con el router/plugin
       reales (ver nota de entorno):
       - `GET /models/ml1-wine-pest-disease-detection/health` → `200 {"loaded": true}`
