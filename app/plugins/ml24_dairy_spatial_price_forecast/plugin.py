@@ -6,12 +6,15 @@ persistence and t-12 seasonality, blended (ml_alpha) with a CatBoostRegressor pe
 uses spatial (border-weighted) signals and EU dairy-market exogenous variables. Faithful port of
 the AI team's src/predict/predictor.py and src/training/train.py; see inbox/a24/manifest.yaml
 for the contract, the golden-dataset verification and the known issues (notably the
-out-of-sample degradation after 2021, outputs/a24/verification_report.md).
+out-of-sample degradation after 2021, outputs/a24/verification_report.md). The base model is
+versioned: every /train publishes the retrained horizons with the series (and, when given, the
+monthly exogenous block) they were trained on as the new base.
 """
 # pylint: disable=line-too-long  # repo limit is 120 (.flake8), enforced by flake8
 from __future__ import annotations
 
 import logging
+import os
 import shutil
 import tempfile
 import time
@@ -20,19 +23,19 @@ from pathlib import Path
 
 from app.application.dto.stats_dto import InputField, OutputField, RuntimeStats, StatsResponse
 from app.domain.ports.model_plugin_port import ModelPluginPort
-from app.domain.services.exceptions import ModelNotLoadedError, ModelPersistenceError
+from app.domain.services.exceptions import ModelNotLoadedError
 from app.domain.services.mlflow_tracker import BaseMLflowTracker
 from app.infrastructure.artifact_store import local_file_path
+from app.infrastructure.base_model_publisher import persist_retrained_bundle
 from app.plugins.ml24_dairy_spatial_price_forecast import inference, model_loader, preprocessing, training
 from app.plugins.ml24_dairy_spatial_price_forecast.constants import (
+    ARTIFACT_FOLDER_NAME,
     FRAMEWORK,
     HORIZONS,
     METRICS_REPORTED,
     MODEL_ID,
     SERIES_REQUIRED_COLUMNS,
     TRAINING_CFG,
-    TRAIN_TEST_YEAR,
-    TRAIN_VALIDATION_YEAR,
     VERSION,
 )
 from app.plugins.ml24_dairy_spatial_price_forecast.mlflow_utils import (
@@ -54,6 +57,8 @@ logger = logging.getLogger(__name__)
 
 class Ml24DairySpatialPriceForecastPlugin(ModelPluginPort):
     """CatBoost + calibrated-baseline plugin for the spatial dairy price forecast (h=1/3/6)."""
+
+    BASE_ARTIFACT_FOLDER = ARTIFACT_FOLDER_NAME   # every /train publishes the new base model
 
     def __init__(self) -> None:
         """Initialize an unloaded plugin with empty runtime counters."""
@@ -150,55 +155,80 @@ class Ml24DairySpatialPriceForecastPlugin(ModelPluginPort):
 
     # ── train ─────────────────────────────────────────────────────────────────
 
-    def train(
+    def train(  # pylint: disable=too-many-arguments,too-many-locals
         self,
         *,
         data_path: str,
-        mlflow_run_id: str,
-        validation_year: int = TRAIN_VALIDATION_YEAR,
-        test_year: int = TRAIN_TEST_YEAR,
+        mlflow_run_id: str = "",
+        validation_year: int | None = None,
+        test_year: int | None = None,
+        exog_path: str = "",
     ) -> TrainResponse:
         """Retrain h=1/3/6 from scratch with the AI team's procedure (see training.py).
 
-        A new model is trained: the served one is never touched. The result lives only in its
-        MLflow run; if it cannot be uploaded, ModelPersistenceError (→ 502). Invalid or
-        insufficient data raise ValueError (→ 400).
+        A new model is trained (self._bundle is never mutated) and published as the new base model
+        version together with the series it was trained on (its five model products) and, if
+        exog_path is given, the new monthly exogenous block; otherwise the current one is used and
+        inherited (upload_warning says so). With mlflow_run_id the bundle is also saved to that
+        run. Without validation_year/test_year they are derived from the series
+        (training.default_split_years). Invalid or insufficient data raise ValueError (-> 400).
         """
         self._require_loaded()
+        reference = dict(self._reference)
+        exog_local = None
         with local_file_path(data_path) as local_path:
             series = preprocessing.read_series_csv(local_path)
-        result = training.train_spatial_price_model(
-            series, self._reference, validation_year=validation_year, test_year=test_year,
-        )
-
-        artifact_tmp = tempfile.mkdtemp(prefix="ml24_train_")
         try:
-            training.save_training_artifacts(Path(artifact_tmp), result)
-            upload_artifacts_to_mlflow(
-                artifact_tmp, mlflow_run_id, metrics=result.metrics,
-                params={
-                    "model": "CatBoostRegressor + baseline calibrado (t-1, t-12)",
-                    "horizons": ",".join(str(h) for h in HORIZONS),
-                    "iterations": TRAINING_CFG["catboost_iterations"],
-                    "depth": TRAINING_CFG["catboost_depth"],
-                    "learning_rate": TRAINING_CFG["catboost_learning_rate"],
-                    "l2_leaf_reg": TRAINING_CFG["catboost_l2_leaf_reg"],
-                    "loss_function": TRAINING_CFG["loss_function"],
-                    "publication_lag_months": TRAINING_CFG["publication_lag_months"],
-                    "random_state": TRAINING_CFG["random_state"],
-                    "validation_year": validation_year,
-                    "test_year": test_year,
-                    "task_type": result.task_type,
-                },
+            if exog_path:
+                with local_file_path(exog_path) as exog_src:
+                    fd, exog_local = tempfile.mkstemp(suffix=".csv")
+                    os.close(fd)
+                    shutil.copyfile(exog_src, exog_local)
+                reference["exog"] = preprocessing.read_exog_csv(exog_local, list(self._reference["exog"].columns))
+            if test_year is None:
+                test_year = validation_year + 1 if validation_year is not None else training.default_split_years(series)[1]
+            if validation_year is None:
+                validation_year = test_year - 1
+            result = training.train_spatial_price_model(
+                series, reference, validation_year=validation_year, test_year=test_year,
             )
-        except Exception as exc:
-            logger.error("ml24: MLflow upload failed: %s", exc)
-            raise ModelPersistenceError(
-                f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}"
-            ) from exc
+            params = {
+                "model": "CatBoostRegressor + baseline calibrado (t-1, t-12)",
+                "horizons": ",".join(str(h) for h in HORIZONS),
+                "iterations": TRAINING_CFG["catboost_iterations"],
+                "depth": TRAINING_CFG["catboost_depth"],
+                "learning_rate": TRAINING_CFG["catboost_learning_rate"],
+                "l2_leaf_reg": TRAINING_CFG["catboost_l2_leaf_reg"],
+                "loss_function": TRAINING_CFG["loss_function"],
+                "publication_lag_months": TRAINING_CFG["publication_lag_months"],
+                "random_state": TRAINING_CFG["random_state"],
+                "validation_year": validation_year,
+                "test_year": test_year,
+                "task_type": result.task_type,
+                "exog_renewed": bool(exog_path),
+            }
+            artifact_tmp = Path(tempfile.mkdtemp(prefix="ml24_train_"))
+            try:
+                training.save_training_artifacts(artifact_tmp, result)
+                training.save_base_reference_data(artifact_tmp, preprocessing.validate_series(series), exog_local)
+                persisted = persist_retrained_bundle(
+                    artifact_tmp, artifact_folder=ARTIFACT_FOLDER_NAME, data_path=data_path,
+                    metrics=result.metrics, mlflow_run_id=mlflow_run_id,
+                    upload_to_mlflow=lambda: upload_artifacts_to_mlflow(
+                        str(artifact_tmp), mlflow_run_id, metrics=result.metrics, params=params),
+                )
+            finally:
+                shutil.rmtree(artifact_tmp, ignore_errors=True)
         finally:
-            shutil.rmtree(artifact_tmp, ignore_errors=True)
+            if exog_local:
+                os.unlink(exog_local)
 
+        warnings = [persisted.upload_warning] if persisted.upload_warning else []
+        if not exog_path:
+            warnings.append(
+                "No se han renovado las exógenas mensuales (exog_path): se ha entrenado con las vigentes "
+                "y el modelo base nuevo las hereda."
+            )
         per_horizon = {
             f"h{item.horizon}": HorizonMetrics(
                 train=HorizonSplitMetrics(**item.metrics["train"]),
@@ -212,14 +242,19 @@ class Ml24DairySpatialPriceForecastPlugin(ModelPluginPort):
             for item in result.horizons
         }
         return TrainResponse(
-            detail="spatial_price_model reentrenado desde cero (h=1/3/6) con el procedimiento del equipo de IA",
+            detail=(
+                "spatial_price_model reentrenado desde cero (h=1/3/6) con el procedimiento del equipo de IA. "
+                f"Modelo base {persisted.base_version['version']}."
+            ),
             **per_horizon,
             validation_year=validation_year,
             test_year=test_year,
             task_type=result.task_type,
             training_time_s=result.training_time_s,
             mlflow_run_id=mlflow_run_id,
-            upload_warning=None,
+            exog_renewed=bool(exog_path),
+            upload_warning=" ".join(warnings) or None,
+            base_version=persisted.base_version,
         )
 
     # ── stats ─────────────────────────────────────────────────────────────────

@@ -129,14 +129,15 @@ training:
       h6: {panel: context, exog_patterns: [exog__dairy, exog__milk, exog__ratio_cheese], exog_top_k: 6, context_top_k: 4}
     stability: {exog_stability_windows: 4, exog_min_support: 2, panel_feature_stability_windows: 4, panel_feature_min_support: 2}
   plugin_adaptations:
-    - "validation_year/test_year opcionales en TrainRequest (por defecto 2019/2020 = config.yaml) para poder reentrenar con datos posteriores a 2020; con los valores por defecto el procedimiento es exactamente el original"
+    - "validation_year/test_year opcionales en TrainRequest; con 2019/2020 (config.yaml) el procedimiento es exactamente el original. (19/10/2026) Si no se indican se derivan de la serie: test = ultimo año con los 12 meses del precio ancla, validacion = el anterior. Con 2019/2020 fijos los paneles se cortan en 2020 y un reentreno programado republicaria el modelo de 2020 (mismas 4063 filas que el artefacto entregado, comprobado)"
+    - "(19/10/2026) exog_path opcional (formato input_costs_monthly.csv), validado contra las columnas vigentes antes de entrenar; si no se indica se entrena con las exogenas vigentes y se heredan (upload_warning lo avisa)"
     - "No se recalcula el rolling summary (diagnóstico, no cambia el artefacto)"
     - "No se llama a np.random.seed (nada consume el RNG global; CatBoost recibe random_seed=24)"
     - "task_type GPU si CatBoost ve GPU, si no CPU (la memoria admite CPU con variación numérica)"
   metrics_returned: [h1/h3/h6 x train/validation/test (mae, smape, mae_baseline, smape_baseline, accuracy_pct, n), baseline_w_persist_1, baseline_w_persist_12, ml_alpha, n_features, task_type, training_time_s]
   duracion_estimada: "~50 s en GPU (RTX 3060) y ~65 s en CPU con la serie oficial completa (medido 2026-10-14)"
   fidelidad_verificada: "Plugin vs train.py original en CPU, mismo entorno: métricas train/val/test idénticas a 6 decimales, mismos ml_alpha, pesos y features (ver verification_report.md)"
-  persistencia: "Solo MLflow (artifact_path=model: model_manifest.json, spatial_price_model_h{1,3,6}.cbm, *_metadata.json, stage_summary_h*.json, metrics.json). El artefacto base nunca se sobrescribe."
+  persistencia: "(19/10/2026) Cada /train publica una version nueva del modelo base (versions/<vN>/: model_manifest.json, spatial_price_model_h{1,3,6}.cbm, *_metadata.json, stage_summary_h*.json, metrics.json, la serie recibida restringida a los 5 productos del modelo -26 MB frente a 338 MB, mismas predicciones- y, si viene, el exog_path). Con mlflow_run_id se sube tambien al run (trazabilidad). Antes: solo MLflow. Ver docs/superpowers/specs/2026-10-14-reentreno-actualiza-base-design.md §10."
 
 metrics_reported:
   dataset: "test 2020 por target_period_dt (17 CCAA x 12 meses = 204 filas por horizonte); validación 2019; train hasta 2018-12 con publication_lag_months=12"
@@ -319,6 +320,12 @@ reference_parity:
   expected: "y_pred, y_baseline_calibrated, y_persist_1, y_persist_12, feature_period, period idénticos (tolerancia 1e-9)"
 
 known_issues:
+  - "[REENTRENO — ACTIVADO Y DOCUMENTADO, 19/10/2026] Reentrenando con datos recientes (validacion
+     2024, test 2025, serie hasta 2026-06) la calibracion del propio procedimiento deja ml_alpha = 0
+     en h1 y h3 (y w1 ~ 0): la prediccion queda en el baseline estacional y_persist_12 y el
+     CatBoost no aporta. Exactitud de test 2025: 95-96 % (KPI >= 80 %). No es un fallo del port
+     (mismo procedimiento que train.py); se activa la promocion automatica y se traslada al equipo
+     de IA."
   - "[MODELO — CRÍTICO PARA NEGOCIO] Degradación fuera de muestra desde 2022 (ver
      out_of_sample_evidence): con el código original sin modificar, exactitud 2021-2026 de
      91,0 / 85,3 / 85,6 % (h1/h3/h6) frente al 98 % de la memoria, con sesgo negativo sistemático

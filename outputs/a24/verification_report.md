@@ -209,3 +209,21 @@ Constan en el PR y se trasladan al equipo de IA (no bloquean la integración):
 4. Los 7 fallos de la suite son de otros plugins y ya estaban en `main` (ml36, bug real de
    aislamiento; ml10, separador de rutas en Windows). Si el pipeline de Bitbucket ejecuta la suite
    completa, fallará por ellos y no por ml24.
+
+## Actualización 19/10/2026 — reentreno que actualiza el modelo base
+
+`/train` deja de guardar solo en MLflow y sigue la lógica de los modelos de series temporales
+(`BASE_ARTIFACT_FOLDER`; spec `docs/superpowers/specs/2026-10-14-reentreno-actualiza-base-design.md`,
+§10.2). Entorno: venv del repo, Python 3.12, catboost 1.2.10 (faltaba en el venv aunque está en
+`requirements.txt`).
+
+| Comprobación | Resultado |
+|---|---|
+| Inferencia con los artefactos reales (copia local) frente a `inference_smoke.csv` | 51/51 filas idénticas (máx. 1e-16) |
+| Reentreno con los años del entregable (2019/2020) y la serie hasta 2026-06 | `training_rows` = 4063, igual que el artefacto entregado: los paneles se cortan en 2020 e ignoran todo lo posterior |
+| Reentreno con años derivados (validación 2024, test 2025) | Exactitud de test 94,8-96,6 % según hardware; `ml_alpha = 0` en h1 y h3 (ver known_issues) |
+| `/train` real vía `ModelContainer` (serie + `exog_path` entregados) | v1 publicada con la serie filtrada (26 MB) y las exógenas; predicciones con la serie filtrada idénticas a las de la serie completa de 338 MB |
+| Tests | `test_ml24_dairy_spatial_price_forecast.py`, `test_ml24_base_promotion.py`, recarga en `test_base_reload_per_model.py` |
+
+Pendiente de acción humana: subir los artefactos a `s3://<STORAGE_BUCKET>/artifacts/fixed/ml24_dairy_spatial_price_forecast/`
+(a 19/10/2026 el prefijo está vacío: el modelo da 503 al arrancar).

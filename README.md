@@ -167,7 +167,7 @@ Available endpoints (from current implementation):
 
 - `GET /` → returns a JSON welcome message.
 
-### Modelo base versionado (ml13, 14, 15, 16, 17, 18, 21, 23)
+### Modelo base versionado (ml13, 14, 15, 16, 17, 18, 19, 21, 23, 24)
 
 - `POST /models/<id>/train` — `mlflow_run_id` opcional. Cada reentreno correcto se publica como
   nueva versión del modelo base (`artifacts/fixed/<carpeta>/versions/<vN>/`, puntero
@@ -181,6 +181,11 @@ Available endpoints (from current implementation):
   `{"version": "v2"}`) y reiniciando.
 - ml15 acepta además `reference_prices_path` y `reference_financial_path` (juntos) para renovar
   sus históricos exógenos de referencia; ml21 publica el CSV de entrenamiento como su panel.
+- ml19 entrena sobre el `dataset_v7_fe.csv` que genera el ETL del equipo de IA y lo publica como su
+  dataset de inferencia (las predicciones avanzan con cada reentreno).
+- ml24 publica la serie de entrenamiento (sus 5 productos) como la serie de inferencia y acepta
+  `exog_path` para renovar las exógenas mensuales; sin `validation_year`/`test_year`, el test es el
+  último año completo de la serie y la validación el anterior.
 - `/train` solo lo llama un entorno controlado (un script con una secuencia fija según la
   degradación esperada de cada modelo). Desde la plataforma estos modelos solo predicen, y no
   tienen explicabilidad (SHAP) ni detección de drift (ODD). Operación y baja en los demás repos:

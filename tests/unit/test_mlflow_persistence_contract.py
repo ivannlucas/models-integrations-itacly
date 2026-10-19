@@ -1,6 +1,6 @@
 """Contract tests for the MLflow persistence rules shared by every trainable plugin.
 
-1. ``mlflow_run_id`` is mandatory and non-empty on every /train (→ 422), except on the 8 models
+1. ``mlflow_run_id`` is mandatory and non-empty on every /train (→ 422), except on the models
    whose /train publishes the new base model (PROMOTING_MODEL_IDS), where it is optional.
 2. If the retrained model cannot be saved to MLflow, /train fails (→ 502) instead of
    answering 200 with a warning and silently discarding the model.
@@ -15,15 +15,14 @@ import pytest
 
 from app.domain.services.exceptions import ModelPersistenceError, UserModelUnavailableError
 from app.domain.services.mlflow_tracker import require_user_model
+from app.registry import REGISTRY
 from tests.conftest import TEST_REGISTRY
 
+# Models whose /train publishes the new base (BASE_ARTIFACT_FOLDER on the real plugin class):
+# they accept /train without a run (spec D4). Read from the real registry so the list cannot drift.
 PROMOTING_MODEL_IDS = {
-    "ml13-wine-price-fluctuation-prediction", "ml14-wine-phyto-price-forecast",
-    "ml15-wine-ipi-price-forecast", "ml16-meat-raw-material-price-alert",
-    "ml17-meat-market-price-analysis", "ml18-meat-spatial-price-forecast",
-    "ml21-cereals-price-spatial", "ml23-lactic-market-price-forecast",
+    entry.model_id for entry in REGISTRY if getattr(entry.plugin_class, "BASE_ARTIFACT_FOLDER", None)
 }
-# The 8 models whose /train publishes the new base accept /train without a run (spec D4).
 TRAINABLE = [entry for entry in TEST_REGISTRY
              if entry.train_request_type is not None and entry.model_id not in PROMOTING_MODEL_IDS]
 
@@ -157,3 +156,14 @@ def test_ml15_predict_fails_instead_of_serving_base_model(ml15, monkeypatch):
     monkeypatch.setattr(mlflow_utils, "BaseMLflowTracker", EmptyRunTracker)
     with pytest.raises(UserModelUnavailableError, match="run-1"):
         instance.predict_batch(data_path=data, mlflow_run_id="run-1")
+
+
+def test_promoting_models_are_the_documented_ones():
+    """CLAUDE.md, the plugin-integration skill and the spec list these models by name."""
+    assert PROMOTING_MODEL_IDS == {
+        "ml13-wine-price-fluctuation-prediction", "ml14-wine-phyto-price-forecast",
+        "ml15-wine-ipi-price-forecast", "ml16-meat-raw-material-price-alert",
+        "ml17-meat-market-price-analysis", "ml18-meat-spatial-price-forecast",
+        "ml19-cereals-cost-forecast", "ml21-cereals-price-spatial",
+        "ml23-lactic-market-price-forecast", "ml24-dairy-spatial-price-forecast",
+    }

@@ -116,6 +116,10 @@ from app.plugins.ml19_cereals_cost_forecast.predict_dto import (
     PredictRequest as Ml19_Request,
     PredictResponse as Ml19_Response,
 )
+from app.plugins.ml19_cereals_cost_forecast.train_dto import (
+    TrainRequest as Ml19_TrainReq,
+    TrainResponse as Ml19_TrainResp,
+)
 
 from app.plugins.ml30_meat_traceability_detection.plugin import Ml30MeatTraceabilityDetectionPlugin
 from app.plugins.ml30_meat_traceability_detection.predict_dto import (
@@ -722,8 +726,8 @@ REGISTRY: list[ModelEntry] = [
         predict_request_type=Ml19_Request,
         predict_response_type=Ml19_Response,
         extra_predict_exceptions=(DataContractError,),
-        # train_request_type/train_response_type omitidos: training.supported=false — ver
-        # inbox/a19/manifest.yaml::training. train() lanza TrainingNotSupportedError (501).
+        train_request_type=Ml19_TrainReq,
+        train_response_type=Ml19_TrainResp,
     ),
     ModelEntry(
         model_id="ml13-wine-price-fluctuation-prediction",

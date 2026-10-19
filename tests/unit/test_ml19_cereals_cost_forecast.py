@@ -64,6 +64,15 @@ def test_predict_batch(client):
     assert body["n_rows"] == len(body["predictions"])
 
 
-def test_train_returns_501(client):
-    resp = client.post(f"{PREFIX}/train", json={"data_path": "/tmp/x.csv", "mlflow_run_id": "test-run-id"})
-    assert resp.status_code == 501
+def test_train_returns_200_with_metrics(client):
+    resp = client.post(f"{PREFIX}/train", json={"data_path": "/tmp/dataset_v7_fe.csv", "mlflow_run_id": "test-run-id"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert {"horizons", "n_features", "train_end", "data_end", "base_version", "upload_warning"} <= body.keys()
+    assert [h["horizon"] for h in body["horizons"]] == [1, 2, 3]
+    assert {"model_name", "sharpe"} <= body["horizons"][0]["reg"].keys()
+
+
+def test_train_without_mlflow_run_id_is_accepted(client):
+    """ml19 promotes its base: the MLflow run is optional (traceability only)."""
+    assert client.post(f"{PREFIX}/train", json={"data_path": "/tmp/dataset_v7_fe.csv"}).status_code == 200

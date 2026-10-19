@@ -3,13 +3,15 @@ and src/utils/io.py::validate_artifacts_compatibility() from the delivered code.
 
 Loads training_meta.json (features list + best_reg/best_clf per horizon + train_end), the 6
 per-horizon .pkl bundles ({"model", "scaler", "model_name"}) it references by name, and the
-frozen reference dataset (dataset_v7_fe.csv) bundled alongside the model artifacts — see
-constants.py module docstring and inbox/a19/manifest.yaml for why this dataset is bundled
-instead of built from client-supplied data.
+reference dataset (dataset_v7_fe.csv) bundled alongside the model artifacts — see constants.py
+module docstring and inbox/a19/manifest.yaml for why this dataset is bundled instead of built
+from client-supplied data. v0 serves the delivered dataset (last row 2026-01); every /train
+publishes a new base version with the dataset it was trained on.
 """
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import joblib
 import numpy as np
@@ -21,6 +23,8 @@ from app.plugins.ml19_cereals_cost_forecast.constants import (
     DATASET_FE_FILENAME,
     DATE_COL,
     TRAINING_META_FILENAME,
+    clf_artifact_filename,
+    reg_artifact_filename,
 )
 
 _store = ArtifactStore(ARTIFACT_FOLDER_NAME)
@@ -72,13 +76,13 @@ def _validate_artifacts_compatibility(features: list[str], reg: dict, clf: dict)
                 )
 
 
-def load_artifact_bundle() -> dict:
-    """Load training_meta.json + per-horizon reg/clf bundles + the frozen reference dataset.
+def _load_bundle(resolve) -> dict:
+    """Build the bundle with resolve(filename) -> path (ArtifactStore or a local directory).
 
     Returns dict: meta, features, reg (dict[int, dict]), clf (dict[int, dict]),
     best_reg, best_clf, dataset (pd.DataFrame, parsed 'date' column).
     """
-    meta_path = _store.path(TRAINING_META_FILENAME)
+    meta_path = resolve(TRAINING_META_FILENAME)
     with open(meta_path, encoding="utf-8") as fh:
         meta = json.load(fh)
 
@@ -88,19 +92,17 @@ def load_artifact_bundle() -> dict:
 
     reg_artifacts: dict[int, dict] = {}
     for h, mname in best_reg.items():
-        path = _store.path(f"best_reg_h{h}m_{mname.lower()}.pkl")
-        reg_artifacts[h] = joblib.load(path)
+        reg_artifacts[h] = joblib.load(resolve(reg_artifact_filename(h, mname)))
         _patch_sklearn_version_gap(reg_artifacts[h]["model"])
 
     clf_artifacts: dict[int, dict] = {}
     for h, mname in best_clf.items():
-        path = _store.path(f"best_clf_h{h}m_{mname.lower()}.pkl")
-        clf_artifacts[h] = joblib.load(path)
+        clf_artifacts[h] = joblib.load(resolve(clf_artifact_filename(h, mname)))
         _patch_sklearn_version_gap(clf_artifacts[h]["model"])
 
     _validate_artifacts_compatibility(features, reg_artifacts, clf_artifacts)
 
-    dataset = pd.read_csv(_store.path(DATASET_FE_FILENAME), parse_dates=[DATE_COL])
+    dataset = pd.read_csv(resolve(DATASET_FE_FILENAME), parse_dates=[DATE_COL])
 
     return {
         "meta": meta,
@@ -111,3 +113,15 @@ def load_artifact_bundle() -> dict:
         "best_clf": best_clf,
         "dataset": dataset,
     }
+
+
+def load_artifact_bundle() -> dict:
+    """Load the base bundle of the active version (training_meta.json, the 6 per-horizon
+    reg/clf .pkl it names and the reference dataset_v7_fe.csv) via ArtifactStore."""
+    return _load_bundle(_store.path)
+
+
+def load_bundle_from_dir(directory: str | Path) -> dict:
+    """Load a bundle written by training.save_training_artifacts (a retrained model from MLflow)."""
+    base = Path(directory)
+    return _load_bundle(lambda name: base / name)
