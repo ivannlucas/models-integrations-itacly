@@ -1,7 +1,7 @@
 """Persist a retrained bundle as the model's new base version.
 
 Used by the train() of the models that declare BASE_ARTIFACT_FOLDER (ml13, 14, 15, 16, 17, 18,
-21, 23): every successful /train becomes the base served without mlflow_run_id. The bundle is
+19, 21, 23, 24): every successful /train becomes the base served without mlflow_run_id. The bundle is
 also uploaded to the caller's MLflow run when one is given — traceability only: if that upload
 fails the base is still published and the response carries upload_warning. If publishing fails,
 ModelPersistenceError (→ 502) and the base does not change (see ArtifactStore.publish_version).

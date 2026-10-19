@@ -17,8 +17,21 @@ VERSION = "1.0.0"
 FRAMEWORK = "scikit-learn==1.8.0, xgboost==3.2.0"
 
 TRAINING_META_FILENAME = "training_meta.json"
+MODEL_SELECTION_AUDIT_FILENAME = "model_selection_audit.json"
 DATASET_FE_FILENAME = "dataset_v7_fe.csv"
 DATE_COL = "date"
+MLFLOW_ARTIFACT_PATH = "model"
+
+
+def reg_artifact_filename(horizon: int, model_name: str) -> str:
+    """train.py::_save_best_models naming, e.g. best_reg_h1m_ridge.pkl."""
+    return f"best_reg_h{horizon}m_{model_name.lower()}.pkl"
+
+
+def clf_artifact_filename(horizon: int, model_name: str) -> str:
+    """train.py::_save_best_models naming, e.g. best_clf_h1m_logreg.pkl."""
+    return f"best_clf_h{horizon}m_{model_name.lower()}.pkl"
+
 
 # src/utils/constants.py::MAPA_PUBLICATION_LAG_MONTHS, literal del codigo entregado.
 MAPA_PUBLICATION_LAG_MONTHS = 3

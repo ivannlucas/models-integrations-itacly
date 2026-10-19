@@ -258,6 +258,10 @@ from app.plugins.ml19_cereals_cost_forecast.predict_dto import (
     RegResult as Ml19Reg,
     ClfResult as Ml19Clf,
 )
+from app.plugins.ml19_cereals_cost_forecast.train_dto import (
+    TrainRequest as Ml19_TrainReq,
+    TrainResponse as Ml19TrainResp,
+)
 from app.plugins.ml47_dairy_dnsl_pasteurization_fault_detection.train_dto import (
     TrainRequest as Ml47Dairy_TrainReq,
     TrainResponse as Ml47DairyTrainResp,
@@ -2174,7 +2178,24 @@ def _ml24_train(plugin: FakePlugin, *, data_path: str) -> Ml24TrainResp:
     )
 
 
+def _ml19_train(plugin: FakePlugin, *, data_path: str) -> Ml19TrainResp:
+    """Fake train response for ml19 (walk-forward metrics of the delivered selection)."""
+    def horizon(h, reg, sharpe, clf, auc):
+        return {"horizon": h,
+                "reg": {"model_name": reg, "corr": 0.6, "dir_acc": 0.8, "sharpe": sharpe, "mae": 2.0, "rmse": 2.5, "r2": 0.3},
+                "clf": {"model_name": clf, "acc": 0.7, "f1": 0.7, "auc": auc, "brier": 0.2, "sharpe": 1.5}}
+
+    return Ml19TrainResp(
+        detail="Reentrenamiento completado (pipeline oficial).",
+        horizons=[horizon(1, "Ridge", 2.61, "LogReg", 0.802), horizon(2, "XGBoost", 1.66, "XGBoost", 0.778),
+                  horizon(3, "XGBoost", 2.71, "XGBoost", 0.842)],
+        n_features=48, lasso_alpha=0.5, train_end="2019-12-31", n_rows=234, data_start="2006-04-01",
+        data_end="2025-09-01", training_time_s=70.0, mlflow_run_id="", upload_warning=None,
+    )
+
+
 TRAIN_FACTORIES: dict[str, Callable] = {
+    "ml19-cereals-cost-forecast": _ml19_train,
     "ml24-dairy-spatial-price-forecast": _ml24_train,
     "ml14-wine-phyto-price-forecast": _ml14_train,
     "ml18-meat-spatial-price-forecast": _ml18_train,
@@ -2498,6 +2519,8 @@ TEST_REGISTRY: list[ModelEntry] = [
         predict_request_type=Ml19_Request,
         predict_response_type=Ml19_Response,
         extra_predict_exceptions=(DataContractError,),
+        train_request_type=Ml19_TrainReq,
+        train_response_type=Ml19TrainResp,
     ),
     ModelEntry(
         model_id="ml9-cereals-infestation-sequence-classifier",

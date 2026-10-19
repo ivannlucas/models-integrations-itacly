@@ -121,7 +121,7 @@ class ModelPersistenceError(RuntimeError):
     and the request must fail instead of answering 200 (→ 502).
 
     Most models keep the retrained model only in its MLflow run: a failed upload raises this.
-    Models with BASE_ARTIFACT_FOLDER (ml13, 14, 15, 16, 17, 18, 21, 23) publish it as a new
+    Models with BASE_ARTIFACT_FOLDER (ml13, 14, 15, 16, 17, 18, 19, 21, 23, 24) publish it as a new
     base version instead: only a failed publish raises this (the base does not change); a failed
     MLflow upload is just an upload_warning (see base_model_publisher.persist_retrained_bundle).
     """

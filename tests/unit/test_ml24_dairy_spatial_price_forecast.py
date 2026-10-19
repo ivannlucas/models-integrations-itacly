@@ -91,12 +91,13 @@ def test_train_returns_200_with_metrics(client):
     assert {"mae", "smape", "accuracy_pct"} <= body["h6"]["test"].keys()
 
 
-def test_train_without_mlflow_run_id_returns_422(client):
-    assert client.post(f"{PREFIX}/train", json={"data_path": "/tmp/series.csv"}).status_code == 422
+def test_train_without_mlflow_run_id_is_accepted(client):
+    """ml24 promotes its base: the MLflow run is optional (traceability only)."""
+    assert client.post(f"{PREFIX}/train", json={"data_path": "/tmp/series.csv"}).status_code == 200
 
 
-def test_train_with_empty_mlflow_run_id_returns_422(client):
-    resp = client.post(f"{PREFIX}/train", json={"data_path": "/tmp/series.csv", "mlflow_run_id": "  "})
+def test_train_rejects_mismatched_years_type(client):
+    resp = client.post(f"{PREFIX}/train", json={"data_path": "/tmp/series.csv", "test_year": "dos mil"})
     assert resp.status_code == 422
 
 

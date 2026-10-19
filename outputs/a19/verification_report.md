@@ -155,3 +155,28 @@ devolviendo 422.
 **Nota para ml18**: el mismo patrón de `mlflow_run_id` ignorado (`_ = mlflow_run_id` sin llamar a
 `download_user_model_from_mlflow`) existe en `app/plugins/ml18_meat_spatial_price_forecast/plugin.py`
 (ya en `main`) — fuera del alcance de este PR, señalado para que su autor lo revise.
+
+## Actualización 19/10/2026 — reentreno que actualiza el modelo base
+
+`/train` pasa de 501 a real y sigue la lógica de los modelos de series temporales
+(`BASE_ARTIFACT_FOLDER`; spec `docs/superpowers/specs/2026-10-14-reentreno-actualiza-base-design.md`,
+§10.1). Entorno: venv del repo, Python 3.12, scikit-learn 1.5.2 (pin del repo), xgboost 3.4.1.
+
+| Comprobación | Resultado |
+|---|---|
+| Inferencia con los artefactos reales (copia local de `models/artifacts/` + `dataset_v7_fe.csv`) | 18/18 golden cases idénticos (máx. 5e-7) |
+| Port `training.py` frente a `src/training/train.py` original, mismo dataset y entorno | Features, modelos elegidos, métricas walk-forward y predicciones de los 6 `.pkl` idénticos bit a bit; ~70 s |
+| Funciones vendorizadas (`_vendor/training_core.py`) | AST idéntico al entregable (test) |
+| `/train` real vía `ModelContainer` con el dataset entregado | v1 publicada, instancia nueva cargada desde `versions/v1/`, predicción de 2020-01 h1 = golden de v0 (1,024653) |
+| Tests | `test_ml19_cereals_cost_forecast.py`, `test_ml19_base_promotion.py`, recarga en `test_base_reload_per_model.py` |
+
+Hallazgo: el reentreno en Linux elige LogReg en h2 de clasificación en lugar del XGBoost entregado.
+AUC walk-forward del XGBoost: 0,7538 con xgboost 3.2.0, 0,7672 con 3.4.1, 0,7782 entregado (LogReg
+0,7731 en todos). Los `.pkl` se entrenaron con xgboost 3.2.0 en Windows; reajustar el XGBoost de h2
+con la misma versión, datos, scaler (idéntico) y parámetros en Linux da árboles distintos (hasta
+0,095 en probabilidad): es una diferencia de plataforma, no de versión. Se fija `xgboost==3.2.0` en
+`requirements.txt` por el resto de modelos (§10.3 de la spec), pero no la elimina. La inferencia de
+los artefactos entregados es idéntica.
+
+Pendiente de acción humana: subir los artefactos a `s3://<STORAGE_BUCKET>/artifacts/fixed/ml19_cereals_cost_forecast/`
+(a 19/10/2026 el prefijo está vacío: el modelo da 503 al arrancar).

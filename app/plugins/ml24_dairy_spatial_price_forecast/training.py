@@ -19,22 +19,27 @@ Plugin adaptations, all deliberate:
 * The series comes from /train's ``data_path`` (same schema as series_consumo_lacteos_ccaa.csv);
   the spatial matrix and the monthly exogenous block are the base artifacts (the original reads
   them from fixed config paths).
-* ``validation_year``/``test_year`` default to the delivered config (2019/2020, panels capped at
-  the test year). They are exposed so a retraining can use data after 2020; with the defaults the
-  procedure is exactly the original one.
+* ``validation_year``/``test_year`` are exposed so a retraining can use data after 2020; with
+  2019/2020 the procedure is exactly the original one (panels capped at the test year). When
+  /train does not give them they are derived from the series (default_split_years: test = last
+  year with the 12 months of the anchor price, validation = the year before) — with the delivered
+  2019/2020 a scheduled retraining would ignore every month after 2020 and republish the 2020
+  model.
 * The rolling summary (_run_rolling_summary) is not recomputed: it is a diagnostic that does not
   change the artifact (11 extra fits per horizon).
 * ``seed_everything`` (np.random.seed) is not called: nothing in the pipeline draws from NumPy's
   global RNG (CatBoost receives random_seed=24 explicitly) and the server is shared.
 * task_type GPU like the original when CatBoost sees a GPU, otherwise CPU (the memoria accepts
   CPU with small numerical differences). The resolved value is stored in the metadata.
-* Artifacts are written to a temp dir that the caller uploads to MLflow, never to artifacts/.
+* Artifacts are written to a temp dir that the caller publishes as the new base model version
+  (and uploads to the MLflow run when given), never to artifacts/ directly.
 """
 # pylint: disable=line-too-long  # repo limit is 120 (.flake8), enforced by flake8
 from __future__ import annotations
 
 import json
 import logging
+import shutil
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -62,11 +67,14 @@ from app.plugins.ml24_dairy_spatial_price_forecast.constants import (
     ANCHOR_PANEL_MIN_YEAR,
     ANCHOR_PRODUCT,
     CONTEXT_PANEL_MIN_YEAR,
+    EXOG_MONTHLY_FILENAME,
     CONTEXT_PRODUCTS,
     HORIZONS_CFG,
     INCLUDE_SPAIN,
     MODEL_MANIFEST_FILENAME,
     ORIGINAL_MODEL_NAME,
+    SERIES_FILENAME,
+    TARGET_METRIC,
     TRAIN_TEST_YEAR,
     TRAIN_VALIDATION_YEAR,
     TRAINING_CFG,
@@ -106,6 +114,24 @@ def resolve_task_type() -> str:
         return "GPU" if get_gpu_device_count() > 0 else "CPU"
     except Exception:  # pylint: disable=broad-exception-caught  # no CUDA runtime at all
         return "CPU"
+
+
+def default_split_years(series: pd.DataFrame) -> tuple[int, int]:
+    """(validation_year, test_year) for a series: test = last calendar year whose anchor price
+    (TOTAL LECHE LIQUIDA, PRECIO MEDIO) covers the 12 months, validation = the year before.
+
+    The split is by target month, so the test year must be fully observed; a year still in
+    progress (e.g. 2026 up to June) is left for inference.
+    """
+    anchor = series[(series["producto"] == ANCHOR_PRODUCT) & (series["metrica"] == TARGET_METRIC)]
+    months = anchor.dropna(subset=["valor"]).groupby(anchor["anio"].astype(int))["mes"].nunique()
+    complete = sorted(int(year) for year, n in months.items() if n == 12)
+    if not complete:
+        raise ValueError(
+            f"La serie no tiene ningún año con los 12 meses del precio de '{ANCHOR_PRODUCT}': no se pueden "
+            "fijar los años de validación y test."
+        )
+    return complete[-1] - 1, complete[-1]
 
 
 def build_training_config(task_type: str, validation_year: int, test_year: int) -> dict:
@@ -417,3 +443,17 @@ def save_training_artifacts(directory: Path, result: TrainingResult) -> None:
         }, fh, indent=2, ensure_ascii=True)
     with open(directory / "metrics.json", "w", encoding="utf-8") as fh:
         json.dump(result.metrics, fh, indent=2)
+
+
+def save_base_reference_data(directory: Path, series: pd.DataFrame, exog_csv: str | Path | None) -> None:
+    """Write the context data a new base version serves predictions from.
+
+    The series is the training CSV restricted to the five products the panels use (exactly what
+    load_reference_data keeps from the 338 MB official file, so predictions do not change); the
+    monthly exogenous CSV is copied as received only when /train got a new one (otherwise the new
+    version inherits the current one).
+    """
+    directory.mkdir(parents=True, exist_ok=True)
+    series.to_csv(directory / SERIES_FILENAME, index=False)
+    if exog_csv is not None:
+        shutil.copyfile(exog_csv, directory / EXOG_MONTHLY_FILENAME)

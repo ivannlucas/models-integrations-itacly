@@ -17,7 +17,7 @@ integrar.
 
 ## Requisito previo
 
-> ⚠ **No aplica a los modelos con `BASE_ARTIFACT_FOLDER`** (ml13, 14, 15, 16, 17, 18, 21 y 23).
+> ⚠ **No aplica a los modelos con `BASE_ARTIFACT_FOLDER`** (ml13, 14, 15, 16, 17, 18, 19, 21, 23 y 24).
 > No tienen explicabilidad: su modelo base cambia con cada reentreno y este servicio solo lee la
 > v0. Si alguno sigue registrado, se da de baja. Ver §9 de
 > `docs/superpowers/specs/2026-10-14-reentreno-actualiza-base-design.md`.

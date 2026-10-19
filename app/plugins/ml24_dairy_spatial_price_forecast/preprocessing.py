@@ -150,3 +150,27 @@ def ccaa_with_insufficient_history(anchor_panel: pd.DataFrame, target_col: str) 
                 f"del producto ancla hasta {last.strftime('%Y-%m')}"
             )
     return reasons
+
+
+def read_exog_csv(path: str, current_columns: list[str]) -> pd.DataFrame:
+    """Read a new monthly exogenous block (input_costs_monthly.csv schema) for /train.
+
+    Same reader as model_loader.load_reference_data (period_dt parsed). Checked against the
+    columns of the exogenous block in use, so a broken ETL output is a 400 before training
+    instead of features silently missing (they would be median-imputed) in the new base.
+    """
+    try:
+        exog = pd.read_csv(path, low_memory=False)
+    except (FileNotFoundError, pd.errors.EmptyDataError, pd.errors.ParserError, UnicodeDecodeError) as exc:
+        raise ValueError(f"exog_path: no se puede leer '{path}': {type(exc).__name__}: {exc}") from exc
+    missing = [c for c in current_columns if c not in exog.columns]
+    if missing:
+        shown = missing[:10] + (["..."] if len(missing) > 10 else [])
+        raise ValueError(
+            f"exog_path: faltan {len(missing)} columnas de las exógenas mensuales vigentes "
+            f"(input_costs_monthly.csv): {shown}"
+        )
+    exog["period_dt"] = pd.to_datetime(exog["period_dt"], errors="coerce")
+    if exog["period_dt"].isna().any():
+        raise ValueError("exog_path: la columna period_dt tiene valores vacíos o que no son fechas.")
+    return exog

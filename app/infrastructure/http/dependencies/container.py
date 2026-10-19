@@ -3,7 +3,7 @@ Dependency injection container for model plugins.
 Define aquí el ModelContainer, que se encarga de instanciar y cargar el plugin concreto,
 y de proporcionar los casos de uso y el servicio runtime asociados.
 
-Los plugins que declaran BASE_ARTIFACT_FOLDER (ml13, 14, 15, 16, 17, 18, 21, 23) publican cada
+Los plugins que declaran BASE_ARTIFACT_FOLDER (ml13, 14, 15, 16, 17, 18, 19, 21, 23, 24) publican cada
 reentreno como nueva versión del modelo base. Para ellos el contenedor serializa /train y
 /rollback con un lock, y tras activar una versión crea una instancia nueva del plugin, la carga
 y la sustituye; si no carga, el puntero vuelve a la versión anterior y se sigue sirviendo la

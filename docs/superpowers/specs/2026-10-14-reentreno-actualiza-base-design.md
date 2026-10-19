@@ -1,8 +1,8 @@
-# Reentreno que actualiza el modelo base (ml13, 14, 15, 16, 17, 18, 21, 23)
+# Reentreno que actualiza el modelo base (ml13, 14, 15, 16, 17, 18, 19, 21, 23, 24)
 
 **Fecha:** 14 de octubre de 2026 · **Rama:** `feature/retrain-updates-base-model` (desde `main` 1c2ebe6)
 **Estado:** implementado (commit e34bb9d). Revisado el 15 de octubre de 2026: decisiones de operación
-y baja en otros servicios en el §9
+y baja en otros servicios en el §9. Ampliado a ml19 y ml24 el 19 de octubre de 2026 (§10)
 
 ---
 
@@ -33,13 +33,13 @@ puntero"*, versionado y reversible.
 | D1 | Cuándo se promueve | **Siempre, automáticamente**: todo `/train` correcto pasa a ser la base. El rollback es la red de seguridad |
 | D2 | Dónde vive la versión vigente | **Puntero en S3** (`current.json` + `versions/<vN>/`), no MLflow Model Registry |
 | D3 | Réplicas | **Un solo pod**: recarga en proceso tras promover, sin sondeo periódico del puntero |
-| D4 | `mlflow_run_id` en `/train` | **Opcional** en estos 8 modelos. Si viene, el bundle también se sube al run (trazabilidad) |
+| D4 | `mlflow_run_id` en `/train` | **Opcional** en estos modelos. Si viene, el bundle también se sube al run (trazabilidad) |
 | D5 | Datos de contexto | ml21 publica el CSV de entrenamiento como panel; ml15 acepta CSV de referencia opcionales; ml14 lleva sus scalers en el bundle |
 
 ### Fuera de alcance
 
 - Scrapers, orquestador, monitorización del error y champion/challenger (resto de la propuesta).
-- Explicabilidad (SHAP) y detección de drift (ODD): dejan de aplicar a estos 8 modelos y se dan
+- Explicabilidad (SHAP) y detección de drift (ODD): dejan de aplicar a estos modelos y se dan
   de baja en esos servicios (§9).
 - Recarga entre réplicas, listado de versiones (`GET /versions`) y limpieza de versiones antiguas.
 - Integración con el entrenamiento asíncrono (`feature/async-train`, no está en `main`). Ver §8.
@@ -222,7 +222,7 @@ Al arrancar, si S3 falla al leer `current.json` o descargar, el modelo no carga,
 ## 6. Reglas del repo
 
 - `CLAUDE.md` y `.claude/skills/plugin-integration/SKILL.md`: la regla pasa a ser *"la base nunca se
-  sobrescribe en el sitio. En los modelos con `BASE_ARTIFACT_FOLDER` (13, 14, 15, 16, 17, 18, 21 y 23)
+  sobrescribe en el sitio. En los modelos con `BASE_ARTIFACT_FOLDER` (13, 14, 15, 16, 17, 18, 19, 21, 23 y 24)
   cada `/train` publica una versión nueva en `versions/<vN>/` y mueve `current.json`. En el resto,
   el modelo reentrenado vive solo en su run de MLflow"*.
 - README: endpoints `/rollback` y el campo `base_version`.
@@ -301,8 +301,8 @@ nuevo. Los modelos cuyos artefactos no están en local se saltan.
 | Quién reentrena | Solo un entorno controlado, fuera de la plataforma. Un script recopila la última versión de los datasets y llama a `POST /models/<id>/train` con ellos |
 | Cuándo | En una secuencia fija por modelo, que sale de su degradación esperada: la frecuencia de actualización de sus fuentes y su ventana de predicción (§1) |
 | Usuarios de la plataforma | Solo predicen, siempre con la versión base vigente. No pueden reentrenar estos modelos |
-| Explicabilidad (SHAP) | Deja de aplicar a los 8 modelos |
-| Detección de drift (ODD) | Deja de aplicar a los 8 modelos |
+| Explicabilidad (SHAP) | Deja de aplicar a estos modelos |
+| Detección de drift (ODD) | Deja de aplicar a estos modelos |
 
 Por eso `/train` y `/rollback` no llevan autenticación propia en este repo: el control es el
 entorno desde el que se llaman. Queda abierto añadir un token como defensa adicional si el API
@@ -323,6 +323,12 @@ servicio conoce a los modelos no coinciden con el `MODEL_ID` de este repo: se li
 | ml18-meat-spatial-price-forecast | Se mantiene | `ml18_meat_spatial_price_forecast` | `modelo-18` |
 | ml21-cereals-price-spatial | Se mantiene | `modelo21_cereales` | `modelo-21` |
 | ml23-lactic-market-price-forecast | Se mantiene | `dairy_price_forecast` | — (no registrado) |
+| ml19-cereals-cost-forecast | Sin dar de alta: al integrarlo, solo predicción | — (no registrado) | — (no registrado) |
+| ml24-dairy-spatial-price-forecast | Sin dar de alta: al integrarlo, solo predicción | — (no registrado) | — (no registrado) |
+
+ml19 y ml24 se añadieron el 19/10/2026 (§10). En las copias locales de `develop` de los tres repos
+(13 y 15 de octubre) no están dados de alta en ningún servicio: no hay nada que dar de baja, y en
+explicabilidad y ODD no deben darse de alta.
 
 **Front: `retech-lote2-xai-plataforma`**
 
@@ -365,13 +371,13 @@ promoción explicaría un modelo distinto del que se sirve.
 **Skills de este repo**
 
 `front-integration`, `explainability-integration` y `odd-integration` llevan una nota que excluye
-estos 8 modelos, para que no se vuelvan a dar de alta.
+estos modelos, para que no se vuelvan a dar de alta.
 
 ### 9.3 Pendiente de verificar en INT
 
 - **Código de error del proxy S3 sin `current.json`.** `refresh()` solo trata como "no existe"
   `NoSuchKey`, `404` y `NotFound`. Si el proxy de la plataforma responde otra cosa (por ejemplo,
-  403), los 8 modelos no cargan en el primer despliegue (503).
+  403), estos modelos no cargan en el primer despliegue (503).
 - **Permiso de escritura** de las credenciales del pod en `artifacts/fixed/` (`put_object` y
   `upload_file`). Hasta ahora ese prefijo solo se leía.
 - **Una sola réplica** por pod de estos modelos, sin autoescalado (decisión D3). Con dos réplicas,
@@ -379,3 +385,88 @@ estos 8 modelos, para que no se vuelvan a dar de alta.
   de la otra.
 - **Primer `/train` de cada modelo** contra S3 y MLflow reales: `versions/v1/` completa,
   `current.json` movido y `/stats` con `base_version` v1.
+- **ml19 y ml24: artefactos en S3.** A 19/10/2026 `artifacts/fixed/ml19_cereals_cost_forecast/` y
+  `artifacts/fixed/ml24_dairy_spatial_price_forecast/` están vacíos: hasta subirlos, los dos dan 503
+  al arrancar (acción del responsable, ver los `verification_report.md`).
+
+---
+
+## 10. Ampliación a ml19 y ml24 (19/10/2026)
+
+Los dos son modelos de series temporales que entraron en `main` después de este diseño (PR #20 y
+#22) con el patrón anterior. Siguen ya las mismas reglas que el resto (D1-D5, §3-§9).
+
+### 10.1 ml19 (coste de cereales, DATAGIA-19)
+
+- **`/train` pasa de 501 a real.** El manifest lo descartaba porque el entrenamiento solo opera
+  sobre el `dataset_v7_fe.csv` que genera el ETL completo (MAPA, ESYRCE, Earth Engine, mercados).
+  Con el flujo del §9 ese ETL lo ejecuta el script del entorno controlado y `/train` recibe el
+  dataset resultante.
+- **Port fiel** de `src/training/train.py::run_multihorizon_training` en `training.py`, con las
+  funciones del pipeline oficial copiadas literalmente en `_vendor/training_core.py` (un test
+  compara su AST con el entregable). Verificado con el dataset entregado: features, modelos
+  elegidos, métricas walk-forward y predicciones de los `.pkl` idénticos bit a bit al original en
+  el mismo entorno. ~70 s.
+- **Dataset de inferencia.** El CSV recibido se publica como `dataset_v7_fe.csv` de la versión
+  nueva, igual que el panel de ml21: resuelve el known issue "dataset congelado en 2026-01".
+- `TRAIN_END = 2019-12-31` se mantiene como en el original: solo acota la selección de features y
+  el inicio del walk-forward; los modelos finales se reentrenan sobre todos los datos.
+- **Fichero sobrante.** Si la selección cambia de modelo (p. ej. h2 clasificación XGBoost →
+  LogReg), la versión nueva hereda también el `.pkl` anterior. No se usa (el loader resuelve por
+  `training_meta.json`) pero queda en la carpeta.
+- **ETL semimanual.** Las descargas de Precios Pagados del MAPA y del cuadro provincial de ESYRCE
+  (anual) y la autenticación de Earth Engine son pasos manuales del `GUION_ACTUALIZACION_DATOS.md`
+  del entregable: el script de ml19 no puede ser completamente automático.
+
+### 10.2 ml24 (precio lácteo espacial, ESP-LACTEO)
+
+- **Años de validación y test.** Con los del entregable (2019/2020) los paneles se cortan en 2020 y
+  un reentreno programado republicaría el modelo de 2020 sin avisar (comprobado: mismas 4063
+  filas que el artefacto entregado). Si `/train` no los recibe, se derivan de la serie: test = último
+  año con los 12 meses del precio ancla y validación = el anterior. Siguen pudiendo indicarse.
+- **Serie de inferencia.** La serie recibida se publica en la versión nueva restringida a los 5
+  productos que usan los paneles (26 MB frente a 338 MB; predicciones idénticas, comprobado).
+- **Exógenas.** `exog_path` opcional con el formato de `input_costs_monthly.csv`, validado contra las
+  columnas vigentes antes de entrenar (400 si faltan). Si viene, se entrena con él y se publica; si
+  no, se usan y heredan las vigentes y `upload_warning` lo indica, como los CSV de referencia de ml15.
+- **`ml_alpha = 0` con datos recientes (decisión: se activa y se documenta).** Reentrenando con
+  validación 2024 y test 2025, la calibración deja `ml_alpha = 0` en h1 y h3 (y `w1 ≈ 0`): la
+  predicción queda en el baseline estacional `y_persist_12` y el CatBoost no aporta. Exactitud de
+  test 2025: 95-96 % (KPI ≥ 80 %). Es el procedimiento del equipo de IA aplicado a datos nuevos, no
+  un fallo del port; queda trasladado al equipo en el manifest.
+- **GPU.** CatBoost entrena en GPU si la ve (como el original) y en CPU si no. Los resultados no
+  son reproducibles bit a bit entre hardware (ya documentado en el manifest).
+
+### 10.3 Versión de xgboost
+
+El entregable de ml19 usa `xgboost==3.2.0`; el repo pide `xgboost>=2.0.0` (el entorno tenía 3.4.1),
+y reentrenar ml19 con 3.4.1 elige LogReg en lugar de XGBoost en h2 de clasificación (AUC de XGBoost
+0,7782 → 0,7672). Antes de fijar 3.2.0 se comprobó el impacto en el resto de modelos (3.4.1 frente a
+3.2.0):
+
+| Comprobación | Resultado |
+|---|---|
+| Inferencia: los 20 estimadores xgboost de ml16, ml19, ml21 y ml25 | Idéntica bit a bit |
+| Reentreno ml13 (datos entregados) | Idéntico |
+| Reentreno ml16 (`dataset_clasificacion_base.csv`) | Umbral `target_animales` 0,44 → **0,48** = el del artefacto entregado; resto igual |
+| Reentreno ml21, regresor H3 (único XGBoost) | MAE test 0,1014 → 0,0986 (memoria: 0,1012) |
+| Tests de ml13, ml16, ml19, ml21, ml25 y de recarga con 3.2.0 | En verde |
+
+ml25 entrena RandomForest y ml23/ml30 solo mencionan xgboost en metadatos. **Decisión (19/10/2026):
+se fija `xgboost==3.2.0` en `requirements.txt`**; el cambio en el H3 de ml21 se acepta.
+
+**Corrección tras fijar la versión.** Con 3.2.0 el reentreno de ml19 sigue eligiendo LogReg en h2 de
+clasificación (AUC walk-forward del XGBoost: 0,7538 con 3.2.0, 0,7672 con 3.4.1, 0,7782 entregado). Los
+`.pkl` entregados se entrenaron con xgboost 3.2.0 y la misma configuración (`hist`, cpu, semilla 42)
+pero en Windows (`run_manifests`: Python 3.11.9 MSC, Windows 10); reajustar en Linux con la misma
+versión, datos, scaler (idéntico) y parámetros da árboles distintos (hasta 0,095 en probabilidad).
+La diferencia es de plataforma, no de versión: ningún pin la elimina. Los modelos XGBoost de los
+reentrenos no son reproducibles bit a bit frente al entregable; la inferencia de los artefactos sí lo
+es. El pin se mantiene por el resto de resultados de la tabla.
+
+### 10.4 Tests
+
+`test_ml19_base_promotion.py`, `test_ml24_base_promotion.py` y los casos de ml19 y ml24 en
+`test_base_reload_per_model.py` (recarga real desde `versions/v1/` con los artefactos entregados).
+La lista de modelos que promueven su base del test de contrato MLflow se lee ahora del registro
+(`BASE_ARTIFACT_FOLDER`), con un test que la compara con la documentada.

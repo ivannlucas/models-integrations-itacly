@@ -97,25 +97,36 @@ outputs:
           confidence: str              # ALTA (reg y clf coinciden en signo) | BAJA (discrepan)
 
 training:
-  supported: false
-  target_column: null
-  required_columns: null
-  hyperparams: null
-  metrics_returned: null
-  source: null
-  reason: >
-    El codigo de entrenamiento (src/training/train.py) SI existe, pero opera
-    exclusivamente sobre data/processed/auto/dataset_v7_fe.csv -- no acepta un
-    CSV de usuario como data_path (a diferencia de los modelos 13/14/18). Para
-    regenerar ese dataset hace falta ejecutar el pipeline ETL completo
-    (src/data_processing/), que requiere autenticacion Google Earth Engine,
-    descarga manual de ficheros Excel del MAPA/ESYRCE y llamadas en vivo a
-    Yahoo Finance -- infraestructura externa fuera del alcance de un endpoint
-    de reentrenamiento de plugin. No se inventa un contrato de
-    train(data_path=<csv_usuario>) que el equipo de IA no definio para este
-    modelo. La memoria (seccion 10.4, "Protocolo de reentrenamiento") confirma
-    que el reentrenamiento es una operacion manual semestral
-    (`python -m src.main all`), no un servicio expuesto.
+  supported: true
+  # (19/10/2026) Antes `supported: false`: el entrenamiento solo opera sobre el
+  # dataset_v7_fe.csv que genera el ETL completo, y ese ETL queda fuera de un
+  # endpoint. Con la operacion de los modelos de series temporales (spec
+  # docs/superpowers/specs/2026-10-14-reentreno-actualiza-base-design.md, §9 y
+  # §10) el ETL lo ejecuta un script en un entorno controlado y /train recibe el
+  # dataset resultante, asi que el motivo deja de aplicar.
+  source: codigo_entrenamiento   # src/training/train.py::run_multihorizon_training (pipeline oficial)
+  input_schema: "dataset_v7_fe.csv (salida de python -m src.main data_processing): date, target_media, target_ret_next, target_dir_next + features de ingenieria; las filas sin target (frente de produccion) solo sirven para inferencia"
+  required_columns: [date, target_media, target_ret_next, target_dir_next]
+  target_column: target_media   # ret_{h}m = pct_change(h).shift(-h)*100, dir_{h}m = ret_{h}m > 0
+  hyperparams:   # src/utils/constants.py, literal
+    train_end: "2019-12-31"   # fijo: acota la seleccion de features y el inicio del walk-forward
+    min_corr: 0.08
+    horizons: [1, 2, 3]
+    ridge_alpha: 100
+    lasso_alpha: "calibrado sobre train (TimeSeriesSplit(5), max Pearson r) entre [0.01..10]"
+    xgb: {max_depth: 2, learning_rate: 0.1, subsample: 0.7, colsample_bytree: 0.6, reg_alpha: 1.0, reg_lambda: 5.0, n_estimators: 200, random_state: 42}
+    logreg_C: 0.1
+    random_forest: {n_estimators: 200, max_depth: 3, min_samples_leaf: 10, random_state: 42}
+    seleccion: {regresion: max_sharpe, clasificacion: max_auc}
+  metrics_returned: "por horizonte, metricas walk-forward (desde train_end) del modelo elegido: reg corr/dir_acc/sharpe/mae/rmse/r2, clf acc/f1/auc/brier/sharpe; n_features, lasso_alpha, rango de fechas"
+  duracion: "~70 s en CPU con el dataset entregado (238 filas)"
+  fidelidad_verificada: "Port (app/plugins/ml19_cereals_cost_forecast/training.py) frente a train.py original en el mismo entorno: features, modelos elegidos, metricas walk-forward y predicciones de los 6 .pkl identicos bit a bit. Funciones del pipeline copiadas literalmente en _vendor/training_core.py (test de AST frente al entregable)."
+  persistencia: "Cada /train publica una version nueva del modelo base (versions/<vN>/: los .pkl elegidos, training_meta.json, model_selection_audit.json y el dataset_v7_fe.csv recibido, que pasa a ser el dataset de inferencia). Con mlflow_run_id se sube tambien al run (trazabilidad)."
+  plugin_adaptations:
+    - "El dataset llega por data_path en lugar de la ruta fija data/processed/auto/dataset_v7_fe.csv"
+    - "No se llama a _seed_everything(42): todos los estimadores reciben random_state=42 y nada usa los RNG globales (servidor compartido); verificado identico sin ella"
+    - "No se escriben los sidecars .sha256, las trazas walk-forward, los CSV de resultados/splits ni el informe de consola (diagnostico del repo original)"
+  reproducibilidad_xgboost: "El reentreno en Linux elige LogReg en h2 de clasificacion en lugar del XGBoost entregado (AUC walk-forward del XGBoost 0.7538 con xgboost 3.2.0, 0.7672 con 3.4.1, 0.7782 entregado; LogReg 0.7731 en todos). Los .pkl se entrenaron con xgboost 3.2.0 en Windows (run_manifests); reajustar con la misma version, datos, scaler y parametros en Linux da arboles distintos: es diferencia de plataforma, no de version. Se fija xgboost==3.2.0 en requirements.txt (19/10/2026) por el resto de modelos (spec §10.3), pero no la elimina. La inferencia de los artefactos entregados es identica."
 
 constraints: {}   # no se han encontrado restricciones duras de negocio tipo "PU >= X" en el codigo
 
@@ -563,6 +574,8 @@ golden_cases:
 known_issues:
   - id: arquitectura_dataset_congelado
     detail: >
+      (RESUELTO 19/10/2026: cada /train publica el dataset recibido como dataset de
+      inferencia de la version nueva del modelo base; ver training.persistencia.)
       El plugin empaqueta data/processed/auto/dataset_v7_fe.csv como artefacto
       estatico (ver nota de arquitectura al inicio de este manifest). La ultima
       fila real es 2026-01 -- el plugin NUNCA avanzara mas alla de esa fecha
