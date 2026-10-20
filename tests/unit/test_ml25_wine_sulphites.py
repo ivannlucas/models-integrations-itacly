@@ -10,7 +10,7 @@ def test_health(client):
     assert body == {
         "status": "ok",
         "model": "ml25-wine-sulphites",
-        "version": "1.2.0",
+        "version": "1.3.0",
         "loaded": True,
     }
 

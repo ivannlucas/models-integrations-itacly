@@ -405,7 +405,7 @@ REGISTRY: list[ModelEntry] = [
     ModelEntry(
         model_id="ml25-wine-sulphites",
         prefix="/models/ml25-wine-sulphites",
-        version="1.2.0",
+        version="1.3.0",
         plugin_class=Ml25WineSulphitesPlugin,
         predict_request_type=Ml25Wine_Request,
         predict_response_type=Ml25Wine_Response,

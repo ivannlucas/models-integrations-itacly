@@ -2,7 +2,12 @@
 
 MODEL_ID = "ml25-wine-sulphites"
 ARTIFACT_FOLDER_NAME = "ml25_wine_sulphites"
-VERSION = "1.2.0"
+VERSION = "1.3.0"
+
+# Batch predictions attach the full dose simulation (~40 points) to every row up to this many
+# rows, so the monitoring panel can show each tank's trajectory (a winery sends 5-6 tanks a week).
+# Larger batches keep only the first row's, to avoid multiplying the response size.
+BATCH_TRAJECTORY_MAX_ROWS = 100
 
 # Percentiles (p1/p99) of 'free sulfur dioxide' in the real training dataset
 # (inbox/a25/codigo/data/white_wine.csv, 4898 filas) — fallback used by
