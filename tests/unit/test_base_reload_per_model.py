@@ -313,3 +313,60 @@ def test_ml23_reloads_the_promoted_base(monkeypatch, tmp_path, isolated_base_sto
 
     _train_and_reload(container, store, isolated_base_store, ARTIFACT_FOLDER_NAME, str(csv))
     assert _predict_batch(container, str(csv))
+
+
+def _predict_inline(container, payload: dict):
+    entry = _entry(type(container._plugin))  # pylint: disable=protected-access
+    body = TypeAdapter(entry.predict_request_type).validate_python({"mode": "inline", **payload})
+    return container.predict_use_case.execute(body)
+
+
+# ── ml19 ───────────────────────────────────────────────────────────────────────
+
+def test_ml19_reloads_the_promoted_base_and_its_new_dataset(monkeypatch, tmp_path, isolated_base_store):
+    from app.plugins.ml19_cereals_cost_forecast import model_loader
+    from app.plugins.ml19_cereals_cost_forecast._vendor import training_core
+    from app.plugins.ml19_cereals_cost_forecast.constants import ARTIFACT_FOLDER_NAME, DATASET_FE_FILENAME
+    from app.plugins.ml19_cereals_cost_forecast.plugin import Ml19CerealsCostForecastPlugin
+
+    for params in (training_core.XGB_PARAMS, training_core.XGBC_PARAMS, training_core.RF_PARAMS):
+        monkeypatch.setitem(params, "n_estimators", 10)
+    container, store = _start_on_v0(monkeypatch, isolated_base_store, ARTIFACT_FOLDER_NAME, model_loader,
+                                    Ml19CerealsCostForecastPlugin)
+    # The delivered dataset plus one month: the promoted base must serve that month.
+    dataset = pd.read_csv(isolated_base_store / ARTIFACT_FOLDER_NAME / DATASET_FE_FILENAME)
+    last = pd.to_datetime(dataset["date"]).max()
+    new_month = dataset.tail(1).copy()
+    new_month["date"] = (last + pd.DateOffset(months=1)).strftime("%Y-%m-%d")
+    csv = tmp_path / "dataset_v7_fe.csv"
+    pd.concat([dataset, new_month], ignore_index=True).to_csv(csv, index=False)
+
+    _train_and_reload(container, store, isolated_base_store, ARTIFACT_FOLDER_NAME, str(csv))
+    out = _predict_inline(container, {})
+    assert out.date_label == (last + pd.DateOffset(months=1)).strftime("%Y-%m")
+
+
+# ── ml24 ───────────────────────────────────────────────────────────────────────
+
+def test_ml24_reloads_the_promoted_base_with_its_series(monkeypatch, isolated_base_store):
+    pytest.importorskip("catboost")
+    from app.plugins.ml24_dairy_spatial_price_forecast import model_loader
+    from app.plugins.ml24_dairy_spatial_price_forecast.constants import (
+        ARTIFACT_FOLDER_NAME, SERIES_FILENAME, TRAINING_CFG,
+    )
+    from app.plugins.ml24_dairy_spatial_price_forecast.plugin import Ml24DairySpatialPriceForecastPlugin
+
+    monkeypatch.setitem(TRAINING_CFG, "catboost_iterations", 20)
+    container, store = _start_on_v0(monkeypatch, isolated_base_store, ARTIFACT_FOLDER_NAME, model_loader,
+                                    Ml24DairySpatialPriceForecastPlugin)
+    served_v0 = container._plugin._reference["series"]  # pylint: disable=protected-access
+    series_csv = isolated_base_store / ARTIFACT_FOLDER_NAME / SERIES_FILENAME
+
+    resp = _train_and_reload(container, store, isolated_base_store, ARTIFACT_FOLDER_NAME, str(series_csv))
+    assert resp.test_year > 2020   # derived from the series, not the delivered 2019/2020
+    v1 = isolated_base_store / ARTIFACT_FOLDER_NAME / "versions" / "v1"
+    assert (v1 / SERIES_FILENAME).stat().st_size < series_csv.stat().st_size   # only the 5 model products
+    served_v1 = container._plugin._reference["series"]  # pylint: disable=protected-access
+    assert len(served_v1) == len(served_v0)
+    out = _predict_inline(container, {"ccaa": ["CYL"], "horizons": [1]})
+    assert out.n_predictions == 1

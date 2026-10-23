@@ -1,0 +1,107 @@
+{
+  "model_id": "a24",
+  "model_slug": "dairy-spatial-price-forecast",
+  "fecha": "Octubre 2026",
+  "descripcion": "Herramienta que estima cuál será el precio medio de la leche líquida que pagan los hogares en cada comunidad autónoma dentro de 1, 3 y 6 meses, a partir de los datos oficiales de consumo del Ministerio de Agricultura, de lo que ocurre en las comunidades vecinas y de la evolución del mercado lácteo europeo.",
+  "objetivo": "Ayudarte a anticipar cómo evolucionará el precio de la leche en cada comunidad para planificar compras, la cadena de suministro y las decisiones territoriales con más antelación. El objetivo fijado es acertar al menos un 80 % (error medio inferior al 20 %).",
+  "caso_uso": "Cada mes, cuando se publican datos nuevos, consultas la predicción: eliges las comunidades y los plazos (1, 3 o 6 meses) que te interesan, o pides todas. Para cada combinación obtienes el precio esperado junto al último precio conocido y la antigüedad de los datos usados. Comparas la tendencia con tu planificación y, si la predicción se aleja mucho del último precio, la revisas antes de decidir.",
+  "que_no_responde": "No da el precio exacto que pagarás ni explica por qué sube o baja; tampoco anticipa crisis, cambios regulatorios o subidas bruscas sin precedente en el histórico.",
+  "entradas_contexto": "El sistema trabaja con datos oficiales ya publicados: el panel mensual de consumo alimentario en hogares del Ministerio de Agricultura (MAPA) por comunidad autónoma, la relación de fronteras entre comunidades y los precios del mercado lácteo europeo. No necesitas introducir mediciones propias.",
+  "ejemplo_interpretacion": "Con datos hasta junio de 2026, para Castilla y León el último precio conocido es 0,95 EUR/l y el sistema devuelve 0,88 EUR/l a un mes. Esa diferencia no indica necesariamente una bajada real: desde 2022 el modelo tiende a quedarse por debajo del precio real (un 7-12 % a un mes en 2023-2026). Contrasta siempre la predicción con el último precio conocido.",
+  "margen_error": "Con precios estables (evaluación de 2020) se equivoca de media un 2 % (unos 1,3 céntimos por litro). Con los precios actuales, más altos que los que conoció al entrenarse, el error medio sube al 9 % a un mes y al 15 % a tres o seis meses, casi siempre por debajo del precio real.",
+  "revisar_manualmente": [
+    "Siempre que la predicción se aleje más de un 5 % del último precio conocido: desde 2022 suele deberse a la infraestimación del modelo, no a un cambio real del mercado.",
+    "Predicciones a 3 y 6 meses con los precios actuales: en 2025-2026 su exactitud fue del 79,5 % a 3 meses (por debajo del objetivo del 80 %) y del 82 % a 6 meses.",
+    "Cuando el aviso de frescura indique que el dato del MAPA tiene más de 24 meses de antigüedad.",
+    "Cuando alguna comunidad aparezca como omitida por histórico insuficiente.",
+    "Periodos de crisis de suministro, cambios fiscales o regulatorios, o subidas bruscas de costes energéticos o de materias primas."
+  ],
+  "que_no_hace": [
+    "No predice otros productos lácteos (yogures, quesos, batidos): solo el precio medio de la leche líquida.",
+    "No da predicciones para toda España, provincias, municipios ni puntos de venta: solo por comunidad autónoma.",
+    "No predice a horizontes distintos de 1, 3 y 6 meses.",
+    "No descarga por sí mismo los datos nuevos del MAPA ni del mercado europeo: hay que actualizarlos.",
+    "No sustituye el criterio del equipo de compras ni el conocimiento del mercado.",
+    "No reemplaza el modelo base al reentrenar: el modelo reentrenado solo se usa si se indica expresamente."
+  ],
+  "puede_equivocarse": "Sí. En la evaluación oficial de 2020 acertaba con un error medio del 2 % y mejoraba ligeramente a repetir el último precio. Pero desde la subida de precios de 2022 se equivoca bastante más (error medio del 9 al 15 %), casi siempre por debajo del precio real, y en ese periodo repetir el último precio conocido habría sido más preciso. Úsalo como una referencia más para la decisión, nunca como garantía, y contrástalo con el último precio publicado.",
+  "kpis": [
+    {
+      "kpi": "Exactitud de la predicción (100 - error porcentual medio)",
+      "valor_umbral": ">= 80 % (caso de uso CU12)",
+      "descripcion": "Cumple con holgura en la evaluación oficial de 2020 (98,1 / 98,0 / 98,0 % a 1, 3 y 6 meses). Con datos reales 2021-2026: 91,0 / 85,3 / 85,6 %; en 2025-2026 a 3 meses baja al 79,5 %, por debajo del umbral (validación pendiente con el equipo de IA)."
+    },
+    {
+      "kpi": "Mejorar a la referencia temporal simple",
+      "valor_umbral": "Error menor que el de la referencia en los 3 horizontes",
+      "descripcion": "Cumple en 2020. Desde 2022 no mejora a repetir el último precio conocido."
+    },
+    {
+      "kpi": "Señal de revisión del modelo (propuesta de la memoria)",
+      "valor_umbral": "Error > 5 % durante 6 meses seguidos en algún horizonte",
+      "descripcion": "Con datos reales se habría activado ya en 2022 (junio a 3 y 6 meses, diciembre a 1 mes) y sigue activa: corresponde revisar o reentrenar el modelo."
+    }
+  ],
+  "inputs": [
+    {
+      "nombre": "Comunidades autónomas",
+      "descripcion": "Las comunidades que quieres consultar (por defecto, las 17). No incluye el total de España."
+    },
+    {
+      "nombre": "Plazos de predicción",
+      "descripcion": "1, 3 y/o 6 meses vista (por defecto, los tres)."
+    },
+    {
+      "nombre": "Fecha de corte (opcional)",
+      "descripcion": "Para comprobar cómo habría acertado en el pasado: el sistema usa solo los datos publicados hasta ese mes."
+    },
+    {
+      "nombre": "Fichero de datos propio (opcional)",
+      "descripcion": "Si dispones de una versión más reciente del panel de consumo del Ministerio, puedes enviarla en lugar de la incluida."
+    }
+  ],
+  "outputs": [
+    {
+      "nombre": "Precio esperado",
+      "descripcion": "Precio medio estimado de la leche líquida (euros por litro) para cada comunidad y plazo.",
+      "interpretacion": "Es una estimación: compárala siempre con el último precio conocido. Desde 2022 suele quedarse por debajo del precio real."
+    },
+    {
+      "nombre": "Último precio conocido y precio de hace un año",
+      "descripcion": "Las referencias que usa el sistema como punto de partida.",
+      "interpretacion": "Si el precio esperado se aleja más de un 5 % del último conocido, revísalo a mano."
+    },
+    {
+      "nombre": "Antigüedad de los datos",
+      "descripcion": "Último mes publicado por el Ministerio y por el mercado europeo, y cuántos meses han pasado.",
+      "interpretacion": "Si los datos del Ministerio tienen más de 24 meses, el sistema te avisa: la fiabilidad baja."
+    },
+    {
+      "nombre": "Avisos",
+      "descripcion": "Mensajes sobre datos desactualizados o comunidades sin histórico suficiente.",
+      "interpretacion": "Normalmente vacío; si aparece una comunidad omitida, no hay predicción para ella."
+    }
+  ],
+  "limitaciones": [
+    {
+      "tipo": "Se queda corto con los precios actuales",
+      "descripcion": "Aprendió con precios de 1999 a 2020. Con la subida de precios desde 2022 tiende a predecir por debajo del precio real (entre un 7 % y un 19 %). Hasta que el equipo de IA lo reentrene con datos recientes, toma sus cifras como orientativas."
+    },
+    {
+      "tipo": "Fecha objetivo pendiente de aclarar",
+      "descripcion": "El mes al que se refiere cada predicción está pendiente de confirmar con el equipo de IA (puede corresponder a un mes posterior al indicado). Validación pendiente antes de usarlo para decisiones con fecha cerrada."
+    },
+    {
+      "tipo": "Datos que hay que mantener al día",
+      "descripcion": "El sistema no descarga solo los datos nuevos del Ministerio ni del mercado europeo: alguien tiene que actualizarlos para que las predicciones partan de lo último publicado."
+    },
+    {
+      "tipo": "Cambio de metodología del Ministerio en 2021",
+      "descripcion": "Los datos recientes se elaboran con otra base estadística que los usados para entrenar; puede afectar a la comparación."
+    },
+    {
+      "tipo": "Solo leche líquida, por comunidad, a 1, 3 o 6 meses",
+      "descripcion": "No sirve para otros productos lácteos, para provincias o puntos de venta, ni para otros plazos."
+    }
+  ]
+}

@@ -1,0 +1,410 @@
+model_id: ml24-dairy-spatial-price-forecast
+sector: lacteo
+nombre: "Desarrollo de un modelo espacial de predicción de precios en áreas concretas en el sector lácteo"
+# Título literal del entregable v1.4 (24/09/2026). Acrónimo de la memoria: ESP-LACTEO; caso de uso
+# de negocio CU12 (memoria, "Introducción" y "Objetivos"). Nombre interno del modelo del equipo de
+# IA: spatial_price_model (config/config.yaml::release.model_id), Air-Institute.
+task_type: regression  # serie temporal panel (17 CCAA), multihorizonte directo h=1/3/6 meses, con señales espaciales entre CCAA vecinas
+framework:
+  - catboost==1.2.10   # CatBoostRegressor, un modelo .cbm por horizonte
+  - pandas==3.0.2      # requirements.txt del código entregado
+  - numpy==2.4.4
+  - scikit-learn==1.8.0  # solo mean_absolute_error (calibración baseline/alpha y métricas)
+  - pyyaml==6.0.3      # config.yaml (no lo usa el plugin: valores copiados a constants.py)
+
+# ============================================================================
+# FUENTES Y ESTADO DE ACEPTACIÓN
+# ============================================================================
+# - Código: inbox/a24/codigo/ (sin .git propio). README verificado por el equipo el 2026-09-23.
+# - Memoria: inbox/a24/entregable/24 - ... - v1.4.docx. Sigue la estructura estándar de secciones
+#   (Entradas y salidas, Arquitectura y algoritmos, Hiperparámetros, Resultados train/val/test,
+#   Despliegue, Limitaciones) -> no hizo falta parar a pedir confirmación.
+# - No hay "Ficha de Valoración del Estado Técnico" en el entregable: no consta dictamen de
+#   aceptación formal de ITACYL (la memoria v1.3/v1.4 recoge "cambios tras las correcciones de
+#   ITACYL"). Ver known_issues.
+# - requirements.txt: ASCII/LF, sin problemas de encoding. Incluye ~40 paquetes de Jupyter/EDA
+#   (ipykernel, plotly, geopandas, torch...) que la inferencia no necesita. El repo NO tenía
+#   catboost en requirements.txt: se añade catboost==1.2.10 (misma versión que el entregable).
+
+artifacts:
+  folder: models/artifacts/spatial_price_model/   # ruta dentro del código entregado
+  files:
+    - model_manifest.json                # orden de horizontes y rutas (md5 d5bc259cdf57f71c63c5a50a928c6f3b)
+    - h1/spatial_price_model_h1.cbm      # CatBoost nativo (md5 6d183abec9e8653d0e828fb3e2df4007)
+    - h1/spatial_price_model_h1_metadata.json   # feature_cols (34), selected_*, w1/w12, ml_alpha (md5 b8c7017e…)
+    - h3/spatial_price_model_h3.cbm      # md5 2ec6dc1e5de30a27e1bbd00cc1402ceb, 30 features
+    - h3/spatial_price_model_h3_metadata.json   # md5 d7eb3b0c…
+    - h6/spatial_price_model_h6.cbm      # md5 d575667bb3e925633947fe07a60afce9, 34 features
+    - h6/spatial_price_model_h6_metadata.json   # md5 2e0db754…
+  extra_bundled_data_required_at_inference:
+    # La inferencia reconstruye los paneles en runtime a partir de la serie larga (README,
+    # "Paquete mínimo para inferencia"): sin estos ficheros no hay predicción posible.
+    - data/processed/series_consumo/series_consumo_lacteos_ccaa.csv   # 337.880.418 bytes, md5 1fb02a2f64be8bc5a859efcf1e330e78, 1999-01..2026-06
+    - data/processed/spatial/ccaa_border_percentage_matrix.csv        # md5 e7f7524edf570ca4dd2e770a01bed7ba
+    - data/processed/exogenous/input_costs_monthly.csv                # md5 4e6ffa203066ad11ce5ec59fac69dee7, 242 filas x 174 cols, hasta 2026-09
+  plugin_layout: >
+    artifacts/ml24_dairy_spatial_price_forecast/ (plano, sin subcarpetas h*): los 10 ficheros
+    anteriores, copiados bit a bit (md5 comprobados el 2026-10-14). Las rutas Windows dentro de
+    model_manifest.json / *_metadata.json no se usan: el plugin resuelve por nombre de fichero.
+  no_scaler: "No hay scaler, pickle ni joblib: CatBoost nativo .cbm (README y memoria 8.3)."
+
+inputs:
+  # Contrato real de src/predict/predictor.py + validate_inference_input (memoria 8.4).
+  series_long_format:
+    description: >
+      Serie larga del panel de consumo alimentario en hogares del MAPA (salida de
+      scripts/data_processing.py): una fila por (anio, mes, ccaa, producto, metrica). La inferencia
+      usa el producto ancla TOTAL LECHE LIQUIDA y 4 productos de contexto, y predice para la última
+      fila disponible de cada CCAA.
+    required_columns: [anio, mes, ccaa, producto, metrica, valor, es_reconstruido]
+    required_products: ["TOTAL LECHE LIQUIDA", "LECHE ESTERILIZADA", "LECHE ENTERA", "LECHE DESNATADA", "LECHE SEMIDESNATAD"]
+    target_metric: "PRECIO MEDIO kg o litros"
+    metrics_used: ["CONSUMO X CAPITA", "GASTO X CAPITA", "PENETRACION (%)", "PRECIO MEDIO kg o litros", "VALOR (Miles Euros)", "VOLUMEN (Miles kg o litros)"]
+    min_history_months_per_ccaa: 13   # lag_12 (memoria 8.4)
+    ccaa: [ANDALUCIA, ARAGON, "C. FORAL DE NAVARRA", CANARIAS, CANTABRIA, "CASTILLA - LA MANCHA", "CASTILLA Y LEON", CATALUNA, "COMUNIDAD DE MADRID", "COMUNITAT VALENCIANA", EXTREMADURA, GALICIA, "ILLES BALEARS", "LA RIOJA", "PAIS VASCO", "PRINCIPADO DE ASTURIAS", "REGION DE MURCIA"]
+    excluded: "T.ESPANA (include_spain: false); la media nacional se calcula como media entre CCAA"
+  fixed:
+    - spatial_weights: "Matriz de % de frontera terrestre entre CCAA (NUTS2 GISCO, EPSG:3035), normalizada por filas"
+    - monthly_exogenous: "input_costs_monthly.csv: indicadores del mercado lácteo UE (milk_*, dairy_*, ratio_cheese_*) agregados a mes"
+  control: []
+  plugin_contract:
+    predict_inline: {ccaa: "lista opcional de códigos de 3 letras (src/utils/ccaa_codes.py) o nombres", horizons: "subconjunto opcional de [1,3,6]", as_of_period: "YYYY-MM opcional: corta la serie base (equivale a --input truncado)", mlflow_run_id: "opcional"}
+    predict_batch: {data_path: "CSV en formato largo (el --input del original); devuelve 17 CCAA x 3 horizontes", mlflow_run_id: "opcional"}
+  derived_if_missing:
+    note: >
+      Todas las features se derivan de la serie (no se aportan): rezagos 1/3/6/12, medias y desv.
+      móviles 3/6/12, media espacial ponderada por fronteras y sus rezagos, diferencias local-espacial
+      y local-España, estacionalidad (target_month sin/cos, quarter), y_persist_1/12, brechas
+      estacionales, cuota frente a España (lag 12) y rezagos 1/2/3/6 de las exógenas mensuales.
+      Faltantes: imputación por mediana (en inferencia, mediana del propio frame de inferencia).
+
+outputs:
+  predict_inline:
+    - name: predictions
+      type: "list[dict]"
+      description: >
+        Una fila por CCAA x horizonte con las columnas de predictor.py: feature_period (último mes de
+        dato), period (= feature_period + h), ccaa, ccaa_code, horizon_months, y_pred (EUR/kg o litro),
+        y_baseline_calibrated, y_persist_1, y_persist_12, selected_anchor/context/exog.
+    - name: data_freshness
+      type: dict
+      description: "main_source_last_period/lag_months y exog_last_period/lag_months (predictor._compute_data_freshness)"
+    - name: warnings
+      type: "list[str]"
+      description: "Desfase MAPA > 24 meses (max_validated_lag_months) o CCAA omitidas por histórico < 13 meses"
+  predict_batch:
+    - "mismo contrato que predict_inline, a partir del CSV de data_path; siempre 17 CCAA x 3 horizontes (51 filas con el dato oficial)"
+
+constraints:
+  # No hay restricciones duras de negocio sobre el valor predicho. Sí hay reglas de contrato de
+  # entrada que el plugin convierte en excepciones de dominio (422), en
+  # app/plugins/ml24_dairy_spatial_price_forecast/exceptions.py (no se toca app/domain):
+  contrato_serie: "SeriesContractError: faltan columnas, productos ancla/contexto o la métrica objetivo (memoria 8.4)"
+  ccaa_validas: "UnknownCcaaError: código/nombre no reconocido, o ESP/T.ESPANA (no servida: include_spain=false)"
+  historial_minimo: "InsufficientPriceHistoryError: ninguna CCAA con 13 meses consecutivos de precio ancla hasta su último periodo. Las CCAA por debajo se omiten con aviso (memoria 8.4); el original las predecía con valores imputados por mediana."
+  horizontes_oficiales: "Solo 1, 3 y 6 meses (memoria 4.3: cualquier otro carece de respaldo estadístico); el DTO no admite otros."
+  kpi: "Exactitud (100 - sMAPE) >= 80% -- KPI de aceptación de negocio, no restricción de inferencia"
+
+training:
+  supported: true
+  # El motor servido (3 CatBoostRegressor + pesos de baseline + ml_alpha) se entrena con
+  # scripts/train.py -> src/training/train.py::train_model, entregado completo. Port fiel en
+  # app/plugins/ml24_dairy_spatial_price_forecast/training.py (funciones de etapa vendorizadas
+  # literalmente en _vendor/train.py).
+  source: codigo_entrenamiento   # src/training/train.py + src/training/spatial_price_model.py + config/config.yaml
+  input_schema: "CSV largo con el formato de data/processed/series_consumo/series_consumo_lacteos_ccaa.csv (la matriz espacial y las exógenas mensuales salen del artefacto base, como en el original salen de rutas fijas de config.yaml)"
+  target_column: total_leche_liquida__precio_medio_kg_o_litros   # config.yaml::training.target_col; en el CSV largo = producto 'TOTAL LECHE LIQUIDA' + metrica 'PRECIO MEDIO kg o litros'
+  required_columns: [anio, mes, ccaa, producto, metrica, valor, es_reconstruido]
+  required_products: ["TOTAL LECHE LIQUIDA", "LECHE ESTERILIZADA", "LECHE ENTERA", "LECHE DESNATADA", "LECHE SEMIDESNATAD"]
+  hyperparams:   # config/config.yaml del código entregado, literal
+    catboost: {loss_function: MAE, iterations: 300, depth: 2, learning_rate: 0.02, l2_leaf_reg: 100.0, bootstrap_type: "No (en config) -> False efectivo, ver known_issues", random_strength: 0.0, random_seed: 24, task_type: GPU, devices: "0"}
+    publication_lag_months: 12
+    baseline: {calibration_months: 12, weight_grid_step: 0.05}
+    ml_blend: {calibrate: true, calibration_months: 12, alpha_grid: "0..1 paso 0.05"}
+    missing_value_strategy: median
+    split: {validation: "2019-01-01..2019-12-01", test: "2020-01-01..2020-12-01", panel_max_year: 2020, por: target_period_dt}
+    horizons:
+      h1: {panel: anchor, exog_patterns: [exog__dairy, exog__milk, exog__ratio_cheese], exog_top_k: 6, anchor_metrics_top_k: 4, context: false}
+      h3: {panel: anchor, exog_patterns: [exog__dairy, exog__milk, exog__ratio_cheese], exog_top_k: 6, anchor_metrics: false, context: false}
+      h6: {panel: context, exog_patterns: [exog__dairy, exog__milk, exog__ratio_cheese], exog_top_k: 6, context_top_k: 4}
+    stability: {exog_stability_windows: 4, exog_min_support: 2, panel_feature_stability_windows: 4, panel_feature_min_support: 2}
+  plugin_adaptations:
+    - "validation_year/test_year opcionales en TrainRequest; con 2019/2020 (config.yaml) el procedimiento es exactamente el original. (19/10/2026) Si no se indican se derivan de la serie: test = ultimo año con los 12 meses del precio ancla, validacion = el anterior. Con 2019/2020 fijos los paneles se cortan en 2020 y un reentreno programado republicaria el modelo de 2020 (mismas 4063 filas que el artefacto entregado, comprobado)"
+    - "(19/10/2026) exog_path opcional (formato input_costs_monthly.csv), validado contra las columnas vigentes antes de entrenar; si no se indica se entrena con las exogenas vigentes y se heredan (upload_warning lo avisa)"
+    - "No se recalcula el rolling summary (diagnóstico, no cambia el artefacto)"
+    - "No se llama a np.random.seed (nada consume el RNG global; CatBoost recibe random_seed=24)"
+    - "task_type GPU si CatBoost ve GPU, si no CPU (la memoria admite CPU con variación numérica)"
+  metrics_returned: [h1/h3/h6 x train/validation/test (mae, smape, mae_baseline, smape_baseline, accuracy_pct, n), baseline_w_persist_1, baseline_w_persist_12, ml_alpha, n_features, task_type, training_time_s]
+  duracion_estimada: "~50 s en GPU (RTX 3060) y ~65 s en CPU con la serie oficial completa (medido 2026-10-14)"
+  fidelidad_verificada: "Plugin vs train.py original en CPU, mismo entorno: métricas train/val/test idénticas a 6 decimales, mismos ml_alpha, pesos y features (ver verification_report.md)"
+  persistencia: "(19/10/2026) Cada /train publica una version nueva del modelo base (versions/<vN>/: model_manifest.json, spatial_price_model_h{1,3,6}.cbm, *_metadata.json, stage_summary_h*.json, metrics.json, la serie recibida restringida a los 5 productos del modelo -26 MB frente a 338 MB, mismas predicciones- y, si viene, el exog_path). Con mlflow_run_id se sube tambien al run (trazabilidad). Antes: solo MLflow. Ver docs/superpowers/specs/2026-10-14-reentreno-actualiza-base-design.md §10."
+
+metrics_reported:
+  dataset: "test 2020 por target_period_dt (17 CCAA x 12 meses = 204 filas por horizonte); validación 2019; train hasta 2018-12 con publication_lag_months=12"
+  source: "models/metrics/spatial_price_model/metrics.csv (scope=global) = memoria Tablas 8-10"
+  split_rows: {h1: {train: 3655, validation: 204, test: 204}, h3: {train: 3621, validation: 204, test: 204}, h6: {train: 3366, validation: 204, test: 204}}   # reproducidos al regenerar el split (memoria Tabla 5)
+  test:
+    h1: {mae: 0.013005, smape: 1.870961, mae_baseline: 0.014319, smape_baseline: 2.059862, accuracy_pct: 98.129}
+    h3: {mae: 0.013768, smape: 1.979459, mae_baseline: 0.014839, smape_baseline: 2.132642, accuracy_pct: 98.021}
+    h6: {mae: 0.014242, smape: 2.045819, mae_baseline: 0.015036, smape_baseline: 2.158799, accuracy_pct: 97.954}
+  validation:
+    h1: {mae: 0.014850, smape: 2.130136, mae_baseline: 0.015872, smape_baseline: 2.276023}
+    h3: {mae: 0.013273, smape: 1.906570, mae_baseline: 0.014814, smape_baseline: 2.127944}
+    h6: {mae: 0.014537, smape: 2.091440, mae_baseline: 0.015727, smape_baseline: 2.263406}
+  train:
+    h1: {mae: 0.015983, smape: 2.328241, mae_baseline: 0.041872, smape_baseline: 6.130821}
+    h3: {mae: 0.015430, smape: 2.260317, mae_baseline: 0.044890, smape_baseline: 6.537284}
+    h6: {mae: 0.013878, smape: 2.033112, mae_baseline: 0.046502, smape_baseline: 6.545201}
+  rolling_summary_wins_vs_baseline: {h1: "6/11", h3: "6/11", h6: "7/11"}   # rolling_summary.csv, ventanas anuales 2010-2020
+  leakage_audit: "96/96 chequeos passed (leakage_audit_summary.csv, verificación del equipo 2026-07-09)"
+  deployed_artifact_params: {h1: {w1: 0.5, w12: 0.5, ml_alpha: 0.4, n_features: 34, training_rows: 4063}, h3: {w1: 0.45, w12: 0.55, ml_alpha: 0.65, n_features: 30, training_rows: 4029}, h6: {w1: 0.5, w12: 0.5, ml_alpha: 0.55, n_features: 34, training_rows: 3774}}
+  kpi_contractual: "exactitud (100 - sMAPE) >= 80% (CU12) -- CUMPLE en test 2020 (98,1 / 98,0 / 98,0 %)"
+  caveat: >
+    Las métricas de test son de los modelos de etapa (ajustados con train+validación). El artefacto
+    servido se reentrenó con todo el histórico hasta 2020 (test incluido), así que el test 2020 NO
+    es ciego para el artefacto desplegado. Ver known_issues y out_of_sample_evidence.
+  tolerance_golden: "tolerancia relativa por caso = 2 x MAE_test / media(y_test 2020) = h1 3,742 %, h3 3,962 %, h6 4,098 %"
+
+# Evidencia adicional (NO golden cases): backtest fuera de muestra del predictor ORIGINAL sin
+# modificar, con la serie oficial truncada en cada mes 2020-12..2026-05 (66 cortes) y comparado con
+# el precio real publicado por MAPA en el periodo etiquetado por la salida (period = corte + h).
+out_of_sample_evidence:
+  method: "src/predict/predictor.py::run_prediction con --input truncado; scripts en outputs/a24/verification_report.md"
+  accuracy_2021_2026_pct: {h1: 90.96, h3: 85.32, h6: 85.59}
+  persistence_accuracy_2021_2026_pct: {h1: 97.61, h3: 96.60, h6: 94.55}
+  bias_2023_2026_pct: {h1: "-7 a -12", h3: "-15 a -19", h6: "-12 a -17"}
+  accuracy_2025_2026_pct: {h1: 88.71, h3: 79.48, h6: 82.19}
+  memoria_retrain_rule_triggered: {h1: "2022-12", h3: "2022-06", h6: "2022-06"}   # sMAPE mensual > 5 % 6 meses seguidos
+  summary: >
+    Rinde como en la memoria en 2021 (exactitud ~97 %). Desde la subida de precios de 2022
+    (de ~0,70 a ~0,95-1,12 EUR/l, fuera del rango de entrenamiento 1999-2020) infraestima de forma
+    sistemática: CatBoost no extrapola y el blend arrastra la predicción hacia el rango histórico.
+    Sigue por encima del KPI del 80 % en el agregado 2021-2026, pero en 2025-2026 h3 queda en
+    79,5 % (INCUMPLE el KPI; h1 88,7 %, h6 82,2 %) y en 2022-2026 es peor que repetir el último
+    precio en los tres horizontes. La regla de reentrenamiento de la propia memoria (sMAPE > 5 %
+    durante 6 meses seguidos) se habría disparado en 2022-06 (h3/h6) y 2022-12 (h1) y sigue activa.
+
+golden_cases:
+  # 18 filas del split de TEST oficial (target 2020), regenerado con el propio código del equipo
+  # (train.py::_prepare_frame + ventanas de config.yaml; recuentos idénticos a la Tabla 5). La
+  # carpeta data/splits/ no se entrega (el README dice que es reproducible). Selección fija y
+  # documentada: 6 meses objetivo por horizonte (ene, mar, may, jul, sep, nov de 2020) cubriendo
+  # las 17 CCAA (Castilla y León dos veces); no se eligió mirando el error.
+  # Cómo se reproduce cada fila por la API: la fila de test con mes base t usa dato MAPA hasta
+  # t-12 (publication_lag_months=12), así que el input es as_of_period = t-12 y el y real es el
+  # del mes objetivo t+h. La salida del original etiqueta ese caso como period = as_of + h
+  # (ver known_issues: etiqueta temporal). reference_original_predictor = salida del predictor
+  # original sin modificar para ese mismo input (paridad del plugin).
+  - id: h1_2020-01_CYL
+    source: dataset_test_split  # h1/splits/test.csv regenerado (ccaa=CASTILLA Y LEON, target_period=2020-01, feature_period=2019-12)
+    input: {mode: inline, ccaa: [CYL], horizons: [1], as_of_period: "2018-12"}
+    expected: {y_true: 0.663144, target_period: "2020-01"}
+    reference_original_predictor: {y_pred: 0.676657, labeled_period: "2019-01"}
+    tolerance_rel: 0.03742
+  - id: h1_2020-03_AND
+    source: dataset_test_split  # h1 (ccaa=ANDALUCIA, target_period=2020-03, feature_period=2020-02)
+    input: {mode: inline, ccaa: [AND], horizons: [1], as_of_period: "2019-02"}
+    expected: {y_true: 0.673777, target_period: "2020-03"}
+    reference_original_predictor: {y_pred: 0.676795, labeled_period: "2019-03"}
+    tolerance_rel: 0.03742
+  - id: h1_2020-05_CAN
+    source: dataset_test_split  # h1 (ccaa=CANARIAS, target_period=2020-05, feature_period=2020-04)
+    input: {mode: inline, ccaa: [CAN], horizons: [1], as_of_period: "2019-04"}
+    expected: {y_true: 0.687172, target_period: "2020-05"}
+    reference_original_predictor: {y_pred: 0.682664, labeled_period: "2019-05"}
+    tolerance_rel: 0.03742
+  - id: h1_2020-07_CAT
+    source: dataset_test_split  # h1 (ccaa=CATALUNA, target_period=2020-07, feature_period=2020-06)
+    input: {mode: inline, ccaa: [CAT], horizons: [1], as_of_period: "2019-06"}
+    expected: {y_true: 0.699593, target_period: "2020-07"}
+    reference_original_predictor: {y_pred: 0.726119, labeled_period: "2019-07"}
+    tolerance_rel: 0.03742
+  - id: h1_2020-09_RIO
+    source: dataset_test_split  # h1 (ccaa=LA RIOJA, target_period=2020-09, feature_period=2020-08)
+    input: {mode: inline, ccaa: [RIO], horizons: [1], as_of_period: "2019-08"}
+    expected: {y_true: 0.735028, target_period: "2020-09"}
+    reference_original_predictor: {y_pred: 0.690182, labeled_period: "2019-09"}
+    tolerance_rel: 0.03742
+  - id: h1_2020-11_GAL
+    source: dataset_test_split  # h1 (ccaa=GALICIA, target_period=2020-11, feature_period=2020-10)
+    input: {mode: inline, ccaa: [GAL], horizons: [1], as_of_period: "2019-10"}
+    expected: {y_true: 0.688321, target_period: "2020-11"}
+    reference_original_predictor: {y_pred: 0.689119, labeled_period: "2019-11"}
+    tolerance_rel: 0.03742
+  - id: h3_2020-01_MAD
+    source: dataset_test_split  # h3 (ccaa=COMUNIDAD DE MADRID, target_period=2020-01, feature_period=2019-10)
+    input: {mode: inline, ccaa: [MAD], horizons: [3], as_of_period: "2018-10"}
+    expected: {y_true: 0.695547, target_period: "2020-01"}
+    reference_original_predictor: {y_pred: 0.690697, labeled_period: "2019-01"}
+    tolerance_rel: 0.03962
+  - id: h3_2020-03_CYL
+    source: dataset_test_split  # h3 (ccaa=CASTILLA Y LEON, target_period=2020-03, feature_period=2019-12)
+    input: {mode: inline, ccaa: [CYL], horizons: [3], as_of_period: "2018-12"}
+    expected: {y_true: 0.655166, target_period: "2020-03"}
+    reference_original_predictor: {y_pred: 0.67448, labeled_period: "2019-03"}
+    tolerance_rel: 0.03962
+  - id: h3_2020-05_BAL
+    source: dataset_test_split  # h3 (ccaa=ILLES BALEARS, target_period=2020-05, feature_period=2020-02)
+    input: {mode: inline, ccaa: [BAL], horizons: [3], as_of_period: "2019-02"}
+    expected: {y_true: 0.732004, target_period: "2020-05"}
+    reference_original_predictor: {y_pred: 0.704992, labeled_period: "2019-05"}
+    tolerance_rel: 0.03962
+  - id: h3_2020-07_VAL
+    source: dataset_test_split  # h3 (ccaa=COMUNITAT VALENCIANA, target_period=2020-07, feature_period=2020-04)
+    input: {mode: inline, ccaa: [VAL], horizons: [3], as_of_period: "2019-04"}
+    expected: {y_true: 0.687657, target_period: "2020-07"}
+    reference_original_predictor: {y_pred: 0.68106, labeled_period: "2019-07"}
+    tolerance_rel: 0.03962
+  - id: h3_2020-09_PVA
+    source: dataset_test_split  # h3 (ccaa=PAIS VASCO, target_period=2020-09, feature_period=2020-06)
+    input: {mode: inline, ccaa: [PVA], horizons: [3], as_of_period: "2019-06"}
+    expected: {y_true: 0.716457, target_period: "2020-09"}
+    reference_original_predictor: {y_pred: 0.713772, labeled_period: "2019-09"}
+    tolerance_rel: 0.03962
+  - id: h3_2020-11_EXT
+    source: dataset_test_split  # h3 (ccaa=EXTREMADURA, target_period=2020-11, feature_period=2020-08)
+    input: {mode: inline, ccaa: [EXT], horizons: [3], as_of_period: "2019-08"}
+    expected: {y_true: 0.683649, target_period: "2020-11"}
+    reference_original_predictor: {y_pred: 0.677014, labeled_period: "2019-11"}
+    tolerance_rel: 0.03962
+  - id: h6_2020-01_AST
+    source: dataset_test_split  # h6 (ccaa=PRINCIPADO DE ASTURIAS, target_period=2020-01, feature_period=2019-07)
+    input: {mode: inline, ccaa: [AST], horizons: [6], as_of_period: "2018-07"}
+    expected: {y_true: 0.686111, target_period: "2020-01"}
+    reference_original_predictor: {y_pred: 0.683273, labeled_period: "2019-01"}
+    tolerance_rel: 0.04098
+  - id: h6_2020-03_MUR
+    source: dataset_test_split  # h6 (ccaa=REGION DE MURCIA, target_period=2020-03, feature_period=2019-09)
+    input: {mode: inline, ccaa: [MUR], horizons: [6], as_of_period: "2018-09"}
+    expected: {y_true: 0.652137, target_period: "2020-03"}
+    reference_original_predictor: {y_pred: 0.707416, labeled_period: "2019-03"}
+    tolerance_rel: 0.04098
+  - id: h6_2020-05_ARA
+    source: dataset_test_split  # h6 (ccaa=ARAGON, target_period=2020-05, feature_period=2019-11)
+    input: {mode: inline, ccaa: [ARA], horizons: [6], as_of_period: "2018-11"}
+    expected: {y_true: 0.7322, target_period: "2020-05"}
+    reference_original_predictor: {y_pred: 0.711625, labeled_period: "2019-05"}
+    tolerance_rel: 0.04098
+  - id: h6_2020-07_NAV
+    source: dataset_test_split  # h6 (ccaa=C. FORAL DE NAVARRA, target_period=2020-07, feature_period=2020-01)
+    input: {mode: inline, ccaa: [NAV], horizons: [6], as_of_period: "2019-01"}
+    expected: {y_true: 0.732923, target_period: "2020-07"}
+    reference_original_predictor: {y_pred: 0.699076, labeled_period: "2019-07"}
+    tolerance_rel: 0.04098
+  - id: h6_2020-09_CTB
+    source: dataset_test_split  # h6 (ccaa=CANTABRIA, target_period=2020-09, feature_period=2020-03)
+    input: {mode: inline, ccaa: [CTB], horizons: [6], as_of_period: "2019-03"}
+    expected: {y_true: 0.646598, target_period: "2020-09"}
+    reference_original_predictor: {y_pred: 0.707589, labeled_period: "2019-09"}
+    tolerance_rel: 0.04098
+  - id: h6_2020-11_CLM
+    source: dataset_test_split  # h6 (ccaa=CASTILLA - LA MANCHA, target_period=2020-11, feature_period=2020-05)
+    input: {mode: inline, ccaa: [CLM], horizons: [6], as_of_period: "2019-05"}
+    expected: {y_true: 0.678695, target_period: "2020-11"}
+    reference_original_predictor: {y_pred: 0.677581, labeled_period: "2019-11"}
+    tolerance_rel: 0.04098
+  # Casos de rechazo (contrato de la memoria 8.4), sin valor numérico:
+  - id: rechazo_ccaa_espana
+    source: memoria_seccion_8.4  # T.ESPANA no se incluye en los paneles (include_spain=false)
+    input: {mode: inline, ccaa: [ESP]}
+    expected: {http_status: 422, error_contains: "T.ESPANA/ESP no se predice"}
+  - id: rechazo_historial_insuficiente
+    source: memoria_seccion_8.4  # "al menos 13 meses" por CCAA; serie oficial cortada en 1999-06 (6 meses)
+    input: {mode: inline, as_of_period: "1999-06"}
+    expected: {http_status: 422, error_contains: "13 meses consecutivos"}
+
+# Paridad con la referencia oficial del equipo (no son golden cases de correctitud):
+reference_parity:
+  source: "data/predictions/spatial_price_model/inference_smoke.csv (51 filas, verify_repro.py PASS en este entorno)"
+  input: {mode: inline}   # serie base completa, sin filtros
+  expected: "y_pred, y_baseline_calibrated, y_persist_1, y_persist_12, feature_period, period idénticos (tolerancia 1e-9)"
+
+known_issues:
+  - "[REENTRENO — ACTIVADO Y DOCUMENTADO, 19/10/2026] Reentrenando con datos recientes (validacion
+     2024, test 2025, serie hasta 2026-06) la calibracion del propio procedimiento deja ml_alpha = 0
+     en h1 y h3 (y w1 ~ 0): la prediccion queda en el baseline estacional y_persist_12 y el
+     CatBoost no aporta. Exactitud de test 2025: 95-96 % (KPI >= 80 %). No es un fallo del port
+     (mismo procedimiento que train.py); se activa la promocion automatica y se traslada al equipo
+     de IA."
+  - "[MODELO — CRÍTICO PARA NEGOCIO] Degradación fuera de muestra desde 2022 (ver
+     out_of_sample_evidence): con el código original sin modificar, exactitud 2021-2026 de
+     91,0 / 85,3 / 85,6 % (h1/h3/h6) frente al 98 % de la memoria, con sesgo negativo sistemático
+     (-7 a -19 % en 2023-2026) y peor que la persistencia ingenua en 2022-2026. Causa: el artefacto
+     se entrenó con precios 1999-2020 (0,42-0,98 EUR/l, 2020: 0,63-0,75) y CatBoost no extrapola
+     al nivel de 2022-2026 (~0,95-1,12). La inferencia de referencia del entregable
+     (inference_smoke.csv, dato hasta 2026-06) ya predice de media un 8,7 / 15,1 / 11,3 % por debajo
+     del último precio observado. Requiere decisión: reentrenamiento por el equipo de IA con datos
+     posteriores a 2020 (el plugin lo permite con validation_year/test_year) o aceptación explícita
+     del riesgo. Afecta a la ficha funcional (limitaciones)."
+  - "[CÓDIGO ORIGINAL] Desalineación entrenamiento/inferencia de las exógenas: con
+     publication_lag_months=12 el entrenamiento retrasa 12 meses las features MAPA pero NO las
+     exógenas (add_monthly_exog_lags usa el periodo de la fila). La fila de entrenamiento de mes t
+     ve MAPA hasta t-12 y exógenas hasta t-1; en inferencia la última fila es el último mes MAPA
+     (T) y las exógenas se toman hasta T-1, aunque haya exógenas hasta hoy (input_costs_monthly
+     llega a 2026-09). Las features MAPA sí cuadran exactamente (fila t de train = fila T=t-12 de
+     inferencia). El plugin replica el original; no se corrige sin el equipo de IA."
+  - "[CÓDIGO ORIGINAL] Etiqueta temporal ambigua: el modelo aprende a predecir y(t+h) con dato MAPA
+     hasta t-12, es decir 12+h meses por delante del último dato; la inferencia etiqueta la salida
+     como period = último mes MAPA + h. El README lo justifica ('el CSV de producción ya refleja la
+     latencia real'), pero con la latencia real actual (~3-4 meses: MAPA hasta 2026-06) la salida
+     etiquetada 2026-07 corresponde en el entrenamiento a 2027-07. En 2020 ambas lecturas dan el
+     mismo error (precio estable): golden cases y backtest las reportan las dos. Pendiente de
+     aclarar con el equipo qué fecha comunica la plataforma."
+  - "[CÓDIGO ORIGINAL] bootstrap_type: No en config.yaml se parsea con yaml.safe_load (YAML 1.1)
+     como el booleano False, y build_model solo pasa bootstrap_type si es truthy: todos los modelos
+     del equipo (el artefacto servido incluido) se entrenaron con el bootstrap POR DEFECTO de
+     CatBoost (MVS en CPU, Bayesian en GPU), no con 'No' como dicen la config y la memoria. El
+     plugin reproduce el comportamiento real (TRAINING_CFG.bootstrap_type=False); con 'No' las
+     métricas cambiaban hasta 0,02 pp. Corregirlo (comillas en el YAML) cambiaría el modelo:
+     decisión del equipo de IA."
+  - "[REPRODUCIBILIDAD] El artefacto entregado (GPU del equipo) no se reproduce bit a bit en otra
+     GPU: train.py original en una RTX 3060 da h1 test sMAPE 2,019 (memoria 1,871) y ml_alpha
+     0,4/0,5/0,55 (entregado 0,4/0,65/0,55). El plugin reproduce EXACTAMENTE al original en la misma
+     máquina (GPU y CPU, 6 decimales). El README declaraba variación GPU < 0,1 pp; aquí h1 test
+     difiere 0,15 pp. No afecta a la inferencia (se sirve el .cbm entregado tal cual)."
+  - "[CÓDIGO ORIGINAL] En inferencia la imputación por mediana usa la mediana del propio frame de
+     inferencia (todo el histórico 1999-2026), no las medianas de entrenamiento guardadas en
+     missing_value_report. Afecta solo a celdas faltantes (exógenas lácteas en años iniciales); el
+     plugin lo replica (paridad exacta con inference_smoke.csv)."
+  - "[CÓDIGO ORIGINAL] Si una CCAA no tiene precio ancla en su última fila o menos de 13 meses, el
+     original predice igualmente con y_persist imputados por mediana; la memoria 8.4 dice que se
+     omite. El plugin la omite con un aviso (InsufficientPriceHistoryError si no queda ninguna). Con
+     el dato oficial no afecta a ninguna CCAA."
+  - "[CÓDIGO ORIGINAL] validate_inference_input exige 6 columnas, pero build_product_panel exige
+     también es_reconstruido: un CSV sin ella pasaba la validación y fallaba después. El plugin la
+     exige desde el principio (SeriesContractError, 422)."
+  - "[EVALUACIÓN] El artefacto final se reentrena con todo el frame (target hasta 2020-12): el test
+     2020 no es ciego para el modelo servido. Las métricas de la memoria son de los modelos de
+     etapa. Los golden cases (test 2020) son, por tanto, in-sample para el artefacto desplegado."
+  - "[GOLDEN] 5 de 18 golden cases quedan fuera de la tolerancia 2xMAE relativo (CAT h1, RIO h1,
+     MUR h6, NAV h6, CTB h6). El modelo de etapa del propio equipo (evaluation_predictions.csv)
+     falla en los mismos casos con errores casi idénticos, y deja fuera de esa tolerancia el
+     12-15 % de las 204 filas de test (persistencia ingenua: 16-18 %). No es un fallo de
+     integración; detalle en outputs/a24/verification_report.md. Tolerancia no ajustada."
+  - "[MEMORIA] Inconsistencias menores: (a) la sección 3.1 dice que la serie procesada llega 'hasta
+     2023' mientras el resto del documento y el README dicen 1999-2026 (28 ficheros); (b) Python
+     3.11.9 en la memoria frente a 3.13.11 en la última verificación del README; (c) algunas tablas
+     (2-7) son imágenes o tablas incrustadas no extraíbles como texto: sus cifras se tomaron de
+     metrics.csv/metadatos, que la memoria cita como fuente única."
+  - "[MEMORIA] Cambio de base metodológica del MAPA en 2021 (base2021, ficheros 2024+): la memoria
+     corta el entrenamiento en 2020 por ese motivo. La inferencia sobre 2021-2026 mezcla ambas
+     bases; el ETL lo trata automáticamente según el README, pero no hay validación del equipo de
+     que los niveles sean comparables. Puede contribuir a la degradación fuera de muestra."
+  - "[ENTREGA] No hay Ficha de Valoración del Estado Técnico ni dictamen de aceptación de ITACYL en
+     el entregable (sí la había en a18). El KPI (>= 80 %) se cumple en test 2020; ver primer
+     known_issue para el comportamiento fuera de muestra."
+  - "[PLUGIN] --refresh-source (scrapers MAPA/UE) no se porta: un pod no debe descargar de webs
+     externas en cada petición. La frescura depende de que el responsable actualice
+     series_consumo_lacteos_ccaa.csv e input_costs_monthly.csv en S3 (o de enviar el CSV en batch).
+     Las exógenas no se pueden aportar por petición (igual que en el original)."
+  - "[PLUGIN] El modo batch siempre devuelve las 17 CCAA x 3 horizontes: el caso de uso genérico de
+     app/application solo reenvía data_path/mlflow_run_id a predict_batch, así que los filtros
+     (ccaa, horizons, as_of_period) existen solo en inline."
+  - "[ARTEFACTOS] series_consumo_lacteos_ccaa.csv pesa 338 MB; el plugin solo usa los 5 productos
+     del modelo (lectura por bloques en load()). Acción del responsable: subir los 10 ficheros a
+     s3://<STORAGE_BUCKET>/artifacts/fixed/ml24_dairy_spatial_price_forecast/ (estructura plana).
+     Opcionalmente podría publicarse una versión filtrada a esos 5 productos (mismas predicciones),
+     decisión del responsable."
+  - "[DEPENDENCIAS] catboost no estaba en requirements.txt del repo: se añade catboost==1.2.10.
+     El requirements.txt del entregable fija pandas 3.0.2 / numpy 2.4.4; el repo usa pandas>=2.0 y
+     numpy>=1.24 sin fijar (versiones efectivas en verification_report.md)."

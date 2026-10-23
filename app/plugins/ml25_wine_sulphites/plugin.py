@@ -14,7 +14,12 @@ from app.application.dto.stats_dto import InputField, OutputField, RuntimeStats,
 from app.domain.ports.model_plugin_port import ModelPluginPort
 from app.domain.services.exceptions import ModelPersistenceError, NoValidSimulationPointError
 from app.domain.services.mlflow_tracker import BaseMLflowTracker
-from app.plugins.ml25_wine_sulphites.constants import BASE_FREE_SO2_P99, MODEL_ID, VERSION
+from app.plugins.ml25_wine_sulphites.constants import (
+    BASE_FREE_SO2_P99,
+    BATCH_TRAJECTORY_MAX_ROWS,
+    MODEL_ID,
+    VERSION,
+)
 from app.plugins.ml25_wine_sulphites.model_loader import load_artifacts
 from app.plugins.ml25_wine_sulphites.predict_dto import (
     PredictBatchResponse,
@@ -193,6 +198,7 @@ class Ml25WineSulphitesPlugin(ModelPluginPort):
             df.columns = [c.strip().replace(" ", "_") for c in df.columns]
 
             predictions = []
+            trajectory_on_every_row = len(df) <= BATCH_TRAJECTORY_MAX_ROWS
             t0 = time.perf_counter()
             for idx, row in df.iterrows():
                 row_dict = row.to_dict()
@@ -215,11 +221,12 @@ class Ml25WineSulphitesPlugin(ModelPluginPort):
                             k: float(row_dict[k]) for k in WINE_ANALYSIS_KEYS if k in row_dict
                         },
                     }
-                    # Full dose-simulation path, first row only — attaching it to every row
-                    # would multiply the response size by up to ~40 points/row for large
-                    # batches; the platform shows it as a representative sample, same as it
-                    # already does for XAI (see buildXaiContextFromBatchTabular using firstRow).
-                    if idx == 0:
+                    # Full dose-simulation path on every row for small batches (the monitoring
+                    # panel shows it per tank); for batches over BATCH_TRAJECTORY_MAX_ROWS only on
+                    # the first row, since ~40 points/row would multiply the response size — the
+                    # platform then shows it as a representative sample, same as XAI does
+                    # (see buildXaiContextFromBatchTabular using firstRow).
+                    if trajectory_on_every_row or idx == 0:
                         prediction_row["simulation_trajectory"] = [
                             {
                                 "free_so2": float(res["valid_free"][j]),

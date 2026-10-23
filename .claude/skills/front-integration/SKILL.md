@@ -16,7 +16,7 @@ nada — nunca asumas una ruta de front por defecto ni "adivines" qué plugin in
 
 ## Requisito previo
 
-> ⚠ **Excepción: modelos con `BASE_ARTIFACT_FOLDER`** (ml13, 14, 15, 16, 17, 18, 21 y 23). En el
+> ⚠ **Excepción: modelos con `BASE_ARTIFACT_FOLDER`** (ml13, 14, 15, 16, 17, 18, 19, 21, 23 y 24). En el
 > front solo se exponen para **predecir**: no llevan acción de entrenamiento (la reentrena un
 > entorno controlado fuera de la plataforma), `createTrainTask` debe rechazarlos y tras predecir no
 > se llama a explicabilidad ni a drift. Ver §9 de

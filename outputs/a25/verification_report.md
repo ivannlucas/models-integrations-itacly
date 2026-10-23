@@ -2,6 +2,51 @@
 
 > **[RENOMBRADO 2026-10-06]** Nomenclatura alineada con el estándar `mlNN_<sector>_<desc>` del resto de plugins: `wine-sulphite (model_id) / wine_sulphite (artefactos)` → `ml25-wine-sulphites / ml25_wine_sulphites (el paquete ya era app/plugins/ml25_wine_sulphites/)`. La carpeta de artefactos (local y en S3) pasa de `artifacts/wine_sulphite/` a `artifacts/ml25_wine_sulphites/`. Las referencias a los nombres antiguos en el texto de abajo son históricas y corresponden a la fecha de cada ciclo.
 
+## Re-verificación 2026-10-20 — v1.3.0 (trayectoria de simulación por fila en batch)
+
+**Cambio:** `predict_batch` adjunta `simulation_trajectory` a **todas** las filas cuando el lote tiene
+≤ `BATCH_TRAJECTORY_MAX_ROWS` (100) filas; por encima, solo a la fila 0, como antes. Motivo: el
+panel de monitorización CU03 de la plataforma muestra la trayectoria de cada depósito (una bodega
+envía 5–6 depósitos por semana). No cambia ningún valor de predicción: la trayectoria ya se
+calculaba para cada fila en `_run_inference` y solo se descartaba. `VERSION` pasa a `1.3.0`
+(también en `app/registry.py` y `tests/conftest.py`).
+
+### Checklist técnico
+- [x] `flake8 app/plugins/ml25_wine_sulphites/ tests/unit/test_ml25_wine_sulphites_plugin.py`: 0 errores
+- [x] `pylint app/plugins/ml25_wine_sulphites/ --disable=import-error`: 9.09/10
+- [x] Tests nuevos (`tests/unit/test_ml25_wine_sulphites_plugin.py`), primero en rojo y después en verde:
+      trayectoria en todas las filas por debajo del tope, solo en la fila 0 por encima del tope,
+      valores idénticos con y sin trayectoria, y columna extra de texto (`deposito`) ignorada.
+- [x] `pytest tests/unit/test_ml25_wine_sulphites*.py`: 72/73. El fallo
+      (`test_predict_no_valid_simulation_point_maps_to_422`) es **de entorno y no tiene que ver con
+      este cambio**: el starlette local (0.38.6) no tiene `status.HTTP_422_UNPROCESSABLE_CONTENT`,
+      que usa `app/infrastructure/http/router_factory.py`. Falla igual en los tests de 422 de todos los plugins.
+- [x] `pytest tests/unit/` (completo, `--continue-on-collection-errors`): 832 passed, 44 failed y
+      8 errores de colección, todos de entorno: el mismo `HTTP_422_UNPROCESSABLE_CONTENT`, o módulos
+      `xgboost`/`catboost`/`librosa`/`timm` no instalados en el WSL local. Ninguno es de ml25:
+      `test_user_model_isolation` del ml25 pasa.
+- [ ] `pip-audit`: no se ha vuelto a ejecutar porque las dependencias no cambian.
+- [ ] Arranque local con `main.py` + curl: no hecho, porque el `main.py` completo no arranca en este
+      WSL (faltan dependencias pesadas de otros plugins). La correctitud se ha comprobado llamando
+      al plugin directamente (abajo).
+
+### Correctitud (golden dataset) — mismo protocolo que el ciclo anterior
+Artefacto: el entregado (`quality_rf.pkl`/`bound_rf.pkl`, `quality_cv.mae_mean=0.42703`; md5
+idéntico en `Modelos IA DATAGIA/Artefactos/Wine_sulphite` y `xai-service/artifacts/wine_sulphite`).
+Los 14 `golden_cases` se han ejecutado por `predict_inline` y también por `predict_batch`, que es
+el camino modificado: un CSV con los 14 casos y columna `tank_id`. Se ha usado `delta_max=0`,
+`min_molecular=0` y `max_total=100000`.
+
+- **Resultado: 10/14 dentro de tolerancia.** Los valores obtenidos coinciden con la tabla del
+  ciclo anterior hasta el tercer decimal en los 14 casos. Los 4 fallos son los mismos (caso_007–010,
+  calidad extrema): es la limitación ya documentada del modelo entregado. La tolerancia no se ha tocado.
+- **Batch = inline** en los 14 casos (calidad y SO2 combinado idénticos), y las 14 filas del batch
+  llevan `simulation_trajectory`.
+
+**Estado:** sin regresiones respecto al ciclo anterior. Pendiente de revisión humana; no hay commit ni PR.
+
+---
+
 Plugin: `app/plugins/ml25_wine_sulphites/` · model_id: `wine-sulphite` · prefix `/models/wine-sulphite`
 Manifest: `inbox/a25/manifest.yaml`
 

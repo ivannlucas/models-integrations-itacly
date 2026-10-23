@@ -244,6 +244,21 @@ from app.plugins.ml18_meat_spatial_price_forecast.train_dto import (
     TrainRequest as Ml18_TrainReq,
     TrainResponse as Ml18TrainResp,
 )
+from app.plugins.ml24_dairy_spatial_price_forecast.exceptions import (
+    InsufficientPriceHistoryError,
+    SeriesContractError,
+    UnknownCcaaError,
+)
+from app.plugins.ml24_dairy_spatial_price_forecast.predict_dto import (
+    PredictBatchResponse as Ml24BatchResp,
+    PredictInlineResponse as Ml24InlineResp,
+    PredictRequest as Ml24_Request,
+    PredictResponse as Ml24_Response,
+)
+from app.plugins.ml24_dairy_spatial_price_forecast.train_dto import (
+    TrainRequest as Ml24_TrainReq,
+    TrainResponse as Ml24TrainResp,
+)
 from app.plugins.ml19_cereals_cost_forecast.predict_dto import (
     BatchPrediction as Ml19BatchPred,
     HorizonResult as Ml19Horizon,
@@ -253,6 +268,10 @@ from app.plugins.ml19_cereals_cost_forecast.predict_dto import (
     PredictResponse as Ml19_Response,
     RegResult as Ml19Reg,
     ClfResult as Ml19Clf,
+)
+from app.plugins.ml19_cereals_cost_forecast.train_dto import (
+    TrainRequest as Ml19_TrainReq,
+    TrainResponse as Ml19TrainResp,
 )
 from app.plugins.ml47_dairy_dnsl_pasteurization_fault_detection.train_dto import (
     TrainRequest as Ml47Dairy_TrainReq,
@@ -2068,6 +2087,33 @@ def _ml18_batch(plugin: FakePlugin, *, data_path: str) -> Ml18BatchResp:
     )
 
 
+_ML24_ROW = {
+    "anchor_product": "TOTAL LECHE LIQUIDA", "context_products": "", "feature_period": "2026-06",
+    "feature_period_dt": "2026-06-01", "period": "2026-07", "period_dt": "2026-07-01",
+    "ccaa": "CASTILLA Y LEON", "ccaa_code": "CYL", "model_id": "spatial_price_model",
+    "model_name": "spatial_price_model", "horizon_months": 1, "y_pred": 0.88,
+    "y_baseline_calibrated": 0.95, "y_persist_1": 0.95, "y_persist_12": 0.95,
+    "selected_anchor_features": "", "selected_context_features": "", "selected_exog": "exog__milk_mom_1w_lag_1",
+}
+_ML24_FRESHNESS = {"main_source_last_period": "2026-06", "main_source_lag_months": 4,
+                   "exog_last_period": "2026-09", "exog_lag_months": 1}
+
+
+def _ml24_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> Ml24InlineResp:
+    """Fake inline response for the ml24 dairy spatial price forecast (one row per horizon)."""
+    rows = [{**_ML24_ROW, "horizon_months": h} for h in (features.get("horizons") or [1, 3, 6])]
+    return Ml24InlineResp(model_id="ml24-dairy-spatial-price-forecast", predictions=rows,
+                          n_predictions=len(rows), data_freshness=_ML24_FRESHNESS, warnings=[])
+
+
+def _ml24_batch(plugin: FakePlugin, *, data_path: str) -> Ml24BatchResp:
+    """Fake batch response for the ml24 dairy spatial price forecast."""
+    rows = [{**_ML24_ROW, "horizon_months": h} for h in (1, 3, 6)]
+    return Ml24BatchResp(model_id="ml24-dairy-spatial-price-forecast", predictions=rows,
+                         n_predictions=len(rows), data_freshness=_ML24_FRESHNESS, warnings=[],
+                         output_path=None)
+
+
 def _ml19_horizons() -> list[Ml19Horizon]:
     """Shared fake multi-horizon payload for ml19 inline/batch fakes."""
     return [
@@ -2111,6 +2157,7 @@ def _ml19_batch(plugin: FakePlugin, *, data_path: str) -> Ml19BatchResp:
 
 
 FAKE_FACTORIES: dict[str, tuple[Callable, Callable]] = {
+    "ml24-dairy-spatial-price-forecast": (_ml24_inline, _ml24_batch),
     "ml18-meat-spatial-price-forecast": (_ml18_inline, _ml18_batch),
     "ml19-cereals-cost-forecast": (_ml19_inline, _ml19_batch),
     "ml46-dairy-fouling-clog-detection": (_ml46_dairy_inline, _ml46_dairy_batch),
@@ -2171,7 +2218,46 @@ def _ml18_train(plugin: FakePlugin, *, data_path: str) -> Ml18TrainResp:
     )
 
 
+def _ml24_train(plugin: FakePlugin, *, data_path: str) -> Ml24TrainResp:
+    """Fake train response for ml24 (test values of the delivered metrics.csv)."""
+    def split(mae, smape, mae_b, smape_b, n):
+        return {"mae": mae, "smape": smape, "mae_baseline": mae_b, "smape_baseline": smape_b,
+                "accuracy_pct": 100 - smape, "n": n}
+
+    def horizon(n_train, test, w1, alpha, n_features):
+        return {"train": split(0.016, 2.3, 0.042, 6.1, n_train), "validation": split(0.0149, 2.13, 0.0159, 2.28, 204),
+                "test": test, "baseline_w_persist_1": w1, "baseline_w_persist_12": 1 - w1, "ml_alpha": alpha,
+                "n_features": n_features}
+
+    return Ml24TrainResp(
+        detail="spatial_price_model reentrenado desde cero (h=1/3/6) con el procedimiento del equipo de IA",
+        h1=horizon(3655, split(0.013005, 1.870961, 0.014319, 2.059862, 204), 0.5, 0.4, 34),
+        h3=horizon(3621, split(0.013768, 1.979459, 0.014839, 2.132642, 204), 0.45, 0.65, 30),
+        h6=horizon(3366, split(0.014242, 2.045819, 0.015036, 2.158799, 204), 0.5, 0.55, 34),
+        validation_year=2019, test_year=2020, task_type="GPU", training_time_s=60.0,
+        mlflow_run_id="run-test-ml24", upload_warning=None,
+    )
+
+
+def _ml19_train(plugin: FakePlugin, *, data_path: str) -> Ml19TrainResp:
+    """Fake train response for ml19 (walk-forward metrics of the delivered selection)."""
+    def horizon(h, reg, sharpe, clf, auc):
+        return {"horizon": h,
+                "reg": {"model_name": reg, "corr": 0.6, "dir_acc": 0.8, "sharpe": sharpe, "mae": 2.0, "rmse": 2.5, "r2": 0.3},
+                "clf": {"model_name": clf, "acc": 0.7, "f1": 0.7, "auc": auc, "brier": 0.2, "sharpe": 1.5}}
+
+    return Ml19TrainResp(
+        detail="Reentrenamiento completado (pipeline oficial).",
+        horizons=[horizon(1, "Ridge", 2.61, "LogReg", 0.802), horizon(2, "XGBoost", 1.66, "XGBoost", 0.778),
+                  horizon(3, "XGBoost", 2.71, "XGBoost", 0.842)],
+        n_features=48, lasso_alpha=0.5, train_end="2019-12-31", n_rows=234, data_start="2006-04-01",
+        data_end="2025-09-01", training_time_s=70.0, mlflow_run_id="", upload_warning=None,
+    )
+
+
 TRAIN_FACTORIES: dict[str, Callable] = {
+    "ml19-cereals-cost-forecast": _ml19_train,
+    "ml24-dairy-spatial-price-forecast": _ml24_train,
     "ml14-wine-phyto-price-forecast": _ml14_train,
     "ml18-meat-spatial-price-forecast": _ml18_train,
     "ml5-meat-cow-behaviour": _ml5_cow_train,
@@ -2208,9 +2294,20 @@ TRAIN_FACTORIES: dict[str, Callable] = {
 
 TEST_REGISTRY: list[ModelEntry] = [
     ModelEntry(
+        model_id="ml24-dairy-spatial-price-forecast",
+        prefix="/models/ml24-dairy-spatial-price-forecast",
+        version="1.0.0",
+        plugin_class=FakePlugin,
+        predict_request_type=Ml24_Request,
+        predict_response_type=Ml24_Response,
+        extra_predict_exceptions=(SeriesContractError, UnknownCcaaError, InsufficientPriceHistoryError),
+        train_request_type=Ml24_TrainReq,
+        train_response_type=Ml24TrainResp,
+    ),
+    ModelEntry(
         model_id="ml25-wine-sulphites",
         prefix="/models/ml25-wine-sulphites",
-        version="1.2.0",
+        version="1.3.0",
         plugin_class=FakePlugin,
         predict_request_type=Ml25Wine_Request,
         predict_response_type=Ml25Wine_Response,
@@ -2495,6 +2592,8 @@ TEST_REGISTRY: list[ModelEntry] = [
         predict_request_type=Ml19_Request,
         predict_response_type=Ml19_Response,
         extra_predict_exceptions=(DataContractError,),
+        train_request_type=Ml19_TrainReq,
+        train_response_type=Ml19TrainResp,
     ),
     ModelEntry(
         model_id="ml9-cereals-infestation-sequence-classifier",

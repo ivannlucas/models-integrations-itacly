@@ -1,0 +1,192 @@
+{
+  "model_id": "a24",
+  "model_slug": "dairy-spatial-price-forecast",
+  "fecha": "Octubre 2026",
+  "model_key": "ml24-dairy-spatial-price-forecast",
+  "version": "1.0.0",
+  "descripcion": "Modelo de predicción espacio-temporal del precio medio mensual de la leche líquida (TOTAL LECHE LIQUIDA, EUR/kg o litro, panel de consumo en hogares del MAPA) en las 17 Comunidades Autónomas, a 1, 3 y 6 meses vista. Combina un baseline calibrado entre persistencia (t-1) y estacionalidad (t-12) con un CatBoostRegressor por horizonte que usa señales espaciales ponderadas por fronteras y exógenas del mercado lácteo europeo.",
+  "task_type": "Regresión de serie temporal espacial (panel 17 CCAA), multihorizonte directo h = 1, 3 y 6 meses",
+  "framework": "CatBoost 1.2.10 (CatBoostRegressor, MAE, 300 iteraciones, profundidad 2, lr 0,02, l2 100); pandas / numpy; scikit-learn solo para MAE",
+  "artefacto": "spatial_price_model_h{1,3,6}.cbm + spatial_price_model_h{1,3,6}_metadata.json + model_manifest.json; datos de referencia: series_consumo_lacteos_ccaa.csv, ccaa_border_percentage_matrix.csv, input_costs_monthly.csv",
+  "objetivo": "Anticipar la evolución del precio medio de la leche líquida por Comunidad Autónoma a corto (1 mes), medio (3 meses) y largo plazo (6 meses) para apoyar las decisiones de compras, cadena de suministro y planificación territorial del caso de uso CU12. KPI de negocio: exactitud (100 - sMAPE) >= 80 %.",
+  "caso_uso": "Inferencia batch mensual. Modo inline: sin datos, predice desde la serie MAPA de referencia del artefacto (opcionalmente filtrando CCAA, horizontes o cortando la serie en as_of_period para backtesting). Modo batch: CSV largo con el formato de series_consumo_lacteos_ccaa.csv; devuelve 17 CCAA x 3 horizontes. Cada fila incluye y_pred, el baseline calibrado, las persistencias y la frescura de las fuentes (desfase MAPA y exógenas). /train reentrena los tres horizontes con el procedimiento original y guarda el modelo solo en MLflow.",
+  "inputs": [
+    {
+      "nombre": "ccaa (inline)",
+      "tipo": "list[str]",
+      "descripcion": "Códigos de 3 letras (AND, ARA, NAV, CAN, CTB, CLM, CYL, CAT, MAD, VAL, EXT, GAL, BAL, RIO, PVA, AST, MUR) o nombre oficial. ESP/T.ESPANA no se sirve",
+      "obligatorio": "No",
+      "valor_defecto": "las 17 CCAA"
+    },
+    {
+      "nombre": "horizons (inline)",
+      "tipo": "list[int]",
+      "descripcion": "Horizontes a devolver: 1, 3 y/o 6 meses (únicos oficiales)",
+      "obligatorio": "No",
+      "valor_defecto": "[1, 3, 6]"
+    },
+    {
+      "nombre": "as_of_period (inline)",
+      "tipo": "str YYYY-MM",
+      "descripcion": "Corta la serie de referencia en ese mes (equivale a un --input truncado); para backtesting",
+      "obligatorio": "No",
+      "valor_defecto": "último mes disponible (2026-06)"
+    },
+    {
+      "nombre": "data_path (batch)",
+      "tipo": "str (ruta local o s3://)",
+      "descripcion": "CSV largo con anio, mes, ccaa, producto, metrica, valor, es_reconstruido; TOTAL LECHE LIQUIDA con 'PRECIO MEDIO kg o litros' + LECHE ESTERILIZADA/ENTERA/DESNATADA/SEMIDESNATAD; >= 13 meses por CCAA",
+      "obligatorio": "Sí (batch)",
+      "valor_defecto": "-"
+    },
+    {
+      "nombre": "mlflow_run_id",
+      "tipo": "str",
+      "descripcion": "Run de MLflow de un modelo reentrenado por el usuario; si no carga, 422 (nunca se usa el base en su lugar)",
+      "obligatorio": "No",
+      "valor_defecto": "modelo base"
+    }
+  ],
+  "outputs": [
+    {
+      "nombre": "predictions[].y_pred",
+      "tipo": "float (EUR/kg o litro)",
+      "descripcion": "Precio medio predicho para la CCAA y el horizonte",
+      "rango": "continuo positivo; 0,63-0,75 en test 2020; 0,79-0,93 con dato hasta 2026-06",
+      "interpretacion": "Precio esperado en el mes period; comparar con y_persist_1 (último precio) para leer la tendencia"
+    },
+    {
+      "nombre": "predictions[].feature_period / period",
+      "tipo": "str YYYY-MM",
+      "descripcion": "Último mes de dato MAPA usado y mes objetivo (= feature_period + h)",
+      "rango": "-",
+      "interpretacion": "Ver limitación de etiqueta temporal: el modelo se entrenó con 12 meses extra de retraso"
+    },
+    {
+      "nombre": "predictions[].y_baseline_calibrated, y_persist_1, y_persist_12",
+      "tipo": "float",
+      "descripcion": "Baseline w1*t-1 + w12*t-12 y las dos persistencias",
+      "rango": "continuo positivo",
+      "interpretacion": "Referencias para auditar cuánto corrige el bloque ML (ml_alpha)"
+    },
+    {
+      "nombre": "data_freshness",
+      "tipo": "dict",
+      "descripcion": "Último mes y antigüedad (meses) de la fuente MAPA y de las exógenas",
+      "rango": "-",
+      "interpretacion": "Desfase MAPA > 24 meses genera aviso en warnings"
+    },
+    {
+      "nombre": "warnings",
+      "tipo": "list[str]",
+      "descripcion": "Avisos de desfase o CCAA omitidas por histórico < 13 meses",
+      "rango": "-",
+      "interpretacion": "Vacío en condiciones normales"
+    }
+  ],
+  "metricas": [
+    {
+      "nombre": "Test 2020 declarado por IA (204 filas/horizonte)",
+      "valor": "sMAPE 1,871 / 1,979 / 2,046 %; MAE 0,0130 / 0,0138 / 0,0142 (h1/h3/h6)",
+      "descripcion": "models/metrics/.../metrics.csv = memoria Tabla 10; modelos de etapa (train+val -> test)",
+      "interpretacion": "Exactitud 98,13 / 98,02 / 97,95 %; mejora al baseline calibrado (sMAPE 2,06 / 2,13 / 2,16 %)"
+    },
+    {
+      "nombre": "Validación 2019 declarada por IA",
+      "valor": "sMAPE 2,130 / 1,907 / 2,091 %",
+      "descripcion": "Memoria Tabla 9",
+      "interpretacion": "Coherente con test; criterio de selección del modelo"
+    },
+    {
+      "nombre": "Verificación tras integración: paridad",
+      "valor": "51/51 filas; max |dif| y_pred = 1,1e-16",
+      "descripcion": "Plugin (servidor real) frente a inference_smoke.csv del equipo (verify_repro PASS)",
+      "interpretacion": "La integración reproduce exactamente la inferencia original"
+    },
+    {
+      "nombre": "Verificación tras integración: test 2020 por la API",
+      "valor": "sMAPE 1,859 / 1,850 / 1,937 % (204 filas/horizonte)",
+      "descripcion": "Camino de inferencia completo con la serie cortada en cada corte de datos; artefacto final (in-sample en 2020)",
+      "interpretacion": "En línea con lo declarado; no es ciego (el artefacto se entrenó con 2020)"
+    },
+    {
+      "nombre": "Verificación tras integración: golden cases",
+      "valor": "13/18 numéricos dentro de tolerancia + 2/2 rechazos",
+      "descripcion": "Tolerancia 2xMAE relativo (3,74 / 3,96 / 4,10 %); fuera: CAT h1, RIO h1, MUR h6, NAV h6, CTB h6",
+      "interpretacion": "Los 5 fallan igual con el modelo de etapa del equipo: error intrínseco del modelo, no de integración"
+    },
+    {
+      "nombre": "Backtest fuera de muestra 2021-2026 (verificación)",
+      "valor": "Exactitud 90,96 / 85,32 / 85,59 % (persistencia ingenua 97,6 / 96,6 / 94,6 %); 2025-26: 88,7 / 79,5 / 82,2 %",
+      "descripcion": "Predictor original sin modificar, 66 cortes mensuales, frente al precio real publicado",
+      "interpretacion": "Cumple el KPI del 80 % en el agregado 2021-26 pero no en h3 2025-26 (79,5 %); sesgo negativo de -7 a -19 % desde 2023 y peor que la persistencia"
+    }
+  ],
+  "limitaciones": [
+    {
+      "tipo": "Degradación fuera de muestra desde 2022",
+      "descripcion": "Entrenado con precios 1999-2020 (<= ~0,98 EUR/l). Con los precios de 2022-2026 (~0,95-1,12) infraestima sistemáticamente (-7 a -19 %) porque CatBoost no extrapola. Requiere reentrenamiento con datos recientes o aceptación explícita del riesgo."
+    },
+    {
+      "tipo": "Etiqueta temporal y exógenas desalineadas",
+      "descripcion": "El entrenamiento aplica publication_lag_months=12 a las features MAPA pero no a las exógenas; en inferencia la salida se etiqueta feature_period + h aunque el modelo aprendió a predecir 12 + h meses por delante. Pendiente de aclarar con el equipo de IA."
+    },
+    {
+      "tipo": "Test 2020 no ciego para el artefacto",
+      "descripcion": "El modelo servido se reentrenó con todo el histórico hasta 2020; las métricas de la memoria son de modelos de etapa."
+    },
+    {
+      "tipo": "Cambio de base MAPA 2021",
+      "descripcion": "Los datos 2024+ se publican en base2021; el entrenamiento se cortó en 2020 por ese motivo y la inferencia actual mezcla ambas bases."
+    },
+    {
+      "tipo": "Datos de referencia estáticos",
+      "descripcion": "No se porta --refresh-source: la frescura depende de actualizar la serie MAPA y las exógenas en S3 o de aportar el CSV en batch."
+    },
+    {
+      "tipo": "Resolución autonómica y horizontes fijos",
+      "descripcion": "Solo CCAA (sin T.ESPANA, provincia ni punto de venta) y solo h = 1, 3, 6 meses; solo TOTAL LECHE LIQUIDA."
+    }
+  ],
+  "fichero_nombre": "Split de test 2020 regenerado con el código del equipo (train.py::_prepare_frame) + inference_smoke.csv del entregable",
+  "fichero_registros": "18 golden cases (6 por horizonte, las 17 CCAA) + 2 casos de rechazo; 51 filas de paridad; 612 filas de test completo",
+  "fichero_resultado": "Paridad exacta con inference_smoke.csv (1e-16); golden cases 13/18 en tolerancia y 2/2 rechazos 422; los 5 fuera de tolerancia reproducen el error del propio modelo de etapa del equipo (detalle en outputs/a24/verification_report.md)",
+  "observaciones_tecnicas": "CPU suficiente para inferencia (~5 s por petición; carga 3 s filtrando la serie de 338 MB a los 5 productos del modelo). /train: ~45 s en GPU (RTX 3060) y ~60 s en CPU; task_type GPU como el original si CatBoost detecta GPU. catboost==1.2.10 añadido a requirements.txt. Monitorizar sMAPE operativo frente a la persistencia y el desfase de las fuentes (main_source_lag_months); la memoria propone revisar si el sMAPE supera el 5 % seis meses seguidos.",
+  "que_no_responde": "No da el precio exacto que pagarás ni explica por qué sube o baja; tampoco anticipa crisis, cambios regulatorios o subidas bruscas sin precedente en el histórico.",
+  "entradas_contexto": "El sistema trabaja con datos oficiales ya publicados: el panel mensual de consumo alimentario en hogares del Ministerio de Agricultura (MAPA) por comunidad autónoma, la relación de fronteras entre comunidades y los precios del mercado lácteo europeo. No necesitas introducir mediciones propias.",
+  "ejemplo_interpretacion": "Con datos hasta junio de 2026, para Castilla y León el último precio conocido es 0,95 EUR/l y el sistema devuelve 0,88 EUR/l a un mes. Esa diferencia no indica necesariamente una bajada real: desde 2022 el modelo tiende a quedarse por debajo del precio real (un 7-12 % a un mes en 2023-2026). Contrasta siempre la predicción con el último precio conocido.",
+  "margen_error": "Con precios estables (evaluación de 2020) se equivoca de media un 2 % (unos 1,3 céntimos por litro). Con los precios actuales, más altos que los que conoció al entrenarse, el error medio sube al 9 % a un mes y al 15 % a tres o seis meses, casi siempre por debajo del precio real.",
+  "revisar_manualmente": [
+    "Siempre que la predicción se aleje más de un 5 % del último precio conocido: desde 2022 suele deberse a la infraestimación del modelo, no a un cambio real del mercado.",
+    "Predicciones a 3 y 6 meses con los precios actuales: en 2025-2026 su exactitud fue del 79,5 % a 3 meses (por debajo del objetivo del 80 %) y del 82 % a 6 meses.",
+    "Cuando el aviso de frescura indique que el dato del MAPA tiene más de 24 meses de antigüedad.",
+    "Cuando alguna comunidad aparezca como omitida por histórico insuficiente.",
+    "Periodos de crisis de suministro, cambios fiscales o regulatorios, o subidas bruscas de costes energéticos o de materias primas."
+  ],
+  "que_no_hace": [
+    "No predice otros productos lácteos (yogures, quesos, batidos): solo el precio medio de la leche líquida.",
+    "No da predicciones para toda España, provincias, municipios ni puntos de venta: solo por comunidad autónoma.",
+    "No predice a horizontes distintos de 1, 3 y 6 meses.",
+    "No descarga por sí mismo los datos nuevos del MAPA ni del mercado europeo: hay que actualizarlos.",
+    "No sustituye el criterio del equipo de compras ni el conocimiento del mercado.",
+    "No reemplaza el modelo base al reentrenar: el modelo reentrenado solo se usa si se indica expresamente."
+  ],
+  "puede_equivocarse": "Sí. En la evaluación oficial de 2020 acertaba con un error medio del 2 % y mejoraba ligeramente a repetir el último precio. Pero desde la subida de precios de 2022 se equivoca bastante más (error medio del 9 al 15 %), casi siempre por debajo del precio real, y en ese periodo repetir el último precio conocido habría sido más preciso. Úsalo como una referencia más para la decisión, nunca como garantía, y contrástalo con el último precio publicado.",
+  "kpis": [
+    {
+      "kpi": "Exactitud de la predicción (100 - error porcentual medio)",
+      "valor_umbral": ">= 80 % (caso de uso CU12)",
+      "descripcion": "Cumple con holgura en la evaluación oficial de 2020 (98,1 / 98,0 / 98,0 % a 1, 3 y 6 meses). Con datos reales 2021-2026: 91,0 / 85,3 / 85,6 %; en 2025-2026 a 3 meses baja al 79,5 %, por debajo del umbral (validación pendiente con el equipo de IA)."
+    },
+    {
+      "kpi": "Mejorar a la referencia temporal simple",
+      "valor_umbral": "Error menor que el de la referencia en los 3 horizontes",
+      "descripcion": "Cumple en 2020. Desde 2022 no mejora a repetir el último precio conocido."
+    },
+    {
+      "kpi": "Señal de revisión del modelo (propuesta de la memoria)",
+      "valor_umbral": "Error > 5 % durante 6 meses seguidos en algún horizonte",
+      "descripcion": "Con datos reales se habría activado ya en 2022 (junio a 3 y 6 meses, diciembre a 1 mes) y sigue activa: corresponde revisar o reentrenar el modelo."
+    }
+  ]
+}

@@ -131,7 +131,7 @@ sin motivo. Antes de fijar `training.supported`:
   opcional (`str = ""`).
 - ⚠ **Excepción: modelos que promueven su base** (ver el párrafo "Modelos que promueven su
   base" más abajo). El artefacto base nunca se sobrescribe **en el sitio**. En los modelos con
-  `BASE_ARTIFACT_FOLDER` (ml13, 14, 15, 16, 17, 18, 21 y 23) cada `/train` publica una versión
+  `BASE_ARTIFACT_FOLDER` (ml13, 14, 15, 16, 17, 18, 19, 21, 23 y 24) cada `/train` publica una versión
   nueva en `artifacts/fixed/<carpeta>/versions/<vN>/` y mueve `current.json`; `POST /rollback`
   vuelve atrás. En el resto, el modelo reentrenado vive solo en su run de MLflow. Diseño:
   `docs/superpowers/specs/2026-10-14-reentreno-actualiza-base-design.md`.
@@ -208,7 +208,7 @@ class TrainRequest(BaseModel):
 ```
 
 **Modelos que promueven su base.** Si el modelo debe reemplazar su base en cada reentreno
-(decisión de producto, hoy ml13/14/15/16/17/18/21/23): declarar en la clase
+(decisión de producto, hoy ml13/14/15/16/17/18/19/21/23/24): declarar en la clase
 `BASE_ARTIFACT_FOLDER = ARTIFACT_FOLDER_NAME`, `mlflow_run_id: str = ""` en el `TrainRequest`,
 `base_version: VersionInfo | None` en el `TrainResponse`, y persistir con
 `app.infrastructure.base_model_publisher.persist_retrained_bundle(bundle_dir, …,

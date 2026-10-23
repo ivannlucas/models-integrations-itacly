@@ -211,6 +211,14 @@ def test_train_request_defaults_to_fine_tune_and_accepts_full():
         TrainRequest(data_path="x.csv", mlflow_run_id="run-1", mode="whatever")
 
 
+def test_train_request_maps_the_platform_transport_mode_to_fine_tune():
+    """The platform always sends mode="batch" (train-task-manager.ts) and the orchestrator forwards it."""
+    from app.plugins.ml47_dairy_dnsl_pasteurization_fault_detection.train_dto import TrainRequest
+
+    for transport in ("batch", "inline"):
+        assert TrainRequest(data_path="x.csv", mlflow_run_id="run-1", mode=transport).mode == "fine_tune"
+
+
 def test_use_case_forwards_mode_to_the_plugin():
     from app.application.use_cases.train_model_use_case import TrainModelUseCase
     from app.plugins.ml47_dairy_dnsl_pasteurization_fault_detection.train_dto import TrainRequest

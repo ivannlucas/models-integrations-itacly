@@ -6,23 +6,40 @@ signal with ALTA/BAJA confidence. Production models: Ridge (h1 regression), XGBo
 regression), LogReg (h1 classification), XGBoost (h2/h3 classification).
 
 See inbox/a19/manifest.yaml for the full contract and the "DECISION DE ARQUITECTURA" note: this
-plugin answers against a frozen reference dataset bundled with the model artifacts (the
-delivered src/predict/predict.py never takes raw client data either — see manifest for why).
+plugin answers against the reference dataset bundled with the model artifacts (the delivered
+src/predict/predict.py never takes raw client data either — see manifest for why). The base model
+is versioned: every /train publishes the retrained models together with the dataset_v7_fe.csv
+they were trained on as the new base, so predictions advance with each update of the data.
 """
 from __future__ import annotations
 
 import logging
+import shutil
+import tempfile
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pandas as pd
 
 from app.application.dto.stats_dto import InputField, OutputField, RuntimeStats, StatsResponse
 from app.domain.ports.model_plugin_port import ModelPluginPort
-from app.domain.services.exceptions import DataContractError, ModelNotLoadedError, TrainingNotSupportedError
+from app.domain.services.exceptions import DataContractError, ModelNotLoadedError
+from app.domain.services.mlflow_tracker import BaseMLflowTracker
 from app.infrastructure.artifact_store import local_file_path
-from app.plugins.ml19_cereals_cost_forecast import inference, model_loader
-from app.plugins.ml19_cereals_cost_forecast.constants import FRAMEWORK, METRICS_REPORTED, MODEL_ID, VERSION
-from app.plugins.ml19_cereals_cost_forecast.mlflow_utils import download_user_model_from_mlflow
+from app.infrastructure.base_model_publisher import persist_retrained_bundle
+from app.plugins.ml19_cereals_cost_forecast import inference, model_loader, training
+from app.plugins.ml19_cereals_cost_forecast.constants import (
+    ARTIFACT_FOLDER_NAME,
+    DATASET_FE_FILENAME,
+    FRAMEWORK,
+    METRICS_REPORTED,
+    MODEL_ID,
+    VERSION,
+)
+from app.plugins.ml19_cereals_cost_forecast.mlflow_utils import (
+    download_user_model_from_mlflow,
+    upload_artifacts_to_mlflow,
+)
 from app.plugins.ml19_cereals_cost_forecast.predict_dto import (
     BatchPrediction,
     ClfResult,
@@ -30,6 +47,12 @@ from app.plugins.ml19_cereals_cost_forecast.predict_dto import (
     PredictBatchResponse,
     PredictInlineResponse,
     RegResult,
+)
+from app.plugins.ml19_cereals_cost_forecast.train_dto import (
+    HorizonTrainMetrics,
+    SelectedClfMetrics,
+    SelectedRegMetrics,
+    TrainResponse,
 )
 
 logger = logging.getLogger(__name__)
@@ -56,6 +79,8 @@ def _build_horizons(result: dict[int, dict], date_label: str) -> list[HorizonRes
 
 class Ml19CerealsCostForecastPlugin(ModelPluginPort):
     """Multi-horizon cereal price signal (regression + classification ensemble)."""
+
+    BASE_ARTIFACT_FOLDER = ARTIFACT_FOLDER_NAME   # every /train publishes the new base model
 
     def __init__(self) -> None:
         """Initialize an unloaded plugin with empty runtime counters."""
@@ -85,16 +110,18 @@ class Ml19CerealsCostForecastPlugin(ModelPluginPort):
         self._predict_count += 1
         self._last_predict_at = datetime.now(tz=timezone.utc).isoformat()
 
-    @staticmethod
-    def _reject_unservable_mlflow_run_id(mlflow_run_id: str) -> None:
-        """Repo review finding (PR #20): predict_inline/predict_batch discarded mlflow_run_id
-        entirely, so a request for a retrained model that does not exist (or any run_id at all)
-        silently served the base model with HTTP 200. ml19 has no retraining path, so any
-        non-empty run_id is unservable — this raises UserModelUnavailableError (-> 422) via
-        mlflow_utils.download_user_model_from_mlflow's @require_user_model decorator instead of
-        pretending the base model is what was asked for."""
+    def _resolve_bundle(self, mlflow_run_id: str) -> tuple[dict, str | None]:
+        """Return (bundle, temp_dir) as locals — never stored on self (shared across requests).
+
+        With mlflow_run_id, the retrained bundle of that run (models + its own dataset). A run
+        without a loadable model raises UserModelUnavailableError (-> 422): never fall back
+        silently to the base model (repo review finding, PR #20). The caller must rmtree
+        temp_dir in a finally block.
+        """
+        self._require_loaded()
         if mlflow_run_id:
-            download_user_model_from_mlflow(mlflow_run_id)
+            return download_user_model_from_mlflow(mlflow_run_id)
+        return self._bundle, None
 
     # ── predict_inline ────────────────────────────────────────────────────────
 
@@ -108,14 +135,14 @@ class Ml19CerealsCostForecastPlugin(ModelPluginPort):
     ) -> PredictInlineResponse:
         """Score one month (the latest available, or 'date' if given) of the bundled dataset."""
         _ = model_key, threshold
-        self._require_loaded()
-        self._reject_unservable_mlflow_run_id(mlflow_run_id)
         date_str = features.get("date") if features else None
-
-        row, date_label = inference.get_row_from_dataset(
-            self._bundle["dataset"], self._bundle["features"], date_str,
-        )
-        result = inference.predict_next_month(row, self._bundle)
+        bundle, user_tmp = self._resolve_bundle(mlflow_run_id)
+        try:
+            row, date_label = inference.get_row_from_dataset(bundle["dataset"], bundle["features"], date_str)
+            result = inference.predict_next_month(row, bundle)
+        finally:
+            if user_tmp:
+                shutil.rmtree(user_tmp, ignore_errors=True)
         self._record_prediction()
         logger.info("predict_inline done — date_label=%s count=%d", date_label, self._predict_count)
 
@@ -123,7 +150,7 @@ class Ml19CerealsCostForecastPlugin(ModelPluginPort):
             model_id=MODEL_ID,
             date_label=date_label,
             mapa_month_used=inference.mapa_month_used(date_label),
-            train_cutoff=self._bundle["meta"]["train_end"],
+            train_cutoff=bundle["meta"]["train_end"],
             horizons=_build_horizons(result, date_label),
         )
 
@@ -134,11 +161,35 @@ class Ml19CerealsCostForecastPlugin(ModelPluginPort):
         reference dataset. Unknown months are reported per-row as an error, not silently
         dropped — one bad month in a batch must not hide the others nor pass as a null result."""
         self._require_loaded()
-        self._reject_unservable_mlflow_run_id(mlflow_run_id)
         with local_file_path(data_path) as local_path:
             df = pd.read_csv(local_path, dtype=str)
         if "date" not in df.columns:
             raise DataContractError("El CSV de entrada debe traer una columna 'date' (YYYY-MM).")
+        bundle, user_tmp = self._resolve_bundle(mlflow_run_id)
+        try:
+            predictions = self._predict_batch_rows(df, bundle)
+        finally:
+            if user_tmp:
+                shutil.rmtree(user_tmp, ignore_errors=True)
+
+        n_predictions = sum(1 for p in predictions if p.error is None)
+        self._record_prediction()
+        logger.info(
+            "predict_batch done — %d filas, %d predicciones, %d errores",
+            len(predictions), n_predictions, len(predictions) - n_predictions,
+        )
+        return PredictBatchResponse(
+            model_id=MODEL_ID,
+            train_cutoff=bundle["meta"]["train_end"],
+            predictions=predictions,
+            n_rows=len(predictions),
+            n_predictions=n_predictions,
+            output_path=None,
+        )
+
+    @staticmethod
+    def _predict_batch_rows(df: pd.DataFrame, bundle: dict) -> list[BatchPrediction]:
+        """One BatchPrediction per CSV row; a bad month is a per-row error, never the whole batch."""
 
         predictions: list[BatchPrediction] = []
         for raw_date in df["date"]:
@@ -151,10 +202,8 @@ class Ml19CerealsCostForecastPlugin(ModelPluginPort):
             try:
                 if date_str is None:
                     raise DataContractError("La columna 'date' tiene una celda vacía en esta fila.")
-                row, date_label = inference.get_row_from_dataset(
-                    self._bundle["dataset"], self._bundle["features"], date_str,
-                )
-                result = inference.predict_next_month(row, self._bundle)
+                row, date_label = inference.get_row_from_dataset(bundle["dataset"], bundle["features"], date_str)
+                result = inference.predict_next_month(row, bundle)
                 predictions.append(
                     BatchPrediction(
                         date_requested=date_str,
@@ -167,46 +216,96 @@ class Ml19CerealsCostForecastPlugin(ModelPluginPort):
                 predictions.append(
                     BatchPrediction(date_requested=date_str or "", error=str(exc))
                 )
+        return predictions
 
-        n_predictions = sum(1 for p in predictions if p.error is None)
-        self._record_prediction()
-        logger.info(
-            "predict_batch done — %d filas, %d predicciones, %d errores",
-            len(predictions), n_predictions, len(predictions) - n_predictions,
-        )
-        return PredictBatchResponse(
-            model_id=MODEL_ID,
-            train_cutoff=self._bundle["meta"]["train_end"],
-            predictions=predictions,
-            n_rows=len(predictions),
-            n_predictions=n_predictions,
-            output_path=None,
-        )
+    # ── train (official pipeline; every /train publishes the new base) ───────
 
-    # ── train (no soportado — ver inbox/a19/manifest.yaml::training) ──────────
+    def train(self, *, data_path: str, mlflow_run_id: str = "") -> TrainResponse:
+        """Retrain with the AI team's official pipeline on an updated dataset_v7_fe.csv.
 
-    def train(self, *, data_path: str = "", mlflow_run_id: str = "") -> None:
-        """Raise TrainingNotSupportedError — the delivered training procedure (src/training/
-        train.py) always reads the fixed data/processed/auto/dataset_v7_fe.csv, never a
-        client-supplied CSV. Regenerating that dataset requires the full external ETL pipeline
-        (Google Earth Engine auth, manual MAPA/ESYRCE downloads, Yahoo Finance) — out of scope
-        for a plugin retraining endpoint. See manifest.training.reason."""
-        _ = data_path, mlflow_run_id
-        raise TrainingNotSupportedError(
-            "ml19 no soporta reentrenamiento por usuario: el procedimiento de entrenamiento "
-            "entregado (src/training/train.py) siempre reentrena sobre el dataset fijo "
-            "data/processed/auto/dataset_v7_fe.csv, generado por un pipeline ETL externo "
-            "(Google Earth Engine, descargas manuales MAPA/ESYRCE, Yahoo Finance) que no acepta "
-            "ningún CSV de cliente. Reentrenar requiere el repo original "
-            "a19-rnn-cereals-predictivo-coste-materias-primas-redes y volver a subir los "
-            "artefactos a S3 bajo artifacts/fixed/ml19_cereals_cost_forecast/."
+        Port of src/training/train.py::run_multihorizon_training (training.py; bit-identical to
+        the original in the same environment). self._bundle is never mutated. The bundle — the 6
+        selected models, training_meta.json, model_selection_audit.json and the dataset itself,
+        which becomes the inference dataset — is published as the new base model version and,
+        if mlflow_run_id is given, also saved to that run. Invalid data -> ValueError (400).
+        """
+        with local_file_path(data_path) as local_path:
+            df = pd.read_csv(local_path)
+            bundle_dir = Path(tempfile.mkdtemp(prefix="ml19_train_"))
+            try:
+                shutil.copyfile(local_path, bundle_dir / DATASET_FE_FILENAME)
+            except BaseException:
+                shutil.rmtree(bundle_dir, ignore_errors=True)
+                raise
+        try:
+            result = training.train_multihorizon(df)
+            training.save_training_artifacts(bundle_dir, result)
+            metrics = training.selected_metrics(result)
+            params = {
+                "train_end": result.meta["train_end"],
+                "selection_reg": training.REG_SELECTION_METRIC,
+                "selection_clf": training.CLF_SELECTION_METRIC,
+                "best_reg": ",".join(f"h{h}:{m}" for h, m in result.best_reg.items()),
+                "best_clf": ",".join(f"h{h}:{m}" for h, m in result.best_clf.items()),
+                "n_features": len(result.features),
+                "lasso_alpha": result.lasso_alpha,
+            }
+            persisted = persist_retrained_bundle(
+                bundle_dir, artifact_folder=ARTIFACT_FOLDER_NAME, data_path=data_path,
+                metrics=metrics, mlflow_run_id=mlflow_run_id,
+                upload_to_mlflow=lambda: upload_artifacts_to_mlflow(
+                    str(bundle_dir), mlflow_run_id, metrics=metrics, params=params),
+            )
+        finally:
+            shutil.rmtree(bundle_dir, ignore_errors=True)
+
+        horizons = []
+        for h in sorted(set(result.best_reg) & set(result.best_clf)):
+            reg_name, clf_name = result.best_reg[h], result.best_clf[h]
+            reg_m, clf_m = result.reg_results[(reg_name, h)], result.clf_results[(clf_name, h)]
+            horizons.append(HorizonTrainMetrics(
+                horizon=h,
+                reg=SelectedRegMetrics(model_name=reg_name, **{k: float(reg_m[k]) for k in (
+                    "corr", "dir_acc", "sharpe", "mae", "rmse", "r2")}),
+                clf=SelectedClfMetrics(model_name=clf_name, **{k: float(clf_m[k]) for k in (
+                    "acc", "f1", "auc", "brier", "sharpe")}),
+            ))
+        logger.info("ml19 train() done — base %s, %d features, %.1fs",
+                    persisted.base_version["version"], len(result.features), result.training_time_s)
+        return TrainResponse(
+            detail=(
+                "Reentrenamiento completado (pipeline oficial: selección STRICT, walk-forward y "
+                f"modelos finales sobre todos los datos). Modelo base {persisted.base_version['version']}."
+            ),
+            horizons=horizons,
+            n_features=len(result.features),
+            lasso_alpha=float(result.lasso_alpha),
+            train_end=result.meta["train_end"],
+            n_rows=result.n_rows,
+            data_start=result.data_start,
+            data_end=result.data_end,
+            training_time_s=result.training_time_s,
+            mlflow_run_id=mlflow_run_id,
+            upload_warning=persisted.upload_warning,
+            base_version=persisted.base_version,
         )
 
     # ── stats ─────────────────────────────────────────────────────────────────
 
+    @staticmethod
+    def _metrics_with_run(mlflow_run_id: str) -> dict:
+        metrics = dict(METRICS_REPORTED)
+        if mlflow_run_id:
+            tracker = BaseMLflowTracker(mlflow_run_id)
+            metrics["mlflow"] = {"params": tracker.get_params(), "metrics": tracker.get_metrics()}
+        return metrics
+
     def stats(self, mlflow_run_id: str = "") -> StatsResponse:
-        """Return model metadata, the input/output contract and the real hold-out metrics."""
-        _ = mlflow_run_id
+        """Return model metadata, the input/output contract and the reported walk-forward metrics.
+
+        With mlflow_run_id, the params and metrics of that retraining run are added under
+        metrics["mlflow"] (read-only; the reported metrics stay as delivered).
+        """
         inputs = [
             InputField(
                 name="date", type="str | null",
@@ -233,13 +332,13 @@ class Ml19CerealsCostForecastPlugin(ModelPluginPort):
                 "Senal de trading mensual (magnitud de retorno + direccion) para el precio "
                 "medio de cereales a granel en España (trigo, cebada, maiz), a 1/2/3 meses "
                 "vista, mediante un ensemble de Ridge/XGBoost (regresion) y LogReg/XGBoost "
-                "(clasificacion). Responde contra un dataset de referencia empaquetado y "
-                "congelado a la fecha de entrega -- ver inbox/a19/manifest.yaml."
+                "(clasificacion). Responde contra el dataset de referencia de la version vigente "
+                "del modelo base, que cada reentreno renueva -- ver inbox/a19/manifest.yaml."
             ),
             task_type="regression_classification_ensemble",
             framework=FRAMEWORK,
             inputs=inputs,
             outputs=outputs,
-            metrics=dict(METRICS_REPORTED),
+            metrics=self._metrics_with_run(mlflow_run_id),
             runtime_stats=RuntimeStats(total_predictions=self._predict_count, avg_latency_ms=None),
         )

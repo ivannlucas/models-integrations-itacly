@@ -116,6 +116,10 @@ from app.plugins.ml19_cereals_cost_forecast.predict_dto import (
     PredictRequest as Ml19_Request,
     PredictResponse as Ml19_Response,
 )
+from app.plugins.ml19_cereals_cost_forecast.train_dto import (
+    TrainRequest as Ml19_TrainReq,
+    TrainResponse as Ml19_TrainResp,
+)
 
 from app.plugins.ml30_meat_traceability_detection.plugin import Ml30MeatTraceabilityDetectionPlugin
 from app.plugins.ml30_meat_traceability_detection.predict_dto import (
@@ -376,6 +380,21 @@ from app.plugins.ml13_wine_price_fluctuation_prediction.train_dto import (
     TrainResponse as Ml13_TrainResp,
 )
 
+from app.plugins.ml24_dairy_spatial_price_forecast.exceptions import (
+    InsufficientPriceHistoryError,
+    SeriesContractError,
+    UnknownCcaaError,
+)
+from app.plugins.ml24_dairy_spatial_price_forecast.plugin import Ml24DairySpatialPriceForecastPlugin
+from app.plugins.ml24_dairy_spatial_price_forecast.predict_dto import (
+    PredictRequest as Ml24_Request,
+    PredictResponse as Ml24_Response,
+)
+from app.plugins.ml24_dairy_spatial_price_forecast.train_dto import (
+    TrainRequest as Ml24_TrainReq,
+    TrainResponse as Ml24_TrainResp,
+)
+
 
 # ── Registry entry dataclass ──────────────────────────────────────────────────
 
@@ -399,7 +418,7 @@ REGISTRY: list[ModelEntry] = [
     ModelEntry(
         model_id="ml25-wine-sulphites",
         prefix="/models/ml25-wine-sulphites",
-        version="1.2.0",
+        version="1.3.0",
         plugin_class=Ml25WineSulphitesPlugin,
         predict_request_type=Ml25Wine_Request,
         predict_response_type=Ml25Wine_Response,
@@ -731,8 +750,8 @@ REGISTRY: list[ModelEntry] = [
         predict_request_type=Ml19_Request,
         predict_response_type=Ml19_Response,
         extra_predict_exceptions=(DataContractError,),
-        # train_request_type/train_response_type omitidos: training.supported=false — ver
-        # inbox/a19/manifest.yaml::training. train() lanza TrainingNotSupportedError (501).
+        train_request_type=Ml19_TrainReq,
+        train_response_type=Ml19_TrainResp,
     ),
     ModelEntry(
         model_id="ml13-wine-price-fluctuation-prediction",
@@ -766,5 +785,16 @@ REGISTRY: list[ModelEntry] = [
         extra_predict_exceptions=(InsufficientSequenceHistoryError, InvalidWineryInputError),
         train_request_type=Ml26_TrainReq,
         train_response_type=Ml26_TrainResp,
+    ),
+    ModelEntry(
+        model_id="ml24-dairy-spatial-price-forecast",
+        prefix="/models/ml24-dairy-spatial-price-forecast",
+        version="1.0.0",
+        plugin_class=Ml24DairySpatialPriceForecastPlugin,
+        predict_request_type=Ml24_Request,
+        predict_response_type=Ml24_Response,
+        extra_predict_exceptions=(SeriesContractError, UnknownCcaaError, InsufficientPriceHistoryError),
+        train_request_type=Ml24_TrainReq,
+        train_response_type=Ml24_TrainResp,
     ),
 ]
