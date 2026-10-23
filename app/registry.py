@@ -157,6 +157,19 @@ from app.plugins.ml4_lactic_cnn_thermal_early_disease_detection.train_dto import
     TrainResponse as Ml4Thermal_TrainResp,
 )
 
+from app.plugins.ml6_meat_poultry_disease_classification.exceptions import UnknownImageModalityError
+from app.plugins.ml6_meat_poultry_disease_classification.plugin import (
+    Ml6MeatPoultryDiseaseClassificationPlugin,
+)
+from app.plugins.ml6_meat_poultry_disease_classification.predict_dto import (
+    PredictRequest as Ml6Poultry_Request,
+    PredictResponse as Ml6Poultry_Response,
+)
+from app.plugins.ml6_meat_poultry_disease_classification.train_dto import (
+    TrainRequest as Ml6Poultry_TrainReq,
+    TrainResponse as Ml6Poultry_TrainResp,
+)
+
 from app.plugins.ml23_lactic_market_price_forecast.plugin import (
     Ml23LacticMarketPriceForecastPlugin,
 )
@@ -507,6 +520,17 @@ REGISTRY: list[ModelEntry] = [
         train_request_type=Ml4Thermal_TrainReq,
         train_response_type=Ml4Thermal_TrainResp,
         extra_predict_exceptions=(InvalidImageError,),
+    ),
+    ModelEntry(
+        model_id="ml6-meat-poultry-disease-classification",
+        prefix="/models/ml6-meat-poultry-disease-classification",
+        version="1.0.0",
+        plugin_class=Ml6MeatPoultryDiseaseClassificationPlugin,
+        predict_request_type=Ml6Poultry_Request,
+        predict_response_type=Ml6Poultry_Response,
+        train_request_type=Ml6Poultry_TrainReq,
+        train_response_type=Ml6Poultry_TrainResp,
+        extra_predict_exceptions=(InvalidImageError, UnknownImageModalityError),
     ),
     ModelEntry(
         model_id="ml23-lactic-market-price-forecast",

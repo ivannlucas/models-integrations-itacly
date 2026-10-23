@@ -161,6 +161,17 @@ from app.plugins.ml4_lactic_cnn_thermal_early_disease_detection.train_dto import
     TrainRequest as Ml4Thermal_TrainReq,
     TrainResponse as Ml4ThermalTrainResp,
 )
+from app.plugins.ml6_meat_poultry_disease_classification.exceptions import UnknownImageModalityError
+from app.plugins.ml6_meat_poultry_disease_classification.predict_dto import (
+    PredictBatchResponse as Ml6PoultryBatchResp,
+    PredictInlineResponse as Ml6PoultryInlineResp,
+    PredictRequest as Ml6Poultry_Request,
+    PredictResponse as Ml6Poultry_Response,
+)
+from app.plugins.ml6_meat_poultry_disease_classification.train_dto import (
+    TrainRequest as Ml6Poultry_TrainReq,
+    TrainResponse as Ml6PoultryTrainResp,
+)
 from app.plugins.ml23_lactic_market_price_forecast.predict_dto import (
     PredictBatchResponse as Ml23BatchResp,
     PredictInlineResponse as Ml23InlineResp,
@@ -1011,6 +1022,55 @@ def _ml4_thermal_train(plugin: FakePlugin, *, data_path: str) -> Ml4ThermalTrain
     return Ml4ThermalTrainResp(
         detail="Reentrenamiento completado", accuracy=0.62, precision=0.60, recall=0.64,
         f1=0.62, auc=0.61, n_train=33, n_val=9, training_time_s=4.2,
+        mlflow_run_id="test-run-id", upload_warning=None,
+    )
+
+
+def _ml6_poultry_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> Ml6PoultryInlineResp:
+    """Fake inline response for the ml6 poultry disease ensemble (golden case thermal_test_002)."""
+    return Ml6PoultryInlineResp(
+        model_id="ml6-meat-poultry-disease-classification",
+        task=model_key or "thermal",
+        threshold=threshold,
+        prediction="healthy",
+        predicted_class_index=0,
+        confidence=2 / 3,
+        model_predictions={"densenet121": "sick", "efficientnet_v2s": "healthy", "resnet50": "healthy"},
+        model_probabilities={
+            "densenet121": {"healthy": 0.41, "sick": 0.59},
+            "efficientnet_v2s": {"healthy": 0.62, "sick": 0.38},
+            "resnet50": {"healthy": 0.71, "sick": 0.29},
+        },
+        features_used=["image_base64"],
+        warnings=[],
+    )
+
+
+def _ml6_poultry_batch(plugin: FakePlugin, *, data_path: str) -> Ml6PoultryBatchResp:
+    """Fake batch response for the ml6 poultry disease ensemble."""
+    return Ml6PoultryBatchResp(
+        model_id="ml6-meat-poultry-disease-classification",
+        task="rgb",
+        n_images=1,
+        predictions=[{
+            "filename": "pcrncd.14.jpg", "path": "pcrncd/pcrncd.14.jpg", "true_class": "ncd",
+            "prediction": "ncd", "predicted_class_index": 2, "confidence": 1.0,
+            "model_predictions": {"vgg19_bn": "ncd", "efficientnet_b7": "ncd", "mobilenet_v3l": "ncd"},
+        }],
+        evaluated_metrics=None,
+        output_path=None,
+    )
+
+
+def _ml6_poultry_train(plugin: FakePlugin, *, data_path: str) -> Ml6PoultryTrainResp:
+    """Fake retraining response for the ml6 poultry disease ensemble."""
+    return Ml6PoultryTrainResp(
+        detail="Reentrenamiento del ensemble 'thermal' completado",
+        task="thermal", accuracy=0.8, precision_weighted=0.7964, recall_weighted=0.8, f1_weighted=0.796,
+        per_class={"healthy": {"precision": 0.75, "recall": 0.6429, "f1": 0.6923, "support": 14},
+                   "sick": {"precision": 0.8214, "recall": 0.8846, "f1": 0.8519, "support": 26}},
+        models={"resnet50": {"test": {"accuracy": 0.775}, "best_val_accuracy": 0.81, "epochs_run": 14}},
+        n_train=177, n_val=37, n_test=40, training_time_s=124.2,
         mlflow_run_id="test-run-id", upload_warning=None,
     )
 
@@ -2108,6 +2168,7 @@ FAKE_FACTORIES: dict[str, tuple[Callable, Callable]] = {
     "ml17-meat-market-price-analysis": (_ml17_inline, _ml17_batch),
     "ml23-lactic-market-price-forecast": (_ml23_inline, _ml23_batch),
     "ml4-lactic-cnn-thermal-early-disease-detection": (_ml4_thermal_inline, _ml4_thermal_batch),
+    "ml6-meat-poultry-disease-classification": (_ml6_poultry_inline, _ml6_poultry_batch),
     "ml31-cereals-residue-optimizer": (_ml31_residue_inline, _ml31_residue_batch),
     "ml33-cereals-reuse-strategy-optimizer": (_ml33_reuse_inline, _ml33_reuse_batch),
     "ml30-meat-traceability-detection": (_ml30_trace_inline, _ml30_trace_batch),
@@ -2224,6 +2285,7 @@ TRAIN_FACTORIES: dict[str, Callable] = {
     "ml23-lactic-market-price-forecast": _ml23_train,
     "ml2-fungal-cnn-disease-detection": _ml2_fungal_train,
     "ml4-lactic-cnn-thermal-early-disease-detection": _ml4_thermal_train,
+    "ml6-meat-poultry-disease-classification": _ml6_poultry_train,
     "ml13-wine-price-fluctuation-prediction": _ml13_train,
 }
 
@@ -2358,6 +2420,17 @@ TEST_REGISTRY: list[ModelEntry] = [
         extra_predict_exceptions=(InvalidImageError,),
         train_request_type=Ml4Thermal_TrainReq,
         train_response_type=Ml4ThermalTrainResp,
+    ),
+    ModelEntry(
+        model_id="ml6-meat-poultry-disease-classification",
+        prefix="/models/ml6-meat-poultry-disease-classification",
+        version="1.0.0",
+        plugin_class=FakePlugin,
+        predict_request_type=Ml6Poultry_Request,
+        predict_response_type=Ml6Poultry_Response,
+        extra_predict_exceptions=(InvalidImageError, UnknownImageModalityError),
+        train_request_type=Ml6Poultry_TrainReq,
+        train_response_type=Ml6PoultryTrainResp,
     ),
     ModelEntry(
         model_id="ml23-lactic-market-price-forecast",
