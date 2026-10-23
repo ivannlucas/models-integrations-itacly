@@ -1,6 +1,6 @@
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.application.dto.train_dto import MlflowRunId
 
@@ -23,9 +23,18 @@ class TrainRequest(BaseModel):
             "fine_tune (por defecto): calibra las 4 cabezas del modelo servido con datos de planta, "
             "backbone CNN congelado (fine_tuner.py del equipo de IA; bastan unos cientos de ciclos). "
             "full: reentrena la CNN desde cero con los hiperparámetros de Optuna (trainer.py; "
-            "pensado para miles de ciclos — con pocos ciclos da un modelo peor que el servido)."
+            "pensado para miles de ciclos — con pocos ciclos da un modelo peor que el servido). "
+            "batch/inline se tratan como fine_tune: la plataforma manda su modo de transporte en "
+            "este mismo campo."
         ),
     )
+
+    @field_validator("mode", mode="before")
+    @classmethod
+    def _platform_transport_mode(cls, value):
+        # train-task-manager.ts always sends mode="batch" (transport mode) and the orchestrator
+        # forwards the payload as-is; without this the request is a 422 before reaching train().
+        return "fine_tune" if value in ("batch", "inline") else value
 
 
 class TrainResponse(BaseModel):

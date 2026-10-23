@@ -251,3 +251,11 @@ def test_train_request_defaults_to_fine_tune_and_accepts_full():
     assert TrainRequest(data_path="x.csv", mlflow_run_id="run-1", mode="full").mode == "full"
     with pytest.raises(ValueError):
         TrainRequest(data_path="x.csv", mlflow_run_id="run-1", mode="whatever")
+
+
+def test_train_request_maps_the_platform_transport_mode_to_fine_tune():
+    """The platform always sends mode="batch" (train-task-manager.ts) and the orchestrator forwards it."""
+    from app.plugins.ml48_dairy_dnsl_critical_point_detection.train_dto import TrainRequest
+
+    for transport in ("batch", "inline"):
+        assert TrainRequest(data_path="x.csv", mlflow_run_id="run-1", mode=transport).mode == "fine_tune"
