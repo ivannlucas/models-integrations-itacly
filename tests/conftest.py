@@ -747,7 +747,7 @@ def _ml1_train(plugin: FakePlugin, *, data_path: str) -> Ml1TrainResp:
     """Fake training response for the ml1 RandomForest tabular experts."""
     return Ml1TrainResp(
         detail="Expertos RandomForest reentrenados",
-        accuracy=0.95, f1_macro=0.88, mae_riesgo=0.19, n_train=16, n_test=4,
+        accuracy=0.95, f1_macro=0.88, f1_weighted=0.94, mae_riesgo=0.19, n_train=16, n_test=4,
         upload_warning=None,
     )
 

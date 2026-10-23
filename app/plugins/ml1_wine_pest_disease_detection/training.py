@@ -38,6 +38,7 @@ class TabularTrainResult:
     rf_riesgo: RandomForestRegressor
     accuracy: float
     f1_macro: float
+    f1_weighted: float
     mae_riesgo: float
     n_train: int
     n_test: int
@@ -92,6 +93,7 @@ def train_tabular_experts(df: pd.DataFrame) -> TabularTrainResult:
         rf_riesgo=rf_riesgo,
         accuracy=float(accuracy_score(y_clase_test, pred_clase_test)),
         f1_macro=float(f1_score(y_clase_test, pred_clase_test, average="macro", zero_division=0)),
+        f1_weighted=float(f1_score(y_clase_test, pred_clase_test, average="weighted", zero_division=0)),
         mae_riesgo=float(mean_absolute_error(y_riesgo_test, pred_riesgo_test)),
         n_train=len(x_train),
         n_test=len(x_test),

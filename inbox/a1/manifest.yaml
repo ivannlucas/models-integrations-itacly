@@ -319,3 +319,26 @@ known_issues:
   - "[ENTORNO] La memoria dice Python 3.12.7 (compatible 3.10+); EJECUCION_MODELO_1.md (más
      reciente) dice Python 3.10+. Verificar la versión real usada para generar los .weights.h5 si
      aparecen problemas de carga."
+  - "[CORREGIDO TRAS REVISIÓN EXTERNA, PR #24] Un compañero probó la rama desplegada y reportó
+     tres fallos reales, confirmados contra el código y corregidos:
+     1) Un sensor no numérico en predict_batch escapaba como ValueError sin capturar (el except
+        por fila solo cubría DataContractError/InvalidImageError), abortando el lote entero y
+        descartando también las filas ya procesadas correctamente. Corregido en
+        preprocessing.py::validate_and_align_sensors: el fallo de conversión numérica ahora
+        lanza DataContractError, así que predict_batch lo reporta como error de esa fila sin
+        afectar al resto.
+     2) predict_batch elegía un único directorio de búsqueda de imágenes (la raíz del ZIP, o la
+        subcarpeta images/ si existía, nunca ambos), pese a que predict_dto.py ya documentaba
+        que se buscan en ambos sitios por nombre de fichero. Una foto válida en la raíz se
+        ignoraba silenciosamente (IMAGEN_NO_DISPONIBLE, fila contada como correcta) en cuanto el
+        ZIP también traía una subcarpeta images/ para otras filas. Corregido:
+        resolve_image_path_for_batch ahora acepta una lista de directorios y los prueba en
+        orden (images/ primero si existe, luego la raíz)."
+  - "[CORREGIDO TRAS REVISIÓN EXTERNA, PR #24] training.metrics_returned exige f1_weighted, pero
+     train_tabular_experts() solo calculaba accuracy/f1_macro/mae_riesgo — ni se devolvía en
+     TrainResponse ni se registraba en MLflow. El train_tabular.py original del equipo de IA
+     tampoco calcula f1_weighted (no es un bug heredado, es un incumplimiento propio del
+     contrato que fijamos en este manifest): se añade f1_score(..., average='weighted') sobre
+     el mismo holdout de test ya calculado, sin alterar el procedimiento de entrenamiento
+     original. Verificado con un run de MLflow real (sqlite local): 200 con f1_weighted en la
+     respuesta y registrado como métrica del run."

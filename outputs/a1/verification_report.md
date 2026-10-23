@@ -154,3 +154,41 @@ determinista y estable, no es una coincidencia de una única ejecución.
    no contra el servidor MLflow real de la plataforma — el contrato (200 con métricas + subida
    real de artefactos, 422 sin `mlflow_run_id`, 502 si la subida falla) está verificado; la
    conectividad con el MLflow real de producción queda fuera del alcance de este sandbox.
+
+## Correcciones tras revisión externa (PR #24)
+
+Un compañero probó la rama desplegada y reportó tres síntomas. Investigados y confirmados los
+tres contra el código real (no solo contra el informe del compañero):
+
+1. **Un sensor no numérico tiraba todo el lote.** Reproducido: una fila con `Mes="oops"` lanzaba
+   un `ValueError` sin capturar desde `validate_and_align_sensors` (el `float()` de conversión no
+   estaba protegido); el `except (DataContractError, InvalidImageError)` por fila de
+   `predict_batch` no lo cubre, así que el error escapaba y abortaba el lote entero — incluidas
+   las filas ya procesadas correctamente antes de llegar a la mala. **Corregido** en
+   `preprocessing.py`: el fallo de conversión numérica ahora lanza `DataContractError`, así que
+   `predict_batch` la reporta como error de esa fila sin afectar al resto. Verificado con un lote
+   real de 2 filas (una con `Mes="oops"`, otra válida): `200`, `n_rows=2`, `n_predictions=1`, la
+   fila mala con `error` descriptivo y la fila válida con su predicción intacta.
+2. **Se ignoraban fotos válidas en la raíz del ZIP.** Reproducido: `predict_batch` elegía un
+   único directorio de búsqueda (la raíz, o `images/` si esa subcarpeta existía, nunca ambos),
+   pese a que el propio docstring de `predict_dto.py` ya decía que se buscan en los dos sitios.
+   Una foto real en la raíz devolvía `IMAGEN_NO_DISPONIBLE` (contada como fila correcta) en
+   cuanto el ZIP traía también una subcarpeta `images/` para otras filas. **Corregido**:
+   `resolve_image_path_for_batch` acepta ahora una lista de directorios candidatos
+   (`images/` primero si existe, luego la raíz). Verificado con un ZIP real con una foto en la
+   raíz + una subcarpeta `images/` con otra foto distinta: la foto de la raíz se detecta y
+   clasifica correctamente (`HIBRIDO_ENSAMBLE`), ya no cae a modo tabular.
+3. **`/train` incumplía el manifest.** `training.metrics_returned` exige `f1_weighted`, pero
+   `train_tabular_experts()` solo calculaba `accuracy`/`f1_macro`/`mae_riesgo` — no se devolvía en
+   `TrainResponse` ni se registraba en MLflow. El `train_tabular.py` original del equipo de IA
+   tampoco calcula `f1_weighted` (no es un bug heredado: es un incumplimiento de un contrato que
+   fijamos nosotros mismos en el manifest). **Corregido**: se añade
+   `f1_score(..., average="weighted")` sobre el mismo holdout de test ya calculado, sin tocar el
+   procedimiento de entrenamiento. Verificado con un run de MLflow real (local, `sqlite://`):
+   `200` con `f1_weighted` en la respuesta, y confirmado como métrica registrada en el run
+   (`client.get_run(...).data.metrics["f1_weighted"]`).
+
+Añadidos 4 tests de regresión reales (no de wiring) en `tests/unit/test_ml1_preprocessing.py`,
+contra las funciones reales, no contra `FakePlugin`. Re-verificación tras los tres parches:
+`flake8` 0 errores, 15/15 tests de ml1 (11 de wiring + 4 de regresión), suite completa sin
+fallos nuevos (1100 passed, mismos 5 fallos preexistentes ajenos a ml1).

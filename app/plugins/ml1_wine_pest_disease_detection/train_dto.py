@@ -31,6 +31,7 @@ class TrainResponse(BaseModel):
     detail: str
     accuracy: float
     f1_macro: float
+    f1_weighted: float
     mae_riesgo: float
     n_train: int
     n_test: int

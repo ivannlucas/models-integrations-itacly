@@ -77,17 +77,28 @@ def validate_and_align_sensors(sensors: dict) -> np.ndarray:
         if unexpected:
             parts.append(f"Columnas no reconocidas: {sorted(unexpected)}")
         raise DataContractError("; ".join(parts))
-    return np.array([float(received[col]) for col in SENSOR_COLS], dtype=np.float32).reshape(1, -1)
+    try:
+        return np.array([float(received[col]) for col in SENSOR_COLS], dtype=np.float32).reshape(1, -1)
+    except (TypeError, ValueError) as exc:
+        raise DataContractError(f"Valor de sensor no numérico: {exc}") from exc
 
 
-def resolve_image_path_for_batch(raw_value, images_dir: Path) -> Path | None:
+def resolve_image_path_for_batch(raw_value, search_dirs: list[Path]) -> Path | None:
     """predictor.py's own link_image_path logic (src/main.py::predict): N/A / empty / a filename
-    not found under images_dir all resolve to "no image" (tabular-only fallback), never an error
-    — a missing photo for one batch row must not fail the whole row."""
+    not found under any of search_dirs all resolve to "no image" (tabular-only fallback), never
+    an error — a missing photo for one batch row must not fail the whole row.
+
+    search_dirs is searched in order (ZIP root and an images/ subfolder, if present, are both
+    valid locations per predict_dto.py's documented contract — a photo at the root must not be
+    ignored just because the ZIP also happens to have an images/ subfolder for other rows)."""
     if raw_value is None:
         return None
     text = str(raw_value).strip()
     if not text or text.upper() == "N/A":
         return None
-    candidate = images_dir / Path(text).name
-    return candidate if candidate.exists() else None
+    filename = Path(text).name
+    for directory in search_dirs:
+        candidate = directory / filename
+        if candidate.exists():
+            return candidate
+    return None

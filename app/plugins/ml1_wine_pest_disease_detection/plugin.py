@@ -155,10 +155,8 @@ class Ml1WinePestDiseaseDetectionPlugin(ModelPluginPort):
             if "Path_Imagen" not in df.columns:
                 raise DataContractError("El CSV debe traer una columna 'Path_Imagen' (N/A si no hay foto).")
 
-            images_dir = root
             nested_images = root / "images"
-            if nested_images.is_dir():
-                images_dir = nested_images
+            search_dirs = [nested_images, root] if nested_images.is_dir() else [root]
 
             predictions: list[BatchPrediction] = []
             for idx, row in df.iterrows():
@@ -167,7 +165,7 @@ class Ml1WinePestDiseaseDetectionPlugin(ModelPluginPort):
                 try:
                     sensors = {col: row[col] for col in row.index if col != "Path_Imagen"}
                     sensors_aligned = preprocessing.validate_and_align_sensors(sensors)
-                    image_path = preprocessing.resolve_image_path_for_batch(raw_name, images_dir)
+                    image_path = preprocessing.resolve_image_path_for_batch(raw_name, search_dirs)
 
                     if image_path is not None:
                         img_bgr = _read_image_bgr(image_path)
@@ -227,7 +225,7 @@ class Ml1WinePestDiseaseDetectionPlugin(ModelPluginPort):
                 mlflow_tmp, mlflow_run_id,
                 metrics={
                     "accuracy": result.accuracy, "f1_macro": result.f1_macro,
-                    "mae_riesgo": result.mae_riesgo,
+                    "f1_weighted": result.f1_weighted, "mae_riesgo": result.mae_riesgo,
                     "n_train": result.n_train, "n_test": result.n_test,
                 },
             )
@@ -240,13 +238,15 @@ class Ml1WinePestDiseaseDetectionPlugin(ModelPluginPort):
             shutil.rmtree(mlflow_tmp, ignore_errors=True)
 
         logger.info(
-            "ml1 train() done — accuracy=%.4f f1_macro=%.4f mae_riesgo=%.4f n_train=%d n_test=%d",
-            result.accuracy, result.f1_macro, result.mae_riesgo, result.n_train, result.n_test,
+            "ml1 train() done — accuracy=%.4f f1_macro=%.4f f1_weighted=%.4f mae_riesgo=%.4f n_train=%d n_test=%d",
+            result.accuracy, result.f1_macro, result.f1_weighted, result.mae_riesgo,
+            result.n_train, result.n_test,
         )
         return TrainResponse(
             detail="Expertos RandomForest (clasificación + riesgo) reentrenados desde cero con el procedimiento del equipo de IA",
             accuracy=round(result.accuracy, 4),
             f1_macro=round(result.f1_macro, 4),
+            f1_weighted=round(result.f1_weighted, 4),
             mae_riesgo=round(result.mae_riesgo, 4),
             n_train=result.n_train,
             n_test=result.n_test,
