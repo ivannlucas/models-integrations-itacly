@@ -11,6 +11,9 @@ directly against the real functions (no FakePlugin — the wiring tests never ex
    ZIP also had an images/ subfolder for other rows.
 3. training.metrics_returned in the manifest promises f1_weighted, but train_tabular_experts()
    never computed or returned it.
+4. A sensor value of inf (or a finite-but-huge value like 1e100, which overflows to +inf once
+   cast to float32) passed validation and reached RandomForestRegressor.predict(), which raises
+   a bare ValueError for non-finite input — same uncaught-abort-the-whole-batch failure as bug 1.
 """
 import pandas as pd
 import pytest
@@ -33,6 +36,15 @@ def test_non_numeric_sensor_raises_data_contract_error_not_value_error():
     bad_sensors = {**_SENSORS_OK, "Mes": "oops"}
     with pytest.raises(DataContractError, match="no numérico"):
         preprocessing.validate_and_align_sensors(bad_sensors)
+
+
+@pytest.mark.parametrize("bad_value", [float("inf"), float("-inf"), 1e100])
+def test_non_finite_sensor_raises_data_contract_error(bad_value):
+    """inf, -inf and values that overflow to inf under float32 (1e100) must all be rejected
+    as a per-row DataContractError, never reach RandomForestRegressor.predict() as non-finite
+    input (sklearn's bare ValueError there is not caught by predict_batch's per-row except)."""
+    with pytest.raises(DataContractError, match="no finito"):
+        preprocessing.validate_and_align_sensors({**_SENSORS_OK, "Mes": bad_value})
 
 
 def test_resolve_image_path_for_batch_finds_root_photo_even_with_images_subfolder(tmp_path):

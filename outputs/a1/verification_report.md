@@ -192,3 +192,30 @@ Añadidos 4 tests de regresión reales (no de wiring) en `tests/unit/test_ml1_pr
 contra las funciones reales, no contra `FakePlugin`. Re-verificación tras los tres parches:
 `flake8` 0 errores, 15/15 tests de ml1 (11 de wiring + 4 de regresión), suite completa sin
 fallos nuevos (1100 passed, mismos 5 fallos preexistentes ajenos a ml1).
+
+## Corrección tras revisión externa — segunda ronda (PR #24)
+
+Un segundo comentario del mismo compañero: **un sensor con `inf` o un valor finito desorbitado
+(`1e100`) seguía abortando todo el lote con HTTP 500**, pese al fix de la primera ronda.
+Reproducido con las versiones reales de sklearn/Pydantic fijadas en el repo:
+`validate_and_align_sensors` aceptaba `inf`/`1e100` sin lanzar excepción (el `float()` de Python
+los convierte sin error; `1e100` además desborda a `+inf` al castear a `float32`, mismo patrón
+que `ml14` ya documenta para su propio caso de overflow), y el valor llegaba intacto a
+`RandomForestRegressor.predict()`, que rechaza entradas no finitas con un `ValueError` sin
+capturar — el mismo patrón de fuga que el bug #1 de la primera ronda, solo que por una vía
+distinta (overflow numérico, no un string no convertible).
+
+**Corregido**: tras construir el array `float32`, se comprueba `np.isfinite()` sobre el conjunto
+completo y se lanza `DataContractError` con las columnas afectadas si alguna no es finita — cubre
+`inf`, `-inf` y cualquier valor que desborde al castear a `float32`.
+
+Verificado:
+- Funciones reales: `inf`, `-inf` y `1e100` lanzan `DataContractError` (ya no `ValueError`); un
+  sensor válido sigue devolviendo el array esperado sin cambios.
+- HTTP real: lote de 2 filas (una con `GDD_Acumulado=1e100`, otra válida, ambas sin imagen) →
+  `200`, `n_rows=2`, `n_predictions=1`, la fila mala con `error` descriptivo
+  (`"Valor de sensor no finito (inf/NaN o desbordamiento): ['GDD_Acumulado']"`), la fila válida
+  con su predicción intacta.
+- 3 tests de regresión añadidos (parametrizados sobre `inf`/`-inf`/`1e100`) en
+  `tests/unit/test_ml1_preprocessing.py`. Re-verificación: `flake8` 0 errores, 18/18 tests de
+  ml1, suite completa sin fallos nuevos.

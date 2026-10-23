@@ -78,9 +78,17 @@ def validate_and_align_sensors(sensors: dict) -> np.ndarray:
             parts.append(f"Columnas no reconocidas: {sorted(unexpected)}")
         raise DataContractError("; ".join(parts))
     try:
-        return np.array([float(received[col]) for col in SENSOR_COLS], dtype=np.float32).reshape(1, -1)
+        aligned = np.array([float(received[col]) for col in SENSOR_COLS], dtype=np.float32).reshape(1, -1)
     except (TypeError, ValueError) as exc:
         raise DataContractError(f"Valor de sensor no numérico: {exc}") from exc
+    if not np.all(np.isfinite(aligned)):
+        # A finite Python float (e.g. 1e100) can still overflow to +/-inf once cast to float32
+        # above — sklearn's RandomForest.predict() rejects non-finite input with a bare
+        # ValueError that predict_batch's per-row except does not catch, aborting the whole
+        # batch. Reject it here instead, as a DataContractError scoped to this row.
+        bad_cols = [col for col, val in zip(SENSOR_COLS, aligned[0]) if not np.isfinite(val)]
+        raise DataContractError(f"Valor de sensor no finito (inf/NaN o desbordamiento): {bad_cols}")
+    return aligned
 
 
 def resolve_image_path_for_batch(raw_value, search_dirs: list[Path]) -> Path | None:

@@ -342,3 +342,16 @@ known_issues:
      el mismo holdout de test ya calculado, sin alterar el procedimiento de entrenamiento
      original. Verificado con un run de MLflow real (sqlite local): 200 con f1_weighted en la
      respuesta y registrado como métrica del run."
+  - "[CORREGIDO TRAS REVISIÓN EXTERNA, PR #24, segunda ronda] Un sensor con inf o un valor finito
+     desorbitado (1e100 -- desborda a +inf al convertirse a float32, igual que ml14 ya documenta
+     para su propio caso) pasaba la validación de validate_and_align_sensors (el float() de
+     Python lo acepta sin lanzar excepción) y llegaba a RandomForestRegressor.predict(), que
+     rechaza entradas no finitas con un ValueError sin capturar -- mismo patrón que el bug #1 de
+     la primera ronda: escapaba del except por fila de predict_batch y abortaba el lote entero,
+     perdiendo también las filas ya procesadas correctamente. Reproducido con sklearn/Pydantic
+     fijados a las versiones reales del repo, igual que reportó el compañero. Corregido: tras
+     construir el array float32, se comprueba np.isfinite() sobre el conjunto completo y se
+     lanza DataContractError con las columnas afectadas si alguna no es finita -- cubre inf,
+     -inf y cualquier valor que desborde al castear a float32. Verificado con inf, -inf y 1e100
+     contra las funciones reales y contra un lote real de 2 filas (una con GDD_Acumulado=1e100,
+     otra válida) vía HTTP: 200, fila mala con error descriptivo, fila válida intacta."
