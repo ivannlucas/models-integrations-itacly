@@ -209,6 +209,35 @@ def ml4(monkeypatch, tmp_path):
     }
 
 
+# ── ml6 ───────────────────────────────────────────────────────────────────────
+
+@pytest.fixture
+def ml6(monkeypatch, tmp_path):
+    from app.plugins.ml6_meat_poultry_disease_classification import plugin
+
+    probe = Probe()
+
+    def ensemble(name):
+        return {"densenet121": _FakeModel(name, probe), "efficientnet_v2s": _FakeModel(name, probe),
+                "resnet50": _FakeModel(name, probe)}
+
+    monkeypatch.setattr(plugin, "load_ensembles", lambda: ({"thermal": ensemble(BASE), "rgb": {}}, "cpu"))
+    monkeypatch.setattr(plugin, "download_user_model_from_mlflow",
+                        lambda run_id: ("thermal", ensemble(f"USER-{run_id}"), "cpu", tempfile.mkdtemp()))
+    monkeypatch.setattr(plugin, "decode_image", lambda image_bytes: MagicMock())
+    monkeypatch.setattr(plugin, "load_image", lambda path: MagicMock())
+    monkeypatch.setattr(plugin, "to_tensor", lambda image, task: MagicMock())
+    instance = plugin.Ml6MeatPoultryDiseaseClassificationPlugin()
+    instance.load()
+    images = _zip_with(tmp_path, "bird.bmp")
+    return probe, {
+        "predict_inline": lambda run_id: instance.predict_inline(
+            features={"image_base64": "eA=="}, model_key="thermal", mlflow_run_id=run_id),
+        "predict_batch": lambda run_id: instance.predict_batch(
+            data_path=images, model_key="thermal", mlflow_run_id=run_id),
+    }
+
+
 # ── ml8 ───────────────────────────────────────────────────────────────────────
 
 @pytest.fixture
@@ -537,7 +566,7 @@ def ml26(monkeypatch, tmp_path):
 CASES = [("ml9", "predict_inline"), ("ml9", "predict_batch"),
          ("ml2", "predict_inline"), ("ml2", "predict_batch"), ("ml2", "stats")] + [
     (name, method)
-    for name in ("ml4", "ml8", "ml13", "ml14", "ml17", "ml18", "ml21", "ml25", "ml26", "ml30", "ml34", "ml35", "ml46")
+    for name in ("ml4", "ml6", "ml8", "ml13", "ml14", "ml17", "ml18", "ml21", "ml25", "ml26", "ml30", "ml34", "ml35", "ml46")
     for method in ("predict_inline", "predict_batch")
 ]
 
