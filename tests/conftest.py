@@ -80,6 +80,17 @@ from app.plugins.ml8_cereals_img_anomaly_detector.train_dto import (
     TrainRequest as Ml8Cereals_TrainReq,
     TrainResponse as Ml8CerealsTrainResp,
 )
+from app.plugins.ml1_wine_pest_disease_detection.predict_dto import (
+    BatchPrediction as Ml1BatchPred,
+    PredictBatchResponse as Ml1BatchResp,
+    PredictInlineResponse as Ml1InlineResp,
+    PredictRequest as Ml1_Request,
+    PredictResponse as Ml1_Response,
+)
+from app.plugins.ml1_wine_pest_disease_detection.train_dto import (
+    TrainRequest as Ml1_TrainReq,
+    TrainResponse as Ml1TrainResp,
+)
 from app.plugins.ml2_fungal_cnn_disease_detection.predict_dto import (
     PredictBatchResponse as Ml2FungalBatchResp,
     PredictInlineResponse as Ml2FungalInlineResp,
@@ -704,6 +715,40 @@ def _ml5_cow_train(plugin: FakePlugin, *, data_path: str) -> BaseTrainResponse:
             "epochs_run": 2,
             "best_val_acc": 41.7,
         },
+    )
+
+
+def _ml1_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> Ml1InlineResp:
+    """Fake inline response for the ml1 vineyard pest/disease model."""
+    if features.get("image_base64"):
+        return Ml1InlineResp(
+            model_id="ml1-wine-pest-disease-detection",
+            enfermedad="MILDIU", confianza=0.87, riesgo=0.42, metodo="HIBRIDO_ENSAMBLE",
+        )
+    return Ml1InlineResp(
+        model_id="ml1-wine-pest-disease-detection",
+        enfermedad="IMAGEN_NO_DISPONIBLE", confianza=0.0, riesgo=0.31, metodo="RIESGO_TABULAR_EXPERT",
+    )
+
+
+def _ml1_batch(plugin: FakePlugin, *, data_path: str) -> Ml1BatchResp:
+    """Fake batch response for the ml1 vineyard pest/disease model."""
+    preds = [
+        Ml1BatchPred(id=0, nombre_imagen="leaf_001.jpg", enfermedad="MILDIU",
+                     confianza=0.87, riesgo=0.42, metodo="HIBRIDO_ENSAMBLE"),
+    ]
+    return Ml1BatchResp(
+        model_id="ml1-wine-pest-disease-detection", predictions=preds,
+        n_rows=len(preds), n_predictions=len(preds), output_path=None,
+    )
+
+
+def _ml1_train(plugin: FakePlugin, *, data_path: str) -> Ml1TrainResp:
+    """Fake training response for the ml1 RandomForest tabular experts."""
+    return Ml1TrainResp(
+        detail="Expertos RandomForest reentrenados",
+        accuracy=0.95, f1_macro=0.88, f1_weighted=0.94, mae_riesgo=0.19, n_train=16, n_test=4,
+        upload_warning=None,
     )
 
 
@@ -2112,6 +2157,7 @@ FAKE_FACTORIES: dict[str, tuple[Callable, Callable]] = {
     "ml33-cereals-reuse-strategy-optimizer": (_ml33_reuse_inline, _ml33_reuse_batch),
     "ml30-meat-traceability-detection": (_ml30_trace_inline, _ml30_trace_batch),
     "ml7-cereals-grain-pest-detection": (_ml7_grain_inline, _ml7_grain_batch),
+    "ml1-wine-pest-disease-detection": (_ml1_inline, _ml1_batch),
     "ml2-fungal-cnn-disease-detection": (_ml2_fungal_inline, _ml2_fungal_batch),
     "ml25-wine-sulphites": (_ml25_wine_inline, _ml25_wine_batch),
     "ml10-dairy-disease-vector-detection": (_ml10_dairy_inline, _ml10_dairy_batch),
@@ -2222,6 +2268,7 @@ TRAIN_FACTORIES: dict[str, Callable] = {
     "ml15-wine-ipi-price-forecast": _ml15_train,
     "ml17-meat-market-price-analysis": _ml17_train,
     "ml23-lactic-market-price-forecast": _ml23_train,
+    "ml1-wine-pest-disease-detection": _ml1_train,
     "ml2-fungal-cnn-disease-detection": _ml2_fungal_train,
     "ml4-lactic-cnn-thermal-early-disease-detection": _ml4_thermal_train,
     "ml13-wine-price-fluctuation-prediction": _ml13_train,
@@ -2296,6 +2343,17 @@ TEST_REGISTRY: list[ModelEntry] = [
         extra_predict_exceptions=(InvalidVideoError, InvalidImageError, InsufficientFramesError),
         train_request_type=Ml5Cow_TrainReq,
         train_response_type=BaseTrainResponse,
+    ),
+    ModelEntry(
+        model_id="ml1-wine-pest-disease-detection",
+        prefix="/models/ml1-wine-pest-disease-detection",
+        version="1.0.0",
+        plugin_class=FakePlugin,
+        predict_request_type=Ml1_Request,
+        predict_response_type=Ml1_Response,
+        extra_predict_exceptions=(DataContractError, InvalidImageError),
+        train_request_type=Ml1_TrainReq,
+        train_response_type=Ml1TrainResp,
     ),
     ModelEntry(
         model_id="ml2-fungal-cnn-disease-detection",

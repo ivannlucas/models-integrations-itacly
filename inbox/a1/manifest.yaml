@@ -1,0 +1,357 @@
+model_id: ml1-wine-pest-disease-detection
+sector: vitivinicola
+nombre: "Desarrollo de un modelo de análisis de imágenes para detección de plagas derivadas de insectos (VID-Deep_Ensemble)"
+# Título y acrónimo literales de la memoria v5.0 (21/09/2026). Nombre interno del equipo de IA:
+# "Sistema Fitopatológico de Vid" / "Modelo 1" (metadata.txt, EJECUCION_MODELO_1.md). Lote 2.
+task_type: classification_regression_multimodal
+# Panel híbrido imagen+tabular: clasificación de 15 patologías (CNN ensemble) + regresión de un
+# índice de riesgo 0-1 (cabecera tabular MLP, modo desacoplado), con un detector de objetos YOLOv8
+# como etapa de preprocesado y dos modelos Random Forest tabulares de contingencia.
+framework:
+  - torch==2.5.1          # exacto en requirements.txt (backend de Keras 3 para entrenamiento; KERAS_BACKEND=torch obligatorio)
+  - torchvision==0.20.1   # exacto
+  - "tensorflow-cpu>=2.15.0 (Linux/Windows) / tensorflow>=2.15.0 (macOS)"  # solo suelo minimo, NO exacto
+  - "keras>=3.0.0"        # solo suelo minimo, NO exacto -- multi-backend, produccion usa backend torch
+  - "scikit-learn>=1.2.0" # solo suelo minimo -- RandomForestClassifier/Regressor
+  - "ultralytics>=8.0.0"  # YOLOv8, solo suelo minimo
+  - "pandas>=2.0.0, numpy>=1.23.5,<2.0.0"  # solo suelo minimo
+  - joblib  # sin pin explicito en requirements.txt
+# NOTA: solo torch/torchvision tienen version exacta fijada en requirements.txt. El resto son
+# minimos (">="), verificado byte a byte (ASCII, LF, sin BOM) -- no copiar estos como si fueran
+# pines exactos al redactar requirements.txt del plugin.
+
+# ============================================================================
+# FUENTES Y ESTADO DE ACEPTACION -- dos entregas distintas, fusionadas en inbox/a1/codigo/
+# ============================================================================
+# 1. ZIP original (código): src/, scripts/, config/, requirements.txt, models/artifacts/ (solo
+#    pesos CNN + YOLO + class_mapping, SIN los .joblib de RF) y un data/processed/to_predict/
+#    input.csv de 3 filas sin etiqueta. La carpeta data/ (9.794 imagenes, SENSORES.csv de 500.000
+#    filas, MANIFEST_MULTIMODAL.csv, data/splits/) NO viene en este ZIP -- la memoria avisa de que
+#    vive en un contenedor externo de gran tamaño, fuera del alcance de esta entrega de código.
+# 2. ZIP "modelo 1.zip" (pedido aparte tras la primera revisión): completa models/artifacts/ con
+#    los 4 .joblib de RF (clase/riesgo x con/sin gases) + ssd_vgg16_expert.pth; completa
+#    models/metrics/ con los CSV/PNG REALES de evaluación (classification_report, regression,
+#    training history, YOLO results.csv, SSD metrics.json) para las 4 variantes de arquitectura;
+#    y añade datos_plataforma/ -- un paquete de integración ya preparado por el equipo de IA con
+#    20 muestras reales etiquetadas (imagen + sensores + patologia real + riesgo real), extraidas
+#    de su propio test_split.csv, mas un script de referencia y contratos JSON de ejemplo.
+# No hay "Ficha de Valoración del Estado Técnico" en ninguna de las dos entregas.
+
+artifacts:
+  folder: models/artifacts/   # ruta dentro del codigo entregado -- variante de produccion: sufijo _no_gases_desacoplado
+  files:
+    - best.pt                                              # YOLOv8, detector hoja(0)/racimo(1)
+    - class_mapping_no_gases.json                          # {0..14: nombre_clase}, idéntico a class_mapping.json
+    - ensemble_member_mobilenet_no_gases_desacoplado.weights.h5
+    - ensemble_member_efficientnet_no_gases_desacoplado.weights.h5
+    - ensemble_member_densenet_no_gases_desacoplado.weights.h5
+    - final_ensemble_complete_no_gases_desacoplado.h5      # promedio (layers.Average) de los 3 anteriores -- no usado directamente por predictor.py, que reconstruye y promedia en runtime
+    - rf_clase_expert_no_gases.joblib                      # NO usado en inferencia de produccion (modo desacoplado) -- ver known_issues
+    - rf_riesgo_expert_no_gases.joblib                     # usado como fallback de riesgo cuando no hay imagen
+  no_pickle_for_cnn: "Los backbones son pesos Keras (.weights.h5), no pickle -- se reconstruye la arquitectura con build_hybrid_model() y se cargan los pesos (load_weights)."
+  keras_backend_requisito: "KERAS_BACKEND=torch debe fijarse como variable de entorno ANTES de importar keras/tensorflow, igual que exige el entrenamiento (EJECUCION_MODELO_1.md, sec. 2.1) -- confirmar si aplica tambien a inferencia o solo a entrenamiento (predictor.py no lo fija explícitamente, solo hace `import tensorflow as tf`)."
+
+inputs:
+  fixed:
+    - name: image
+      type: "bytes/path (JPG/PNG), opcional"
+      description: >
+        Foto de campo de una hoja o racimo de vid. Si se aporta, el sistema recorta
+        automaticamente con YOLOv8 (conf=0.3, se usa boxes.data[0] -- la primera caja que
+        devuelve YOLO, no un argmax explicito de confianza) y reescala a 224x224. Si se omite,
+        es None, o la ruta no es localizable, el sistema entra en modo de contingencia tabular.
+    - name: sensors
+      type: "dict[str, float]"
+      description: >
+        Telemetria IIoT de los ultimos 5 dias. En la configuracion de produccion
+        (exclude_gases=true) son 9 campos obligatorios: Mes, Temp_Max_Media_5d_C,
+        Temp_Min_Media_5d_C, Hum_Rel_Max_5d_Pct, Hum_Rel_Min_5d_Pct, Hum_Suelo_Pct,
+        Lluvia_Acum_5d_mm, Horas_Humedad_Foliar, GDD_Acumulado. CO2_ppm y VOC_ppb se ignoran si
+        se envian (no son error, pero tampoco se usan) -- ver predictor.py::_validate_sensor_dimensions.
+  control: []
+  derived_if_missing:
+    note: >
+      Nada se deriva: todos los sensores son obligatorios tal cual (validate_sensor_dimensions
+      exige coincidencia EXACTA de nombres, sin tolerancia a columnas de más o de menos salvo
+      CO2/VOC en modo exclude_gases). La imagen es el unico campo verdaderamente opcional.
+  plugin_contract:
+    predict_inline: "una muestra: {image (opcional), sensors (9 campos)}"
+    predict_batch: "CSV largo igual al --input original: Path_Imagen + 9 columnas de sensores (N/A o ruta invalida => modo tabular por fila)"
+
+outputs:
+  predict_inline:
+    - name: enfermedad
+      type: string
+      description: >
+        Una de las 15 clases (ALTICA, BLACK_ROT, BOTRYTIS, EMPOASCA, ERINOSIS, ESCA_HOJA,
+        ESCA_RACIMO, HEALTHY_HOJA, HEALTHY_RACIMO, ISARIOPSIS, LOBESIA, MILDIU, OIDIO,
+        OIDIO_RACIMO, RED_MITE), o "IMAGEN_NO_DISPONIBLE" si no hay imagen (modo desacoplado,
+        el de produccion -- ver known_issues sobre la discrepancia con la memoria).
+    - name: confianza
+      type: float
+      description: "Probabilidad softmax de la clase ganadora, promedio de los 3 backbones (soft voting). 0.0 si enfermedad=IMAGEN_NO_DISPONIBLE."
+    - name: riesgo
+      type: float
+      description: >
+        Indice de riesgo epidemiologico 0.0-1.0 (regresion). Con imagen: salida de la cabecera
+        tabular del ensemble (promedio de los 3 modelos), clip a [0,1], y si enfermedad es
+        HEALTHY_* con confianza > 0.80 se multiplica x0.6 (regla de negocio en predictor.py).
+        Sin imagen: salida directa del RF regresor (rf_riesgo_expert_no_gases.joblib).
+    - name: metodo
+      type: string
+      description: "HIBRIDO_ENSAMBLE (con imagen) | RIESGO_TABULAR_EXPERT (sin imagen, modo desacoplado de produccion)."
+  predict_batch: "mismo contrato que predict_inline, una fila de salida por fila de entrada (Path_Imagen N/A o inexistente -> RIESGO_TABULAR_EXPERT para esa fila; si ademas faltan los RF, la fila se descarta con log, ver known_issues)"
+
+constraints: {}  # no hay restricciones duras de negocio sobre el valor predicho; las validaciones son de contrato de entrada (ver exceptions en plugin-integration)
+
+training:
+  supported: true
+  scope_note: >
+    Soporte PARCIAL, con dos procedimientos completamente distintos en el codigo original
+    (src.main train, train_manager() segun pipeline_mode):
+      - tabular_expert (run_tabular_training -> src/training/train_tabular.py): rapido (<2 min
+        con tuning, <5s sin tuning), 100% CPU, reentrena los 2 RandomForest con un CSV tabular
+        (sensores + Etiqueta + Indice_Riesgo_Cientifico). ESTE es el que tiene sentido exponer
+        como train() del plugin: es ligero, no necesita imagenes, y el cliente puede aportar un
+        CSV de ese tamaño razonablemente.
+      - hybrid (run_training -> src/training/train.py): re-entrena los 3 backbones CNN desde
+        cero, GPU recomendada, ~4h20min en CPU (memoria, Tabla 2) para los 3 backbones x 50
+        epocas, Y exige el corpus completo de 9.794 imagenes (no entregado, vive en un
+        contenedor externo). NO es razonable exponerlo como endpoint de reentrenamiento bajo
+        demanda de un plugin -- fuera de alcance, igual que otros modelos pesados de este repo.
+  target_column: "Etiqueta (clasificacion, 15 clases) + Indice_Riesgo_Cientifico (regresion, 0-1)"
+  required_columns: [Mes, Temp_Max_Media_5d_C, Temp_Min_Media_5d_C, Hum_Rel_Max_5d_Pct, Hum_Rel_Min_5d_Pct, Hum_Suelo_Pct, Lluvia_Acum_5d_mm, Horas_Humedad_Foliar, GDD_Acumulado, Etiqueta, Indice_Riesgo_Cientifico]
+  # CO2_ppm/VOC_ppb opcionales -- se ignoran en modo exclude_gases=true (produccion)
+  hyperparams:
+    rf_clasificador: {n_estimators: 200, max_depth: 15, min_samples_leaf: 20, max_features: "log2", bootstrap: true, min_samples_split: 10, random_state: 42}
+    rf_regresor_riesgo: {n_estimators: 200, max_depth: 30, min_samples_leaf: 10, max_features: "log2", bootstrap: true, min_samples_split: 5, random_state: 42}
+    nota_tuning: >
+      src/training/tuning.py (RandomizedSearchCV, 3-fold, n_iter=10) existe y SI se ejecuto
+      (metadata.txt lo registra) pero sus mejores hiperparametros NO se escriben de vuelta en
+      train_tabular.py -- los hiperparametros arriba son los que de verdad usa el codigo de
+      produccion (hardcoded), no necesariamente los que tuning_RF encontro como optimos.
+  metrics_returned: [accuracy, f1_macro, f1_weighted, mae_riesgo, n_train, n_test]
+  source: codigo_entrenamiento  # src/training/train_tabular.py, confirmado por sub-agente de exploracion
+  duracion_estimada: "< 2 min con tuning previo, < 5 s sin tuning (memoria Tabla 2, Intel i9-14900K)"
+
+constraints_entrenamiento: "El CSV de entrenamiento debe traer las 15 clases representadas (RandomForestClassifier con stratify implicito via el propio reparto 80/20); no hay minimo de filas documentado por el equipo de IA."
+
+metrics_reported:
+  # TODAS las cifras de esta seccion son de ficheros CSV auditables reales de
+  # models/metrics/classification/ y models/metrics/detection/YOLO/results.csv (segunda entrega,
+  # "modelo 1.zip"), NO solo de las tablas de texto de la memoria -- cruzadas y consistentes con
+  # memoria Tablas 4, 6, 7 (diferencias de redondeo del 0.1-0.3%).
+  clasificacion_deep_ensemble_produccion:
+    # report_ensemble_final_no_gases_desacoplado.csv (support total 1470, holdout test)
+    accuracy: 0.9469
+    f1_macro: 0.8807
+    f1_weighted: 0.9463
+    peor_clase: {nombre: OIDIO_RACIMO, f1: 0.593, recall: 0.615, support: 13}
+    mejor_clase: {nombre: ALTICA, f1: 0.992, recall: 1.0, support: 59}
+    nota_clases_minoritarias: "EMPOASCA (f1=0.741, recall=0.588) y LOBESIA (f1=0.667, recall=0.60) tambien quedan muy por debajo de la media -- support bajo (17 y 15 filas de test respectivamente)."
+  clasificacion_rf_tabular_sin_gases:
+    # report_rf_tabular_no_gases.csv (support total 100.000, holdout 20% real)
+    accuracy: 0.11593
+    f1_macro: 0.1180
+    nota: >
+      Confirma por que el codigo de produccion (modo desacoplado) NO usa este RF para
+      clasificar cuando falta la imagen: 11.6% de accuracy en 15 clases es casi aleatorio
+      (baseline=6.7%). Ver known_issues.
+  regresion_riesgo_deep_ensemble_desacoplado_sin_gases:
+    mae: 0.189          # memoria Tabla 7 -- no hay CSV propio, solo graficas PNG en models/metrics/regression/ (sin cifra exacta re-extraible de un PNG)
+    mae_con_10pct_ruido_sensores: 0.188
+    fuente: memoria_tabla_7  # a diferencia de clasificacion, esta cifra NO tiene CSV auditado -- solo PNG + memoria
+  deteccion_yolo:
+    # models/metrics/detection/YOLO/results.csv, epoca final (50/50)
+    precision: 0.995
+    recall: 1.0
+    map50: 0.995
+    map50_95: 0.868
+    clases: ["hoja (id 0)", "racimo (id 1)"]
+  kpi_contractual:
+    accuracy_minimo: 0.80   # memoria 6.1 -- CUMPLE (0.9469)
+    f1_macro_minimo: 0.85   # memoria 6.1 -- NO CUMPLE en sentido estricto (0.8807 > 0.85 realmente SI cumple, verificar: 0.8807 >= 0.85 -> CUMPLE por escaso margen)
+    recall_minimo: 0.85     # memoria 6.1 -- varias clases minoritarias (EMPOASCA 0.588, LOBESIA 0.60, OIDIO_RACIMO 0.615) NO cumplen individualmente aunque el macro recall si
+    precision_minima: 0.85  # memoria 6.1
+
+golden_cases:
+  # 20 muestras reales con imagen + sensores + ETIQUETA REAL + RIESGO REAL, extraidas por el
+  # propio equipo de IA de su test_split.csv (datos_plataforma/muestras_con_etiqueta_real.csv +
+  # datos_plataforma/imagenes/). NO son inventadas: proceden de su conjunto de evaluacion
+  # independiente, confirmado por datos_plataforma/README.md.
+  #
+  # ADVERTENCIA IMPORTANTE (ver known_issues): NO se ha podido ejecutar el pipeline CNN real en
+  # este entorno de desarrollo (TensorFlow/Keras no tiene wheel para la version de Python
+  # disponible en esta maquina) EN EL MOMENTO DE ESCRIBIR ESTO -- PERO SE RESOLVIO: se consiguio
+  # instalar keras 3 (backend=torch) + ultralytics sin necesidad de tensorflow (backend=torch no
+  # lo requiere), y SE EJECUTO el plugin real (app/plugins/ml1_wine_pest_disease_detection/)
+  # contra los 20 pares imagen+sensores de datos_plataforma/. Cada caso lleva ahora, ademas de
+  # esperado_clase/esperado_riesgo (ground truth), predicho_clase/predicho_confianza/
+  # predicho_riesgo (salida real verificada del plugin). Resultado: 19/20 (95%) de clasificacion
+  # exacta, consistente con el 94.69% auditado (report_ensemble_final_no_gases_desacoplado.csv).
+  # El unico fallo (caso_17: OIDIO predicho como OIDIO_RACIMO) es una confusion entre clases
+  # visualmente emparentadas (oidio en hoja vs. en racimo), no un fallo de integracion -- ver
+  # known_issues. El fichero datos_plataforma/resultado_inferencia_batch.csv entregado NO sirve
+  # como referencia (es un script simplificado que solo usa el RF, no la CNN) -- ver known_issues.
+  source_note: "dataset_test_split (datos_plataforma/muestras_con_etiqueta_real.csv, extraido de test_split.csv por el equipo de IA)"
+  tolerance_clasificacion: "coincidencia exacta de clase (no hay tolerancia relativa aplicable a una etiqueta categorica)"
+  tolerance_riesgo: "2 x MAE reportado (0.189) = 0.378 absoluto sobre el riesgo real, igual que el patron de tolerancia de otros modelos de este repo"
+  resultado_verificado: >
+    Clasificacion: 19/20 (95%) exacta -- unico fallo caso_17 (ver known_issues). Riesgo: 19/20
+    dentro de tolerancia (2xMAE=0.378) -- unico fallo caso_11 (LOBESIA, error 0.566, real=0.227
+    predicho=0.793). Ninguno de los dos fallos se ha silenciado ni se ha ajustado la tolerancia
+    para que cuele -- ambos quedan documentados en known_issues con su investigacion.
+  cases:
+    - {id: caso_01, imagen: "Mites_Disease_0069.png", esperado_clase: ALTICA, esperado_riesgo: 0.071, predicho_clase: ALTICA, predicho_confianza: 0.6467, predicho_riesgo: 0.3263, sensores: {Mes: 8, Temp_Max_Media_5d_C: 28.71, Temp_Min_Media_5d_C: 15.7, Hum_Rel_Max_5d_Pct: 59.8, Hum_Rel_Min_5d_Pct: 29.4, Hum_Suelo_Pct: 34.7, Lluvia_Acum_5d_mm: 0.14, Horas_Humedad_Foliar: 4.3, GDD_Acumulado: 0.0}}
+    - {id: caso_02, imagen: "image (795).JPG", esperado_clase: BLACK_ROT, esperado_riesgo: 0.077, predicho_clase: BLACK_ROT, predicho_confianza: 0.4822, predicho_riesgo: 0.3423, sensores: {Mes: 7, Temp_Max_Media_5d_C: 31.07, Temp_Min_Media_5d_C: 18.75, Hum_Rel_Max_5d_Pct: 61.1, Hum_Rel_Min_5d_Pct: 24.6, Hum_Suelo_Pct: 27.2, Lluvia_Acum_5d_mm: 0.75, Horas_Humedad_Foliar: 4.9, GDD_Acumulado: 0.0}}
+    - {id: caso_03, imagen: "000001415_mask_jpg.rf.d1892a5831ba709cf86c3bc0cfca4ecc.jpg", esperado_clase: BOTRYTIS, esperado_riesgo: 0.016, predicho_clase: BOTRYTIS, predicho_confianza: 0.3955, predicho_riesgo: 0.3184, sensores: {Mes: 5, Temp_Max_Media_5d_C: 27.01, Temp_Min_Media_5d_C: 14.82, Hum_Rel_Max_5d_Pct: 69.8, Hum_Rel_Min_5d_Pct: 35.5, Hum_Suelo_Pct: 31.6, Lluvia_Acum_5d_mm: 0.29, Horas_Humedad_Foliar: 4.1, GDD_Acumulado: 0.0}}
+    - {id: caso_04, imagen: "mosquito-verde-hojas02 - copia (3).jpg", esperado_clase: EMPOASCA, esperado_riesgo: 0.456, predicho_clase: EMPOASCA, predicho_confianza: 0.4006, predicho_riesgo: 0.2237, sensores: {Mes: 1, Temp_Max_Media_5d_C: 21.04, Temp_Min_Media_5d_C: 8.92, Hum_Rel_Max_5d_Pct: 85.0, Hum_Rel_Min_5d_Pct: 49.5, Hum_Suelo_Pct: 64.6, Lluvia_Acum_5d_mm: 0.30, Horas_Humedad_Foliar: 8.1, GDD_Acumulado: 0.0}}
+    - {id: caso_05, imagen: "178.JPEG", esperado_clase: ERINOSIS, esperado_riesgo: 0.604, predicho_clase: ERINOSIS, predicho_confianza: 0.6741, predicho_riesgo: 0.3233, sensores: {Mes: 7, Temp_Max_Media_5d_C: 30.78, Temp_Min_Media_5d_C: 20.38, Hum_Rel_Max_5d_Pct: 60.5, Hum_Rel_Min_5d_Pct: 31.4, Hum_Suelo_Pct: 20.2, Lluvia_Acum_5d_mm: 0.37, Horas_Humedad_Foliar: 0.6, GDD_Acumulado: 0.0}}
+    - {id: caso_06, imagen: "image (779).JPG", esperado_clase: ESCA_HOJA, esperado_riesgo: 0.373, predicho_clase: ESCA_HOJA, predicho_confianza: 0.6861, predicho_riesgo: 0.0621, sensores: {Mes: 1, Temp_Max_Media_5d_C: 10.4, Temp_Min_Media_5d_C: -4.9, Hum_Rel_Max_5d_Pct: 98.1, Hum_Rel_Min_5d_Pct: 89.9, Hum_Suelo_Pct: 29.0, Lluvia_Acum_5d_mm: 4.58, Horas_Humedad_Foliar: 20.7, GDD_Acumulado: 0.0}}
+    - {id: caso_07, imagen: "Photo-2 - copia (6) - copia - copia.jpg", esperado_clase: ESCA_RACIMO, esperado_riesgo: 0.354, predicho_clase: ESCA_RACIMO, predicho_confianza: 0.397, predicho_riesgo: 0.3408, sensores: {Mes: 6, Temp_Max_Media_5d_C: 31.48, Temp_Min_Media_5d_C: 22.86, Hum_Rel_Max_5d_Pct: 52.6, Hum_Rel_Min_5d_Pct: 15.6, Hum_Suelo_Pct: 49.3, Lluvia_Acum_5d_mm: 0.52, Horas_Humedad_Foliar: 5.8, GDD_Acumulado: 0.0}}
+    - {id: caso_08, imagen: "image (202).JPG", esperado_clase: HEALTHY_HOJA, esperado_riesgo: 0.233, predicho_clase: HEALTHY_HOJA, predicho_confianza: 0.6718, predicho_riesgo: 0.2113, sensores: {Mes: 4, Temp_Max_Media_5d_C: 18.42, Temp_Min_Media_5d_C: 8.85, Hum_Rel_Max_5d_Pct: 88.6, Hum_Rel_Min_5d_Pct: 42.1, Hum_Suelo_Pct: 41.0, Lluvia_Acum_5d_mm: 2.84, Horas_Humedad_Foliar: 22.8, GDD_Acumulado: 0.0}}
+    - {id: caso_09, imagen: "CFR_1623.jpg", esperado_clase: HEALTHY_RACIMO, esperado_riesgo: 0.18, predicho_clase: HEALTHY_RACIMO, predicho_confianza: 0.6616, predicho_riesgo: 0.2785, sensores: {Mes: 7, Temp_Max_Media_5d_C: 41.63, Temp_Min_Media_5d_C: 28.24, Hum_Rel_Max_5d_Pct: 42.4, Hum_Rel_Min_5d_Pct: 7.5, Hum_Suelo_Pct: 52.3, Lluvia_Acum_5d_mm: 0.0, Horas_Humedad_Foliar: 4.6, GDD_Acumulado: 0.0}}
+    - {id: caso_10, imagen: "image (119).JPG", esperado_clase: ISARIOPSIS, esperado_riesgo: 0.029, predicho_clase: ISARIOPSIS, predicho_confianza: 0.5821, predicho_riesgo: 0.3099, sensores: {Mes: 7, Temp_Max_Media_5d_C: 28.04, Temp_Min_Media_5d_C: 14.65, Hum_Rel_Max_5d_Pct: 60.4, Hum_Rel_Min_5d_Pct: 28.7, Hum_Suelo_Pct: 17.8, Lluvia_Acum_5d_mm: 0.48, Horas_Humedad_Foliar: 2.9, GDD_Acumulado: 0.0}}
+    - {id: caso_11, imagen: "lobesia_botrana_169.jpg", esperado_clase: LOBESIA, esperado_riesgo: 0.227, predicho_clase: LOBESIA, predicho_confianza: 0.3974, predicho_riesgo: 0.7934, sensores: {Mes: 7, Temp_Max_Media_5d_C: 32.18, Temp_Min_Media_5d_C: 21.4, Hum_Rel_Max_5d_Pct: 59.4, Hum_Rel_Min_5d_Pct: 26.2, Hum_Suelo_Pct: 27.7, Lluvia_Acum_5d_mm: 0.84, Horas_Humedad_Foliar: 3.7, GDD_Acumulado: 679.0}}
+    - {id: caso_12, imagen: "Downy Mildew_436.jpg", esperado_clase: MILDIU, esperado_riesgo: 0.133, predicho_clase: MILDIU, predicho_confianza: 0.5295, predicho_riesgo: 0.2812, sensores: {Mes: 4, Temp_Max_Media_5d_C: 20.77, Temp_Min_Media_5d_C: 10.86, Hum_Rel_Max_5d_Pct: 75.8, Hum_Rel_Min_5d_Pct: 40.5, Hum_Suelo_Pct: 34.1, Lluvia_Acum_5d_mm: 0.67, Horas_Humedad_Foliar: 1.0, GDD_Acumulado: 0.0}}
+    - {id: caso_13, imagen: "Powdery Mildew_374.JPG", esperado_clase: OIDIO, esperado_riesgo: 0.041, predicho_clase: OIDIO, predicho_confianza: 0.396, predicho_riesgo: 0.229, sensores: {Mes: 11, Temp_Max_Media_5d_C: 20.31, Temp_Min_Media_5d_C: 8.39, Hum_Rel_Max_5d_Pct: 88.6, Hum_Rel_Min_5d_Pct: 56.3, Hum_Suelo_Pct: 54.3, Lluvia_Acum_5d_mm: 5.55, Horas_Humedad_Foliar: 10.1, GDD_Acumulado: 0.0}}
+    - {id: caso_14, imagen: "6325e35b-oidio_grappolo46.jpg", esperado_clase: OIDIO_RACIMO, esperado_riesgo: 0.059, predicho_clase: OIDIO_RACIMO, predicho_confianza: 0.3983, predicho_riesgo: 0.2085, sensores: {Mes: 11, Temp_Max_Media_5d_C: 19.05, Temp_Min_Media_5d_C: 8.65, Hum_Rel_Max_5d_Pct: 87.9, Hum_Rel_Min_5d_Pct: 46.6, Hum_Suelo_Pct: 53.4, Lluvia_Acum_5d_mm: 2.13, Horas_Humedad_Foliar: 12.2, GDD_Acumulado: 0.0}}
+    - {id: caso_15, imagen: "4d9645fa-c250-4224-b730-21710bf11596___Com.G_SpM_FL 8755_patch_1.jpg", esperado_clase: RED_MITE, esperado_riesgo: 0.524, predicho_clase: RED_MITE, predicho_confianza: 0.3787, predicho_riesgo: 0.3282, sensores: {Mes: 9, Temp_Max_Media_5d_C: 29.94, Temp_Min_Media_5d_C: 14.66, Hum_Rel_Max_5d_Pct: 64.2, Hum_Rel_Min_5d_Pct: 35.2, Hum_Suelo_Pct: 36.7, Lluvia_Acum_5d_mm: 0.72, Horas_Humedad_Foliar: 2.3, GDD_Acumulado: 0.0}}
+    - {id: caso_16, imagen: "Downy Mildew_112.jpg", esperado_clase: MILDIU, esperado_riesgo: 0.053, predicho_clase: MILDIU, predicho_confianza: 0.5529, predicho_riesgo: 0.1373, sensores: {Mes: 2, Temp_Max_Media_5d_C: 16.92, Temp_Min_Media_5d_C: 8.39, Hum_Rel_Max_5d_Pct: 92.6, Hum_Rel_Min_5d_Pct: 46.6, Hum_Suelo_Pct: 70.5, Lluvia_Acum_5d_mm: 15.41, Horas_Humedad_Foliar: 24.0, GDD_Acumulado: 0.0}}
+    - {id: caso_17, imagen: "grapevine_powdery_mildew_leaf_29.jpg", esperado_clase: OIDIO, esperado_riesgo: 0.049, predicho_clase: OIDIO_RACIMO, predicho_confianza: 0.3116, predicho_riesgo: 0.2773, sensores: {Mes: 10, Temp_Max_Media_5d_C: 24.71, Temp_Min_Media_5d_C: 10.97, Hum_Rel_Max_5d_Pct: 78.8, Hum_Rel_Min_5d_Pct: 35.0, Hum_Suelo_Pct: 44.6, Lluvia_Acum_5d_mm: 0.03, Horas_Humedad_Foliar: 3.5, GDD_Acumulado: 0.0}}
+    - {id: caso_18, imagen: "image (122).JPG", esperado_clase: BLACK_ROT, esperado_riesgo: 0.099, predicho_clase: BLACK_ROT, predicho_confianza: 0.3733, predicho_riesgo: 0.3399, sensores: {Mes: 7, Temp_Max_Media_5d_C: 33.97, Temp_Min_Media_5d_C: 21.53, Hum_Rel_Max_5d_Pct: 45.9, Hum_Rel_Min_5d_Pct: 9.1, Hum_Suelo_Pct: 41.7, Lluvia_Acum_5d_mm: 1.47, Horas_Humedad_Foliar: 1.4, GDD_Acumulado: 0.0}}
+    - {id: caso_19, imagen: "000000723_mask_jpg.rf.6427ca9835c07de3615e55cbebf4d449.jpg", esperado_clase: BOTRYTIS, esperado_riesgo: 0.013, predicho_clase: BOTRYTIS, predicho_confianza: 0.575, predicho_riesgo: 0.2399, sensores: {Mes: 11, Temp_Max_Media_5d_C: 24.65, Temp_Min_Media_5d_C: 11.87, Hum_Rel_Max_5d_Pct: 88.6, Hum_Rel_Min_5d_Pct: 29.2, Hum_Suelo_Pct: 57.0, Lluvia_Acum_5d_mm: 4.24, Horas_Humedad_Foliar: 8.7, GDD_Acumulado: 0.0}}
+    - {id: caso_20, imagen: "image (1047).JPG", esperado_clase: ESCA_HOJA, esperado_riesgo: 0.246, predicho_clase: ESCA_HOJA, predicho_confianza: 0.6754, predicho_riesgo: 0.1318, sensores: {Mes: 1, Temp_Max_Media_5d_C: 10.19, Temp_Min_Media_5d_C: -3.45, Hum_Rel_Max_5d_Pct: 100.0, Hum_Rel_Min_5d_Pct: 65.2, Hum_Suelo_Pct: 52.9, Lluvia_Acum_5d_mm: 0.74, Horas_Humedad_Foliar: 15.4, GDD_Acumulado: 0.0}}
+  rechazo_sin_imagen_ni_rf:
+    - id: rechazo_contrato_sensores
+      source: codigo_fuente  # predictor.py::_validate_sensor_dimensions
+      input: {sensors: {Mes: 1}}  # faltan 8 de los 9 sensores obligatorios
+      expected: {http_status: 422, error_contains: "Faltan sensores requeridos"}
+
+known_issues:
+  - "[CRÍTICO -- ENTREGA] El ZIP de código original NO incluye la carpeta data/ (imágenes,
+     SENSORES.csv, MANIFEST_MULTIMODAL.csv, data/splits/) ni los .joblib de los RF. Se pidió al
+     equipo de IA un segundo paquete (\"modelo 1.zip\") con los .joblib, las métricas auditadas
+     reales y 20 muestras etiquetadas (datos_plataforma/) — ya fusionado en inbox/a1/codigo/.
+     Pendiente: el equipo de IA aún no ha confirmado si puede dar el corpus completo de 9.794
+     imágenes + SENSORES.csv para un reentrenamiento real del bloque CNN (fuera de alcance de
+     este plugin de todas formas, ver training.scope_note)."
+  - "[RESUELTO -- VERIFICADO CONTRA EL PLUGIN REAL] El bloqueo inicial (TensorFlow sin wheel
+     para la versión de Python de este entorno) se resolvió instalando keras 3 con
+     backend=torch + ultralytics directamente (backend=torch no necesita tensorflow en
+     absoluto). Se cargaron los 3 backbones reales (.weights.h5) en la arquitectura reconstruida
+     por app/plugins/ml1_wine_pest_disease_detection/model_loader.py::build_hybrid_model sin
+     ningún error de carga de pesos, y se ejecutó predict_inline() del plugin real contra las 20
+     imágenes+sensores de datos_plataforma/. Resultado: 19/20 (95%) de clasificación exacta,
+     consistente con el 94.69% auditado — ver golden_cases.cases (predicho_* junto a
+     esperado_*). El plugin reproduce fielmente el pipeline entregado."
+  - "[MODELO -- CASO_17 INVESTIGADO] El único golden case fuera de acierto (caso_17,
+     grapevine_powdery_mildew_leaf_29.jpg): esperado OIDIO, predicho OIDIO_RACIMO, confianza
+     0.312 (la más baja de los 20 casos). Es una confusión entre dos clases visualmente
+     emparentadas (oidio en hoja vs. oidio en racimo — ambas presentan el mismo velo
+     blanquecino característico, memoria sección 'Leaf or Grape Roszc'), con baja confianza del
+     propio modelo, no un fallo de integración: el plugin reproduce exactamente la arquitectura
+     y los pesos entregados. report_ensemble_final_no_gases_desacoplado.csv confirma que
+     OIDIO_RACIMO es, de las 15 clases, la de peor F1 (0.593) y recall (0.615) del modelo real
+     — este fallo es consistente con esa debilidad ya documentada, no un caso aislado."
+  - "[MODELO -- REGRESIÓN DE RIESGO MÁS RUIDOSA DE LO QUE SUGIERE EL MAE AGREGADO] Sobre los 20
+     casos reales verificados, el error absoluto por caso en el índice de riesgo varía mucho
+     más que el MAE agregado (0.189): p. ej. caso_11 (LOBESIA) real=0.227 vs. predicho=0.793
+     (error 0.566), caso_06 (ESCA_HOJA) real=0.373 vs. predicho=0.062 (error 0.311). El MAE
+     agregado sobre 1470 filas de test oculta esta varianza caso a caso — a tener en cuenta en
+     la ficha funcional (el índice de riesgo es menos fiable individualmente que la
+     clasificación de patología, aunque el agregado parezca sólido)."
+  - "[HALLAZGO -- SCRIPT DE REFERENCIA ENGAÑOSO] datos_plataforma/ejemplo_inferencia.py y su
+     resultado_inferencia_batch.csv NO deben usarse como referencia de corrección: ese script
+     solo carga y usa el Random Forest tabular (rf_clase_expert.joblib, SIEMPRE la variante CON
+     gases, sin mirar exclude_gases) -- nunca carga ni ejecuta los backbones CNN, aunque marca el
+     campo metodo_ejecutado como \"HIBRIDO_ENSAMBLE\" cuando hay imagen. Resultado: solo 9/20
+     aciertos (45%) en las muestras de datos_plataforma, frente al 94.69% real del Deep Ensemble
+     (report_ensemble_final_no_gases_desacoplado.csv). Confirmado con metricas auditadas: el RF
+     de clasificación solo (sin gases) tiene 11.6% de accuracy en su propio test de 100.000 filas
+     (report_rf_tabular_no_gases.csv) -- prácticamente al azar (baseline 15 clases = 6.7%). Esto
+     también explica, con evidencia numérica, por qué predictor.py en modo desacoplado NO usa el
+     RF para clasificar cuando falta la imagen (ver siguiente known_issue): el equipo de IA
+     probablemente descartó esa vía por su bajo rendimiento, aunque la memoria no lo actualizó."
+  - "[MEMORIA vs CÓDIGO] La memoria dice 3 veces (secciones 4.3, 7.4 y 8.2) que si falta la
+     imagen el sistema usa el RF para clasificar. El código real
+     (predictor.py::run_inference_tabular_only) solo hace eso si use_fusion_layer=True; en modo
+     desacoplado (el de producción, config.yaml por defecto) devuelve enfermedad=
+     'IMAGEN_NO_DISPONIBLE' con confianza 0.0, y el riesgo sí sale del RF regresor. A la luz del
+     hallazgo anterior (RF clasificador al 11.6% de accuracy), esto parece una decisión de
+     ingeniería correcta no reflejada en la memoria, no un bug -- el plugin replica el código,
+     no la memoria. Pendiente de que el equipo de IA lo confirme explícitamente."
+  - "[CÓDIGO ORIGINAL] yolo_crop_alignment (preprocess.py) toma resultados[0].boxes.data[0] --
+     la PRIMERA caja que devuelve YOLO con conf>=0.3, no un argmax explícito de confianza. En la
+     práctica coincide con la de mayor confianza porque Ultralytics ordena así su salida tras
+     NMS, pero no es una garantía explícita del código. El script de referencia
+     datos_plataforma/ejemplo_inferencia.py sí hace `max(boxes, key=lambda b: float(b.conf[0]))`
+     explícito -- dos implementaciones del equipo de IA con comportamiento distinto ante
+     múltiples detecciones. El plugin replica preprocess.py (el que usa predictor.py en
+     producción), no el script de ejemplo."
+  - "[CÓDIGO ORIGINAL] scripts/detection/YOLO/training_YOLO.py referencia
+     data/processed/YOLO_IMAGES/archivo.yaml (fichero de clases para el entrenamiento de
+     Ultralytics) que no viene en ninguna de las dos entregas -- solo afecta a un reentrenamiento
+     de YOLO desde cero (fuera de alcance del plugin: se usa el best.pt ya entrenado)."
+  - "[MODELO] Varias clases minoritarias no alcanzan el KPI individual de recall>=0.85 de la
+     memoria (6.1) aunque el macro-recall global sí: EMPOASCA (0.588, 17 filas de test), LOBESIA
+     (0.60, 15 filas), OIDIO_RACIMO (0.615, 13 filas). Afecta a la ficha funcional (limitaciones)."
+  - "[DATOS] El índice de riesgo es 100% sintético: generado por reglas biológicas
+     (scripts/data/create_dataset.py::generar_dataset_maestro_total, con citas a modelos
+     epidemiológicos de la literatura -- Broome, Rossi, Caffi) sobre clima simulado, no sobre
+     mediciones de campo reales. Debe constar explícitamente en la ficha funcional."
+  - "[CÓDIGO ORIGINAL] src/evaluate/evaluate.py regenera un split 70/15/15 estratificado en
+     memoria en cada ejecución (no lee un test set persistido) para la evaluación de la CNN; solo
+     la evaluación del RF tabular (evaluate_rf) usa un test_rf.csv persistido. Con random_state=42
+     fijo y el dataset completo disponible sería reproducible, pero no lo hemos podido regenerar
+     nosotros (no tenemos MANIFEST_MULTIMODAL.csv). Los CSV de métricas entregados en
+     models/metrics/classification/ son, por tanto, de una única ejecución de referencia del
+     equipo de IA, no algo que este agente haya podido reproducir de forma independiente."
+  - "[ENTORNO] requirements.txt fija --index-url https://download.pytorch.org/whl/cu121 (rueda
+     CUDA 12.1 de PyTorch) como primer índice de paquetes -- un pip install -r requirements.txt
+     normal en una máquina sin esa URL accesible, o en CPU/otra versión de CUDA, puede fallar o
+     instalar una build incorrecta de torch si no se ajusta antes."
+  - "[ENTORNO] Solo torch/torchvision tienen versión EXACTA fijada en requirements.txt;
+     tensorflow-cpu/tensorflow, keras, scikit-learn, ultralytics y pandas solo tienen un mínimo
+     (>=), y numpy un rango. El plugin debe fijar versiones exactas propias para reproducir
+     fielmente la inferencia (mismo riesgo de incompatibilidad de pickle/arquitectura visto en
+     otros modelos de este repo, p. ej. ml19 con scikit-learn)."
+  - "[ENTORNO] La memoria dice Python 3.12.7 (compatible 3.10+); EJECUCION_MODELO_1.md (más
+     reciente) dice Python 3.10+. Verificar la versión real usada para generar los .weights.h5 si
+     aparecen problemas de carga."
+  - "[CORREGIDO TRAS REVISIÓN EXTERNA, PR #24] Un compañero probó la rama desplegada y reportó
+     tres fallos reales, confirmados contra el código y corregidos:
+     1) Un sensor no numérico en predict_batch escapaba como ValueError sin capturar (el except
+        por fila solo cubría DataContractError/InvalidImageError), abortando el lote entero y
+        descartando también las filas ya procesadas correctamente. Corregido en
+        preprocessing.py::validate_and_align_sensors: el fallo de conversión numérica ahora
+        lanza DataContractError, así que predict_batch lo reporta como error de esa fila sin
+        afectar al resto.
+     2) predict_batch elegía un único directorio de búsqueda de imágenes (la raíz del ZIP, o la
+        subcarpeta images/ si existía, nunca ambos), pese a que predict_dto.py ya documentaba
+        que se buscan en ambos sitios por nombre de fichero. Una foto válida en la raíz se
+        ignoraba silenciosamente (IMAGEN_NO_DISPONIBLE, fila contada como correcta) en cuanto el
+        ZIP también traía una subcarpeta images/ para otras filas. Corregido:
+        resolve_image_path_for_batch ahora acepta una lista de directorios y los prueba en
+        orden (images/ primero si existe, luego la raíz)."
+  - "[CORREGIDO TRAS REVISIÓN EXTERNA, PR #24] training.metrics_returned exige f1_weighted, pero
+     train_tabular_experts() solo calculaba accuracy/f1_macro/mae_riesgo — ni se devolvía en
+     TrainResponse ni se registraba en MLflow. El train_tabular.py original del equipo de IA
+     tampoco calcula f1_weighted (no es un bug heredado, es un incumplimiento propio del
+     contrato que fijamos en este manifest): se añade f1_score(..., average='weighted') sobre
+     el mismo holdout de test ya calculado, sin alterar el procedimiento de entrenamiento
+     original. Verificado con un run de MLflow real (sqlite local): 200 con f1_weighted en la
+     respuesta y registrado como métrica del run."
+  - "[CORREGIDO TRAS REVISIÓN EXTERNA, PR #24, segunda ronda] Un sensor con inf o un valor finito
+     desorbitado (1e100 -- desborda a +inf al convertirse a float32, igual que ml14 ya documenta
+     para su propio caso) pasaba la validación de validate_and_align_sensors (el float() de
+     Python lo acepta sin lanzar excepción) y llegaba a RandomForestRegressor.predict(), que
+     rechaza entradas no finitas con un ValueError sin capturar -- mismo patrón que el bug #1 de
+     la primera ronda: escapaba del except por fila de predict_batch y abortaba el lote entero,
+     perdiendo también las filas ya procesadas correctamente. Reproducido con sklearn/Pydantic
+     fijados a las versiones reales del repo, igual que reportó el compañero. Corregido: tras
+     construir el array float32, se comprueba np.isfinite() sobre el conjunto completo y se
+     lanza DataContractError con las columnas afectadas si alguna no es finita -- cubre inf,
+     -inf y cualquier valor que desborde al castear a float32. Verificado con inf, -inf y 1e100
+     contra las funciones reales y contra un lote real de 2 filas (una con GDD_Acumulado=1e100,
+     otra válida) vía HTTP: 200, fila mala con error descriptivo, fila válida intacta."
