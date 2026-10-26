@@ -1,0 +1,166 @@
+{
+  "model_id": "a06",
+  "model_slug": "meat-poultry-disease-classification",
+  "fecha": "Octubre 2026",
+  "model_key": "ml6-meat-poultry-disease-classification",
+  "version": "1.0.0",
+  "descripcion": "Dos ensembles independientes de redes convolucionales con votación por mayoría para la detección de enfermedades en aves de galpón. El ensemble 'thermal' (DenseNet-121, EfficientNetV2-S, ResNet-50) clasifica imágenes térmicas del ave en healthy/sick; el ensemble 'rgb' (VGG19-BN, EfficientNet-B7, MobileNetV3-L) clasifica imágenes RGB de heces en healthy/cocci/ncd/salmo. Transfer learning desde ImageNet con backbone congelado y capa final reentrenada.",
+  "task_type": "image_classification_ensemble (binaria thermal + multiclase rgb, voto duro 3 modelos)",
+  "framework": "PyTorch 2.13 + torchvision 0.28 (DenseNet-121, EfficientNetV2-S, ResNet-50, VGG19-BN, EfficientNet-B7, MobileNetV3-L) · opencv (CLAHE) · scikit-learn (métricas)",
+  "artefacto": "6 state_dict de PyTorch en artifacts/ml6_meat_poultry_disease_classification/: densenet121.pt (28 MB), efficientnet_v2s.pt (82 MB), resnet50.pt (94 MB) para thermal; vgg19_bn.pt (558 MB), efficientnet_b7.pt (257 MB), mobilenet_v3l.pt (17 MB) para rgb. md5 idéntico a la entrega del equipo de IA.",
+  "objetivo": "Detección temprana y no invasiva de enfermedades aviares en dos etapas: cribado sano/enfermo por termografía de todas las aves en los puntos de manejo individual, y diagnóstico de la patología (coccidiosis, Newcastle, salmonelosis) a partir de las heces del ave aislada. Objetivo de negocio declarado: reducir un 10 % los tratamientos veterinarios en galpón (no medido; requiere validación con datos reales antes de despliegue).",
+  "caso_uso": "POST /predict con model_key='thermal' o 'rgb'. Inline: una imagen (image_base64 o image_path) → clase del ensemble, voto y softmax de cada modelo base. Batch: directorio o .zip de imágenes → una fila por imagen y, si las imágenes están en subcarpetas con el nombre de su clase, métricas por modelo y del ensemble. POST /train con task='thermal'|'rgb' reentrena los 3 modelos de ese ensemble con el procedimiento original (split 70/15/15, seed 42) y guarda el resultado solo en el run de MLflow indicado; /predict con ese mlflow_run_id lo usa.",
+  "inputs": [
+    {
+      "nombre": "model_key",
+      "tipo": "string: 'thermal' | 'rgb'",
+      "descripcion": "Ensemble a usar. Las dos modalidades no son intercambiables; sin model_key o con otro valor → 422",
+      "obligatorio": "Sí",
+      "valor_defecto": "-"
+    },
+    {
+      "nombre": "image_base64 / image_path",
+      "tipo": "string (base64) / ruta",
+      "descripcion": "Imagen jpg, jpeg, png, bmp, tif o webp. thermal: frame de la cámara térmica a resolución nativa 240x320 (ancho x alto), sin redimensionar; rgb: foto de heces de cualquier tamaño (se redimensiona a 256x256)",
+      "obligatorio": "Sí (inline, uno de los dos)",
+      "valor_defecto": "-"
+    },
+    {
+      "nombre": "data_path",
+      "tipo": "string (ruta local, s3:// o .zip)",
+      "descripcion": "Modo batch: directorio o ZIP de imágenes; subcarpetas con nombre de clase (healthy/sick; healthy|pcrhealthy, cocci|pcrcocci, ncd|pcrncd, salmo|pcrsalmo) habilitan la evaluación",
+      "obligatorio": "Sí (batch)",
+      "valor_defecto": "-"
+    },
+    {
+      "nombre": "mlflow_run_id",
+      "tipo": "string",
+      "descripcion": "Run con un ensemble reentrenado por /train. Si no contiene un ensemble cargable de esa modalidad → 422 (nunca se usa el base en su lugar)",
+      "obligatorio": "No",
+      "valor_defecto": "\"\" (modelo base)"
+    }
+  ],
+  "outputs": [
+    {
+      "nombre": "prediction",
+      "tipo": "string",
+      "descripcion": "Clase del ensemble por votación por mayoría de los 3 modelos base",
+      "rango": "thermal: healthy | sick; rgb: healthy | cocci | ncd | salmo",
+      "interpretacion": "En empate a tres (solo rgb) gana el voto de VGG19-BN, igual que el código original"
+    },
+    {
+      "nombre": "predicted_class_index",
+      "tipo": "int",
+      "descripcion": "Índice de la clase predicha",
+      "rango": "thermal 0-1; rgb 0-3",
+      "interpretacion": "Orden de config.yaml: thermal 0=healthy 1=sick; rgb 0=healthy 1=cocci 2=ncd 3=salmo"
+    },
+    {
+      "nombre": "confidence",
+      "tipo": "float",
+      "descripcion": "Fracción de modelos base que votan la clase predicha",
+      "rango": "1/3, 2/3 o 1",
+      "interpretacion": "No es una probabilidad: 1 = unanimidad; 2/3 = un modelo discrepa; 1/3 = empate a tres"
+    },
+    {
+      "nombre": "model_predictions",
+      "tipo": "dict[str, str]",
+      "descripcion": "Clase votada por cada modelo base",
+      "rango": "una entrada por modelo base",
+      "interpretacion": "Permite ver qué arquitectura discrepa"
+    },
+    {
+      "nombre": "model_probabilities",
+      "tipo": "dict[str, dict[str, float]]",
+      "descripcion": "Softmax por clase de cada modelo base (informativo)",
+      "rango": "[0, 1], suman 1 por modelo",
+      "interpretacion": "Para monitorización: probabilidades concentradas en 0.4-0.6 de forma sostenida indican pérdida de discriminación o drift"
+    },
+    {
+      "nombre": "warnings",
+      "tipo": "list[str]",
+      "descripcion": "Avisos no bloqueantes sobre la entrada",
+      "rango": "vacío o mensajes",
+      "interpretacion": "p. ej. imagen térmica que no es 240x320: la predicción puede no ser fiable"
+    },
+    {
+      "nombre": "evaluated_metrics (batch)",
+      "tipo": "dict",
+      "descripcion": "accuracy, precision/recall/f1 weighted y macro, y por clase, de cada modelo base y del ensemble",
+      "rango": "[0, 1]",
+      "interpretacion": "Solo si todas las imágenes del lote traen su clase real por subcarpeta; mismo cálculo que predictor.py del original"
+    }
+  ],
+  "metricas": [
+    {
+      "nombre": "Accuracy ensemble thermal (test, n=40)",
+      "valor": "0.8000",
+      "descripcion": "Declarada por el equipo de IA (memoria Tabla 4). Por modelo: DenseNet-121 0.6750, EfficientNetV2-S 0.6750, ResNet-50 0.7750",
+      "interpretacion": "8 de cada 10 aves clasificadas correctamente; el ensemble supera en 2.5 pp al mejor modelo individual. Objetivo > 0.7 cumplido"
+    },
+    {
+      "nombre": "Recall thermal por clase (test)",
+      "valor": "sick 0.8846 · healthy 0.6429 · weighted 0.8000 · macro 0.7637",
+      "descripcion": "La memoria reporta 0.8000 (weighted, igual a la accuracy en binario); desglose de data/thermal/predictions/thermal_per_class_metrics.csv",
+      "interpretacion": "Detecta ~88 % de las aves enfermas; el objetivo 'Recall > 0.65' se cumple en sick y weighted, no en healthy (0.64)"
+    },
+    {
+      "nombre": "Accuracy / F1 weighted ensemble rgb (test, n=192)",
+      "valor": "0.8490 / 0.8484",
+      "descripcion": "Declaradas por el equipo de IA (memoria Tabla 5). Por modelo: VGG19-BN 0.8490, EfficientNet-B7 0.8125, MobileNetV3-L 0.8490",
+      "interpretacion": "Objetivos > 0.8 cumplidos; el ensemble iguala al mejor modelo individual"
+    },
+    {
+      "nombre": "F1 por clase ensemble rgb (test)",
+      "valor": "healthy 0.7358 · cocci 0.8704 · ncd 0.9667 · salmo 0.8727",
+      "descripcion": "Memoria Tabla 6; recall de Newcastle (ncd) = 1.0000 sobre 29 imágenes",
+      "interpretacion": "La clase sana es la más confundida; la memoria fija recall ncd < 0.85 como umbral crítico de reentrenamiento"
+    },
+    {
+      "nombre": "Verificación post-integración (golden dataset)",
+      "valor": "63/63 casos exactos (tolerancia 0 por voto)",
+      "descripcion": "40 imágenes thermal + 23 rgb del split de test real (regenerado con ensure_data_splits del equipo y comprobado contra sus CSV), llamando a /predict del servidor real: clase del ensemble y voto de los 3 modelos base idénticos a los registrados por el pipeline original — ver outputs/a06/verification_report.md",
+      "interpretacion": "El plugin reproduce la inferencia original sin desviación propia, incluido el criterio de desempate"
+    },
+    {
+      "nombre": "Verificación split de test completo (batch)",
+      "valor": "232/232 imágenes, 0 diferencias de voto; Tablas 4, 5 y 6 reproducidas a 4 decimales",
+      "descripcion": "Resultado verificado tras integración (no declarado por el equipo): thermal 0.8000 y rgb 0.8490 de accuracy, idénticas a las declaradas",
+      "interpretacion": "Las métricas declaradas por el equipo de IA quedan confirmadas con el plugin servido; quedan votos thermal con margen softmax < 0.01, sensibles a cambios de versión de opencv/torch"
+    }
+  ],
+  "limitaciones": [
+    {
+      "tipo": "Test sets pequeños",
+      "descripcion": "thermal: 40 imágenes (14 sanas / 26 enfermas); cada imagen vale 2.5 pp de accuracy. Intervalos de confianza amplios."
+    },
+    {
+      "tipo": "Datos públicos de otro contexto",
+      "descripcion": "thermal: 254 imágenes de broilers Cobb de una granja experimental en Egipto con una cámara UNI-T UTi165A; rgb: 1 255 imágenes de heces con etiqueta PCR (Zenodo). Sin datos de explotaciones de Castilla y León: requiere validación con datos reales antes de despliegue."
+    },
+    {
+      "tipo": "Dependencia de la cámara térmica",
+      "descripcion": "El ensemble thermal se entrenó a la resolución nativa 240x320 con los metadatos de esa cámara incrustados; otra cámara, resolución o emisividad introduce un desplazamiento sistemático. Recalibrar/reentrenar con imágenes del equipo de destino."
+    },
+    {
+      "tipo": "Posible ruido de etiquetas",
+      "descripcion": "En el dataset térmico público hay imágenes con nombre 'infectado' (árabe) en la carpeta Healthy, una de ellas en test. No se ha corregido; pendiente de revisión por el equipo de IA."
+    },
+    {
+      "tipo": "Etapa rgb requiere aislamiento",
+      "descripcion": "El diagnóstico por heces solo es válido si se puede asociar la muestra a un ave concreta, lo que exige aislarla. Newcastle y salmonelosis comparten signos en estadios iniciales."
+    },
+    {
+      "tipo": "Reentrenamiento síncrono y largo",
+      "descripcion": "/train rgb completo dura ~2 h 45 min en GPU (memoria Tabla 3); thermal ~2 min en GPU (860 s medidos en CPU). Parte del checkpoint servido, no de ImageNet como el original, y no repite la búsqueda Optuna."
+    },
+    {
+      "tipo": "Sin explicabilidad en línea",
+      "descripcion": "Grad-CAM y el análisis de atención sobre metadatos del entregable son fases offline y no se sirven por la API."
+    }
+  ],
+  "fichero_nombre": "inbox/a06/manifest.yaml::golden_cases (63 imágenes del split de test: data/thermal/splits/test y data/fecal/splits/test) + los splits de test completos",
+  "fichero_registros": "63 golden cases (40 thermal, 20 rgb, 3 empates rgb) x 4 decisiones (ensemble + 3 modelos) = 252 valores; split completo 232 imágenes (40 + 192)",
+  "fichero_resultado": "Cada imagen debe devolver la misma clase del ensemble y el mismo voto de cada modelo base que los CSV del entregable (data/*/predictions/*_predictions.csv); p. ej. thermal_test_002 (A1_1_104_6_0.bmp) → healthy con votos densenet121=sick, efficientnet_v2s=healthy, resnet50=healthy. El batch del test completo debe dar accuracy 0.8000 (thermal) y 0.8490 (rgb).",
+  "observaciones_tecnicas": "Inferencia en CPU viable (x86-64, ≥ 4 vCPU, 8 GB RAM; recomendado 16 GB: los 6 modelos ocupan ~1 GB en memoria). Medido en CPU: mediana 163 ms por imagen thermal y 370 ms por imagen rgb (3 modelos). GPU NVIDIA recomendada para /train. Dependencias ya presentes en el repo; recomendado fijar la versión de opencv-python-headless (el entregable usaba 4.13.0.92, verificado con 5.0.0). Monitorizar: probabilidades concentradas en 0.4-0.6 y recall de ncd < 0.85 (umbral de reentrenamiento de la memoria). Los modelos se cargan con weights=None + state_dict strict (sin descarga de ImageNet)."
+}

@@ -1,0 +1,562 @@
+# Manifest — a06 / ml6-meat-poultry-disease-classification
+#
+# Fuente del código entregado: inbox/a06/codigo/ (README "CU06 - Detección de Enfermedades en
+#   Aves de Galpón"; src/, scripts/, config/config.yaml, models/{thermal,fecal}/artifacts/).
+# Fuente de la memoria: inbox/a06/entregable/06 - Modelo de deep ensemble learning para
+#   clasificación de defectos y enfermedades en animales - v1.5.docx (versión 1.5, 21/09/2026).
+#   La memoria sigue la estructura estándar de secciones (Entradas y Salidas, Arquitectura y
+#   Algoritmos, Hiperparámetros Clave, Métricas y Rendimiento, Despliegue e Inferencia,
+#   Limitaciones…): no ha hecho falta pedir confirmación por estructura.
+#
+# Generado con el skill manifest-extraction el 2026-10-16.
+
+model_id: ml6-meat-poultry-disease-classification
+sector: carnico
+nombre: "Modelo de Deep Ensemble Learning para la clasificación de las enfermedades y defectos en los animales"
+acronimo: DEL-Carne-Defect
+task_type: image_classification_ensemble   # dos ensembles independientes de clasificación de imagen
+framework: [pytorch, torchvision, opencv-python, pillow, numpy, scikit-learn]
+
+# El caso de uso entrega DOS modelos independientes (memoria §1 y §4.1, README "Modelos y
+# Arquitectura"): se integran en un único plugin y la petición elige cuál con model_key.
+ensembles:
+  thermal:
+    descripcion: "Clasificación binaria de imágenes térmicas del ave (healthy / sick). Primera etapa: cribado masivo, sin capacidad diagnóstica."
+    base_models: [densenet121, efficientnet_v2s, resnet50]   # config.yaml tasks.thermal.models.names (orden = desempate)
+    class_names: {0: healthy, 1: sick}                      # config.yaml tasks.thermal.data.class_names
+  rgb:
+    descripcion: "Clasificación multiclase de imágenes RGB de heces (healthy / cocci / ncd / salmo). Segunda etapa: diagnóstico del ave aislada."
+    base_models: [vgg19_bn, efficientnet_b7, mobilenet_v3l]  # config.yaml tasks.rgb.models.names
+    class_names: {0: healthy, 1: cocci, 2: ncd, 3: salmo}   # config.yaml tasks.rgb.data.class_names
+    folder_map: {healthy: pcrhealthy, cocci: pcrcocci, ncd: pcrncd, salmo: pcrsalmo}
+  agregacion: majority_voting   # src/main.py::predict — Counter(votes).most_common(1); voto duro, mismo peso
+  desempate: >
+    Con 3 modelos y 4 clases (rgb) puede haber empate a tres. Counter.most_common devuelve el
+    primero insertado, es decir, el voto del primer modelo de base_models (vgg19_bn en rgb). En
+    thermal (2 clases) no hay empates posibles. El plugin replica este comportamiento.
+
+artifacts:
+  folder: models/{thermal,fecal}/artifacts/
+  files:   # state_dict de torch de cada wrapper (src/training/<modelo>.py); md5 de la entrega
+    - {file: thermal/artifacts/densenet121.pt,      md5: 5548bd112a91046073d9dd550f2ed2d7, bytes: 28445509}
+    - {file: thermal/artifacts/efficientnet_v2s.pt, md5: 90f0f940c37dc7604e04ae77b3a5bdb3, bytes: 81650647}
+    - {file: thermal/artifacts/resnet50.pt,         md5: 57b809bf5d75541befbeaf11f92292c6, bytes: 94371077}
+    - {file: fecal/artifacts/vgg19_bn.pt,           md5: bd4ced6023679f9f20fc2c37898747e5, bytes: 558475407}
+    - {file: fecal/artifacts/efficientnet_b7.pt,    md5: bc7eda6c16323723109e7a473a94cf3d, bytes: 256914775}
+    - {file: fecal/artifacts/mobilenet_v3l.pt,      md5: 05cf7582a63abf945fb192b2cc93828a, bytes: 17043395}
+  plugin_layout: >
+    artifacts/ml6_meat_poultry_disease_classification/<modelo>.pt (plano: los 6 nombres son
+    únicos) y s3://<STORAGE_BUCKET>/artifacts/fixed/ml6_meat_poultry_disease_classification/.
+
+inputs:
+  fixed:
+    - name: model_key
+      type: str
+      allowed: [thermal, rgb]
+      description: "Ensemble a usar. Obligatorio: las dos modalidades de imagen no son intercambiables."
+    - name: image
+      type: file
+      format: [jpg, jpeg, png, bmp, tiff, tif, webp]   # src/utils/io.py::SUPPORTED_IMAGE_EXTENSIONS (memoria §8.2 cita jpg/jpeg/png/bmp)
+      description: >
+        thermal: imagen térmica del ave tal como la da la cámara, sin redimensionar (resolución
+        nativa 240x320 = ancho x alto; memoria §3.2). rgb: imagen RGB de heces, cualquier tamaño
+        (se redimensiona a 256x256).
+  control: null              # no hay optimización ni variables de decisión
+  derived_if_missing: null   # la imagen se consume directamente
+  preprocessing:             # src/data_processing/preprocess.py (idéntico en train y test, sin augmentación)
+    comun: "PIL.Image.open(...).convert('RGB') (loader por defecto de ImageFolder) → ToTensor → Normalize(ImageNet mean [0.485, 0.456, 0.406], std [0.229, 0.224, 0.225])"
+    thermal: "boost_contrast: RGB→Lab, CLAHE(clipLimit=3.0, tileGridSize=8x8) solo sobre L, Lab→RGB (opencv); sin resize"
+    rgb: "transforms.Resize((256, 256))"
+
+outputs:
+  predict_inline:
+    - task                    # thermal | rgb
+    - prediction              # clase del ensemble (voto por mayoría)
+    - predicted_class_index
+    - confidence              # fracción de modelos que votan la clase ganadora (1/3, 2/3, 1) — no es una probabilidad
+    - model_predictions       # voto de cada modelo base (lo que guarda {modelo}_predictions.csv)
+    - model_probabilities     # softmax por modelo base; informativo (memoria §10 lo propone para vigilar el rango 0.4-0.6)
+    - warnings                # p. ej. imagen térmica que no tiene la resolución nativa 240x320
+  predict_batch:
+    - "una fila por imagen (filename, prediction, model_predictions, model_probabilities; true_class si la carpeta de la imagen es una clase)"
+    - "evaluated_metrics: si todas las imágenes traen clase, accuracy/precision/recall/f1 (weighted y macro) y por clase, por modelo y del ensemble — mismo cálculo que src/predict/predictor.py::save_metrics"
+  no_portado: >
+    Grad-CAM (scripts/grad_cam.py) y la evaluación de atención (scripts/eval_attention.py) no
+    se integran: la memoria (§6.4) los define como fases opcionales offline que "no forman
+    parte del pipeline de inferencia y no se ejecutan en producción".
+
+training:
+  supported: true
+  # El código entregado incluye el procedimiento real que generó los 6 artefactos servidos:
+  # scripts/train.py → src/main.py::train → src/training/trainer.py::train_model, con
+  # src/data_processing/load_data.py (OrderedImageFolder + WeightedRandomSampler) y
+  # src/utils/io.py::ensure_data_splits (split 70/15/15, seed 42). Entrena exactamente los
+  # modelos base que sirve el plugin (no es un benchmark aparte).
+  task_selector: task        # campo del TrainRequest: thermal | rgb (se reentrenan los 3 modelos de ese ensemble)
+  target_column: null        # no hay CSV: la clase es el nombre de la subcarpeta de cada imagen (ImageFolder)
+  required_columns: null     # ídem — ver required_layout
+  required_layout:
+    thermal: "data_path/{healthy,sick}/<imagen>"                                       # data/thermal/raw del original
+    rgb: "data_path/{pcrhealthy,pcrcocci,pcrncd,pcrsalmo}/<imagen> (o healthy/cocci/ncd/salmo)"  # data/fecal/raw + folder_map
+  split: {train: 0.7, val: 0.15, test: 0.15, seed: 42, algoritmo: "src/utils/io.py::ensure_data_splits (por carpeta ordenada, ficheros ordenados, random.Random(42).shuffle, int(n*0.7) / int(n*0.15) / resto)"}
+  hyperparams:
+    comunes:   # src/training/trainer.py::train_model + config.yaml
+      init: "pesos ImageNet (IMAGENET1K_V1) con todo el backbone congelado (requires_grad=False) y capa final sustituida por Linear(in, num_classes) entrenable"
+      optimizer: adam
+      loss: cross_entropy
+      scheduler: {type: step_lr, step_size: 7, gamma: 0.1}   # un paso por época
+      epochs: 100
+      early_stopping: {monitor: val_loss, patience: 10, min_delta: 0.0001}
+      checkpoint: "mejor val_acc (estrictamente mayor)"
+      sampler: weighted_random_sampler   # pesos 1/frecuencia de clase, replacement=True
+      seed: 42
+    thermal: {learning_rate: 0.0002139312453740547, weight_decay: 0.000689762040038286, batch_size: 4}
+    rgb:     {learning_rate: 0.005372828091952831,  weight_decay: 0.0006682955795832878, batch_size: 64}
+    origen_valores: "Optuna (notebooks/tuning_hyperparameters/tuning.ipynb; memoria §6.2). /train NO repite la búsqueda."
+  metrics_returned: [accuracy, precision_weighted, recall_weighted, f1_weighted, per_class, models, n_train, n_val, n_test, training_time_s]
+  source: codigo_entrenamiento   # src/training/trainer.py, src/data_processing/load_data.py, src/utils/io.py, config/config.yaml; memoria §6
+  duracion_estimada:
+    thermal: "124 s el ensemble completo en GPU RTX 4070 (memoria Tabla 3)"
+    rgb: "9 894 s (~2 h 45 min) el ensemble completo en GPU RTX 4070 (memoria Tabla 3). /train es síncrono: depende del timeout del cliente y del ingress de la plataforma."
+  divergencias_documentadas:
+    - "El original parte de pesos ImageNet con cabeza nueva; el plugin parte del checkpoint base servido (regla del repo: el ajuste fino parte siempre del modelo base). Backbone congelado y cabeza entrenable igual que el original."
+    - "El original siembra el RNG global (set_seed) y el WeightedRandomSampler y el Dropout tiran de él; el plugin lo aísla con torch.random.fork_rng + manual_seed(42) para no tocar el RNG del servidor compartido. Mismo orden de consumo: verificado idéntico al original a 4 decimales (ver fidelidad_verificada)."
+    - "El split se calcula en memoria con el mismo algoritmo que ensure_data_splits (el original copia los ficheros a data/*/splits/)."
+
+  fidelidad_verificada: >
+    2026-10-23: scripts/train.py --task thermal del equipo y el port del plugin, ambos desde ImageNet, en CPU y
+    la misma máquina, dan métricas de validación idénticas (4 decimales) y el mismo punto de parada en los 3
+    modelos (ver outputs/a06/verification_report.md, «Fidelidad del reentrenamiento»).
+
+constraints:
+  hard: null   # la memoria no define ninguna restricción numérica dura de negocio sobre las entradas/salidas
+  operativas:  # se documentan; no son verificables desde la imagen, así que no se convierten en excepción
+    - "La etapa rgb requiere aislar al ave identificada como enferma para asociar sus heces a ella (memoria §1 y §10)."
+    - "Herramienta de apoyo a la decisión veterinaria (human-in-the-loop), no sustituto del diagnóstico (memoria §10)."
+    - "thermal: la imagen debe venir de la cámara con su resolución nativa 240x320; otra cámara/resolución introduce un desplazamiento sistemático (memoria §3.2 y §10). El plugin avisa en warnings, no bloquea."
+  excepciones_de_dominio:
+    - "UnknownImageModalityError (422): model_key ausente o distinto de thermal/rgb."
+    - "InvalidImageError (422, ya existente): la imagen no se puede decodificar."
+
+metrics_reported:
+  objetivos:   # memoria §2 y §7
+    thermal: {accuracy: "> 0.7", recall: "> 0.65"}
+    rgb: {accuracy: "> 0.8", f1_weighted: "> 0.8"}
+  test_thermal_n40:   # memoria Tabla 4 = data/thermal/predictions/*_aggregated_metrics.csv
+    densenet121:      {accuracy: 0.6750, precision_w: 0.6807, recall_w: 0.6750, f1_w: 0.6774}
+    efficientnet_v2s: {accuracy: 0.6750, precision_w: 0.6940, recall_w: 0.6750, f1_w: 0.6808}
+    resnet50:         {accuracy: 0.7750, precision_w: 0.7754, recall_w: 0.7750, f1_w: 0.7604}
+    ensemble:         {accuracy: 0.8000, precision_w: 0.7964, recall_w: 0.8000, f1_w: 0.7960, recall_sick: 0.8846, recall_healthy: 0.6429, recall_macro: 0.7637}
+  test_rgb_n192:      # memoria Tabla 5 = data/fecal/predictions/*_aggregated_metrics.csv
+    efficientnet_b7:  {accuracy: 0.8125, precision_w: 0.8227, recall_w: 0.8125, f1_w: 0.8152}
+    mobilenet_v3l:    {accuracy: 0.8490, precision_w: 0.8497, recall_w: 0.8490, f1_w: 0.8476}
+    vgg19_bn:         {accuracy: 0.8490, precision_w: 0.8502, recall_w: 0.8490, f1_w: 0.8493}
+    ensemble:         {accuracy: 0.8490, precision_w: 0.8505, recall_w: 0.8490, f1_w: 0.8484}
+  test_rgb_por_clase_ensemble:   # memoria Tabla 6 = data/fecal/predictions/rgb_per_class_metrics.csv
+    healthy: {precision: 0.7358, recall: 0.7358, f1: 0.7358, support: 53}
+    cocci:   {precision: 0.9216, recall: 0.8246, f1: 0.8704, support: 57}
+    ncd:     {precision: 0.9355, recall: 1.0000, f1: 0.9667, support: 29}
+    salmo:   {precision: 0.8421, recall: 0.9057, f1: 0.8727, support: 53}
+  monitorizacion:   # memoria §10
+    - "Alerta si las probabilidades se concentran en 0.4-0.6 (pérdida de discriminación / drift)."
+    - "rgb: recall de Newcastle (ncd) < 0.85 = umbral crítico para evaluar reentrenamiento."
+  source: memoria_tablas_4_5_6 + data/{thermal,fecal}/predictions/*_metrics.csv
+
+verification_tolerance:
+  # Fijada ANTES de ejecutar la verificación. Es una clasificación: no hay MAE del que derivar
+  # una tolerancia relativa, y la inferencia es determinista (mismos pesos, mismo preprocesado).
+  por_caso: >
+    La clase del ensemble y el voto de cada modelo base deben coincidir EXACTAMENTE con lo que
+    registró el pipeline original para esa misma imagen ({tarea}_predictions.csv y
+    {modelo}_predictions.csv). Tolerancia 0: la única fuente legítima de diferencia es la deriva
+    numérica entre versiones de librería (torch/torchvision/opencv), y si cambia un voto se
+    investiga.
+  agregada: >
+    Accuracy del ensemble sobre el split de test completo: |obtenida - metrics_reported| <= 1
+    muestra (1/40 = 0.025 thermal; 1/192 = 0.0052 rgb), la granularidad mínima de la métrica
+    en cada test set.
+  contra_etiqueta_real: "Informativo (es el rendimiento del modelo, no un fallo de integración): se reporta aciertos vs true_class."
+
+golden_cases:
+  # Fuente: split de TEST real. Los datasets no vienen en la entrega (data/*/raw y data/*/splits
+  # están en el .gitignore del equipo de IA); se descargaron de las fuentes públicas que cita la
+  # memoria §3.1 (Mendeley vwbb4dc9b7 v1, Zenodo 5801834 v3) a inbox/a06/codigo/data/<tarea>/raw y
+  # el split se regeneró con la PROPIA función del equipo (src/utils/io.py::ensure_data_splits,
+  # seed 42). Comprobación: el conjunto de ficheros de test regenerado es idéntico al de la
+  # columna filename de los CSV de predicciones entregados.
+  # expected = lo que produjo el pipeline original para esa imagen (voto de cada modelo y clase del
+  # ensemble), leído de los CSV; true_class = etiqueta real del dataset. Nada se ha inventado.
+  #
+  # thermal: las 40 imágenes del test (split completo; 177/37/40 regenerado).
+  - id: thermal_test_001
+    input: {model_key: thermal, image_path: "data/thermal/splits/test/healthy/A1_1_104_5_0.bmp"}
+    expected: {prediction: sick, model_predictions: {densenet121: sick, efficientnet_v2s: sick, resnet50: sick}}
+    true_class: healthy
+    source: dataset_test_split (data/thermal/predictions/thermal_predictions.csv + <modelo>_predictions.csv, filename=A1_1_104_5_0.bmp)
+  - id: thermal_test_002
+    input: {model_key: thermal, image_path: "data/thermal/splits/test/healthy/A1_1_104_6_0.bmp"}
+    expected: {prediction: healthy, model_predictions: {densenet121: sick, efficientnet_v2s: healthy, resnet50: healthy}}
+    true_class: healthy
+    source: dataset_test_split (data/thermal/predictions/thermal_predictions.csv + <modelo>_predictions.csv, filename=A1_1_104_6_0.bmp)
+  - id: thermal_test_003
+    input: {model_key: thermal, image_path: "data/thermal/splits/test/healthy/A1_1_124_3_0_مصاب.bmp"}
+    expected: {prediction: healthy, model_predictions: {densenet121: healthy, efficientnet_v2s: sick, resnet50: healthy}}
+    true_class: healthy
+    source: dataset_test_split (data/thermal/predictions/thermal_predictions.csv + <modelo>_predictions.csv, filename=A1_1_124_3_0_مصاب.bmp)
+  - id: thermal_test_004
+    input: {model_key: thermal, image_path: "data/thermal/splits/test/healthy/A1_1_124_5_0.bmp"}
+    expected: {prediction: sick, model_predictions: {densenet121: sick, efficientnet_v2s: healthy, resnet50: sick}}
+    true_class: healthy
+    source: dataset_test_split (data/thermal/predictions/thermal_predictions.csv + <modelo>_predictions.csv, filename=A1_1_124_5_0.bmp)
+  - id: thermal_test_005
+    input: {model_key: thermal, image_path: "data/thermal/splits/test/healthy/A1_1_124_6_0.bmp"}
+    expected: {prediction: healthy, model_predictions: {densenet121: healthy, efficientnet_v2s: healthy, resnet50: healthy}}
+    true_class: healthy
+    source: dataset_test_split (data/thermal/predictions/thermal_predictions.csv + <modelo>_predictions.csv, filename=A1_1_124_6_0.bmp)
+  - id: thermal_test_006
+    input: {model_key: thermal, image_path: "data/thermal/splits/test/healthy/C5_3_253_6_0_بعد التعطيش.bmp"}
+    expected: {prediction: healthy, model_predictions: {densenet121: healthy, efficientnet_v2s: healthy, resnet50: healthy}}
+    true_class: healthy
+    source: dataset_test_split (data/thermal/predictions/thermal_predictions.csv + <modelo>_predictions.csv, filename=C5_3_253_6_0_بعد التعطيش.bmp)
+  - id: thermal_test_007
+    input: {model_key: thermal, image_path: "data/thermal/splits/test/healthy/img20220322_013728.bmp"}
+    expected: {prediction: healthy, model_predictions: {densenet121: healthy, efficientnet_v2s: sick, resnet50: healthy}}
+    true_class: healthy
+    source: dataset_test_split (data/thermal/predictions/thermal_predictions.csv + <modelo>_predictions.csv, filename=img20220322_013728.bmp)
+  - id: thermal_test_008
+    input: {model_key: thermal, image_path: "data/thermal/splits/test/healthy/img20220323_191350.bmp"}
+    expected: {prediction: sick, model_predictions: {densenet121: healthy, efficientnet_v2s: sick, resnet50: sick}}
+    true_class: healthy
+    source: dataset_test_split (data/thermal/predictions/thermal_predictions.csv + <modelo>_predictions.csv, filename=img20220323_191350.bmp)
+  - id: thermal_test_009
+    input: {model_key: thermal, image_path: "data/thermal/splits/test/healthy/img20220324_012058.bmp"}
+    expected: {prediction: healthy, model_predictions: {densenet121: healthy, efficientnet_v2s: healthy, resnet50: sick}}
+    true_class: healthy
+    source: dataset_test_split (data/thermal/predictions/thermal_predictions.csv + <modelo>_predictions.csv, filename=img20220324_012058.bmp)
+  - id: thermal_test_010
+    input: {model_key: thermal, image_path: "data/thermal/splits/test/healthy/img20220331_003135.bmp"}
+    expected: {prediction: healthy, model_predictions: {densenet121: healthy, efficientnet_v2s: healthy, resnet50: healthy}}
+    true_class: healthy
+    source: dataset_test_split (data/thermal/predictions/thermal_predictions.csv + <modelo>_predictions.csv, filename=img20220331_003135.bmp)
+  - id: thermal_test_011
+    input: {model_key: thermal, image_path: "data/thermal/splits/test/healthy/img20220411_212823.bmp"}
+    expected: {prediction: sick, model_predictions: {densenet121: sick, efficientnet_v2s: healthy, resnet50: sick}}
+    true_class: healthy
+    source: dataset_test_split (data/thermal/predictions/thermal_predictions.csv + <modelo>_predictions.csv, filename=img20220411_212823.bmp)
+  - id: thermal_test_012
+    input: {model_key: thermal, image_path: "data/thermal/splits/test/healthy/img20220412_222341.bmp"}
+    expected: {prediction: healthy, model_predictions: {densenet121: sick, efficientnet_v2s: healthy, resnet50: healthy}}
+    true_class: healthy
+    source: dataset_test_split (data/thermal/predictions/thermal_predictions.csv + <modelo>_predictions.csv, filename=img20220412_222341.bmp)
+  - id: thermal_test_013
+    input: {model_key: thermal, image_path: "data/thermal/splits/test/healthy/img20220412_224453.bmp"}
+    expected: {prediction: sick, model_predictions: {densenet121: sick, efficientnet_v2s: sick, resnet50: sick}}
+    true_class: healthy
+    source: dataset_test_split (data/thermal/predictions/thermal_predictions.csv + <modelo>_predictions.csv, filename=img20220412_224453.bmp)
+  - id: thermal_test_014
+    input: {model_key: thermal, image_path: "data/thermal/splits/test/healthy/img20220412_224611.bmp"}
+    expected: {prediction: healthy, model_predictions: {densenet121: healthy, efficientnet_v2s: healthy, resnet50: sick}}
+    true_class: healthy
+    source: dataset_test_split (data/thermal/predictions/thermal_predictions.csv + <modelo>_predictions.csv, filename=img20220412_224611.bmp)
+  - id: thermal_test_015
+    input: {model_key: thermal, image_path: "data/thermal/splits/test/sick/img20220319_020529.bmp"}
+    expected: {prediction: sick, model_predictions: {densenet121: healthy, efficientnet_v2s: sick, resnet50: sick}}
+    true_class: sick
+    source: dataset_test_split (data/thermal/predictions/thermal_predictions.csv + <modelo>_predictions.csv, filename=img20220319_020529.bmp)
+  - id: thermal_test_016
+    input: {model_key: thermal, image_path: "data/thermal/splits/test/sick/img20220321_234915.bmp"}
+    expected: {prediction: healthy, model_predictions: {densenet121: healthy, efficientnet_v2s: healthy, resnet50: sick}}
+    true_class: sick
+    source: dataset_test_split (data/thermal/predictions/thermal_predictions.csv + <modelo>_predictions.csv, filename=img20220321_234915.bmp)
+  - id: thermal_test_017
+    input: {model_key: thermal, image_path: "data/thermal/splits/test/sick/img20220322_000021.bmp"}
+    expected: {prediction: sick, model_predictions: {densenet121: sick, efficientnet_v2s: healthy, resnet50: sick}}
+    true_class: sick
+    source: dataset_test_split (data/thermal/predictions/thermal_predictions.csv + <modelo>_predictions.csv, filename=img20220322_000021.bmp)
+  - id: thermal_test_018
+    input: {model_key: thermal, image_path: "data/thermal/splits/test/sick/img20220331_041941.bmp"}
+    expected: {prediction: healthy, model_predictions: {densenet121: healthy, efficientnet_v2s: healthy, resnet50: healthy}}
+    true_class: sick
+    source: dataset_test_split (data/thermal/predictions/thermal_predictions.csv + <modelo>_predictions.csv, filename=img20220331_041941.bmp)
+  - id: thermal_test_019
+    input: {model_key: thermal, image_path: "data/thermal/splits/test/sick/img20220331_042756.bmp"}
+    expected: {prediction: healthy, model_predictions: {densenet121: healthy, efficientnet_v2s: healthy, resnet50: healthy}}
+    true_class: sick
+    source: dataset_test_split (data/thermal/predictions/thermal_predictions.csv + <modelo>_predictions.csv, filename=img20220331_042756.bmp)
+  - id: thermal_test_020
+    input: {model_key: thermal, image_path: "data/thermal/splits/test/sick/img20220401_171056.bmp"}
+    expected: {prediction: sick, model_predictions: {densenet121: healthy, efficientnet_v2s: sick, resnet50: sick}}
+    true_class: sick
+    source: dataset_test_split (data/thermal/predictions/thermal_predictions.csv + <modelo>_predictions.csv, filename=img20220401_171056.bmp)
+  - id: thermal_test_021
+    input: {model_key: thermal, image_path: "data/thermal/splits/test/sick/img20220403_232143.bmp"}
+    expected: {prediction: sick, model_predictions: {densenet121: healthy, efficientnet_v2s: sick, resnet50: sick}}
+    true_class: sick
+    source: dataset_test_split (data/thermal/predictions/thermal_predictions.csv + <modelo>_predictions.csv, filename=img20220403_232143.bmp)
+  - id: thermal_test_022
+    input: {model_key: thermal, image_path: "data/thermal/splits/test/sick/img20220403_232627.bmp"}
+    expected: {prediction: sick, model_predictions: {densenet121: sick, efficientnet_v2s: sick, resnet50: sick}}
+    true_class: sick
+    source: dataset_test_split (data/thermal/predictions/thermal_predictions.csv + <modelo>_predictions.csv, filename=img20220403_232627.bmp)
+  - id: thermal_test_023
+    input: {model_key: thermal, image_path: "data/thermal/splits/test/sick/img20220403_232704.bmp"}
+    expected: {prediction: sick, model_predictions: {densenet121: sick, efficientnet_v2s: sick, resnet50: sick}}
+    true_class: sick
+    source: dataset_test_split (data/thermal/predictions/thermal_predictions.csv + <modelo>_predictions.csv, filename=img20220403_232704.bmp)
+  - id: thermal_test_024
+    input: {model_key: thermal, image_path: "data/thermal/splits/test/sick/img20220403_232859.bmp"}
+    expected: {prediction: sick, model_predictions: {densenet121: healthy, efficientnet_v2s: sick, resnet50: sick}}
+    true_class: sick
+    source: dataset_test_split (data/thermal/predictions/thermal_predictions.csv + <modelo>_predictions.csv, filename=img20220403_232859.bmp)
+  - id: thermal_test_025
+    input: {model_key: thermal, image_path: "data/thermal/splits/test/sick/img20220403_232951.bmp"}
+    expected: {prediction: sick, model_predictions: {densenet121: sick, efficientnet_v2s: healthy, resnet50: sick}}
+    true_class: sick
+    source: dataset_test_split (data/thermal/predictions/thermal_predictions.csv + <modelo>_predictions.csv, filename=img20220403_232951.bmp)
+  - id: thermal_test_026
+    input: {model_key: thermal, image_path: "data/thermal/splits/test/sick/img20220410_231434.bmp"}
+    expected: {prediction: sick, model_predictions: {densenet121: sick, efficientnet_v2s: sick, resnet50: sick}}
+    true_class: sick
+    source: dataset_test_split (data/thermal/predictions/thermal_predictions.csv + <modelo>_predictions.csv, filename=img20220410_231434.bmp)
+  - id: thermal_test_027
+    input: {model_key: thermal, image_path: "data/thermal/splits/test/sick/img20220411_210116.bmp"}
+    expected: {prediction: sick, model_predictions: {densenet121: sick, efficientnet_v2s: sick, resnet50: sick}}
+    true_class: sick
+    source: dataset_test_split (data/thermal/predictions/thermal_predictions.csv + <modelo>_predictions.csv, filename=img20220411_210116.bmp)
+  - id: thermal_test_028
+    input: {model_key: thermal, image_path: "data/thermal/splits/test/sick/img20220411_213549.bmp"}
+    expected: {prediction: sick, model_predictions: {densenet121: sick, efficientnet_v2s: sick, resnet50: sick}}
+    true_class: sick
+    source: dataset_test_split (data/thermal/predictions/thermal_predictions.csv + <modelo>_predictions.csv, filename=img20220411_213549.bmp)
+  - id: thermal_test_029
+    input: {model_key: thermal, image_path: "data/thermal/splits/test/sick/img20220411_220302.jpg"}
+    expected: {prediction: sick, model_predictions: {densenet121: sick, efficientnet_v2s: sick, resnet50: sick}}
+    true_class: sick
+    source: dataset_test_split (data/thermal/predictions/thermal_predictions.csv + <modelo>_predictions.csv, filename=img20220411_220302.jpg)
+  - id: thermal_test_030
+    input: {model_key: thermal, image_path: "data/thermal/splits/test/sick/img20220411_221255.bmp"}
+    expected: {prediction: sick, model_predictions: {densenet121: sick, efficientnet_v2s: healthy, resnet50: sick}}
+    true_class: sick
+    source: dataset_test_split (data/thermal/predictions/thermal_predictions.csv + <modelo>_predictions.csv, filename=img20220411_221255.bmp)
+  - id: thermal_test_031
+    input: {model_key: thermal, image_path: "data/thermal/splits/test/sick/img20220414_213924.jpg"}
+    expected: {prediction: sick, model_predictions: {densenet121: sick, efficientnet_v2s: sick, resnet50: sick}}
+    true_class: sick
+    source: dataset_test_split (data/thermal/predictions/thermal_predictions.csv + <modelo>_predictions.csv, filename=img20220414_213924.jpg)
+  - id: thermal_test_032
+    input: {model_key: thermal, image_path: "data/thermal/splits/test/sick/img20220415_210907.bmp"}
+    expected: {prediction: sick, model_predictions: {densenet121: sick, efficientnet_v2s: sick, resnet50: sick}}
+    true_class: sick
+    source: dataset_test_split (data/thermal/predictions/thermal_predictions.csv + <modelo>_predictions.csv, filename=img20220415_210907.bmp)
+  - id: thermal_test_033
+    input: {model_key: thermal, image_path: "data/thermal/splits/test/sick/img20220417_213908.bmp"}
+    expected: {prediction: sick, model_predictions: {densenet121: sick, efficientnet_v2s: sick, resnet50: sick}}
+    true_class: sick
+    source: dataset_test_split (data/thermal/predictions/thermal_predictions.csv + <modelo>_predictions.csv, filename=img20220417_213908.bmp)
+  - id: thermal_test_034
+    input: {model_key: thermal, image_path: "data/thermal/splits/test/sick/img20220417_214618.bmp"}
+    expected: {prediction: sick, model_predictions: {densenet121: sick, efficientnet_v2s: sick, resnet50: sick}}
+    true_class: sick
+    source: dataset_test_split (data/thermal/predictions/thermal_predictions.csv + <modelo>_predictions.csv, filename=img20220417_214618.bmp)
+  - id: thermal_test_035
+    input: {model_key: thermal, image_path: "data/thermal/splits/test/sick/img20220417_214652.bmp"}
+    expected: {prediction: sick, model_predictions: {densenet121: sick, efficientnet_v2s: healthy, resnet50: sick}}
+    true_class: sick
+    source: dataset_test_split (data/thermal/predictions/thermal_predictions.csv + <modelo>_predictions.csv, filename=img20220417_214652.bmp)
+  - id: thermal_test_036
+    input: {model_key: thermal, image_path: "data/thermal/splits/test/sick/img20220417_214658.bmp"}
+    expected: {prediction: sick, model_predictions: {densenet121: sick, efficientnet_v2s: sick, resnet50: sick}}
+    true_class: sick
+    source: dataset_test_split (data/thermal/predictions/thermal_predictions.csv + <modelo>_predictions.csv, filename=img20220417_214658.bmp)
+  - id: thermal_test_037
+    input: {model_key: thermal, image_path: "data/thermal/splits/test/sick/img20220417_214806.bmp"}
+    expected: {prediction: sick, model_predictions: {densenet121: sick, efficientnet_v2s: sick, resnet50: sick}}
+    true_class: sick
+    source: dataset_test_split (data/thermal/predictions/thermal_predictions.csv + <modelo>_predictions.csv, filename=img20220417_214806.bmp)
+  - id: thermal_test_038
+    input: {model_key: thermal, image_path: "data/thermal/splits/test/sick/img20220417_215033.bmp"}
+    expected: {prediction: sick, model_predictions: {densenet121: sick, efficientnet_v2s: sick, resnet50: sick}}
+    true_class: sick
+    source: dataset_test_split (data/thermal/predictions/thermal_predictions.csv + <modelo>_predictions.csv, filename=img20220417_215033.bmp)
+  - id: thermal_test_039
+    input: {model_key: thermal, image_path: "data/thermal/splits/test/sick/img20220417_215048.bmp"}
+    expected: {prediction: sick, model_predictions: {densenet121: sick, efficientnet_v2s: sick, resnet50: sick}}
+    true_class: sick
+    source: dataset_test_split (data/thermal/predictions/thermal_predictions.csv + <modelo>_predictions.csv, filename=img20220417_215048.bmp)
+  - id: thermal_test_040
+    input: {model_key: thermal, image_path: "data/thermal/splits/test/sick/img20220417_215126.bmp"}
+    expected: {prediction: sick, model_predictions: {densenet121: sick, efficientnet_v2s: healthy, resnet50: sick}}
+    true_class: sick
+    source: dataset_test_split (data/thermal/predictions/thermal_predictions.csv + <modelo>_predictions.csv, filename=img20220417_215126.bmp)
+  #
+  # rgb: las 5 primeras imágenes de test de cada clase en orden ImageFolder (clase, nombre de fichero);
+  # regla determinista que no mira si el modelo acierta. 20 casos.
+  - id: rgb_test_001
+    input: {model_key: rgb, image_path: "data/fecal/splits/test/pcrcocci/pcrcocci.100.jpg"}
+    expected: {prediction: cocci, model_predictions: {vgg19_bn: cocci, efficientnet_b7: cocci, mobilenet_v3l: cocci}}
+    true_class: cocci
+    source: dataset_test_split (data/fecal/predictions/rgb_predictions.csv + <modelo>_predictions.csv, filename=pcrcocci.100.jpg)
+  - id: rgb_test_002
+    input: {model_key: rgb, image_path: "data/fecal/splits/test/pcrcocci/pcrcocci.109.jpg"}
+    expected: {prediction: cocci, model_predictions: {vgg19_bn: cocci, efficientnet_b7: cocci, mobilenet_v3l: salmo}}
+    true_class: cocci
+    source: dataset_test_split (data/fecal/predictions/rgb_predictions.csv + <modelo>_predictions.csv, filename=pcrcocci.109.jpg)
+  - id: rgb_test_003
+    input: {model_key: rgb, image_path: "data/fecal/splits/test/pcrcocci/pcrcocci.11.jpg"}
+    expected: {prediction: cocci, model_predictions: {vgg19_bn: cocci, efficientnet_b7: cocci, mobilenet_v3l: cocci}}
+    true_class: cocci
+    source: dataset_test_split (data/fecal/predictions/rgb_predictions.csv + <modelo>_predictions.csv, filename=pcrcocci.11.jpg)
+  - id: rgb_test_004
+    input: {model_key: rgb, image_path: "data/fecal/splits/test/pcrcocci/pcrcocci.111.jpg"}
+    expected: {prediction: cocci, model_predictions: {vgg19_bn: cocci, efficientnet_b7: cocci, mobilenet_v3l: cocci}}
+    true_class: cocci
+    source: dataset_test_split (data/fecal/predictions/rgb_predictions.csv + <modelo>_predictions.csv, filename=pcrcocci.111.jpg)
+  - id: rgb_test_005
+    input: {model_key: rgb, image_path: "data/fecal/splits/test/pcrcocci/pcrcocci.112.jpg"}
+    expected: {prediction: cocci, model_predictions: {vgg19_bn: cocci, efficientnet_b7: cocci, mobilenet_v3l: cocci}}
+    true_class: cocci
+    source: dataset_test_split (data/fecal/predictions/rgb_predictions.csv + <modelo>_predictions.csv, filename=pcrcocci.112.jpg)
+  - id: rgb_test_006
+    input: {model_key: rgb, image_path: "data/fecal/splits/test/pcrhealthy/pcrhealthy.1.jpg"}
+    expected: {prediction: healthy, model_predictions: {vgg19_bn: healthy, efficientnet_b7: healthy, mobilenet_v3l: healthy}}
+    true_class: healthy
+    source: dataset_test_split (data/fecal/predictions/rgb_predictions.csv + <modelo>_predictions.csv, filename=pcrhealthy.1.jpg)
+  - id: rgb_test_007
+    input: {model_key: rgb, image_path: "data/fecal/splits/test/pcrhealthy/pcrhealthy.101.jpg"}
+    expected: {prediction: healthy, model_predictions: {vgg19_bn: cocci, efficientnet_b7: healthy, mobilenet_v3l: healthy}}
+    true_class: healthy
+    source: dataset_test_split (data/fecal/predictions/rgb_predictions.csv + <modelo>_predictions.csv, filename=pcrhealthy.101.jpg)
+  - id: rgb_test_008
+    input: {model_key: rgb, image_path: "data/fecal/splits/test/pcrhealthy/pcrhealthy.114.jpg"}
+    expected: {prediction: healthy, model_predictions: {vgg19_bn: healthy, efficientnet_b7: healthy, mobilenet_v3l: healthy}}
+    true_class: healthy
+    source: dataset_test_split (data/fecal/predictions/rgb_predictions.csv + <modelo>_predictions.csv, filename=pcrhealthy.114.jpg)
+  - id: rgb_test_009
+    input: {model_key: rgb, image_path: "data/fecal/splits/test/pcrhealthy/pcrhealthy.116.jpg"}
+    expected: {prediction: salmo, model_predictions: {vgg19_bn: salmo, efficientnet_b7: healthy, mobilenet_v3l: salmo}}
+    true_class: healthy
+    source: dataset_test_split (data/fecal/predictions/rgb_predictions.csv + <modelo>_predictions.csv, filename=pcrhealthy.116.jpg)
+  - id: rgb_test_010
+    input: {model_key: rgb, image_path: "data/fecal/splits/test/pcrhealthy/pcrhealthy.117.jpg"}
+    expected: {prediction: healthy, model_predictions: {vgg19_bn: healthy, efficientnet_b7: healthy, mobilenet_v3l: healthy}}
+    true_class: healthy
+    source: dataset_test_split (data/fecal/predictions/rgb_predictions.csv + <modelo>_predictions.csv, filename=pcrhealthy.117.jpg)
+  - id: rgb_test_011
+    input: {model_key: rgb, image_path: "data/fecal/splits/test/pcrncd/pcrncd.103.jpg"}
+    expected: {prediction: ncd, model_predictions: {vgg19_bn: ncd, efficientnet_b7: ncd, mobilenet_v3l: ncd}}
+    true_class: ncd
+    source: dataset_test_split (data/fecal/predictions/rgb_predictions.csv + <modelo>_predictions.csv, filename=pcrncd.103.jpg)
+  - id: rgb_test_012
+    input: {model_key: rgb, image_path: "data/fecal/splits/test/pcrncd/pcrncd.115.jpg"}
+    expected: {prediction: ncd, model_predictions: {vgg19_bn: ncd, efficientnet_b7: ncd, mobilenet_v3l: ncd}}
+    true_class: ncd
+    source: dataset_test_split (data/fecal/predictions/rgb_predictions.csv + <modelo>_predictions.csv, filename=pcrncd.115.jpg)
+  - id: rgb_test_013
+    input: {model_key: rgb, image_path: "data/fecal/splits/test/pcrncd/pcrncd.121.jpg"}
+    expected: {prediction: ncd, model_predictions: {vgg19_bn: ncd, efficientnet_b7: ncd, mobilenet_v3l: ncd}}
+    true_class: ncd
+    source: dataset_test_split (data/fecal/predictions/rgb_predictions.csv + <modelo>_predictions.csv, filename=pcrncd.121.jpg)
+  - id: rgb_test_014
+    input: {model_key: rgb, image_path: "data/fecal/splits/test/pcrncd/pcrncd.122.jpg"}
+    expected: {prediction: ncd, model_predictions: {vgg19_bn: ncd, efficientnet_b7: ncd, mobilenet_v3l: ncd}}
+    true_class: ncd
+    source: dataset_test_split (data/fecal/predictions/rgb_predictions.csv + <modelo>_predictions.csv, filename=pcrncd.122.jpg)
+  - id: rgb_test_015
+    input: {model_key: rgb, image_path: "data/fecal/splits/test/pcrncd/pcrncd.124.jpg"}
+    expected: {prediction: ncd, model_predictions: {vgg19_bn: ncd, efficientnet_b7: ncd, mobilenet_v3l: ncd}}
+    true_class: ncd
+    source: dataset_test_split (data/fecal/predictions/rgb_predictions.csv + <modelo>_predictions.csv, filename=pcrncd.124.jpg)
+  - id: rgb_test_016
+    input: {model_key: rgb, image_path: "data/fecal/splits/test/pcrsalmo/pcrsalmo.1.jpg"}
+    expected: {prediction: healthy, model_predictions: {vgg19_bn: healthy, efficientnet_b7: salmo, mobilenet_v3l: healthy}}
+    true_class: salmo
+    source: dataset_test_split (data/fecal/predictions/rgb_predictions.csv + <modelo>_predictions.csv, filename=pcrsalmo.1.jpg)
+  - id: rgb_test_017
+    input: {model_key: rgb, image_path: "data/fecal/splits/test/pcrsalmo/pcrsalmo.112.jpg"}
+    expected: {prediction: salmo, model_predictions: {vgg19_bn: salmo, efficientnet_b7: salmo, mobilenet_v3l: salmo}}
+    true_class: salmo
+    source: dataset_test_split (data/fecal/predictions/rgb_predictions.csv + <modelo>_predictions.csv, filename=pcrsalmo.112.jpg)
+  - id: rgb_test_018
+    input: {model_key: rgb, image_path: "data/fecal/splits/test/pcrsalmo/pcrsalmo.125.jpg"}
+    expected: {prediction: salmo, model_predictions: {vgg19_bn: salmo, efficientnet_b7: salmo, mobilenet_v3l: salmo}}
+    true_class: salmo
+    source: dataset_test_split (data/fecal/predictions/rgb_predictions.csv + <modelo>_predictions.csv, filename=pcrsalmo.125.jpg)
+  - id: rgb_test_019
+    input: {model_key: rgb, image_path: "data/fecal/splits/test/pcrsalmo/pcrsalmo.130.jpg"}
+    expected: {prediction: salmo, model_predictions: {vgg19_bn: salmo, efficientnet_b7: salmo, mobilenet_v3l: salmo}}
+    true_class: salmo
+    source: dataset_test_split (data/fecal/predictions/rgb_predictions.csv + <modelo>_predictions.csv, filename=pcrsalmo.130.jpg)
+  - id: rgb_test_020
+    input: {model_key: rgb, image_path: "data/fecal/splits/test/pcrsalmo/pcrsalmo.132.jpg"}
+    expected: {prediction: salmo, model_predictions: {vgg19_bn: salmo, efficientnet_b7: salmo, mobilenet_v3l: salmo}}
+    true_class: salmo
+    source: dataset_test_split (data/fecal/predictions/rgb_predictions.csv + <modelo>_predictions.csv, filename=pcrsalmo.132.jpg)
+  #
+  # rgb: los 3 empates a tres del test (cada modelo vota una clase distinta). Se añaden para fijar
+  # la regla de desempate de Counter.most_common: gana el voto de vgg19_bn.
+  - id: rgb_tie_001
+    input: {model_key: rgb, image_path: "data/fecal/splits/test/pcrcocci/pcrcocci.138.jpg"}
+    expected: {prediction: healthy, model_predictions: {vgg19_bn: healthy, efficientnet_b7: cocci, mobilenet_v3l: salmo}}
+    true_class: cocci
+    source: dataset_test_split (data/fecal/predictions/rgb_predictions.csv + <modelo>_predictions.csv, filename=pcrcocci.138.jpg)
+  - id: rgb_tie_002
+    input: {model_key: rgb, image_path: "data/fecal/splits/test/pcrhealthy/pcrhealthy.223.jpg"}
+    expected: {prediction: salmo, model_predictions: {vgg19_bn: salmo, efficientnet_b7: healthy, mobilenet_v3l: cocci}}
+    true_class: healthy
+    source: dataset_test_split (data/fecal/predictions/rgb_predictions.csv + <modelo>_predictions.csv, filename=pcrhealthy.223.jpg)
+  - id: rgb_tie_003
+    input: {model_key: rgb, image_path: "data/fecal/splits/test/pcrhealthy/pcrhealthy.269.jpg"}
+    expected: {prediction: cocci, model_predictions: {vgg19_bn: cocci, efficientnet_b7: ncd, mobilenet_v3l: healthy}}
+    true_class: healthy
+    source: dataset_test_split (data/fecal/predictions/rgb_predictions.csv + <modelo>_predictions.csv, filename=pcrhealthy.269.jpg)
+
+known_issues:
+  - "DATASETS NO ENTREGADOS: data/*/raw y data/*/splits están en el .gitignore del equipo de IA, así que
+    la entrega trae solo los CSV de predicciones/métricas. Para los golden cases se descargaron de las
+    fuentes públicas de la memoria §3.1 a inbox/a06/codigo/data/ (no se commitea): thermal completo
+    (Mendeley, Healthy.rar/Sick.rar, sha256 = el publicado por la API de Mendeley) y, del rgb, solo las 192
+    imágenes de test + 10 por clase del train para la prueba de humo de /train (lectura por rangos HTTP de los
+    zips de Zenodo; los 4,4 GB completos tardaban horas). El split rgb se calculó con ensure_data_splits sobre
+    los nombres reales de los zips. Ambos splits de test coinciden fichero a fichero con los CSV entregados."
+  - "README/memoria vs. fuente real del dataset térmico: el README dice que el ZIP de Mendeley trae carpetas
+    train/val/test y data.yaml; en realidad son dos RAR (Healthy.rar, Sick.rar) con carpetas en mayúscula
+    (Healthy/, Sick/). En Linux OrderedImageFolder exige healthy/ y sick/ en minúscula, así que hay que
+    renombrar. tar.exe de Windows se salta los 8 ficheros con nombre en árabe (82+164 en vez de 86+168);
+    hace falta 7z/unrar. El /train del plugin acepta los nombres de carpeta sin distinguir mayúsculas."
+  - "POSIBLE RUIDO DE ETIQUETAS en el dataset térmico público: A1_1_124_3_0_مصاب.bmp ('infectado' en árabe)
+    está en Healthy y cae en el split de TEST (el ensemble lo predice healthy). Tres ficheros
+    C5_3_253_*_بعد التعطيش ('tras privación de agua') también están en Healthy (uno en test). Con n_test=40
+    cada imagen vale 2,5 pp de accuracy. No se ha tocado ninguna etiqueta: requiere decisión del equipo de IA."
+  - "Test sets pequeños: thermal n=40 (14 healthy / 26 sick), intervalo de confianza amplio para
+    accuracy=0.80. rgb n=192."
+  - "Recall térmico: la memoria (§7) reporta 'recall 0.8000' = recall weighted (= accuracy en binario). El
+    recall de la clase sick es 0.8846, el de healthy 0.6429 y el macro 0.7637. El objetivo 'Recall > 0.65'
+    no dice cuál; sick y weighted lo cumplen, healthy (0.6429) quedaría por debajo si fuera ese."
+  - "requirements.txt del entregable: ASCII con CRLF (no UTF-16), con --index-url de CUDA 12.6 y pins torch
+    2.12.0 / torchvision 0.27.0 / opencv-python 4.13.0.92. El repo usa torch>=2.13, torchvision 0.28.0 y
+    opencv-python-headless sin pin. El CLAHE de opencv y las convoluciones pueden derivar entre versiones:
+    los golden cases por voto lo controlan."
+  - "Los wrappers originales (src/training/<modelo>.py) construyen la red con weights='IMAGENET1K_V1', lo que
+    descarga los pesos de ImageNet incluso para inferencia. El plugin construye con weights=None y carga el
+    state_dict con strict=True (sin red)."
+  - "El backbone 'congelado' del original solo congela parámetros: model.train() sigue actualizando las
+    estadísticas de BatchNorm durante el entrenamiento, así que los checkpoints servidos tienen estadísticas BN
+    distintas de ImageNet. El /train del plugin lo replica igual."
+  - "Detalles cosméticos de trainer.py (no afectan al modelo, no se corrigen): el mensaje de early stopping
+    imprime la época siguiente a la real y la accuracy de la barra de progreso se calcula con el tamaño del
+    último batch."
+  - "La puntuación 'confidence' del plugin es la fracción de votos (voto duro, como el original). Las
+    probabilidades softmax por modelo se exponen solo como información para la monitorización que propone la
+    memoria §10 (rango 0.4-0.6); el original no las calcula."
+  - "/train rgb: 2 h 45 min en GPU según la memoria (Tabla 3). /train es síncrono en este repo; con esa
+    duración depende del timeout del cliente HTTP y del ingress. Mismo caso que ml5/ml10."
+  - "Objetivo de negocio (reducir un 10 % los tratamientos veterinarios): la memoria (§2) dice que solo podrá
+    establecerse tras la validación in situ. Los datasets son reales pero públicos y de otro contexto (térmico:
+    broilers Cobb de una granja de Kafrelsheikh, Egipto, cámara UNI-T UTi165A; heces: PCR, Zenodo). Ninguna
+    cifra de negocio está validada en granjas de Castilla y León."
+  - "Grad-CAM y eval_attention no se portan (fases offline según la memoria §6.4). El README avisa además de
+    que las conclusiones del notebook grad_cam.ipynb se obtuvieron aplicando CLAHE dos veces por error."
+  - "Los checkpoints thermal entregados no se reproducen reentrenando en otra máquina: re-ejecutando
+    scripts/train.py en CPU, densenet121 coincide exacto con models/thermal/metrics/*_VAL_*, pero
+    efficientnet_v2s y resnet50 dan val_acc 0.8378 frente a 0.8919 (el equipo entrenó en GPU RTX 4070; cuDNN no
+    es determinista). No afecta a la inferencia, que sirve sus checkpoints tal cual."

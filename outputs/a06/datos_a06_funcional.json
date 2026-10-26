@@ -1,0 +1,120 @@
+{
+  "model_id": "a06",
+  "model_slug": "meat-poultry-disease-classification",
+  "fecha": "Octubre 2026",
+  "descripcion": "Te ayuda a detectar pronto aves enfermas en el galpón a partir de fotos. Tiene dos pasos que puedes usar juntos o por separado: con una foto de la cámara térmica indica si el ave parece sana o enferma, y con una foto de las heces de un ave aislada indica si está sana o tiene coccidiosis, enfermedad de Newcastle o salmonelosis. Cada resultado lo deciden tres análisis que votan; gana la opción con más votos.",
+  "objetivo": "Detectar antes las aves enfermas, sin tocarlas, para aislarlas a tiempo, frenar contagios y orientar el tratamiento correcto. El objetivo del proyecto es reducir un 10 % los tratamientos veterinarios en el galpón; esa cifra aún no se ha comprobado y requiere validación con datos reales antes de despliegue.",
+  "caso_uso": "1) Aprovechando el pesaje, la vacunación u otro momento en que manejas las aves una a una, haces una foto térmica de cada ave y la envías al sistema. 2) Obtienes 'sana' o 'enferma' y cuántos de los tres análisis están de acuerdo. 3) Si sale enferma, la aíslas; cuando tengas sus heces, haces una foto y la envías al segundo paso. 4) Obtienes la enfermedad más probable (o 'sana') y la confirmas con el veterinario antes de tratar. Si no puedes aislar aves, usa solo el primer paso.",
+  "inputs": [
+    {
+      "nombre": "Tipo de foto",
+      "descripcion": "Indica si envías una foto térmica del ave (primer paso) o una foto de heces (segundo paso)."
+    },
+    {
+      "nombre": "Foto térmica del ave",
+      "descripcion": "La imagen tal como sale de la cámara térmica, sin recortar ni cambiar de tamaño."
+    },
+    {
+      "nombre": "Foto de las heces",
+      "descripcion": "Foto en color de las heces de un ave aislada, para saber que pertenecen a ese animal."
+    },
+    {
+      "nombre": "Lote de fotos (opcional)",
+      "descripcion": "Puedes enviar muchas fotos a la vez; si las organizas en carpetas por resultado conocido, el sistema te dice además cuántas acierta."
+    }
+  ],
+  "outputs": [
+    {
+      "nombre": "Resultado",
+      "descripcion": "Primer paso: sana o enferma. Segundo paso: sana, coccidiosis, Newcastle o salmonelosis.",
+      "interpretacion": "Es la opción que más análisis han elegido."
+    },
+    {
+      "nombre": "Acuerdo entre análisis",
+      "descripcion": "Cuántos de los tres análisis coinciden con el resultado (3 de 3, 2 de 3 o 1 de 3).",
+      "interpretacion": "3 de 3 es un resultado claro; con 2 de 3 o menos, trátalo como dudoso y revísalo."
+    },
+    {
+      "nombre": "Opinión de cada análisis",
+      "descripcion": "Qué ha dicho cada uno de los tres análisis por separado y con qué seguridad.",
+      "interpretacion": "Útil para el técnico: si con el tiempo los análisis dudan cada vez más, puede que algo haya cambiado en la granja o en la cámara."
+    },
+    {
+      "nombre": "Avisos",
+      "descripcion": "Mensajes cuando la foto no es la esperada, por ejemplo una foto térmica de otro tamaño.",
+      "interpretacion": "Si aparece un aviso, no te fíes del resultado sin revisarlo."
+    }
+  ],
+  "que_no_responde": "No da un diagnóstico veterinario definitivo ni dice qué tratamiento aplicar: indica si el ave parece enferma y, en la etapa de heces, qué enfermedad es la más probable de las cuatro que conoce.",
+  "entradas_contexto": "Las imágenes las captura el personal de la granja: una foto con la cámara térmica de cada ave durante el pesaje o la vacunación y, si el ave sale como enferma y se aísla, una foto de sus heces.",
+  "ejemplo_interpretacion": "Introduces la foto térmica de un ave y el sistema responde 'sano' con dos de tres votos: dos de los tres análisis la ven sana y uno enferma. Conviene tratarlo como un caso dudoso y volver a revisar el ave en la siguiente inspección. Si los tres coinciden en 'enfermo', aísla el ave y toma una foto de sus heces: si el resultado es 'coccidiosis' por unanimidad, es la sospecha principal que debes confirmar con el veterinario.",
+  "margen_error": "En las pruebas, la etapa térmica acierta en 8 de cada 10 aves (detecta casi 9 de cada 10 enfermas, pero confunde como enfermas a algo más de 1 de cada 3 sanas) y la etapa de heces acierta en algo más de 8 de cada 10 muestras. La enfermedad de Newcastle se reconoció en todos los casos de prueba; las heces de aves sanas son las que más se confunden.",
+  "revisar_manualmente": [
+    "Cuando los tres análisis no coinciden (resultado con 2 de 3 o 1 de 3 votos).",
+    "Cuando el sistema avisa de que la foto térmica no tiene el tamaño habitual de la cámara: puede venir de otra cámara o haber sido recortada.",
+    "Cuando el ave sale como sana pero muestra síntomas visibles: el sistema puede no detectar fases muy iniciales.",
+    "Siempre que el resultado de heces sea Newcastle o salmonelosis: comparten signos en fases iniciales y deben confirmarse en laboratorio.",
+    "Si con el tiempo empiezan a salir muchos resultados dudosos: puede indicar que las condiciones de la granja o la cámara han cambiado y hace falta revisar el modelo."
+  ],
+  "que_no_hace": [
+    "No sustituye el diagnóstico del veterinario ni las pruebas de laboratorio.",
+    "No vigila a las aves de forma continua: solo analiza las fotos que se le envían en cada inspección.",
+    "No identifica qué ave es cada foto: esa asociación la tiene que hacer el personal.",
+    "No reconoce enfermedades distintas de coccidiosis, Newcastle y salmonelosis.",
+    "No garantiza la reducción del 10 % de tratamientos veterinarios: ese objetivo no se ha medido y requiere validación con datos reales antes de despliegue."
+  ],
+  "puede_equivocarse": "Sí, puede equivocarse: en las pruebas falla con 2 de cada 10 aves en la etapa térmica y con unas 15 de cada 100 muestras de heces, y esas pruebas se hicieron con imágenes públicas de otras granjas, no de explotaciones de Castilla y León. Cualquier cifra de ahorro en tratamientos requiere validación con datos reales antes de despliegue. Es una ayuda para decidir antes qué aves revisar y qué sospechar, no una garantía de diagnóstico.",
+  "kpis": [
+    {
+      "kpi": "Aciertos en el cribado térmico",
+      "valor_umbral": "> 70 % (obtenido 80 %)",
+      "descripcion": "Porcentaje de aves bien clasificadas como sanas o enfermas por la foto térmica. Cumplido en las pruebas."
+    },
+    {
+      "kpi": "Aves enfermas detectadas en el cribado",
+      "valor_umbral": "> 65 % (obtenido 88 %)",
+      "descripcion": "De cada 100 aves realmente enfermas, cuántas marca el sistema. Es la cifra más importante: un ave enferma no detectada puede contagiar al resto."
+    },
+    {
+      "kpi": "Aciertos en el diagnóstico por heces",
+      "valor_umbral": "> 80 % (obtenido 85 %)",
+      "descripcion": "Porcentaje de muestras de heces con la enfermedad correcta (o sana). Cumplido en las pruebas."
+    },
+    {
+      "kpi": "Detección de Newcastle",
+      "valor_umbral": "≥ 85 % (obtenido 100 %)",
+      "descripcion": "Si en el uso real baja de este valor, el equipo técnico debe revisar o reentrenar el sistema."
+    },
+    {
+      "kpi": "Reducción de tratamientos veterinarios",
+      "valor_umbral": "10 % (objetivo, no medido)",
+      "descripcion": "Objetivo de negocio del proyecto. Requiere validación con datos reales antes de despliegue."
+    }
+  ],
+  "limitaciones": [
+    {
+      "tipo": "Pocas pruebas",
+      "descripcion": "El primer paso se probó con solo 40 fotos; los porcentajes pueden variar bastante en tu granja."
+    },
+    {
+      "tipo": "Fotos de otras granjas",
+      "descripcion": "Se entrenó con fotos públicas de otras granjas y otros países, no de Castilla y León. Requiere validación con datos reales antes de despliegue."
+    },
+    {
+      "tipo": "Cámara térmica concreta",
+      "descripcion": "Funciona con fotos de la cámara con la que se entrenó. Con otra cámara los resultados pueden empeorar; habría que volver a entrenarlo con fotos de tu cámara."
+    },
+    {
+      "tipo": "Hace falta aislar al ave",
+      "descripcion": "El segundo paso solo sirve si sabes que las heces son de esa ave, lo que obliga a aislarla."
+    },
+    {
+      "tipo": "Enfermedades parecidas",
+      "descripcion": "Newcastle y salmonelosis pueden confundirse al principio; las heces de aves sanas son las que más se confunden con alguna enfermedad."
+    },
+    {
+      "tipo": "Solo cuatro situaciones",
+      "descripcion": "Solo distingue sana, coccidiosis, Newcastle y salmonelosis; cualquier otra enfermedad saldrá como una de estas."
+    }
+  ]
+}
