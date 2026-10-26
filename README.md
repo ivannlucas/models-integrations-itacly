@@ -186,10 +186,48 @@ Available endpoints (from current implementation):
 - ml24 publica la serie de entrenamiento (sus 5 productos) como la serie de inferencia y acepta
   `exog_path` para renovar las exógenas mensuales; sin `validation_year`/`test_year`, el test es el
   último año completo de la serie y la validación el anterior.
+- `/train` es solo síncrono: `?wait=false` responde 501 (ver "Entrenamiento asíncrono").
 - `/train` solo lo llama un entorno controlado (un script con una secuencia fija según la
   degradación esperada de cada modelo). Desde la plataforma estos modelos solo predicen, y no
   tienen explicabilidad (SHAP) ni detección de drift (ODD). Operación y baja en los demás repos:
   §9 de `docs/superpowers/specs/2026-10-14-reentreno-actualiza-base-design.md`.
+
+## Entrenamiento asíncrono
+
+`POST /models/<model-id>/train?wait=false` lanza el entrenamiento en un proceso aparte y responde `202`
+con el estado del trabajo. El `job_id` es el `mlflow_run_id` del cuerpo (obligatorio). Sin `wait`, o con
+`wait=true`, `/train` sigue siendo síncrono como hasta ahora.
+
+```bash
+curl -s -X POST "$BASE/models/<model-id>/train?wait=false" \
+  -H 'Content-Type: application/json' \
+  -d '{"data_path": "s3://<bucket>/<dataset>.csv", "mlflow_run_id": "<run_id>"}'
+# 202 {"job_id": "<run_id>", "status": "queued", ...}
+
+curl -s "$BASE/models/<model-id>/train/<run_id>"
+# 200 {"status": "running" | "succeeded" | "failed", "result": {...}, "error": ..., "error_type": ...}
+```
+
+| Código | Significado |
+|---|---|
+| 202 | Trabajo creado o ya existente para ese `job_id` (reintentar el POST es seguro) |
+| 400 | `mlflow_run_id` vacío, o el run no existe en MLflow |
+| 501 | El modelo publica su base en cada `/train` (ml13–19, 21, 23, 24): solo síncrono |
+| 409 | Ya hay otro entrenamiento de ese modelo en curso en el pod |
+| 404 | (GET) No hay trabajo con ese `job_id` para este modelo |
+| 503 | MLflow no accesible (reintentable) |
+| 500 | Error inesperado del servicio |
+
+El estado de un trabajo nunca cambia una vez terminal. Reenviar el mismo `job_id` devuelve el trabajo
+existente, también si falló: para reintentar hay que crear un run nuevo en MLflow y usar su id.
+
+El estado vive en el run de MLflow (etiquetas `async_train.*` y artefacto `async_train/result.json`).
+Si el proceso deja de dar señales más de `TRAIN_JOB_STALE_AFTER_S` segundos (600 por defecto; latido cada
+`TRAIN_JOB_HEARTBEAT_S`, 60), el GET lo devuelve como `failed` con `error_type: "TrainJobLost"`.
+
+Solo para los modelos que guardan el reentreno en su run de MLflow (aplicativos sectoriales): su
+`train()` no debe sobrescribir el artefacto fijo en disco (se comparte con el proceso que sirve
+predicciones). Los de modelo base versionado siguen siendo síncronos.
 
 ## Tests
 
