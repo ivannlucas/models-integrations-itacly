@@ -588,10 +588,46 @@ def ml26(monkeypatch, tmp_path):
     }
 
 
+@pytest.fixture
+def ml1(monkeypatch, tmp_path):
+    from app.plugins.ml1_wine_pest_disease_detection import plugin
+
+    probe = Probe()
+
+    def bundle(name):
+        return {
+            "yolo_model": None, "yolo_device": "cpu", "ensemble": {}, "class_mapping": {},
+            "rf_clase": _FakeModel(name, probe), "rf_riesgo": _FakeModel(name, probe),
+        }
+
+    monkeypatch.setattr(plugin.model_loader, "load_model_bundle", lambda: bundle(BASE))
+    monkeypatch.setattr(plugin, "download_user_model_from_mlflow",
+                        lambda run_id: (bundle(f"USER-{run_id}"), tempfile.mkdtemp()))
+    instance = plugin.Ml1WinePestDiseaseDetectionPlugin()
+    instance.load()
+
+    sensors = {
+        "Mes": 1.0, "Temp_Max_Media_5d_C": 1.0, "Temp_Min_Media_5d_C": 1.0,
+        "Hum_Rel_Max_5d_Pct": 1.0, "Hum_Rel_Min_5d_Pct": 1.0, "Hum_Suelo_Pct": 1.0,
+        "Lluvia_Acum_5d_mm": 1.0, "Horas_Humedad_Foliar": 1.0, "GDD_Acumulado": 1.0,
+    }
+    batch_zip = tmp_path / "batch.zip"
+    with zipfile.ZipFile(batch_zip, "w") as archive:
+        row = pd.DataFrame([{**sensors, "Path_Imagen": "N/A"}])
+        archive.writestr("data.csv", row.to_csv(index=False))
+
+    return probe, {
+        "predict_inline": lambda run_id: instance.predict_inline(
+            features={"sensors": sensors}, mlflow_run_id=run_id),
+        "predict_batch": lambda run_id: instance.predict_batch(
+            data_path=str(batch_zip), mlflow_run_id=run_id),
+    }
+
+
 CASES = [("ml9", "predict_inline"), ("ml9", "predict_batch"),
          ("ml2", "predict_inline"), ("ml2", "predict_batch"), ("ml2", "stats")] + [
     (name, method)
-    for name in ("ml4", "ml6", "ml8", "ml13", "ml14", "ml17", "ml18", "ml21", "ml24", "ml25", "ml26", "ml30", "ml34", "ml35", "ml46")
+    for name in ("ml1", "ml4", "ml6", "ml8", "ml13", "ml14", "ml17", "ml18", "ml21", "ml24", "ml25", "ml26", "ml30", "ml34", "ml35", "ml46")
     for method in ("predict_inline", "predict_batch")
 ]
 

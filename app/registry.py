@@ -61,6 +61,16 @@ from app.plugins.ml8_cereals_img_anomaly_detector.train_dto import (
     TrainResponse as Ml8Cereals_TrainResp,
 )
 
+from app.plugins.ml1_wine_pest_disease_detection.plugin import Ml1WinePestDiseaseDetectionPlugin
+from app.plugins.ml1_wine_pest_disease_detection.predict_dto import (
+    PredictRequest as Ml1_Request,
+    PredictResponse as Ml1_Response,
+)
+from app.plugins.ml1_wine_pest_disease_detection.train_dto import (
+    TrainRequest as Ml1_TrainReq,
+    TrainResponse as Ml1_TrainResp,
+)
+
 from app.plugins.ml2_fungal_cnn_disease_detection.plugin import Ml2FungalCnnDiseaseDetectionPlugin
 from app.plugins.ml2_fungal_cnn_disease_detection.predict_dto import (
     PredictRequest as Ml2Fungal_Request,
@@ -458,6 +468,17 @@ REGISTRY: list[ModelEntry] = [
         extra_predict_exceptions=(InvalidVideoError, InvalidImageError, InsufficientFramesError),
         train_request_type=Ml5Cow_TrainReq,
         train_response_type=Ml5Cow_TrainResp,
+    ),
+    ModelEntry(
+        model_id="ml1-wine-pest-disease-detection",
+        prefix="/models/ml1-wine-pest-disease-detection",
+        version="1.0.0",
+        plugin_class=Ml1WinePestDiseaseDetectionPlugin,
+        predict_request_type=Ml1_Request,
+        predict_response_type=Ml1_Response,
+        train_request_type=Ml1_TrainReq,
+        train_response_type=Ml1_TrainResp,
+        extra_predict_exceptions=(DataContractError, InvalidImageError),
     ),
     ModelEntry(
         model_id="ml2-fungal-cnn-disease-detection",
