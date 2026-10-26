@@ -7,9 +7,16 @@ import time
 from dataclasses import asdict, replace
 
 import numpy as np
+import pandas as pd
 from pydantic import BaseModel
 
 from app.domain.ports.train_executor_port import TrainExecutorPort
+from app.domain.services.exceptions import (
+    ArchiveLimitExceededError,
+    BaseReloadError,
+    ModelPersistenceError,
+    TrainingNotSupportedError,
+)
 from app.domain.ports.train_job_store_port import TrainJobStorePort
 from app.domain.services.train_job import TrainJobRecord, TrainJobStatus
 
@@ -107,6 +114,35 @@ class EchoTrainPlugin:
 class FailingTrainPlugin(EchoTrainPlugin):
     def train(self, *, data_path: str, mlflow_run_id: str) -> FakeTrainResponse:
         raise FileNotFoundError(f"no existe {data_path}")
+
+
+# data_path -> exception raised by RaisingTrainPlugin, with the status the synchronous /train answers.
+TRAIN_ERRORS = {
+    "not-supported": (TrainingNotSupportedError("no reentrenable"), 501),
+    "archive": (ArchiveLimitExceededError("zip demasiado grande"), 413),
+    "missing": (FileNotFoundError("no existe"), 400),
+    "value": (ValueError("columna x vacía"), 400),
+    "parser": (pd.errors.ParserError("Error tokenizing data"), 400),
+    "empty": (pd.errors.EmptyDataError("No columns to parse from file"), 400),
+    "decode": (UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte"), 400),
+    "persist": (ModelPersistenceError("MLflow caído"), 502),
+    "reload": (BaseReloadError("v3 no carga"), 500),
+    "boom": (RuntimeError("bug"), 500),
+}
+
+
+class RaisingTrainPlugin(EchoTrainPlugin):
+    """Raises ``TRAIN_ERRORS[data_path]``."""
+
+    def train(self, *, data_path: str, mlflow_run_id: str) -> FakeTrainResponse:
+        raise TRAIN_ERRORS[data_path][0]
+
+
+class NiceReportingTrainPlugin(EchoTrainPlugin):
+    """Reports the niceness it trained with."""
+
+    def train(self, *, data_path: str, mlflow_run_id: str) -> FakeTrainResponse:
+        return FakeTrainResponse(detail="ok", metrics={"nice": os.nice(0)}, mlflow_run_id=mlflow_run_id)
 
 
 class SlowTrainPlugin(EchoTrainPlugin):

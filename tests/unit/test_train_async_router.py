@@ -10,9 +10,13 @@ from pydantic import BaseModel
 
 from app.application.use_cases.train_job_use_cases import GetTrainJobUseCase, SubmitTrainJobUseCase
 from app.application.use_cases.train_model_use_case import TrainModelUseCase
-from app.domain.services.exceptions import TrainJobRunNotFoundError, TrainJobStoreUnavailableError
+from app.domain.services.exceptions import (
+    TrainJobResultUnreadableError,
+    TrainJobRunNotFoundError,
+    TrainJobStoreUnavailableError,
+)
 from app.infrastructure.http.router_factory import make_model_router
-from tests.unit.train_job_fakes import EchoTrainPlugin, InlineExecutor, InMemoryJobStore
+from tests.unit.train_job_fakes import TRAIN_ERRORS, EchoTrainPlugin, InlineExecutor, InMemoryJobStore, RaisingTrainPlugin
 
 MODEL_ID = "fake-model"
 BASE = f"/models/{MODEL_ID}"
@@ -37,15 +41,22 @@ class _MissingRunStore(InMemoryJobStore):
         raise TrainJobRunNotFoundError(f"El run {record.job_id} no existe en MLflow")
 
 
+class _UnreadableResultStore(InMemoryJobStore):
+    def get(self, job_id):
+        raise TrainJobResultUnreadableError(f"El entrenamiento {job_id} terminó (succeeded) pero ...")
+
+
 class _BuggyStore(InMemoryJobStore):
     def get(self, job_id):
         raise RuntimeError("bug")
 
 
-def _client(executor=None, store=None, promotes_base=False) -> tuple[TestClient, InMemoryJobStore, InlineExecutor]:
+def _client(
+    executor=None, store=None, promotes_base=False, plugin_class=EchoTrainPlugin,
+) -> tuple[TestClient, InMemoryJobStore, InlineExecutor]:
     store = store if store is not None else InMemoryJobStore()
     executor = executor if executor is not None else InlineExecutor()
-    plugin = EchoTrainPlugin()
+    plugin = plugin_class()
     plugin.load()
     container = SimpleNamespace(
         train_use_case=TrainModelUseCase(plugin),
@@ -83,6 +94,7 @@ def test_async_post_returns_202_queued_then_get_returns_result():
     assert got.json()["status"] == "succeeded"
     assert got.json()["result"]["detail"] == "ok"
     assert got.json()["error"] is None
+    assert got.json()["http_status"] is None
 
 
 def test_default_post_stays_synchronous():
@@ -172,3 +184,42 @@ def test_async_post_on_a_base_promoting_model_is_501_and_starts_nothing():
     assert executor.calls == 0
     assert store.get("run-1") is None
     assert client.post(f"{BASE}/train", json=BODY).status_code == 200  # sync path still works
+
+
+@pytest.mark.parametrize("data_path", sorted(TRAIN_ERRORS))
+def test_failed_job_http_status_matches_the_synchronous_train(data_path):
+    exc, expected = TRAIN_ERRORS[data_path]
+    client, _, _ = _client(plugin_class=RaisingTrainPlugin)
+    body = {"data_path": data_path, "mlflow_run_id": f"run-{data_path}"}
+    sync = client.post(f"{BASE}/train", json=body)
+    assert sync.status_code == expected
+
+    assert client.post(f"{BASE}/train?wait=false", json=body).status_code == 202
+    job = client.get(f"{BASE}/train/run-{data_path}").json()
+    assert job["status"] == "failed"
+    assert job["http_status"] == sync.status_code
+    assert job["error_type"] == type(exc).__name__
+
+
+def test_sync_train_is_409_while_an_async_job_runs():
+    client, store, _ = _client(executor=InlineExecutor(busy=True))
+    resp = client.post(f"{BASE}/train", json=BODY)
+    assert resp.status_code == 409
+    assert "asíncrono" in resp.json()["detail"]
+    assert store.records == {}
+
+
+def test_async_train_is_409_while_a_sync_train_runs():
+    client, store, executor = _client()
+    submit = client.app.state.containers[MODEL_ID].submit_train_job_use_case
+    with submit.sync_training():  # a synchronous /train in another request thread
+        assert client.post(f"{BASE}/train?wait=false", json=BODY).status_code == 409
+    assert executor.calls == 0 and store.records == {}
+    assert client.post(f"{BASE}/train?wait=false", json=BODY).status_code == 202
+
+
+def test_unreadable_result_is_500_with_detail_not_503():
+    client, _, _ = _client(store=_UnreadableResultStore())
+    resp = client.get(f"{BASE}/train/run-1")
+    assert resp.status_code == 500
+    assert "succeeded" in resp.json()["detail"]

@@ -39,8 +39,8 @@ El entrenamiento pasa a ser un **trabajo en segundo plano**, identificado por `j
      (60 s). Si un trabajo `queued`/`running` lleva más de `TRAIN_JOB_STALE_AFTER_S` (600 s) sin
      latir, `GET` lo da por `failed` con `error_type = "TrainJobLost"` y lo persiste.
 2. **Orquestador:** la tarea `train` hace `POST /train?wait=false` (segundos) y libera el worker; una
-   tarea de seguimiento consulta `GET /train/{job_id}` y se reprograma con `self.retry(countdown=…)`
-   hasta estado terminal. El contrato hacia la plataforma (`GET /api/ml/tasks/{id}`) no cambia.
+   tarea de seguimiento consulta `GET /train/{job_id}` y se reprograma encadenando
+   `apply_async(countdown=…)` (no `self.retry`, que corta en `max_retries`) hasta estado terminal. El contrato hacia la plataforma (`GET /api/ml/tasks/{id}`) no cambia.
 3. **Plataforma** (decisión del usuario 2026-10-25: reanudar la tarea, no barrido periódico): la tarea
    `train` sigue consultando al orquestador, sin el límite fijo de 30 min y tolerando caídas pasajeras
    (60 consultas seguidas sin respuesta). Si la plataforma se reinicia, la tarea reasignada ve el
@@ -59,7 +59,7 @@ sirve el plugin m48).
 |---|---|
 | `202` + `TrainJob` | Trabajo creado, o ya existía para ese `job_id` (idempotente) |
 | `400` | `mlflow_run_id` vacío, o el run no existe en MLflow (422 de FastAPI si el cuerpo no valida el esquema) |
-| `409` | Ya hay un entrenamiento en curso de ese modelo en este pod |
+| `409` | Ya hay un entrenamiento en curso de ese modelo en este pod (asíncrono, o un `POST /train` síncrono; el síncrono también da `409` si hay uno asíncrono vivo) |
 | `503` | MLflow no accesible al registrar el trabajo (reintentable) |
 | `500` | Error inesperado del servicio |
 
@@ -69,7 +69,8 @@ sirve el plugin m48).
 |---|---|
 | `200` + `TrainJob` | Existe el trabajo |
 | `404` | No hay trabajo con ese `job_id` para este modelo |
-| `503` | MLflow no accesible |
+| `503` | MLflow no accesible (solo errores de red/MLflow; reintentable) |
+| `500` | Error del servicio; también un trabajo `succeeded` cuyo `async_train/result.json` no se puede leer (detalle explícito; el estado en MLflow no se toca) |
 
 `TrainJob` (JSON):
 
@@ -82,13 +83,22 @@ sirve el plugin m48).
   "updated_at": "2026-10-09T10:05:00Z",
   "result": { "...": "TrainResponse del plugin, solo si succeeded" },
   "error": "mensaje, solo si failed",
-  "error_type": "ValueError | FileNotFoundError | TrainingNotSupportedError | TrainJobLost | …"
+  "error_type": "ValueError | FileNotFoundError | TrainingNotSupportedError | TrainJobLost | TrainJobTimeout | …",
+  "http_status": "400 | 413 | 501 | 502 | 500, solo si failed (null en el resto)"
 }
 ```
 
-Mapeo recomendado de `error_type` en el consumidor (equivale a los códigos del modo síncrono):
-`TrainingNotSupportedError` → "no soportado" (antes 501); `FileNotFoundError`/`ValueError` → error de
-datos (antes 400); `TrainJobLost` → proceso perdido, reintentable; resto → error interno (antes 500).
+`http_status` es el código que habría devuelto `POST /train` síncrono con ese error, calculado con
+`isinstance` (las subclases cuentan como su clase base): `TrainingNotSupportedError` → 501,
+`ArchiveLimitExceededError` → 413, `FileNotFoundError`/`ValueError` (incluidos `pandas.errors.ParserError`,
+`UnicodeDecodeError`…) → 400, `ModelPersistenceError` → 502, resto → 500. `TrainJobLost` y
+`TrainJobTimeout` → 500. El consumidor mapea por `http_status`; `error_type` (nombre exacto de la clase) se
+mantiene por compatibilidad y solo distingue `TrainJobLost` (proceso perdido, reintentable con un run
+nuevo). Un trabajo `failed` guardado antes de existir `http_status` lo trae `null`.
+
+`TrainJobTimeout`: un trabajo `queued`/`running` con más de `TRAIN_JOB_MAX_DURATION_S` (43200 s = 12 h)
+desde `submitted_at`. El pod que lo lanzó detiene el proceso hijo y cualquier `GET` lo da por `failed` y
+lo persiste.
 
 **Reintentos:** el estado de un trabajo es monótono (un estado terminal no cambia nunca) y el `POST` es
 idempotente por `job_id`: reenviar el mismo `job_id` devuelve el trabajo existente, también si acabó en

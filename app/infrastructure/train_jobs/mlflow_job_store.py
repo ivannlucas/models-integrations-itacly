@@ -6,25 +6,37 @@ the plugin's TrainResponse goes to the ``async_train/result.json`` artifact of t
 from __future__ import annotations
 
 import json
+import os
+import socket
 import tempfile
 from contextlib import contextmanager
 
 import requests
 
 from app.domain.ports.train_job_store_port import TrainJobStorePort
-from app.domain.services.exceptions import TrainJobRunNotFoundError, TrainJobStoreUnavailableError
+from app.domain.services.exceptions import (
+    TrainJobResultUnreadableError,
+    TrainJobRunNotFoundError,
+    TrainJobStoreUnavailableError,
+)
 from app.domain.services.mlflow_tracker import BaseMLflowTracker
 from app.domain.services.train_job import TrainJobRecord, TrainJobStatus
 
 TAG_PREFIX = "async_train."
-RESULT_ARTIFACT = "async_train/result.json"
+RESULT_DIR = "async_train"
+RESULT_FILE = "result.json"
+RESULT_ARTIFACT = f"{RESULT_DIR}/{RESULT_FILE}"
 _MAX_ERROR_CHARS = 4000  # well under MLflow's tag value limit
 _NOT_FOUND = "RESOURCE_DOES_NOT_EXIST"
 
 
 @contextmanager
 def _mlflow_errors(job_id: str):
-    """Translate MLflow/transport failures into domain errors (missing run → 400, anything else → 503)."""
+    """Translate MLflow/transport failures into domain errors (missing run → 400, MLflow or network → 503).
+
+    Only network errors are "MLflow not reachable": a local file error (e.g. reading a downloaded
+    artifact) is not retryable and must not be reported as one.
+    """
     from mlflow.exceptions import MlflowException
     try:
         yield
@@ -32,7 +44,7 @@ def _mlflow_errors(job_id: str):
         if getattr(exc, "error_code", "") == _NOT_FOUND:
             raise TrainJobRunNotFoundError(f"El run {job_id} no existe en MLflow") from exc
         raise TrainJobStoreUnavailableError(f"MLflow: {exc}") from exc
-    except (requests.exceptions.RequestException, OSError) as exc:
+    except (requests.exceptions.RequestException, ConnectionError, TimeoutError, socket.gaierror) as exc:
         raise TrainJobStoreUnavailableError(f"MLflow no accesible: {exc}") from exc
 
 
@@ -76,6 +88,7 @@ class MLflowTrainJobStore(TrainJobStorePort):
             result=self._load_result(job_id) if status is TrainJobStatus.SUCCEEDED else None,
             error=tags.get(f"{TAG_PREFIX}error") or None,
             error_type=tags.get(f"{TAG_PREFIX}error_type") or None,
+            http_status=int(tags[f"{TAG_PREFIX}http_status"]) if tags.get(f"{TAG_PREFIX}http_status") else None,
         )
 
     def save(self, record: TrainJobRecord) -> None:
@@ -94,6 +107,8 @@ class MLflowTrainJobStore(TrainJobStorePort):
             tags["error"] = record.error[:_MAX_ERROR_CHARS]
         if record.error_type:
             tags["error_type"] = record.error_type
+        if record.http_status is not None:
+            tags["http_status"] = str(record.http_status)
         for key, value in tags.items():
             self.client.set_tag(record.job_id, f"{TAG_PREFIX}{key}", value)
         # Status last: a reader never sees "succeeded" before result.json exists.
@@ -104,7 +119,32 @@ class MLflowTrainJobStore(TrainJobStorePort):
             self.client.set_tag(job_id, f"{TAG_PREFIX}updated_at", str(at))
 
     def _load_result(self, job_id: str) -> dict:
-        with tempfile.TemporaryDirectory() as tmp, _mlflow_errors(job_id):
-            local = self.client.download_artifacts(job_id, RESULT_ARTIFACT, tmp)
-            with open(local, encoding="utf-8") as fh:
-                return json.load(fh)
+        # Download the folder, not the file: the platform's S3 proxy answers the listing of
+        # "async_train/result.json/" as if it were a folder, so MLflow "downloads" the lone file as an
+        # empty directory (IsADirectoryError). The folder listing returns result.json as a file.
+        with tempfile.TemporaryDirectory() as tmp:
+            try:
+                with _mlflow_errors(job_id):
+                    local = os.path.join(self.client.download_artifacts(job_id, RESULT_DIR, tmp), RESULT_FILE)
+            except TrainJobRunNotFoundError as exc:  # the run exists (it has job tags): the artifact does not
+                raise TrainJobResultUnreadableError(
+                    f"El entrenamiento {job_id} terminó (succeeded) pero MLflow no tiene {RESULT_ARTIFACT}: {exc}"
+                ) from exc
+            except OSError as exc:  # network errors already became TrainJobStoreUnavailableError
+                raise TrainJobResultUnreadableError(
+                    f"El entrenamiento {job_id} terminó (succeeded) pero no se pudo descargar {RESULT_ARTIFACT}: "
+                    f"{type(exc).__name__}: {exc}"
+                ) from exc
+            if not os.path.isfile(local):
+                found = "una carpeta" if os.path.isdir(local) else "nada"
+                raise TrainJobResultUnreadableError(
+                    f"El entrenamiento {job_id} terminó (succeeded) pero al descargar {RESULT_ARTIFACT} "
+                    f"de MLflow se obtiene {found} en vez del fichero"
+                )
+            try:
+                with open(local, encoding="utf-8") as fh:
+                    return json.load(fh)
+            except (OSError, ValueError) as exc:
+                raise TrainJobResultUnreadableError(
+                    f"El entrenamiento {job_id} terminó (succeeded) pero {RESULT_ARTIFACT} no se puede leer: {exc}"
+                ) from exc

@@ -28,6 +28,7 @@ from app.application.dto.stats_dto import InputField, OutputField, RuntimeStats,
 from app.application.dto.train_dto import TrainResponse as BaseTrainResponse
 from app.application.use_cases.get_stats_use_case import GetStatsUseCase
 from app.application.use_cases.predict_model_use_case import PredictModelUseCase
+from app.application.use_cases.train_job_use_cases import SubmitTrainJobUseCase
 from app.application.use_cases.train_model_use_case import TrainModelUseCase
 from app.domain.ports.model_plugin_port import ModelPluginPort
 from app.domain.services.exceptions import (
@@ -410,6 +411,7 @@ from app.plugins.ml13_wine_price_fluctuation_prediction.train_dto import (
     TrainRequest as Ml13_TrainReq,
     TrainResponse as Ml13TrainResp,
 )
+from tests.unit.train_job_fakes import InMemoryJobStore, RecordingExecutor
 
 # ── ModelEntry dataclass (local copy — avoids importing app.registry which loads real plugins) ───
 
@@ -2750,6 +2752,10 @@ def _build_container(plugin: FakePlugin) -> Any:
     container.predict_use_case = PredictModelUseCase(plugin)
     container.stats_use_case = GetStatsUseCase(plugin)
     container.train_use_case = TrainModelUseCase(plugin)
+    # Sync /train asks it whether an async job of the model is running (never, here).
+    container.submit_train_job_use_case = SubmitTrainJobUseCase(
+        plugin, plugin._model_id, InMemoryJobStore(), RecordingExecutor()  # pylint: disable=protected-access
+    )
     return container
 
 

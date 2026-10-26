@@ -83,8 +83,32 @@ class TestSubmit:
         record = use_case.execute(_request())
         assert record.status is TrainJobStatus.FAILED
         assert record.error_type == "OSError"
+        assert record.http_status == 500
         assert "no fork" in record.error
         assert store.get("run-1") == record
+
+    def test_async_is_busy_while_a_synchronous_train_runs(self):
+        use_case, store, executor = _submit()
+        with use_case.sync_training():
+            with pytest.raises(TrainJobBusyError):
+                use_case.execute(_request())
+        assert store.get("run-1") is None and executor.submitted == []
+        assert use_case.execute(_request()).status is TrainJobStatus.QUEUED  # released afterwards
+
+    def test_synchronous_train_is_busy_while_an_async_job_runs(self):
+        use_case, _, _ = _submit(executor=RecordingExecutor(busy=True))
+        with pytest.raises(TrainJobBusyError, match="asíncrono"):
+            with use_case.sync_training():
+                pytest.fail("must not enter")
+
+    def test_synchronous_trains_do_not_block_each_other_and_release_on_error(self):
+        use_case, _, _ = _submit()
+        with use_case.sync_training(), use_case.sync_training():
+            pass
+        with pytest.raises(RuntimeError):
+            with use_case.sync_training():
+                raise RuntimeError("train() failed")
+        assert use_case.execute(_request()).status is TrainJobStatus.QUEUED
 
 
 class TestGet:
@@ -112,12 +136,46 @@ class TestGet:
         record = GetTrainJobUseCase(MODEL_ID, store, clock=lambda: 1601.0, stale_after_s=600).execute("run-1")
         assert record.status is TrainJobStatus.FAILED
         assert record.error_type == "TrainJobLost"
+        assert record.http_status == 500
         assert store.get("run-1").status is TrainJobStatus.FAILED
 
     def test_terminal_job_is_never_marked_lost(self):
         store = self._store_with(TrainJobStatus.SUCCEEDED, updated_at=1000.0)
         record = GetTrainJobUseCase(MODEL_ID, store, clock=lambda: 99999.0, stale_after_s=600).execute("run-1")
         assert record.status is TrainJobStatus.SUCCEEDED
+
+    @pytest.mark.parametrize("status", [TrainJobStatus.QUEUED, TrainJobStatus.RUNNING])
+    def test_job_older_than_max_duration_is_timed_out_and_persisted(self, status):
+        store = self._store_with(status, updated_at=44190.0)  # still heart-beating
+        record = GetTrainJobUseCase(
+            MODEL_ID, store, clock=lambda: 44201.0, stale_after_s=600, max_duration_s=43200,
+        ).execute("run-1")
+        assert record.status is TrainJobStatus.FAILED
+        assert (record.error_type, record.http_status) == ("TrainJobTimeout", 500)
+        assert record.error == "El entrenamiento superó la duración máxima (12 h) y se ha detenido."
+        assert store.get("run-1") == record
+
+    def test_job_within_max_duration_is_not_timed_out(self):
+        store = self._store_with(TrainJobStatus.RUNNING, updated_at=44190.0)
+        record = GetTrainJobUseCase(
+            MODEL_ID, store, clock=lambda: 44199.0, stale_after_s=600, max_duration_s=43200,
+        ).execute("run-1")
+        assert record.status is TrainJobStatus.RUNNING
+
+    def test_terminal_job_is_never_timed_out(self):
+        store = InMemoryJobStore()
+        done = TrainJobRecord("run-1", MODEL_ID, TrainJobStatus.FAILED, 1000.0, 1000.0,
+                              error="x", error_type="ValueError", http_status=400)
+        store.save(done)
+        record = GetTrainJobUseCase(MODEL_ID, store, clock=lambda: 1e9, max_duration_s=10).execute("run-1")
+        assert record == done
+
+    def test_max_duration_defaults_to_env(self, monkeypatch):
+        monkeypatch.setenv("TRAIN_JOB_MAX_DURATION_S", "30")
+        store = self._store_with(TrainJobStatus.RUNNING, updated_at=1030.0)
+        record = GetTrainJobUseCase(MODEL_ID, store, clock=lambda: 1031.0, stale_after_s=600).execute("run-1")
+        assert record.error_type == "TrainJobTimeout"
+        assert "(30 s)" in record.error
 
     def test_stale_window_defaults_to_env(self, monkeypatch):
         monkeypatch.setenv("TRAIN_JOB_STALE_AFTER_S", "10")
