@@ -82,6 +82,13 @@ shap>=0.51.0
 # MLflow integration
 mlflow>=2.20.0
 
+# Added for ml1 (vineyard pest/disease image detection) — standalone Keras 3 package, NOT
+# tf.keras: the plugin needs the explicit backend-switching API (KERAS_BACKEND=torch), which
+# only the standalone `keras` package exposes. tensorflow>=2.15.0 above does not guarantee this
+# import path (ml3/ml18 use tf.keras instead) and is not required by ml1 at all — Keras 3 with
+# backend=torch has no TensorFlow dependency.
+keras>=3.0.0
+
 # Added for ml41 (meat curing machinery acoustic anomaly detection) — Audio-MAE (ViT) over
 # log-Mel spectrograms. Versions pinned to match the AI team's original delivery
 # (inbox/a41/codigo/requirements_mae.txt) so the shipped checkpoints' preprocessing is
