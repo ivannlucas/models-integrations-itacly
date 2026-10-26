@@ -41,10 +41,11 @@ El entrenamiento pasa a ser un **trabajo en segundo plano**, identificado por `j
 2. **Orquestador:** la tarea `train` hace `POST /train?wait=false` (segundos) y libera el worker; una
    tarea de seguimiento consulta `GET /train/{job_id}` y se reprograma con `self.retry(countdown=…)`
    hasta estado terminal. El contrato hacia la plataforma (`GET /api/ml/tasks/{id}`) no cambia.
-3. **Plataforma:** el seguimiento deja de vivir en memoria: la tarea de entrenamiento se persiste como
-   "entrenando" y un barrido periódico revisa las abiertas. Sin límite fijo de 30 min (el fallo por
-   inactividad lo decide el latido del servicio de modelos). Al terminar: actualiza la tarea y envía
-   correo al usuario (`AlertMailer`, nuevo `sendTrainingFinishedMail`).
+3. **Plataforma** (decisión del usuario 2026-10-25: reanudar la tarea, no barrido periódico): la tarea
+   `train` sigue consultando al orquestador, sin el límite fijo de 30 min y tolerando caídas pasajeras
+   (60 consultas seguidas sin respuesta). Si la plataforma se reinicia, la tarea reasignada ve el
+   `orch_task_id` guardado en `task.result` y retoma el seguimiento en vez de relanzar el entrenamiento.
+   Al terminar, bien o mal, envía correo al usuario que lo lanzó (`AlertMailer.sendTrainingFinishedMail`).
 
 Piloto extremo a extremo: **modelo-47** (único con entrenamiento habilitado en la plataforma; hoy lo
 sirve el plugin m48).
@@ -118,5 +119,5 @@ entrenamientos por modelo.
 ## Planes
 
 1. `docs/superpowers/plans/2026-10-09-train-async-servicio-modelos.md` (este repo) — fija el contrato.
-2. Orquestador — pendiente, se escribe tras cerrar el 1.
-3. Plataforma — pendiente, se escribe tras cerrar el 2.
+2. `docs/superpowers/plans/2026-10-25-train-async-orquestador.md` — orquestador (repo `retech-lote2-xai-orquestador`).
+3. `docs/superpowers/plans/2026-10-25-train-async-plataforma.md` — plataforma (repo `retech-lote2-xai-plataforma`).
