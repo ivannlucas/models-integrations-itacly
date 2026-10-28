@@ -216,7 +216,8 @@ Aciertos frente a la etiqueta real (informativo, es el rendimiento del modelo, n
    (`thermal_test_016`, densenet121). Hoy coinciden con el original, pero el entorno de verificación (opencv 5.0.0,
    torch 2.13) **no es el del equipo** (opencv 4.13.0.92, torch 2.12.0). Una deriva numérica del CLAHE o de las
    convoluciones podría voltear esos votos. `opencv-python-headless` no está fijado en el `requirements.txt` del
-   repo: se recomienda fijarlo. En rgb el margen mínimo es 0.061 (mucho más estable).
+   repo: se recomienda fijarlo. En rgb también hay votos al borde: 0.0049 (`pcrcocci.253.jpg`, mobilenet_v3l) y
+   0.026 (efficientnet_b7) — medido en la revisión del 2026-10-28; una versión anterior de este informe daba 0.061.
 2. **Desempate a tres** (`rgb_tie_001..003`): el original devuelve el voto de vgg19_bn (primer modelo de
    `config.yaml`) por cómo funciona `Counter.most_common`; el plugin lo reproduce en los 3 casos. Si se quiere otro
    criterio (p. ej. media de probabilidades) es una decisión del equipo de IA, no de la integración.

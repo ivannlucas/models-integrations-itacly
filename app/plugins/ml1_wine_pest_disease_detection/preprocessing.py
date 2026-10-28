@@ -42,7 +42,7 @@ def yolo_crop_alignment(img_bgr: np.ndarray, yolo_model, yolo_device: str) -> np
     instead of a path (the plugin decodes once; batch and inline share this function).
 
     Takes results[0].boxes.data[0] — the first box YOLO returns at conf>=0.3, not an explicit
-    confidence argmax (see inbox/a1/manifest.yaml known_issues: the AI team's own reference
+    confidence argmax (see inbox/a01/manifest.yaml known_issues: the AI team's own reference
     script does take the max-confidence box explicitly — two different behaviours in their own
     delivery. This plugin replicates preprocess.py, the one predictor.py actually uses in
     production).

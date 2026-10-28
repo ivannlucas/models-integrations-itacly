@@ -21,7 +21,7 @@ framework:
 # pines exactos al redactar requirements.txt del plugin.
 
 # ============================================================================
-# FUENTES Y ESTADO DE ACEPTACION -- dos entregas distintas, fusionadas en inbox/a1/codigo/
+# FUENTES Y ESTADO DE ACEPTACION -- dos entregas distintas, fusionadas en inbox/a01/codigo/
 # ============================================================================
 # 1. ZIP original (código): src/, scripts/, config/, requirements.txt, models/artifacts/ (solo
 #    pesos CNN + YOLO + class_mapping, SIN los .joblib de RF) y un data/processed/to_predict/
@@ -46,8 +46,8 @@ artifacts:
     - ensemble_member_efficientnet_no_gases_desacoplado.weights.h5
     - ensemble_member_densenet_no_gases_desacoplado.weights.h5
     - final_ensemble_complete_no_gases_desacoplado.h5      # promedio (layers.Average) de los 3 anteriores -- no usado directamente por predictor.py, que reconstruye y promedia en runtime
-    - rf_clase_expert_no_gases.joblib                      # NO usado en inferencia de produccion (modo desacoplado) -- ver known_issues
-    - rf_riesgo_expert_no_gases.joblib                     # usado como fallback de riesgo cuando no hay imagen
+    - rf_clase_expert_no_gases.joblib                      # NO usado en inferencia de produccion (modo desacoplado) -- el plugin no lo carga ni lo publica en S3
+    - rf_riesgo_expert_no_gases.joblib                     # fallback de riesgo cuando no hay imagen -- el entregado (sklearn 1.8.0) se re-serializo con 1.5.2, ver known_issues
   no_pickle_for_cnn: "Los backbones son pesos Keras (.weights.h5), no pickle -- se reconstruye la arquitectura con build_hybrid_model() y se cargan los pesos (load_weights)."
   keras_backend_requisito: "KERAS_BACKEND=torch debe fijarse como variable de entorno ANTES de importar keras/tensorflow, igual que exige el entrenamiento (EJECUCION_MODELO_1.md, sec. 2.1) -- confirmar si aplica tambien a inferencia o solo a entrenamiento (predictor.py no lo fija explícitamente, solo hace `import tensorflow as tf`)."
 
@@ -76,7 +76,7 @@ inputs:
       CO2/VOC en modo exclude_gases). La imagen es el unico campo verdaderamente opcional.
   plugin_contract:
     predict_inline: "una muestra: {image (opcional), sensors (9 campos)}"
-    predict_batch: "CSV largo igual al --input original: Path_Imagen + 9 columnas de sensores (N/A o ruta invalida => modo tabular por fila)"
+    predict_batch: "CSV largo igual al --input original: Path_Imagen + 9 columnas de sensores (N/A o ruta invalida => modo tabular por fila). Como predictor.py:317, cualquier otra columna (ID, Etiqueta, Cached_Path...) se ignora"
 
 outputs:
   predict_inline:
@@ -134,13 +134,15 @@ training:
   required_columns: [Mes, Temp_Max_Media_5d_C, Temp_Min_Media_5d_C, Hum_Rel_Max_5d_Pct, Hum_Rel_Min_5d_Pct, Hum_Suelo_Pct, Lluvia_Acum_5d_mm, Horas_Humedad_Foliar, GDD_Acumulado, Etiqueta, Indice_Riesgo_Cientifico]
   # CO2_ppm/VOC_ppb opcionales -- se ignoran en modo exclude_gases=true (produccion)
   hyperparams:
-    rf_clasificador: {n_estimators: 200, max_depth: 15, min_samples_leaf: 20, max_features: "log2", bootstrap: true, min_samples_split: 10, random_state: 42}
-    rf_regresor_riesgo: {n_estimators: 200, max_depth: 30, min_samples_leaf: 10, max_features: "log2", bootstrap: true, min_samples_split: 5, random_state: 42}
+    rf_clasificador: {n_estimators: 200, max_depth: 15, min_samples_leaf: 20, max_features: "log2", bootstrap: true, random_state: 42}
+    rf_regresor_riesgo: {n_estimators: 200, max_depth: 30, min_samples_leaf: 10, max_features: "log2", bootstrap: true, random_state: 42}
     nota_tuning: >
       src/training/tuning.py (RandomizedSearchCV, 3-fold, n_iter=10) existe y SI se ejecuto
       (metadata.txt lo registra) pero sus mejores hiperparametros NO se escriben de vuelta en
       train_tabular.py -- los hiperparametros arriba son los que de verdad usa el codigo de
       produccion (hardcoded), no necesariamente los que tuning_RF encontro como optimos.
+      Comprobado contra get_params() de los .joblib entregados: identicos (min_samples_split=2
+      por defecto -- una version anterior de este manifest declaraba 10/5 por error).
   metrics_returned: [accuracy, f1_macro, f1_weighted, mae_riesgo, n_train, n_test]
   source: codigo_entrenamiento  # src/training/train_tabular.py, confirmado por sub-agente de exploracion
   duracion_estimada: "< 2 min con tuning previo, < 5 s sin tuning (memoria Tabla 2, Intel i9-14900K)"
@@ -188,51 +190,46 @@ metrics_reported:
 golden_cases:
   # 20 muestras reales con imagen + sensores + ETIQUETA REAL + RIESGO REAL, extraidas por el
   # propio equipo de IA de su test_split.csv (datos_plataforma/muestras_con_etiqueta_real.csv +
-  # datos_plataforma/imagenes/). NO son inventadas: proceden de su conjunto de evaluacion
-  # independiente, confirmado por datos_plataforma/README.md.
+  # datos_plataforma/imagenes/). NO son inventadas. Revision 2026-10-28, con la carpeta data/
+  # completa del equipo: los 20 casos se localizan en data/splits/test_split.csv (nombre de
+  # fichero + 9 sensores), con etiqueta y riesgo identicos; las imagenes son las de
+  # data/processed/IMAGENES_RESIZED224/.
   #
-  # ADVERTENCIA IMPORTANTE (ver known_issues): NO se ha podido ejecutar el pipeline CNN real en
-  # este entorno de desarrollo (TensorFlow/Keras no tiene wheel para la version de Python
-  # disponible en esta maquina) EN EL MOMENTO DE ESCRIBIR ESTO -- PERO SE RESOLVIO: se consiguio
-  # instalar keras 3 (backend=torch) + ultralytics sin necesidad de tensorflow (backend=torch no
-  # lo requiere), y SE EJECUTO el plugin real (app/plugins/ml1_wine_pest_disease_detection/)
-  # contra los 20 pares imagen+sensores de datos_plataforma/. Cada caso lleva ahora, ademas de
-  # esperado_clase/esperado_riesgo (ground truth), predicho_clase/predicho_confianza/
-  # predicho_riesgo (salida real verificada del plugin). Resultado: 19/20 (95%) de clasificacion
-  # exacta, consistente con el 94.69% auditado (report_ensemble_final_no_gases_desacoplado.csv).
-  # El unico fallo (caso_17: OIDIO predicho como OIDIO_RACIMO) es una confusion entre clases
-  # visualmente emparentadas (oidio en hoja vs. en racimo), no un fallo de integracion -- ver
-  # known_issues. El fichero datos_plataforma/resultado_inferencia_batch.csv entregado NO sirve
-  # como referencia (es un script simplificado que solo usa el RF, no la CNN) -- ver known_issues.
-  source_note: "dataset_test_split (datos_plataforma/muestras_con_etiqueta_real.csv, extraido de test_split.csv por el equipo de IA)"
+  # predicho_* = salida del plugin real por HTTP (main.py + artefactos reales, sin parches) DESPUES
+  # de corregir la reconstruccion de EfficientNetB0 (ver known_issues). Los predicho_* anteriores
+  # (19/20) se midieron con EfficientNet roto y no correspondian al modelo del equipo.
+  source_note: "dataset_test_split (data/splits/test_split.csv del equipo de IA; antes via datos_plataforma/muestras_con_etiqueta_real.csv)"
   tolerance_clasificacion: "coincidencia exacta de clase (no hay tolerancia relativa aplicable a una etiqueta categorica)"
   tolerance_riesgo: "2 x MAE reportado (0.189) = 0.378 absoluto sobre el riesgo real, igual que el patron de tolerancia de otros modelos de este repo"
   resultado_verificado: >
-    Clasificacion: 19/20 (95%) exacta -- unico fallo caso_17 (ver known_issues). Riesgo: 19/20
-    dentro de tolerancia (2xMAE=0.378) -- unico fallo caso_11 (LOBESIA, error 0.566, real=0.227
-    predicho=0.793). Ninguno de los dos fallos se ha silenciado ni se ha ajustado la tolerancia
-    para que cuele -- ambos quedan documentados en known_issues con su investigacion.
+    Clasificacion: 18/20 exacta -- fallan caso_13 (OIDIO -> HEALTHY_HOJA, conf 0.416) y caso_17
+    (OIDIO -> OIDIO_RACIMO, conf 0.311), ambos errores del propio modelo (el pipeline original con
+    los mismos pesos da la misma clase). Consistente con el test completo: el plugin reproduce
+    exactamente accuracy 0.9469 / F1 macro 0.8807 / F1 weighted 0.9463 sobre las 1470 filas.
+    Riesgo: 19/20 dentro de 2xMAE (unico fuera caso_11, LOBESIA, 0.793 vs 0.227) -- pero ver
+    known_issues: esa tolerancia deja pasar practicamente cualquier prediccion, el riesgo no
+    tiene capacidad predictiva real. Nada se ha silenciado ni se ha ajustado la tolerancia.
   cases:
-    - {id: caso_01, imagen: "Mites_Disease_0069.png", esperado_clase: ALTICA, esperado_riesgo: 0.071, predicho_clase: ALTICA, predicho_confianza: 0.6467, predicho_riesgo: 0.3263, sensores: {Mes: 8, Temp_Max_Media_5d_C: 28.71, Temp_Min_Media_5d_C: 15.7, Hum_Rel_Max_5d_Pct: 59.8, Hum_Rel_Min_5d_Pct: 29.4, Hum_Suelo_Pct: 34.7, Lluvia_Acum_5d_mm: 0.14, Horas_Humedad_Foliar: 4.3, GDD_Acumulado: 0.0}}
-    - {id: caso_02, imagen: "image (795).JPG", esperado_clase: BLACK_ROT, esperado_riesgo: 0.077, predicho_clase: BLACK_ROT, predicho_confianza: 0.4822, predicho_riesgo: 0.3423, sensores: {Mes: 7, Temp_Max_Media_5d_C: 31.07, Temp_Min_Media_5d_C: 18.75, Hum_Rel_Max_5d_Pct: 61.1, Hum_Rel_Min_5d_Pct: 24.6, Hum_Suelo_Pct: 27.2, Lluvia_Acum_5d_mm: 0.75, Horas_Humedad_Foliar: 4.9, GDD_Acumulado: 0.0}}
-    - {id: caso_03, imagen: "000001415_mask_jpg.rf.d1892a5831ba709cf86c3bc0cfca4ecc.jpg", esperado_clase: BOTRYTIS, esperado_riesgo: 0.016, predicho_clase: BOTRYTIS, predicho_confianza: 0.3955, predicho_riesgo: 0.3184, sensores: {Mes: 5, Temp_Max_Media_5d_C: 27.01, Temp_Min_Media_5d_C: 14.82, Hum_Rel_Max_5d_Pct: 69.8, Hum_Rel_Min_5d_Pct: 35.5, Hum_Suelo_Pct: 31.6, Lluvia_Acum_5d_mm: 0.29, Horas_Humedad_Foliar: 4.1, GDD_Acumulado: 0.0}}
-    - {id: caso_04, imagen: "mosquito-verde-hojas02 - copia (3).jpg", esperado_clase: EMPOASCA, esperado_riesgo: 0.456, predicho_clase: EMPOASCA, predicho_confianza: 0.4006, predicho_riesgo: 0.2237, sensores: {Mes: 1, Temp_Max_Media_5d_C: 21.04, Temp_Min_Media_5d_C: 8.92, Hum_Rel_Max_5d_Pct: 85.0, Hum_Rel_Min_5d_Pct: 49.5, Hum_Suelo_Pct: 64.6, Lluvia_Acum_5d_mm: 0.30, Horas_Humedad_Foliar: 8.1, GDD_Acumulado: 0.0}}
-    - {id: caso_05, imagen: "178.JPEG", esperado_clase: ERINOSIS, esperado_riesgo: 0.604, predicho_clase: ERINOSIS, predicho_confianza: 0.6741, predicho_riesgo: 0.3233, sensores: {Mes: 7, Temp_Max_Media_5d_C: 30.78, Temp_Min_Media_5d_C: 20.38, Hum_Rel_Max_5d_Pct: 60.5, Hum_Rel_Min_5d_Pct: 31.4, Hum_Suelo_Pct: 20.2, Lluvia_Acum_5d_mm: 0.37, Horas_Humedad_Foliar: 0.6, GDD_Acumulado: 0.0}}
-    - {id: caso_06, imagen: "image (779).JPG", esperado_clase: ESCA_HOJA, esperado_riesgo: 0.373, predicho_clase: ESCA_HOJA, predicho_confianza: 0.6861, predicho_riesgo: 0.0621, sensores: {Mes: 1, Temp_Max_Media_5d_C: 10.4, Temp_Min_Media_5d_C: -4.9, Hum_Rel_Max_5d_Pct: 98.1, Hum_Rel_Min_5d_Pct: 89.9, Hum_Suelo_Pct: 29.0, Lluvia_Acum_5d_mm: 4.58, Horas_Humedad_Foliar: 20.7, GDD_Acumulado: 0.0}}
-    - {id: caso_07, imagen: "Photo-2 - copia (6) - copia - copia.jpg", esperado_clase: ESCA_RACIMO, esperado_riesgo: 0.354, predicho_clase: ESCA_RACIMO, predicho_confianza: 0.397, predicho_riesgo: 0.3408, sensores: {Mes: 6, Temp_Max_Media_5d_C: 31.48, Temp_Min_Media_5d_C: 22.86, Hum_Rel_Max_5d_Pct: 52.6, Hum_Rel_Min_5d_Pct: 15.6, Hum_Suelo_Pct: 49.3, Lluvia_Acum_5d_mm: 0.52, Horas_Humedad_Foliar: 5.8, GDD_Acumulado: 0.0}}
-    - {id: caso_08, imagen: "image (202).JPG", esperado_clase: HEALTHY_HOJA, esperado_riesgo: 0.233, predicho_clase: HEALTHY_HOJA, predicho_confianza: 0.6718, predicho_riesgo: 0.2113, sensores: {Mes: 4, Temp_Max_Media_5d_C: 18.42, Temp_Min_Media_5d_C: 8.85, Hum_Rel_Max_5d_Pct: 88.6, Hum_Rel_Min_5d_Pct: 42.1, Hum_Suelo_Pct: 41.0, Lluvia_Acum_5d_mm: 2.84, Horas_Humedad_Foliar: 22.8, GDD_Acumulado: 0.0}}
-    - {id: caso_09, imagen: "CFR_1623.jpg", esperado_clase: HEALTHY_RACIMO, esperado_riesgo: 0.18, predicho_clase: HEALTHY_RACIMO, predicho_confianza: 0.6616, predicho_riesgo: 0.2785, sensores: {Mes: 7, Temp_Max_Media_5d_C: 41.63, Temp_Min_Media_5d_C: 28.24, Hum_Rel_Max_5d_Pct: 42.4, Hum_Rel_Min_5d_Pct: 7.5, Hum_Suelo_Pct: 52.3, Lluvia_Acum_5d_mm: 0.0, Horas_Humedad_Foliar: 4.6, GDD_Acumulado: 0.0}}
-    - {id: caso_10, imagen: "image (119).JPG", esperado_clase: ISARIOPSIS, esperado_riesgo: 0.029, predicho_clase: ISARIOPSIS, predicho_confianza: 0.5821, predicho_riesgo: 0.3099, sensores: {Mes: 7, Temp_Max_Media_5d_C: 28.04, Temp_Min_Media_5d_C: 14.65, Hum_Rel_Max_5d_Pct: 60.4, Hum_Rel_Min_5d_Pct: 28.7, Hum_Suelo_Pct: 17.8, Lluvia_Acum_5d_mm: 0.48, Horas_Humedad_Foliar: 2.9, GDD_Acumulado: 0.0}}
-    - {id: caso_11, imagen: "lobesia_botrana_169.jpg", esperado_clase: LOBESIA, esperado_riesgo: 0.227, predicho_clase: LOBESIA, predicho_confianza: 0.3974, predicho_riesgo: 0.7934, sensores: {Mes: 7, Temp_Max_Media_5d_C: 32.18, Temp_Min_Media_5d_C: 21.4, Hum_Rel_Max_5d_Pct: 59.4, Hum_Rel_Min_5d_Pct: 26.2, Hum_Suelo_Pct: 27.7, Lluvia_Acum_5d_mm: 0.84, Horas_Humedad_Foliar: 3.7, GDD_Acumulado: 679.0}}
-    - {id: caso_12, imagen: "Downy Mildew_436.jpg", esperado_clase: MILDIU, esperado_riesgo: 0.133, predicho_clase: MILDIU, predicho_confianza: 0.5295, predicho_riesgo: 0.2812, sensores: {Mes: 4, Temp_Max_Media_5d_C: 20.77, Temp_Min_Media_5d_C: 10.86, Hum_Rel_Max_5d_Pct: 75.8, Hum_Rel_Min_5d_Pct: 40.5, Hum_Suelo_Pct: 34.1, Lluvia_Acum_5d_mm: 0.67, Horas_Humedad_Foliar: 1.0, GDD_Acumulado: 0.0}}
-    - {id: caso_13, imagen: "Powdery Mildew_374.JPG", esperado_clase: OIDIO, esperado_riesgo: 0.041, predicho_clase: OIDIO, predicho_confianza: 0.396, predicho_riesgo: 0.229, sensores: {Mes: 11, Temp_Max_Media_5d_C: 20.31, Temp_Min_Media_5d_C: 8.39, Hum_Rel_Max_5d_Pct: 88.6, Hum_Rel_Min_5d_Pct: 56.3, Hum_Suelo_Pct: 54.3, Lluvia_Acum_5d_mm: 5.55, Horas_Humedad_Foliar: 10.1, GDD_Acumulado: 0.0}}
-    - {id: caso_14, imagen: "6325e35b-oidio_grappolo46.jpg", esperado_clase: OIDIO_RACIMO, esperado_riesgo: 0.059, predicho_clase: OIDIO_RACIMO, predicho_confianza: 0.3983, predicho_riesgo: 0.2085, sensores: {Mes: 11, Temp_Max_Media_5d_C: 19.05, Temp_Min_Media_5d_C: 8.65, Hum_Rel_Max_5d_Pct: 87.9, Hum_Rel_Min_5d_Pct: 46.6, Hum_Suelo_Pct: 53.4, Lluvia_Acum_5d_mm: 2.13, Horas_Humedad_Foliar: 12.2, GDD_Acumulado: 0.0}}
-    - {id: caso_15, imagen: "4d9645fa-c250-4224-b730-21710bf11596___Com.G_SpM_FL 8755_patch_1.jpg", esperado_clase: RED_MITE, esperado_riesgo: 0.524, predicho_clase: RED_MITE, predicho_confianza: 0.3787, predicho_riesgo: 0.3282, sensores: {Mes: 9, Temp_Max_Media_5d_C: 29.94, Temp_Min_Media_5d_C: 14.66, Hum_Rel_Max_5d_Pct: 64.2, Hum_Rel_Min_5d_Pct: 35.2, Hum_Suelo_Pct: 36.7, Lluvia_Acum_5d_mm: 0.72, Horas_Humedad_Foliar: 2.3, GDD_Acumulado: 0.0}}
-    - {id: caso_16, imagen: "Downy Mildew_112.jpg", esperado_clase: MILDIU, esperado_riesgo: 0.053, predicho_clase: MILDIU, predicho_confianza: 0.5529, predicho_riesgo: 0.1373, sensores: {Mes: 2, Temp_Max_Media_5d_C: 16.92, Temp_Min_Media_5d_C: 8.39, Hum_Rel_Max_5d_Pct: 92.6, Hum_Rel_Min_5d_Pct: 46.6, Hum_Suelo_Pct: 70.5, Lluvia_Acum_5d_mm: 15.41, Horas_Humedad_Foliar: 24.0, GDD_Acumulado: 0.0}}
-    - {id: caso_17, imagen: "grapevine_powdery_mildew_leaf_29.jpg", esperado_clase: OIDIO, esperado_riesgo: 0.049, predicho_clase: OIDIO_RACIMO, predicho_confianza: 0.3116, predicho_riesgo: 0.2773, sensores: {Mes: 10, Temp_Max_Media_5d_C: 24.71, Temp_Min_Media_5d_C: 10.97, Hum_Rel_Max_5d_Pct: 78.8, Hum_Rel_Min_5d_Pct: 35.0, Hum_Suelo_Pct: 44.6, Lluvia_Acum_5d_mm: 0.03, Horas_Humedad_Foliar: 3.5, GDD_Acumulado: 0.0}}
-    - {id: caso_18, imagen: "image (122).JPG", esperado_clase: BLACK_ROT, esperado_riesgo: 0.099, predicho_clase: BLACK_ROT, predicho_confianza: 0.3733, predicho_riesgo: 0.3399, sensores: {Mes: 7, Temp_Max_Media_5d_C: 33.97, Temp_Min_Media_5d_C: 21.53, Hum_Rel_Max_5d_Pct: 45.9, Hum_Rel_Min_5d_Pct: 9.1, Hum_Suelo_Pct: 41.7, Lluvia_Acum_5d_mm: 1.47, Horas_Humedad_Foliar: 1.4, GDD_Acumulado: 0.0}}
-    - {id: caso_19, imagen: "000000723_mask_jpg.rf.6427ca9835c07de3615e55cbebf4d449.jpg", esperado_clase: BOTRYTIS, esperado_riesgo: 0.013, predicho_clase: BOTRYTIS, predicho_confianza: 0.575, predicho_riesgo: 0.2399, sensores: {Mes: 11, Temp_Max_Media_5d_C: 24.65, Temp_Min_Media_5d_C: 11.87, Hum_Rel_Max_5d_Pct: 88.6, Hum_Rel_Min_5d_Pct: 29.2, Hum_Suelo_Pct: 57.0, Lluvia_Acum_5d_mm: 4.24, Horas_Humedad_Foliar: 8.7, GDD_Acumulado: 0.0}}
-    - {id: caso_20, imagen: "image (1047).JPG", esperado_clase: ESCA_HOJA, esperado_riesgo: 0.246, predicho_clase: ESCA_HOJA, predicho_confianza: 0.6754, predicho_riesgo: 0.1318, sensores: {Mes: 1, Temp_Max_Media_5d_C: 10.19, Temp_Min_Media_5d_C: -3.45, Hum_Rel_Max_5d_Pct: 100.0, Hum_Rel_Min_5d_Pct: 65.2, Hum_Suelo_Pct: 52.9, Lluvia_Acum_5d_mm: 0.74, Horas_Humedad_Foliar: 15.4, GDD_Acumulado: 0.0}}
+    - {id: caso_01, imagen: "Mites_Disease_0069.png", esperado_clase: ALTICA, esperado_riesgo: 0.071, predicho_clase: ALTICA, predicho_confianza: 0.6941, predicho_riesgo: 0.3263, sensores: {Mes: 8, Temp_Max_Media_5d_C: 28.71, Temp_Min_Media_5d_C: 15.7, Hum_Rel_Max_5d_Pct: 59.8, Hum_Rel_Min_5d_Pct: 29.4, Hum_Suelo_Pct: 34.7, Lluvia_Acum_5d_mm: 0.14, Horas_Humedad_Foliar: 4.3, GDD_Acumulado: 0.0}}
+    - {id: caso_02, imagen: "image (795).JPG", esperado_clase: BLACK_ROT, esperado_riesgo: 0.077, predicho_clase: BLACK_ROT, predicho_confianza: 0.4841, predicho_riesgo: 0.3423, sensores: {Mes: 7, Temp_Max_Media_5d_C: 31.07, Temp_Min_Media_5d_C: 18.75, Hum_Rel_Max_5d_Pct: 61.1, Hum_Rel_Min_5d_Pct: 24.6, Hum_Suelo_Pct: 27.2, Lluvia_Acum_5d_mm: 0.75, Horas_Humedad_Foliar: 4.9, GDD_Acumulado: 0.0}}
+    - {id: caso_03, imagen: "000001415_mask_jpg.rf.d1892a5831ba709cf86c3bc0cfca4ecc.jpg", esperado_clase: BOTRYTIS, esperado_riesgo: 0.016, predicho_clase: BOTRYTIS, predicho_confianza: 0.3997, predicho_riesgo: 0.3184, sensores: {Mes: 5, Temp_Max_Media_5d_C: 27.01, Temp_Min_Media_5d_C: 14.82, Hum_Rel_Max_5d_Pct: 69.8, Hum_Rel_Min_5d_Pct: 35.5, Hum_Suelo_Pct: 31.6, Lluvia_Acum_5d_mm: 0.29, Horas_Humedad_Foliar: 4.1, GDD_Acumulado: 0.0}}
+    - {id: caso_04, imagen: "mosquito-verde-hojas02 - copia (3).jpg", esperado_clase: EMPOASCA, esperado_riesgo: 0.456, predicho_clase: EMPOASCA, predicho_confianza: 0.3992, predicho_riesgo: 0.2237, sensores: {Mes: 1, Temp_Max_Media_5d_C: 21.04, Temp_Min_Media_5d_C: 8.92, Hum_Rel_Max_5d_Pct: 85.0, Hum_Rel_Min_5d_Pct: 49.5, Hum_Suelo_Pct: 64.6, Lluvia_Acum_5d_mm: 0.30, Horas_Humedad_Foliar: 8.1, GDD_Acumulado: 0.0}}
+    - {id: caso_05, imagen: "178.JPEG", esperado_clase: ERINOSIS, esperado_riesgo: 0.604, predicho_clase: ERINOSIS, predicho_confianza: 0.6675, predicho_riesgo: 0.3233, sensores: {Mes: 7, Temp_Max_Media_5d_C: 30.78, Temp_Min_Media_5d_C: 20.38, Hum_Rel_Max_5d_Pct: 60.5, Hum_Rel_Min_5d_Pct: 31.4, Hum_Suelo_Pct: 20.2, Lluvia_Acum_5d_mm: 0.37, Horas_Humedad_Foliar: 0.6, GDD_Acumulado: 0.0}}
+    - {id: caso_06, imagen: "image (779).JPG", esperado_clase: ESCA_HOJA, esperado_riesgo: 0.373, predicho_clase: ESCA_HOJA, predicho_confianza: 0.8752, predicho_riesgo: 0.0621, sensores: {Mes: 1, Temp_Max_Media_5d_C: 10.4, Temp_Min_Media_5d_C: -4.9, Hum_Rel_Max_5d_Pct: 98.1, Hum_Rel_Min_5d_Pct: 89.9, Hum_Suelo_Pct: 29.0, Lluvia_Acum_5d_mm: 4.58, Horas_Humedad_Foliar: 20.7, GDD_Acumulado: 0.0}}
+    - {id: caso_07, imagen: "Photo-2 - copia (6) - copia - copia.jpg", esperado_clase: ESCA_RACIMO, esperado_riesgo: 0.354, predicho_clase: ESCA_RACIMO, predicho_confianza: 0.3909, predicho_riesgo: 0.3408, sensores: {Mes: 6, Temp_Max_Media_5d_C: 31.48, Temp_Min_Media_5d_C: 22.86, Hum_Rel_Max_5d_Pct: 52.6, Hum_Rel_Min_5d_Pct: 15.6, Hum_Suelo_Pct: 49.3, Lluvia_Acum_5d_mm: 0.52, Horas_Humedad_Foliar: 5.8, GDD_Acumulado: 0.0}}
+    - {id: caso_08, imagen: "image (202).JPG", esperado_clase: HEALTHY_HOJA, esperado_riesgo: 0.233, predicho_clase: HEALTHY_HOJA, predicho_confianza: 0.7670, predicho_riesgo: 0.2113, sensores: {Mes: 4, Temp_Max_Media_5d_C: 18.42, Temp_Min_Media_5d_C: 8.85, Hum_Rel_Max_5d_Pct: 88.6, Hum_Rel_Min_5d_Pct: 42.1, Hum_Suelo_Pct: 41.0, Lluvia_Acum_5d_mm: 2.84, Horas_Humedad_Foliar: 22.8, GDD_Acumulado: 0.0}}
+    - {id: caso_09, imagen: "CFR_1623.jpg", esperado_clase: HEALTHY_RACIMO, esperado_riesgo: 0.18, predicho_clase: HEALTHY_RACIMO, predicho_confianza: 0.6547, predicho_riesgo: 0.2785, sensores: {Mes: 7, Temp_Max_Media_5d_C: 41.63, Temp_Min_Media_5d_C: 28.24, Hum_Rel_Max_5d_Pct: 42.4, Hum_Rel_Min_5d_Pct: 7.5, Hum_Suelo_Pct: 52.3, Lluvia_Acum_5d_mm: 0.0, Horas_Humedad_Foliar: 4.6, GDD_Acumulado: 0.0}}
+    - {id: caso_10, imagen: "image (119).JPG", esperado_clase: ISARIOPSIS, esperado_riesgo: 0.029, predicho_clase: ISARIOPSIS, predicho_confianza: 0.5306, predicho_riesgo: 0.3099, sensores: {Mes: 7, Temp_Max_Media_5d_C: 28.04, Temp_Min_Media_5d_C: 14.65, Hum_Rel_Max_5d_Pct: 60.4, Hum_Rel_Min_5d_Pct: 28.7, Hum_Suelo_Pct: 17.8, Lluvia_Acum_5d_mm: 0.48, Horas_Humedad_Foliar: 2.9, GDD_Acumulado: 0.0}}
+    - {id: caso_11, imagen: "lobesia_botrana_169.jpg", esperado_clase: LOBESIA, esperado_riesgo: 0.227, predicho_clase: LOBESIA, predicho_confianza: 0.3954, predicho_riesgo: 0.7934, sensores: {Mes: 7, Temp_Max_Media_5d_C: 32.18, Temp_Min_Media_5d_C: 21.4, Hum_Rel_Max_5d_Pct: 59.4, Hum_Rel_Min_5d_Pct: 26.2, Hum_Suelo_Pct: 27.7, Lluvia_Acum_5d_mm: 0.84, Horas_Humedad_Foliar: 3.7, GDD_Acumulado: 679.0}}
+    - {id: caso_12, imagen: "Downy Mildew_436.jpg", esperado_clase: MILDIU, esperado_riesgo: 0.133, predicho_clase: MILDIU, predicho_confianza: 0.6735, predicho_riesgo: 0.2812, sensores: {Mes: 4, Temp_Max_Media_5d_C: 20.77, Temp_Min_Media_5d_C: 10.86, Hum_Rel_Max_5d_Pct: 75.8, Hum_Rel_Min_5d_Pct: 40.5, Hum_Suelo_Pct: 34.1, Lluvia_Acum_5d_mm: 0.67, Horas_Humedad_Foliar: 1.0, GDD_Acumulado: 0.0}}
+    - {id: caso_13, imagen: "Powdery Mildew_374.JPG", esperado_clase: OIDIO, esperado_riesgo: 0.041, predicho_clase: HEALTHY_HOJA, predicho_confianza: 0.4156, predicho_riesgo: 0.2290, sensores: {Mes: 11, Temp_Max_Media_5d_C: 20.31, Temp_Min_Media_5d_C: 8.39, Hum_Rel_Max_5d_Pct: 88.6, Hum_Rel_Min_5d_Pct: 56.3, Hum_Suelo_Pct: 54.3, Lluvia_Acum_5d_mm: 5.55, Horas_Humedad_Foliar: 10.1, GDD_Acumulado: 0.0}}
+    - {id: caso_14, imagen: "6325e35b-oidio_grappolo46.jpg", esperado_clase: OIDIO_RACIMO, esperado_riesgo: 0.059, predicho_clase: OIDIO_RACIMO, predicho_confianza: 0.3960, predicho_riesgo: 0.2085, sensores: {Mes: 11, Temp_Max_Media_5d_C: 19.05, Temp_Min_Media_5d_C: 8.65, Hum_Rel_Max_5d_Pct: 87.9, Hum_Rel_Min_5d_Pct: 46.6, Hum_Suelo_Pct: 53.4, Lluvia_Acum_5d_mm: 2.13, Horas_Humedad_Foliar: 12.2, GDD_Acumulado: 0.0}}
+    - {id: caso_15, imagen: "4d9645fa-c250-4224-b730-21710bf11596___Com.G_SpM_FL 8755_patch_1.jpg", esperado_clase: RED_MITE, esperado_riesgo: 0.524, predicho_clase: RED_MITE, predicho_confianza: 0.3674, predicho_riesgo: 0.3282, sensores: {Mes: 9, Temp_Max_Media_5d_C: 29.94, Temp_Min_Media_5d_C: 14.66, Hum_Rel_Max_5d_Pct: 64.2, Hum_Rel_Min_5d_Pct: 35.2, Hum_Suelo_Pct: 36.7, Lluvia_Acum_5d_mm: 0.72, Horas_Humedad_Foliar: 2.3, GDD_Acumulado: 0.0}}
+    - {id: caso_16, imagen: "Downy Mildew_112.jpg", esperado_clase: MILDIU, esperado_riesgo: 0.053, predicho_clase: MILDIU, predicho_confianza: 0.6703, predicho_riesgo: 0.1373, sensores: {Mes: 2, Temp_Max_Media_5d_C: 16.92, Temp_Min_Media_5d_C: 8.39, Hum_Rel_Max_5d_Pct: 92.6, Hum_Rel_Min_5d_Pct: 46.6, Hum_Suelo_Pct: 70.5, Lluvia_Acum_5d_mm: 15.41, Horas_Humedad_Foliar: 24.0, GDD_Acumulado: 0.0}}
+    - {id: caso_17, imagen: "grapevine_powdery_mildew_leaf_29.jpg", esperado_clase: OIDIO, esperado_riesgo: 0.049, predicho_clase: OIDIO_RACIMO, predicho_confianza: 0.3113, predicho_riesgo: 0.2773, sensores: {Mes: 10, Temp_Max_Media_5d_C: 24.71, Temp_Min_Media_5d_C: 10.97, Hum_Rel_Max_5d_Pct: 78.8, Hum_Rel_Min_5d_Pct: 35.0, Hum_Suelo_Pct: 44.6, Lluvia_Acum_5d_mm: 0.03, Horas_Humedad_Foliar: 3.5, GDD_Acumulado: 0.0}}
+    - {id: caso_18, imagen: "image (122).JPG", esperado_clase: BLACK_ROT, esperado_riesgo: 0.099, predicho_clase: BLACK_ROT, predicho_confianza: 0.3819, predicho_riesgo: 0.3399, sensores: {Mes: 7, Temp_Max_Media_5d_C: 33.97, Temp_Min_Media_5d_C: 21.53, Hum_Rel_Max_5d_Pct: 45.9, Hum_Rel_Min_5d_Pct: 9.1, Hum_Suelo_Pct: 41.7, Lluvia_Acum_5d_mm: 1.47, Horas_Humedad_Foliar: 1.4, GDD_Acumulado: 0.0}}
+    - {id: caso_19, imagen: "000000723_mask_jpg.rf.6427ca9835c07de3615e55cbebf4d449.jpg", esperado_clase: BOTRYTIS, esperado_riesgo: 0.013, predicho_clase: BOTRYTIS, predicho_confianza: 0.5668, predicho_riesgo: 0.2399, sensores: {Mes: 11, Temp_Max_Media_5d_C: 24.65, Temp_Min_Media_5d_C: 11.87, Hum_Rel_Max_5d_Pct: 88.6, Hum_Rel_Min_5d_Pct: 29.2, Hum_Suelo_Pct: 57.0, Lluvia_Acum_5d_mm: 4.24, Horas_Humedad_Foliar: 8.7, GDD_Acumulado: 0.0}}
+    - {id: caso_20, imagen: "image (1047).JPG", esperado_clase: ESCA_HOJA, esperado_riesgo: 0.246, predicho_clase: ESCA_HOJA, predicho_confianza: 0.7557, predicho_riesgo: 0.1318, sensores: {Mes: 1, Temp_Max_Media_5d_C: 10.19, Temp_Min_Media_5d_C: -3.45, Hum_Rel_Max_5d_Pct: 100.0, Hum_Rel_Min_5d_Pct: 65.2, Hum_Suelo_Pct: 52.9, Lluvia_Acum_5d_mm: 0.74, Horas_Humedad_Foliar: 15.4, GDD_Acumulado: 0.0}}
   verificacion_a_gran_escala_28_10_2026: >
     Tras recibir el corpus completo (ver known_issues), se re-verifico el plugin real contra los
     datos reales completos, no solo contra las 20 muestras de arriba:
@@ -252,6 +249,15 @@ golden_cases:
     OIDIO_RACIMO (f1=0.6897, recall=0.77), EMPOASCA (f1=0.8276, recall=0.71) -- ninguna sorpresa,
     confirma las debilidades de clases minoritarias ya conocidas, no un fallo de integracion.
     Script y resultados completos (79 fallos, uno por fila) disponibles bajo demanda.
+    CORRECCIÓN (revisión posterior del mismo 28/10/2026, rama fix/a01-ml1-review-fixes): el punto (1)
+    sigue en pie. El punto (2) se midió con EfficientNetB0 mal reconstruido (ver known_issues): ese
+    plugin roto, con imagen en bruto, da exactamente 0.9463, pero el modelo del equipo con imagen en
+    bruto da 0.9401 -- la cercanía al 0.9469 auditado era casual (el backbone roto 'mejora' el
+    ensemble). Con la corrección, el plugin da 0.9469 / 0.8807 / 0.9463 exactos sobre los recortes
+    cacheados, 0.9483 sobre la imagen 224 y 0.9401 sobre la imagen en bruto. Las cifras por clase de
+    (2) (OIDIO_RACIMO f1 0.69 / recall 0.77, EMPOASCA f1 0.83 / recall 0.71) tampoco son del modelo
+    real: las auditadas (y reproducidas) son OIDIO_RACIMO 0.593 / 0.615, EMPOASCA 0.741 / 0.588,
+    LOBESIA 0.667 / 0.60.
   rechazo_sin_imagen_ni_rf:
     - id: rechazo_contrato_sensores
       source: codigo_fuente  # predictor.py::_validate_sensor_dimensions
@@ -264,12 +270,12 @@ known_issues:
      los RF. Se pidió al equipo de IA un segundo paquete (\"modelo 1.zip\", ya fusionado) y,
      más tarde, el corpus completo: el responsable actual del modelo (Carlos Antón) entregó
      los 4 ZIPs (raw/, splits/, processed/, predictions/, ~1.6 GB) el 28/10/2026 vía Slack.
-     Ya fusionado en inbox/a1/codigo/data/ — 10.526 imágenes reales en 15 carpetas de clase,
+     Ya fusionado en inbox/a01/codigo/data/ — 10.526 imágenes reales en 15 carpetas de clase,
      SENSORES.csv (500.000 filas), MANIFEST_MULTIMODAL.csv, y los 5 splits CSV
      (train/val/test_split.csv del CNN; train/test_rf.csv del RF). Ver más abajo las dos
      verificaciones a gran escala que esto permitió (RF exacto contra 500.000 filas reales;
      CNN contra las 1470 imágenes reales de test_split.csv)."
-  - "[RESUELTO -- VERIFICADO CONTRA EL PLUGIN REAL] El bloqueo inicial (TensorFlow sin wheel
+  - "[SUPERADO -- ver la entrada de EfficientNetB0 más abajo] El bloqueo inicial (TensorFlow sin wheel
      para la versión de Python de este entorno) se resolvió instalando keras 3 con
      backend=torch + ultralytics directamente (backend=torch no necesita tensorflow en
      absoluto). Se cargaron los 3 backbones reales (.weights.h5) en la arquitectura reconstruida
@@ -277,8 +283,11 @@ known_issues:
      ningún error de carga de pesos, y se ejecutó predict_inline() del plugin real contra las 20
      imágenes+sensores de datos_plataforma/. Resultado: 19/20 (95%) de clasificación exacta,
      consistente con el 94.69% auditado — ver golden_cases.cases (predicho_* junto a
-     esperado_*). El plugin reproduce fielmente el pipeline entregado."
-  - "[MODELO -- CASO_17 INVESTIGADO] El único golden case fuera de acierto (caso_17,
+     esperado_*). CORRECCIÓN 2026-10-28: esa conclusión era falsa -- EfficientNetB0 se cargaba
+     sin error pero con la arquitectura equivocada, y el 19/20 era del plugin roto."
+  - "[MODELO -- CASO_13 Y CASO_17] caso_13 (Powdery Mildew_374.JPG, OIDIO predicho como
+     HEALTHY_HOJA, conf 0.416) falla con el modelo correcto: es un error del modelo, mismo
+     resultado que el pipeline original. Sobre caso_17 (texto original): el golden case (caso_17,
      grapevine_powdery_mildew_leaf_29.jpg): esperado OIDIO, predicho OIDIO_RACIMO, confianza
      0.312 (la más baja de los 20 casos). Es una confusión entre dos clases visualmente
      emparentadas (oidio en hoja vs. oidio en racimo — ambas presentan el mismo velo
@@ -293,7 +302,16 @@ known_issues:
      (error 0.566), caso_06 (ESCA_HOJA) real=0.373 vs. predicho=0.062 (error 0.311). El MAE
      agregado sobre 1470 filas de test oculta esta varianza caso a caso — a tener en cuenta en
      la ficha funcional (el índice de riesgo es menos fiable individualmente que la
-     clasificación de patología, aunque el agregado parezca sólido)."
+     clasificación de patología, aunque el agregado parezca sólido).
+     AMPLIADO 2026-10-28 con el test real (1470 filas): la cabeza de riesgo da MAE 0.189 (igual que
+     la memoria) pero R2=0.076, y predecir la mediana constante da MAE 0.183 -- mejor que el
+     modelo. Las medias predichas por clase son planas (0.25-0.27) frente a reales de 0.056 a
+     0.595. Causa (scripts/data/create_dataset.py): el riesgo se genera con reglas por clase, pero
+     los sensores simulados no dependen de la clase (salvo GDD_Acumulado, solo >0 en LOBESIA y
+     ALTICA), y en modo desacoplado la cabeza de riesgo solo ve sensores. El RF regresor tiene la
+     misma limitación (R2=0.205 en test_rf). Es un límite del modelo, no de la integración: debe
+     constar en la ficha funcional. evaluate.py ni siquiera calcula el MAE en modo desacoplado
+     (evaluate.py:365-373,386-391); el 0.189 no sale de ese script."
   - "[HALLAZGO -- SCRIPT DE REFERENCIA ENGAÑOSO] datos_plataforma/ejemplo_inferencia.py y su
      resultado_inferencia_batch.csv NO deben usarse como referencia de corrección: ese script
      solo carga y usa el Random Forest tabular (rf_clase_expert.joblib, SIEMPRE la variante CON
@@ -339,7 +357,10 @@ known_issues:
      fijo y el dataset completo disponible sería reproducible, pero no lo hemos podido regenerar
      nosotros (no tenemos MANIFEST_MULTIMODAL.csv). Los CSV de métricas entregados en
      models/metrics/classification/ son, por tanto, de una única ejecución de referencia del
-     equipo de IA, no algo que este agente haya podido reproducir de forma independiente."
+     equipo de IA, no algo que este agente haya podido reproducir de forma independiente.
+     ACTUALIZADO 2026-10-28: con data/splits/test_split.csv se reprodujo de forma independiente:
+     el plugin da exactamente 0.9469 / 0.8807 / 0.9463 sobre los recortes cacheados del equipo,
+     y los RF entregados dan 0.11593 / 0.1180 / MAE 0.188 sobre test_rf.csv."
   - "[ENTORNO] requirements.txt fija --index-url https://download.pytorch.org/whl/cu121 (rueda
      CUDA 12.1 de PyTorch) como primer índice de paquetes -- un pip install -r requirements.txt
      normal en una máquina sin esa URL accesible, o en CPU/otra versión de CUDA, puede fallar o
@@ -388,3 +409,32 @@ known_issues:
      -inf y cualquier valor que desborde al castear a float32. Verificado con inf, -inf y 1e100
      contra las funciones reales y contra un lote real de 2 filas (una con GDD_Acumulado=1e100,
      otra válida) vía HTTP: 200, fila mala con error descriptivo, fila válida intacta."
+  - "[CORREGIDO 2026-10-28 -- FIDELIDAD] EfficientNetB0 se reconstruía con weights=None; el
+     original usa weights='imagenet' (src/training/train.py:84-85), y en Keras 3 eso añade una
+     capa Rescaling(1/sqrt(stddev)) tras la Normalization del stem. La capa no tiene variables,
+     así que load_weights() no fallaba, pero el backbone predecía ISARIOPSIS en las 1470 filas
+     de test (acc 0.110 vs 0.214 del original) y el ensemble daba 0.9599 en vez del 0.9469
+     auditado (35/1470 clases distintas). Corregido en
+     model_loader.py::_efficientnet_b0_imagenet_topology (misma topología vía clone_model, sin
+     descargar ImageNet): salida idéntica (Δ=0.0) a un EfficientNetB0(weights='imagenet'), test
+     completo idéntico a lo auditado y predictions.csv del equipo reproducido (MILDIU 64.88% vs
+     64.87%). test_ml1_model_loader.py compara las capas reconstruidas con las del .weights.h5."
+  - "[CORREGIDO 2026-10-28 -- DESPLIEGUE] Los .joblib entregados se serializaron con
+     scikit-learn 1.8.0 y el repo fija 1.5.2 (InconsistentVersionWarning, carga no soportada).
+     rf_riesgo_expert_no_gases.joblib se re-entrenó con 1.5.2 siguiendo train_tabular.py sobre
+     data/splits/train_rf.csv: los 200 árboles son idénticos al entregado (umbrales y valores) y
+     las predicciones difieren como máximo 5.6e-16 en test_rf.csv. Es el que debe estar en S3."
+  - "[CORREGIDO 2026-10-28 -- MEMORIA] El plugin ya no carga rf_clase_expert_no_gases.joblib (no se
+     usa en modo desacoplado; ~370 MB de RSS en la versión anterior) y rf_riesgo pasa a ser
+     opcional como en predictor.py:137-144: sin él, el servicio arranca y atiende peticiones con
+     imagen; las peticiones sin imagen devuelven 422. /train sigue entrenando ambos RF (el de
+     clase solo para devolver accuracy/f1 del contrato) pero solo sube a MLflow el de riesgo."
+  - "[CORREGIDO 2026-10-28 -- CONTRATO BATCH] predict_batch trataba como sensor cualquier columna
+     distinta de Path_Imagen: un CSV con el formato de test_split.csv (ID, Etiqueta,
+     Cached_Path...) fallaba en todas las filas. Ahora, como predictor.py:317, solo se leen los
+     sensores (y CO2/VOC, que se ignoran)."
+  - "[CÓDIGO ORIGINAL -- DESAJUSTE ENTRENAMIENTO/PRODUCCIÓN] El 94.69% se midió sobre recortes YOLO
+     cacheados de imágenes ya reducidas a 224 px (preprocess.py:313, Cached_Path). El recorte al
+     vuelo del plugin sobre esa misma imagen 224 lo reproduce (0.9483, 99.6% de coincidencia), pero
+     con la foto a resolución completa -- lo que llegará en producción -- baja a 0.9401 (MobileNet
+     de 0.71 a 0.60). Heredado del diseño del equipo de IA (el predictor original hace lo mismo)."

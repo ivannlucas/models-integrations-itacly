@@ -178,11 +178,14 @@ verification_tolerance:
   contra_etiqueta_real: "Informativo (es el rendimiento del modelo, no un fallo de integración): se reporta aciertos vs true_class."
 
 golden_cases:
-  # Fuente: split de TEST real. Los datasets no vienen en la entrega (data/*/raw y data/*/splits
-  # están en el .gitignore del equipo de IA); se descargaron de las fuentes públicas que cita la
-  # memoria §3.1 (Mendeley vwbb4dc9b7 v1, Zenodo 5801834 v3) a inbox/a06/codigo/data/<tarea>/raw y
-  # el split se regeneró con la PROPIA función del equipo (src/utils/io.py::ensure_data_splits,
-  # seed 42). Comprobación: el conjunto de ficheros de test regenerado es idéntico al de la
+  # Fuente: split de TEST real. Los datasets no venían en la entrega inicial (data/*/raw y
+  # data/*/splits están en el .gitignore del equipo de IA); se descargaron de las fuentes públicas
+  # que cita la memoria §3.1 (Mendeley vwbb4dc9b7 v1, Zenodo 5801834 v3) a
+  # inbox/a06/codigo/data/<tarea>/raw y el split se regeneró con la PROPIA función del equipo
+  # (src/utils/io.py::ensure_data_splits, seed 42). Revisión 2026-10-28: la carpeta data/ aportada
+  # después es idéntica (md5) a esa descarga y su test coincide fichero a fichero (thermal 40,
+  # rgb 192). Ojo: de fecal solo trae splits/test; ejecutar el train.py/predict.py original borra
+  # y regenera data/fecal/splits (src/utils/io.py:111-115). Comprobación: el conjunto de ficheros de test regenerado es idéntico al de la
   # columna filename de los CSV de predicciones entregados.
   # expected = lo que produjo el pipeline original para esa imagen (voto de cada modelo y clase del
   # ensemble), leído de los CSV; true_class = etiqueta real del dataset. Nada se ha inventado.

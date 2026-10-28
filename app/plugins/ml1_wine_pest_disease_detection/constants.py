@@ -1,6 +1,6 @@
 """Constants for ml1 — vineyard pest/disease image detection (Deep Ensemble, VID-Deep_Ensemble).
 
-See inbox/a1/manifest.yaml for the full contract, the two-delivery provenance of the artifacts
+See inbox/a01/manifest.yaml for the full contract, the two-delivery provenance of the artifacts
 (original code ZIP + "modelo 1.zip" with the RF experts and the audited metrics/platform
 examples) and the known issues — especially the memoria-vs-code discrepancy on the no-image
 fallback and the finding that the delivered ejemplo_inferencia.py/resultado_inferencia_batch.csv
@@ -25,8 +25,9 @@ ENSEMBLE_WEIGHTS_FILENAMES = {
     "efficientnet": "ensemble_member_efficientnet_no_gases_desacoplado.weights.h5",
     "densenet": "ensemble_member_densenet_no_gases_desacoplado.weights.h5",
 }
-RF_CLASE_FILENAME = "rf_clase_expert_no_gases.joblib"   # no se usa para clasificar en produccion (modo desacoplado) -- solo se carga por si se reactivase use_fusion_layer
-RF_RIESGO_FILENAME = "rf_riesgo_expert_no_gases.joblib"  # fallback de riesgo cuando no hay imagen
+# Solo el RF de riesgo (fallback cuando no hay imagen). El RF de clase no se carga: en modo
+# desacoplado no se usa nunca (ver inference.run_inference_tabular_only).
+RF_RIESGO_FILENAME = "rf_riesgo_expert_no_gases.joblib"
 
 # --- Clases (orden vinculante -- config.yaml::model_params.classes, coincide con class_mapping_no_gases.json) ---
 CLASSES = (
@@ -38,6 +39,9 @@ HEALTHY_CLASSES = ("HEALTHY_HOJA", "HEALTHY_RACIMO")
 NO_IMAGE_LABEL = "IMAGEN_NO_DISPONIBLE"  # predictor.py::run_inference_tabular_only, modo desacoplado
 
 IMAGE_SIZE = (224, 224)
+# keras/src/applications/efficientnet.py::IMAGENET_STDDEV_RGB -- copiado aqui (modulo privado de
+# Keras) para reconstruir la capa Rescaling que EfficientNetB0 lleva con weights='imagenet'.
+IMAGENET_STDDEV_RGB = (0.229, 0.224, 0.225)
 YOLO_CONF_THRESHOLD = 0.3
 
 # Sensores de produccion (exclude_gases=true -> 9, sin CO2_ppm/VOC_ppb). Orden vinculante: el
@@ -57,13 +61,14 @@ HEALTHY_CONFIDENCE_THRESHOLD = 0.80
 HEALTHY_RISK_DAMPING = 0.6
 
 # --- Hiperparametros de entrenamiento (unicamente los RF tabulares -- ver manifest.training.scope_note) ---
+# src/training/train_tabular.py:117-137 -- identicos a get_params() de los RF entregados.
 TRAIN_RF_CLASE_PARAMS = {
     "n_estimators": 200, "max_depth": 15, "min_samples_leaf": 20, "max_features": "log2",
-    "bootstrap": True, "min_samples_split": 10,
+    "bootstrap": True,
 }
 TRAIN_RF_RIESGO_PARAMS = {
     "n_estimators": 200, "max_depth": 30, "min_samples_leaf": 10, "max_features": "log2",
-    "bootstrap": True, "min_samples_split": 5,
+    "bootstrap": True,
 }
 TRAIN_RANDOM_STATE = 42
 TRAIN_TEST_SIZE = 0.2  # src/training/train_tabular.py -- holdout 80/20

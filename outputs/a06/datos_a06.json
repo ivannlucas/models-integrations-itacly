@@ -126,7 +126,7 @@
       "nombre": "Verificación split de test completo (batch)",
       "valor": "232/232 imágenes, 0 diferencias de voto; Tablas 4, 5 y 6 reproducidas a 4 decimales",
       "descripcion": "Resultado verificado tras integración (no declarado por el equipo): thermal 0.8000 y rgb 0.8490 de accuracy, idénticas a las declaradas",
-      "interpretacion": "Las métricas declaradas por el equipo de IA quedan confirmadas con el plugin servido; quedan votos thermal con margen softmax < 0.01, sensibles a cambios de versión de opencv/torch"
+      "interpretacion": "Las métricas declaradas por el equipo de IA quedan confirmadas con el plugin servido; quedan votos thermal y rgb con margen softmax < 0.01, sensibles a cambios de versión de opencv/torch"
     }
   ],
   "limitaciones": [

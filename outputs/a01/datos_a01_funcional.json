@@ -1,0 +1,104 @@
+{
+  "model_id": "a01",
+  "model_slug": "wine-pest-disease-detection",
+  "fecha": "Octubre 2026",
+  "descripcion": "Un asistente de diagnóstico para la vid: le envías una foto de una hoja o un racimo, junto con las lecturas de los sensores de campo de los últimos 5 días, y te dice qué plaga o enfermedad hay (si la hay) y cómo de favorables están las condiciones ambientales para que se extienda.",
+  "objetivo": "Detectar lo antes posible plagas y enfermedades en el viñedo, para que puedas intervenir solo donde y cuando hace falta, en vez de aplicar tratamientos fitosanitarios de forma preventiva y generalizada.",
+  "caso_uso": "Haces una foto a una hoja o racimo con dudas, recoges la lectura de los sensores de la zona de los últimos 5 días, y envías ambas cosas al sistema. Si tienes foto, te devuelve el diagnóstico (una de 15 plagas/enfermedades conocidas, o 'sana') junto con el riesgo ambiental. Si no tienes foto a mano, igualmente puedes consultar solo el riesgo ambiental con los sensores.",
+  "que_no_responde": "No te dice qué tratamiento aplicar ni en qué dosis, ni sustituye la inspección de un técnico agrónomo ante un caso dudoso o grave — es una ayuda a la decisión, no un diagnóstico clínico definitivo.",
+  "entradas_contexto": "Los datos vienen de dos sitios: una foto que tú mismo tomas en campo (hoja o racimo) y las lecturas de los sensores IIoT ya instalados en la parcela (temperatura, humedad, lluvia, etc. de los últimos 5 días).",
+  "inputs": [
+    {
+      "nombre": "Foto de hoja o racimo",
+      "descripcion": "Una imagen tomada en campo; el sistema localiza y recorta automáticamente la zona de interés antes de analizarla. Es opcional: sin foto, el sistema solo te da el riesgo ambiental."
+    },
+    {
+      "nombre": "Lecturas de los sensores de los últimos 5 días",
+      "descripcion": "Mes, temperaturas máxima/mínima media, humedad relativa máxima/mínima, humedad del suelo, lluvia acumulada, horas de humedad foliar y grados-día acumulados. Hacen falta los 9 valores."
+    },
+    {
+      "nombre": "Fotos y sensores de varias muestras a la vez (lote)",
+      "descripcion": "Si tienes que revisar varias zonas de golpe, puedes subir un archivo comprimido con todas las fotos y un listado de sensores por foto, en vez de consultarlas una a una."
+    }
+  ],
+  "outputs": [
+    {
+      "nombre": "Diagnóstico",
+      "descripcion": "La plaga o enfermedad detectada (o 'sana'), o un aviso de que no se ha podido analizar la foto.",
+      "interpretacion": "Si no mandaste foto, este campo saldrá como 'sin imagen disponible' — solo tendrás el riesgo ambiental, no el diagnóstico."
+    },
+    {
+      "nombre": "Confianza del diagnóstico",
+      "descripcion": "Qué tan de acuerdo están entre sí los tres modelos que componen el sistema a la hora de dar ese diagnóstico.",
+      "interpretacion": "Cuanto más alta, más fiable es el diagnóstico. Si es baja, conviene revisar la muestra a mano."
+    },
+    {
+      "nombre": "Índice de riesgo",
+      "descripcion": "Un número entre 0 y 1 que indica cómo de favorables están las condiciones ambientales (humedad, temperatura...) para que la plaga o enfermedad se extienda.",
+      "interpretacion": "Tómalo como orientación, no como dato preciso: en las pruebas, el índice apenas mejora a dar siempre el mismo valor medio. No lo uses por sí solo para decidir un tratamiento."
+    },
+    {
+      "nombre": "Método usado",
+      "descripcion": "Si el resultado viene de analizar la foto (diagnóstico + riesgo fiables) o solo de los sensores (riesgo únicamente, sin diagnóstico de la foto).",
+      "interpretacion": "Te permite saber si el diagnóstico es real o si solo tienes la estimación de riesgo ambiental."
+    }
+  ],
+  "ejemplo_interpretacion": "Si envías una foto de una hoja con manchas y los sensores de la zona, y el sistema devuelve 'MILDIU' con confianza 0,95 y riesgo 0,65, significa: alta seguridad de que es mildiu, y las condiciones ambientales actuales son razonablemente favorables para que progrese — conviene intervenir pronto. Si en cambio no mandas foto y solo consultas los sensores, el sistema solo te dará ese 0,65 de riesgo, sin decirte si hay o no una enfermedad presente.",
+  "margen_error": "De cada 100 fotos analizadas, el sistema acierta en el diagnóstico en unas 95 (verificado de forma independiente sobre 1470 fotos reales: 94,7%; con fotos de cámara a resolución completa, en torno al 94%). Para algunas plagas poco frecuentes (Lobesia, Oídio en racimo, mosquito verde) acierta solo unas 6 de cada 10 veces — en esos casos conviene no fiarse solo del diagnóstico automático. El índice de riesgo es solo orientativo.",
+  "revisar_manualmente": [
+    "Diagnósticos de Lobesia, Oídio en racimo o mosquito verde (Empoasca) con confianza baja — son las plagas donde el sistema acierta menos.",
+    "Cualquier diagnóstico con confianza por debajo de un tercio (los tres modelos no se ponen de acuerdo entre sí).",
+    "El índice de riesgo en general — en las pruebas apenas acierta más que un valor fijo, así que no sirve para decidir por sí solo.",
+    "Fotos tomadas con una cámara térmica fuera de su resolución habitual, o en condiciones de campo muy distintas a las habituales (polvo, contraluz extremo...)."
+  ],
+  "que_no_hace": [
+    "No recomienda el tratamiento fitosanitario a aplicar, solo diagnostica y estima el riesgo.",
+    "No sustituye la confirmación de un técnico agrónomo en casos dudosos o de alto impacto económico.",
+    "No detecta deficiencias nutricionales ni otras co-infecciones que no sean una de las 15 categorías entrenadas.",
+    "No actualiza el riesgo ambiental en tiempo real por sí solo si los sensores dejan de enviar datos — depende de que la telemetría de campo funcione."
+  ],
+  "puede_equivocarse": "Sí, como cualquier sistema automático. Acierta en el diagnóstico en torno al 95% de las veces, verificado contra casi 1500 fotos reales, pero ese porcentaje es bastante más bajo para las plagas menos frecuentes. El índice de riesgo no es fiable: tómalo solo como orientación. Es una herramienta de apoyo a la decisión del viticultor, no una garantía absoluta — las decisiones de tratamiento importantes conviene confirmarlas con criterio humano.",
+  "kpis": [
+    {
+      "kpi": "Acierto en el diagnóstico de la foto",
+      "valor_umbral": ">= 80%",
+      "descripcion": "El umbral mínimo para que el sistema aporte valor real frente a no usarlo; el resultado obtenido (94,7%) lo supera ampliamente."
+    },
+    {
+      "kpi": "Equilibrio entre plagas frecuentes y poco frecuentes (F1 macro)",
+      "valor_umbral": ">= 85%",
+      "descripcion": "Evita que el sistema solo funcione bien con las plagas más comunes y falle sistemáticamente con las raras; se alcanza un 88%, por encima del umbral, aunque con margen de mejora en las clases menos representadas."
+    },
+    {
+      "kpi": "Detección de casos reales (sensibilidad)",
+      "valor_umbral": ">= 85%",
+      "descripcion": "Prioriza no dejar pasar infecciones reales (falsos negativos) frente a dar alguna alarma de más."
+    }
+  ],
+  "limitaciones": [
+    {
+      "tipo": "Fotos de otros países",
+      "descripcion": "Al no existir suficientes fotos de viñedos de Castilla y León, se usaron fotos de India, Brasil y EE.UU. Una hoja real de la zona podría presentar síntomas ligeramente distintos a los que el sistema ha visto durante el entrenamiento."
+    },
+    {
+      "tipo": "Menos fiable con plagas poco comunes",
+      "descripcion": "Lobesia, Oídio en racimo y mosquito verde (Empoasca) tienen menos fotos de ejemplo que el resto, y el sistema acierta algo menos con ellas."
+    },
+    {
+      "tipo": "Sin foto, no hay diagnóstico de plaga",
+      "descripcion": "Si solo mandas los sensores, el sistema te da el riesgo ambiental pero no te dice si hay una plaga presente — para eso necesita la foto."
+    },
+    {
+      "tipo": "El índice de riesgo es solo orientativo",
+      "descripcion": "En las pruebas, el índice de riesgo apenas acierta más que dar siempre el mismo valor medio: los datos con que se entrenó no relacionan bien las condiciones de los sensores con cada plaga. Úsalo como referencia general, nunca como único criterio."
+    },
+    {
+      "tipo": "El riesgo ambiental viene de un gemelo digital, no de mediciones de campo acumuladas durante años",
+      "descripcion": "Los datos históricos usados para calibrar el índice de riesgo se generaron con modelos científicos estándar del sector, no son un histórico real de campo de varios años — es razonable como orientación, pero conviene contrastarlo con la experiencia local antes de tomarlo como un valor absoluto."
+    },
+    {
+      "tipo": "El reentrenamiento de la parte visual (fotos) no está disponible todavía",
+      "descripcion": "Hoy solo se puede reentrenar la parte que calcula el riesgo a partir de los sensores. Mejorar el reconocimiento de las fotos con datos propios de la explotación requiere un desarrollo específico pendiente."
+    }
+  ]
+}

@@ -1,0 +1,145 @@
+{
+  "model_id": "a01",
+  "model_slug": "wine-pest-disease-detection",
+  "fecha": "Octubre 2026",
+  "model_key": "ml1-wine-pest-disease-detection",
+  "version": "1.0.0",
+  "descripcion": "Sistema experto multimodal (VID-Deep_Ensemble) para diagnóstico fitopatológico de la vid: un detector YOLOv8 localiza y recorta la hoja o el racimo de interés, y un Deep Ensemble de tres backbones (MobileNetV3Small, EfficientNetB0, DenseNet121) clasifica entre 15 plagas/patologías a partir de esa imagen. Una rama tabular paralela, alimentada por 9 sensores IIoT, estima de forma independiente un índice de riesgo epidemiológico continuo (0-1). Variante de producción: modo desacoplado (la clase proviene en exclusiva de la imagen, el riesgo en exclusiva de los sensores) y sin gases (CO2/VOC no son necesarios).",
+  "task_type": "classification_regression_multimodal (ensemble de visión + regresión tabular, con fallback de solo-riesgo sin imagen)",
+  "framework": "keras3(backend=torch) + ultralytics (YOLOv8) + scikit-learn (RandomForestClassifier/Regressor)",
+  "artefacto": "best.pt (detector YOLOv8) + 3 ensemble_member_<backbone>_no_gases_desacoplado.weights.h5 (Deep Ensemble) + rf_riesgo_expert_no_gases.joblib (experto de riesgo de respaldo, re-serializado con scikit-learn 1.5.2) + class_mapping_no_gases.json — 574 MB en total",
+  "objetivo": "Detección y monitorización fitosanitaria temprana de la vid en Castilla y León mediante visión computacional y datos fisicoquímicos de campo, identificando 15 enfermedades fúngicas y plagas sobre hoja o racimo y cuantificando el riesgo epidemiológico ambiental, para permitir intervenciones fitosanitarias dirigidas en lugar de tratamientos preventivos generalizados.",
+  "caso_uso": "El cliente envía una imagen de hoja/racimo (base64) junto con la lectura de 9 sensores IIoT de los últimos 5 días; el sistema devuelve la patología diagnosticada (voto por mayoría/soft-voting de los 3 backbones), la confianza del ensemble y el índice de riesgo. Si no se aporta imagen, el sistema cae a un modo de contingencia: un experto RandomForest estima solo el riesgo a partir de los sensores (no clasifica patología — ver limitaciones). En modo batch, el cliente sube un ZIP con un CSV (columna Path_Imagen + 9 sensores) y las imágenes referenciadas; cada fila se procesa de forma independiente, con la misma lógica de contingencia por fila.",
+  "inputs": [
+    {
+      "nombre": "image_base64",
+      "tipo": "string | null",
+      "descripcion": "Imagen de hoja o racimo en base64 (JPG/PNG), recortada automáticamente por YOLOv8 antes de clasificar.",
+      "obligatorio": "No",
+      "valor_defecto": "sin imagen -> modo de contingencia tabular (solo riesgo)"
+    },
+    {
+      "nombre": "sensors",
+      "tipo": "dict[string, float]",
+      "descripcion": "9 sensores IIoT de los últimos 5 días: Mes, Temp_Max_Media_5d_C, Temp_Min_Media_5d_C, Hum_Rel_Max_5d_Pct, Hum_Rel_Min_5d_Pct, Hum_Suelo_Pct, Lluvia_Acum_5d_mm, Horas_Humedad_Foliar, GDD_Acumulado. CO2_ppm/VOC_ppb se aceptan pero se ignoran (configuración de producción, exclude_gases=true).",
+      "obligatorio": "Sí (coincidencia exacta con los 9 campos)",
+      "valor_defecto": "N/A"
+    },
+    {
+      "nombre": "mlflow_run_id",
+      "tipo": "string",
+      "descripcion": "Run de MLflow con el RandomForest de riesgo reentrenado por el usuario (solo afecta a las peticiones sin imagen). Si no se puede cargar, la petición falla (422): nunca se usa el modelo base en su lugar.",
+      "obligatorio": "No",
+      "valor_defecto": "\"\" (usa el RF de riesgo base)"
+    },
+    {
+      "nombre": "data_path (modo batch)",
+      "tipo": "string",
+      "descripcion": "Ruta local o s3:// a un .zip con un CSV (Path_Imagen + los 9 sensores) y las imágenes referenciadas, en la raíz del ZIP o en una subcarpeta images/ (se buscan en ambos sitios). Las columnas del CSV que no son sensores (ID, etiqueta...) se ignoran.",
+      "obligatorio": "Sí, en modo batch",
+      "valor_defecto": "N/A"
+    }
+  ],
+  "outputs": [
+    {
+      "nombre": "enfermedad",
+      "tipo": "string",
+      "descripcion": "Una de las 15 clases (ALTICA, BLACK_ROT, BOTRYTIS, EMPOASCA, ERINOSIS, ESCA_HOJA, ESCA_RACIMO, HEALTHY_HOJA, HEALTHY_RACIMO, ISARIOPSIS, LOBESIA, MILDIU, OIDIO, OIDIO_RACIMO, RED_MITE) o IMAGEN_NO_DISPONIBLE si no se aportó foto.",
+      "rango": "15 clases + 1 etiqueta de contingencia",
+      "interpretacion": "diagnóstico fitopatológico por voto mayoritario/promedio del ensemble"
+    },
+    {
+      "nombre": "confianza",
+      "tipo": "float",
+      "descripcion": "Probabilidad softmax promedio de la clase ganadora entre los 3 backbones.",
+      "rango": "[0, 1]; 0.0 si no hay imagen",
+      "interpretacion": "a mayor valor, mayor acuerdo entre los 3 modelos del ensemble"
+    },
+    {
+      "nombre": "riesgo",
+      "tipo": "float",
+      "descripcion": "Índice de riesgo epidemiológico, estimado por la rama tabular (con imagen) o por el experto RandomForest (sin imagen).",
+      "rango": "[0, 1]",
+      "interpretacion": "potencial de propagación según las condiciones microclimáticas; no depende de la imagen. Orientativo: ver limitaciones (apenas mejora a un valor constante)"
+    },
+    {
+      "nombre": "metodo",
+      "tipo": "string",
+      "descripcion": "Motor que generó la respuesta.",
+      "rango": "HIBRIDO_ENSAMBLE | RIESGO_TABULAR_EXPERT",
+      "interpretacion": "HIBRIDO_ENSAMBLE = con imagen (clase + riesgo fiables); RIESGO_TABULAR_EXPERT = sin imagen (solo riesgo, enfermedad=IMAGEN_NO_DISPONIBLE)"
+    }
+  ],
+  "metricas": [
+    {
+      "nombre": "Deep Ensemble — Accuracy (declarado, memoria Tabla 4/6)",
+      "valor": "0,95 (0,9469 en el CSV auditado)",
+      "descripcion": "Test hold-out, 1470 imágenes, configuración Desacoplado + Sin Gases",
+      "interpretacion": "clasifica correctamente ~95 de cada 100 imágenes del test oficial"
+    },
+    {
+      "nombre": "Deep Ensemble — F1-Score (declarado)",
+      "valor": "macro=0,88 / weighted=0,95",
+      "descripcion": "Promedio por clase (macro, sin ponderar) y ponderado por soporte (weighted), mismo test hold-out",
+      "interpretacion": "el macro, más bajo que el weighted, refleja que algunas clases minoritarias (LOBESIA, OIDIO_RACIMO, EMPOASCA) rinden peor"
+    },
+    {
+      "nombre": "Deep Ensemble — métricas verificadas con el plugin real (28/10/2026)",
+      "valor": "0,9469 / F1 macro 0,8807 / F1 weighted 0,9463",
+      "descripcion": "Las 1470 imágenes de data/splits/test_split.csv sobre los recortes del equipo: idéntico a lo auditado. Con la imagen 224 recortada por el plugin (ruta de producción): 0,9483. Con la foto a resolución completa: 0,9401",
+      "interpretacion": "el plugin reproduce exactamente el modelo auditado; con fotos de cámara a resolución completa cabe esperar ~0,6 puntos menos de acierto"
+    },
+    {
+      "nombre": "MAE riesgo Deep Ensemble (declarado y verificado)",
+      "valor": "0,189 (R² = 0,076)",
+      "descripcion": "Error absoluto medio del índice de riesgo [0,1] sobre las 1470 filas de test; un valor constante (la mediana) obtiene MAE 0,183",
+      "interpretacion": "el índice de riesgo apenas aporta información sobre la que daría un valor fijo — ver limitaciones"
+    },
+    {
+      "nombre": "RandomForest tabular (fallback de riesgo) — accuracy/f1 (declarado y verificado EXACTO)",
+      "valor": "accuracy=0,11593, f1_macro=0,11804, f1_weighted=0,11755",
+      "descripcion": "Reproducido de forma EXACTA (mismas 5 cifras decimales) ejecutando el training.py real del plugin contra las 500.000 filas reales de SENSORES.csv, con el mismo split 80/20 (seed=42) que generó el test auditado (100.000 filas). El RF de riesgo de respaldo: MAE 0,188, R² 0,205",
+      "interpretacion": "confirma que el RF tabular NO es apto como clasificador aislado (apenas por encima del azar sobre 15 clases) — por eso el plugin nunca lo usa para clasificar, solo para estimar riesgo"
+    },
+    {
+      "nombre": "YOLOv8 — detección",
+      "valor": "mAP50=0,995, mAP50-95=0,868, Recall=1,0",
+      "descripcion": "Localización de hoja/racimo, test hold-out (memoria Tabla 7/Figura 9)",
+      "interpretacion": "detecta prácticamente el 100% de las regiones de interés con alta precisión geométrica"
+    }
+  ],
+  "limitaciones": [
+    {
+      "tipo": "Origen internacional de las imágenes",
+      "descripcion": "Ante la falta de datasets públicos de Castilla y León, se usaron colecciones de India, Brasil y EE.UU.; las manifestaciones visuales de las patologías pueden variar por clima, luz o variedad de vid respecto al viñedo español real."
+    },
+    {
+      "tipo": "Clases minoritarias con rendimiento más débil",
+      "descripcion": "LOBESIA (f1=0,67, recall 0,60), OIDIO_RACIMO (f1=0,59, recall 0,62) y EMPOASCA (f1=0,74, recall 0,59) tienen soporte bajo en el test (15, 13 y 17 imágenes) y un recall muy inferior al resto de clases y al KPI individual de 0,85 — cifras auditadas por el equipo y reproducidas exactamente con el plugin."
+    },
+    {
+      "tipo": "Fotos a resolución completa",
+      "descripcion": "El modelo se entrenó y evaluó con recortes de imágenes ya reducidas a 224 px; con fotos de cámara a resolución completa la accuracy baja de 0,947 a 0,940 (MobileNetV3 de 0,71 a 0,60). Heredado del diseño del equipo de IA."
+    },
+    {
+      "tipo": "El fallback sin imagen NO clasifica patología",
+      "descripcion": "Cuando no se aporta imagen, el sistema usa un experto RandomForest que solo estima el riesgo (metodo=RIESGO_TABULAR_EXPERT, enfermedad=IMAGEN_NO_DISPONIBLE). El RandomForest clasificador existe como artefacto pero no se invoca para diagnosticar: su accuracy real aislada es del 11,6% sobre 15 clases (ver métricas), casi aleatoria."
+    },
+    {
+      "tipo": "El índice de riesgo apenas tiene capacidad predictiva",
+      "descripcion": "MAE 0,189 pero R² 0,076: predecir siempre la mediana da MAE 0,183, mejor que el modelo. Las predicciones medias por clase son casi planas (0,25-0,27) frente a valores reales de 0,06 a 0,60. Causa: el riesgo de entrenamiento se generó con reglas por patología, pero los sensores simulados no dependen de la patología (salvo los grados-día en LOBESIA/ALTICA) y la rama de riesgo solo ve sensores. El RF de respaldo tiene la misma limitación (R² 0,205). Debe tratarse como orientativo."
+    },
+    {
+      "tipo": "Reentrenamiento del Deep Ensemble fuera de alcance (por ahora)",
+      "descripcion": "Solo el par RandomForest (riesgo de respaldo) es reentrenable vía /train. El Deep Ensemble CNN requiere ~4h20min de CPU y un pipeline de entrenamiento complejo (tf.data, aumentado, scheduler); aunque el corpus completo ya está disponible y el repositorio soporta entrenamiento asíncrono, portar fielmente ese pipeline es un trabajo dedicado pendiente, no incluido en esta integración."
+    },
+    {
+      "tipo": "Índice de riesgo basado en un Digital Twin sintético",
+      "descripcion": "Los registros ambientales que alimentan el riesgo (500.000 filas de SENSORES.csv) son generados sintéticamente a partir de modelos epidemiológicos estándar (Broome, Rossi, Caffi), no mediciones directas de campo — requiere validación con telemetría real antes de confiar en el valor absoluto del índice."
+    }
+  ],
+  "fichero_nombre": "inbox/a01/manifest.yaml::golden_cases (20 casos de data/splits/test_split.csv) + test completo de 1470 imágenes + SENSORES.csv (500.000 filas)",
+  "fichero_registros": "20 casos con imagen+sensores+etiqueta real; 1470 imágenes del split de test oficial (Deep Ensemble); 500.000 filas reales (RandomForest)",
+  "fichero_resultado": "Deep Ensemble: 0,9469 / 0,8807 / 0,9463 idénticos a lo auditado; golden 18/20 (los 2 fallos son errores del modelo). RandomForest: reproducción EXACTA de accuracy/f1 auditados. predictions.csv del equipo reproducido — ver outputs/a01/verification_report.md",
+  "observaciones_tecnicas": "Inferencia 100% en CPU (Keras 3 con backend=torch, sin TensorFlow ni GPU); YOLOv8 vía ultralytics también en CPU. ~0,64 s por imagen en CPU. Memoria: 2,3 GB tras cargar, pico de 3,2 GB con 4 peticiones concurrentes — límite de pod recomendado >= 4 GiB. Artefactos: 574 MB (499 MB son el RF de riesgo, solo usado sin imagen). Dependencias con versión fijada: scikit-learn==1.5.2 (compatibilidad de pickle con el servicio de explicabilidad), keras>=3.0.0 (paquete standalone, no tf.keras)."
+}
