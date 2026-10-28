@@ -25,7 +25,14 @@ class TrainJobResponse(BaseModel):
     error: str | None = Field(default=None, description="Mensaje de error, solo si failed")
     error_type: str | None = Field(
         default=None,
-        description="Clase del error (ValueError, FileNotFoundError, TrainingNotSupportedError, TrainJobLost…)",
+        description=(
+            "Clase del error (ValueError, FileNotFoundError, TrainingNotSupportedError, TrainJobLost, "
+            "TrainJobTimeout…)"
+        ),
+    )
+    http_status: int | None = Field(
+        default=None,
+        description="Código que habría devuelto POST /train síncrono (400, 413, 501, 502, 500…), solo si failed",
     )
 
     @classmethod
@@ -39,4 +46,5 @@ class TrainJobResponse(BaseModel):
             result=record.result,
             error=record.error,
             error_type=record.error_type,
+            http_status=record.http_status,
         )

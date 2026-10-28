@@ -1,16 +1,24 @@
 """ProcessTrainExecutor with real `spawn` child processes and a file-backed store."""
 from __future__ import annotations
 
+import logging
 import os
 import time
 
+import pytest
+
 from app.domain.services.train_job import TrainJobRecord, TrainJobStatus
+from app.infrastructure.train_jobs import process_executor
 from app.infrastructure.train_jobs.process_executor import ProcessTrainExecutor, run_train_job
 from tests.unit.train_job_fakes import (
+    TRAIN_ERRORS,
     EchoTrainPlugin,
     FailingTrainPlugin,
     FileJobStore,
+    InMemoryJobStore,
+    NiceReportingTrainPlugin,
     NumpyMetricsTrainPlugin,
+    RaisingTrainPlugin,
     SlowTrainPlugin,
 )
 
@@ -59,7 +67,29 @@ def test_failure_is_stored_with_its_type(tmp_path):
     record = _terminal(store, "run-2")
     assert record.status is TrainJobStatus.FAILED
     assert record.error_type == "FileNotFoundError"
+    assert record.http_status == 400
     assert "s3://b/missing.csv" in record.error
+
+
+@pytest.mark.parametrize("data_path", sorted(TRAIN_ERRORS))
+def test_failure_stores_the_http_status_of_the_synchronous_train(tmp_path, data_path):
+    exc, expected = TRAIN_ERRORS[data_path]
+    store = FileJobStore(str(tmp_path))
+    _queue(store, "run-h")
+    run_train_job(job_id="run-h", plugin_class=RaisingTrainPlugin,
+                  train_kwargs={"data_path": data_path, "mlflow_run_id": "run-h"}, store=store, heartbeat_s=60)
+    record = store.get("run-h")
+    assert record.status is TrainJobStatus.FAILED
+    assert record.error_type == type(exc).__name__  # unchanged: still the exact class name
+    assert record.http_status == expected
+
+
+def test_success_has_no_http_status(tmp_path):
+    store = FileJobStore(str(tmp_path))
+    _queue(store, "run-ok")
+    run_train_job(job_id="run-ok", plugin_class=EchoTrainPlugin,
+                  train_kwargs={"data_path": "x", "mlflow_run_id": "run-ok"}, store=store, heartbeat_s=60)
+    assert store.get("run-ok").http_status is None
 
 
 def test_numpy_metrics_are_stored_as_plain_json(tmp_path):
@@ -131,3 +161,101 @@ def test_run_train_job_without_record_does_nothing(tmp_path):
     store = FileJobStore(str(tmp_path))
     run_train_job(job_id="ghost", plugin_class=EchoTrainPlugin, train_kwargs={}, store=store, heartbeat_s=60)
     assert store.get("ghost") is None
+
+
+def test_hung_training_is_stopped_after_max_duration_and_frees_the_model(tmp_path):
+    store = FileJobStore(str(tmp_path))
+    executor = ProcessTrainExecutor(heartbeat_s=0.2, max_duration_s=2)
+    _submit(executor, store, "run-8", SlowTrainPlugin, data_path="120")
+    proc = executor._procs["run-8"]
+    record = _terminal(store, "run-8")
+    assert record.status is TrainJobStatus.FAILED
+    assert record.error_type == "TrainJobTimeout"
+    assert record.http_status == 500
+    assert "duración máxima" in record.error
+    _wait(lambda: not proc.is_alive(), timeout=15, what="child stopped")
+    assert not executor.is_busy()
+
+
+def test_training_child_runs_at_lower_cpu_priority(tmp_path):
+    store, executor = FileJobStore(str(tmp_path)), ProcessTrainExecutor(heartbeat_s=0.2, nice=5)
+    _submit(executor, store, "run-9", NiceReportingTrainPlugin)
+    record = _terminal(store, "run-9")
+    assert record.status is TrainJobStatus.SUCCEEDED, record.error
+    assert record.result["metrics"]["nice"] == min(os.nice(0) + 5, 19)
+
+
+def test_renice_failure_is_logged_not_raised(monkeypatch, caplog):
+    def deny(_):
+        raise PermissionError("not allowed")
+
+    monkeypatch.setattr(process_executor.os, "nice", deny)
+    with caplog.at_level(logging.WARNING):
+        process_executor._lower_priority(10)
+    assert "priority" in caplog.text
+
+
+class _FakeProc:
+    """Process double for the watchdog: ``dies_on`` is the signal method that ends it."""
+
+    pid = 4242
+
+    def __init__(self, dies_on: str = "terminate", finishes: bool = False) -> None:
+        self.alive = not finishes
+        self.dies_on = dies_on
+        self.calls: list[str] = []
+
+    def join(self, timeout=None):
+        self.calls.append("join")
+
+    def is_alive(self):
+        return self.alive
+
+    def terminate(self):
+        self.calls.append("terminate")
+        if self.dies_on == "terminate":
+            self.alive = False
+
+    def kill(self):
+        self.calls.append("kill")
+        self.alive = False
+
+
+def _queued_store(status=TrainJobStatus.RUNNING, **extra):
+    store = InMemoryJobStore()
+    store.save(TrainJobRecord("run-w", "fake-model", status, 1.0, 1.0, **extra))
+    return store
+
+
+def test_watchdog_does_nothing_when_the_child_ends_in_time():
+    proc, store = _FakeProc(finishes=True), _queued_store()
+    process_executor._watch(proc, "run-w", store, 5)
+    assert proc.calls == ["join"]
+    assert store.get("run-w").status is TrainJobStatus.RUNNING
+
+
+def test_watchdog_kills_a_child_that_ignores_sigterm():
+    proc, store = _FakeProc(dies_on="kill"), _queued_store()
+    process_executor._watch(proc, "run-w", store, 5)
+    assert proc.calls == ["join", "terminate", "join", "kill", "join"]
+    record = store.get("run-w")
+    assert (record.status, record.error_type, record.http_status) == (TrainJobStatus.FAILED, "TrainJobTimeout", 500)
+
+
+def test_watchdog_never_overwrites_a_terminal_job():
+    proc = _FakeProc()
+    store = _queued_store(TrainJobStatus.FAILED, error="lost", error_type="TrainJobLost", http_status=500)
+    process_executor._watch(proc, "run-w", store, 5)
+    assert "terminate" in proc.calls  # the child is still stopped
+    assert store.get("run-w").error_type == "TrainJobLost"
+
+
+@pytest.mark.parametrize("workers,warns", [("4", True), ("1", False), ("", False)])
+def test_more_than_one_worker_is_warned_once(monkeypatch, caplog, workers, warns):
+    monkeypatch.setenv("WEB_CONCURRENCY", workers)
+    process_executor._warn_if_multiple_workers.cache_clear()
+    with caplog.at_level(logging.WARNING):
+        ProcessTrainExecutor()
+        ProcessTrainExecutor()
+    process_executor._warn_if_multiple_workers.cache_clear()
+    assert caplog.text.count("1 worker and 1 replica") == (1 if warns else 0)

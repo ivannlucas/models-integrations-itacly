@@ -15,11 +15,12 @@ from app.domain.services.exceptions import (
     BaseVersionNotFoundError,
     ModelPersistenceError,
     NoPreviousBaseVersionError,
-    TrainingNotSupportedError,
     TrainJobBusyError,
+    TrainJobResultUnreadableError,
     TrainJobStoreUnavailableError,
     UserModelUnavailableError,
 )
+from app.domain.services.train_job import train_error_http_status
 
 logger = logging.getLogger(__name__)
 
@@ -158,37 +159,24 @@ def make_model_router(
                 content=TrainJobResponse.from_record(record).model_dump(mode="json"),
             )
         try:
-            return container.train_use_case.execute(body)
-        except TrainingNotSupportedError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_501_NOT_IMPLEMENTED, detail=str(exc)
-            ) from exc
-        except ArchiveLimitExceededError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_413_CONTENT_TOO_LARGE, detail=str(exc)
-            ) from exc
-        except (FileNotFoundError, ValueError) as exc:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
-            ) from exc
-        except ModelPersistenceError as exc:
-            logger.error(
-                "Retrained model for '%s' could not be persisted (MLflow run or new base version): %s",
-                model_id, exc,
-            )
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)
-            ) from exc
-        except BaseReloadError as exc:
-            logger.error("Retrained base of '%s' does not load: %s", model_id, exc)
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)
-            ) from exc
+            # An async job and a synchronous /train of the same model never overlap (409).
+            with container.submit_train_job_use_case.sync_training():
+                return container.train_use_case.execute(body)
+        except TrainJobBusyError as exc:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
         except Exception as exc:
-            logger.exception("Unexpected error during training for model '%s'", model_id)
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)
-            ) from exc
+            # Same mapping the async job stores as http_status (train_error_http_status).
+            code = train_error_http_status(exc)
+            if isinstance(exc, ModelPersistenceError):
+                logger.error(
+                    "Retrained model for '%s' could not be persisted (MLflow run or new base version): %s",
+                    model_id, exc,
+                )
+            elif isinstance(exc, BaseReloadError):
+                logger.error("Retrained base of '%s' does not load: %s", model_id, exc)
+            elif code == status.HTTP_500_INTERNAL_SERVER_ERROR:
+                logger.exception("Unexpected error during training for model '%s'", model_id)
+            raise HTTPException(status_code=code, detail=str(exc)) from exc
 
     @router.post("/rollback")
     def rollback(request: Request, body: RollbackRequest | None = None) -> RollbackResponse:
@@ -228,6 +216,10 @@ def make_model_router(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail=f"No se pudo consultar el entrenamiento: {exc}",
             ) from exc
+        except TrainJobResultUnreadableError as exc:
+            # Not 503: MLflow answers, retrying won't help. The job stays succeeded in MLflow.
+            logger.error("Result of training job %s for model '%s' is unreadable: %s", job_id, model_id, exc)
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
         except Exception as exc:
             logger.exception("Unexpected error reading training job %s for model '%s'", job_id, model_id)
             raise HTTPException(

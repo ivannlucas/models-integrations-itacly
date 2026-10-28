@@ -205,7 +205,8 @@ curl -s -X POST "$BASE/models/<model-id>/train?wait=false" \
 # 202 {"job_id": "<run_id>", "status": "queued", ...}
 
 curl -s "$BASE/models/<model-id>/train/<run_id>"
-# 200 {"status": "running" | "succeeded" | "failed", "result": {...}, "error": ..., "error_type": ...}
+# 200 {"status": "running" | "succeeded" | "failed", "result": {...}, "error": ..., "error_type": ...,
+#      "http_status": ...}
 ```
 
 | Código | Significado |
@@ -213,10 +214,10 @@ curl -s "$BASE/models/<model-id>/train/<run_id>"
 | 202 | Trabajo creado o ya existente para ese `job_id` (reintentar el POST es seguro) |
 | 400 | `mlflow_run_id` vacío, o el run no existe en MLflow |
 | 501 | El modelo publica su base en cada `/train` (ml13–19, 21, 23, 24): solo síncrono |
-| 409 | Ya hay otro entrenamiento de ese modelo en curso en el pod |
+| 409 | Ya hay otro entrenamiento de ese modelo en curso en el pod (también `POST /train` síncrono si hay uno asíncrono en curso, y al revés) |
 | 404 | (GET) No hay trabajo con ese `job_id` para este modelo |
 | 503 | MLflow no accesible (reintentable) |
-| 500 | Error inesperado del servicio |
+| 500 | Error inesperado del servicio; en el GET, también un trabajo `succeeded` cuyo `async_train/result.json` no se puede leer de MLflow (el detalle lo explica; no es reintentable como el 503) |
 
 El estado de un trabajo nunca cambia una vez terminal. Reenviar el mismo `job_id` devuelve el trabajo
 existente, también si falló: para reintentar hay que crear un run nuevo en MLflow y usar su id.
@@ -224,6 +225,23 @@ existente, también si falló: para reintentar hay que crear un run nuevo en MLf
 El estado vive en el run de MLflow (etiquetas `async_train.*` y artefacto `async_train/result.json`).
 Si el proceso deja de dar señales más de `TRAIN_JOB_STALE_AFTER_S` segundos (600 por defecto; latido cada
 `TRAIN_JOB_HEARTBEAT_S`, 60), el GET lo devuelve como `failed` con `error_type: "TrainJobLost"`.
+Si sigue en `queued`/`running` más de `TRAIN_JOB_MAX_DURATION_S` segundos desde que se envió (43200 por
+defecto, 12 h), el pod que lo lanzó detiene el proceso (SIGTERM y, si no para, SIGKILL) y cualquier GET lo
+devuelve como `failed` con `error_type: "TrainJobTimeout"`; así un `train()` colgado no deja el modelo en 409.
+
+Un trabajo `failed` lleva `http_status`: el código que habría devuelto `POST /train` síncrono con ese
+error (400 datos inválidos o fichero inexistente, incluidas subclases de `ValueError` como los errores de
+lectura de pandas; 413 ZIP fuera de límites; 501 modelo no reentrenable; 502 no se pudo guardar el modelo
+reentrenado; 500 resto, `TrainJobLost` y `TrainJobTimeout`). Es lo que debe mapear el consumidor;
+`error_type` (nombre exacto de la clase) se mantiene por compatibilidad. En `queued`, `running` y
+`succeeded` es `null`.
+
+El proceso de entrenamiento corre con prioridad de CPU rebajada (`os.nice(TRAIN_JOB_NICE)`, 10 por
+defecto) para que, con la CPU saturada, las predicciones y las sondas de liveness sigan respondiendo.
+
+El 409 y la idempotencia por `job_id` se controlan dentro del proceso: el servicio debe desplegarse con
+**1 réplica y 1 worker** (`uvicorn` sin `--workers`, `WEB_CONCURRENCY` sin definir o a 1) por modelo. Con
+más workers el arranque lo avisa en el log y dos entrenamientos del mismo modelo podrían solaparse.
 
 Solo para los modelos que guardan el reentreno en su run de MLflow (aplicativos sectoriales): su
 `train()` no debe sobrescribir el artefacto fijo en disco (se comparte con el proceso que sirve

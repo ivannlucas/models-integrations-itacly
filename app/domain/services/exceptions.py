@@ -156,3 +156,8 @@ class TrainJobRunNotFoundError(ValueError):
 
 class TrainJobStoreUnavailableError(Exception):
     """Raised when the async training state store (MLflow) cannot be reached or fails (503, retryable)."""
+
+
+class TrainJobResultUnreadableError(Exception):
+    """Raised when a succeeded async job's result.json cannot be read back from MLflow (500, not 503:
+    MLflow answers, but the artifact is missing or not a JSON file)."""
