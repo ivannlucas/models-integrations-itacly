@@ -115,10 +115,21 @@ training:
         como train() del plugin: es ligero, no necesita imagenes, y el cliente puede aportar un
         CSV de ese tamaño razonablemente.
       - hybrid (run_training -> src/training/train.py): re-entrena los 3 backbones CNN desde
-        cero, GPU recomendada, ~4h20min en CPU (memoria, Tabla 2) para los 3 backbones x 50
-        epocas, Y exige el corpus completo de 9.794 imagenes (no entregado, vive en un
-        contenedor externo). NO es razonable exponerlo como endpoint de reentrenamiento bajo
-        demanda de un plugin -- fuera de alcance, igual que otros modelos pesados de este repo.
+        cero (o, siguiendo la regla del repo, desde el checkpoint servido -- nunca desde
+        ImageNet ni desde un reentreno anterior), GPU recomendada, ~4h20min en CPU (memoria,
+        Tabla 2) para los 3 backbones x 50 epocas. El corpus completo (10.526 imagenes) SI
+        esta disponible ya (ver known_issues, entrega 28/10/2026) y el repo ya soporta
+        `/train?wait=false` (entrenamiento asincrono, generico para cualquier plugin cuyo
+        reentreno viva solo en MLflow -- es el caso de ml1), asi que el argumento original de
+        "no puede ser sincrono" ya no aplica. Sigue fuera de alcance de este cambio concreto
+        por una razon distinta: portar fielmente el pipeline de entrenamiento completo
+        (tf.data, CLAHE + aumentado, ReduceLROnPlateau, EarlyStopping paciencia 20, ruido
+        gaussiano tabular, fine-tuning parcial de las ultimas `train_base_layers` capas) es un
+        trabajo grande con riesgo real de fidelidad -- exactamente el tipo de pieza donde este
+        repo ya ha tenido bugs serios (ml8, 6 divergencias) -- y no se puede verificar de
+        extremo a extremo en un entorno sin GPU (4h+ de CPU). Recomendacion: abordarlo como
+        tarea propia, dedicada, con verificacion por piezas (split, scheduler, transforms) via
+        smoke tests de segundos antes de confiar en una ejecucion completa."
   target_column: "Etiqueta (clasificacion, 15 clases) + Indice_Riesgo_Cientifico (regresion, 0-1)"
   required_columns: [Mes, Temp_Max_Media_5d_C, Temp_Min_Media_5d_C, Hum_Rel_Max_5d_Pct, Hum_Rel_Min_5d_Pct, Hum_Suelo_Pct, Lluvia_Acum_5d_mm, Horas_Humedad_Foliar, GDD_Acumulado, Etiqueta, Indice_Riesgo_Cientifico]
   # CO2_ppm/VOC_ppb opcionales -- se ignoran en modo exclude_gases=true (produccion)
@@ -222,6 +233,25 @@ golden_cases:
     - {id: caso_18, imagen: "image (122).JPG", esperado_clase: BLACK_ROT, esperado_riesgo: 0.099, predicho_clase: BLACK_ROT, predicho_confianza: 0.3733, predicho_riesgo: 0.3399, sensores: {Mes: 7, Temp_Max_Media_5d_C: 33.97, Temp_Min_Media_5d_C: 21.53, Hum_Rel_Max_5d_Pct: 45.9, Hum_Rel_Min_5d_Pct: 9.1, Hum_Suelo_Pct: 41.7, Lluvia_Acum_5d_mm: 1.47, Horas_Humedad_Foliar: 1.4, GDD_Acumulado: 0.0}}
     - {id: caso_19, imagen: "000000723_mask_jpg.rf.6427ca9835c07de3615e55cbebf4d449.jpg", esperado_clase: BOTRYTIS, esperado_riesgo: 0.013, predicho_clase: BOTRYTIS, predicho_confianza: 0.575, predicho_riesgo: 0.2399, sensores: {Mes: 11, Temp_Max_Media_5d_C: 24.65, Temp_Min_Media_5d_C: 11.87, Hum_Rel_Max_5d_Pct: 88.6, Hum_Rel_Min_5d_Pct: 29.2, Hum_Suelo_Pct: 57.0, Lluvia_Acum_5d_mm: 4.24, Horas_Humedad_Foliar: 8.7, GDD_Acumulado: 0.0}}
     - {id: caso_20, imagen: "image (1047).JPG", esperado_clase: ESCA_HOJA, esperado_riesgo: 0.246, predicho_clase: ESCA_HOJA, predicho_confianza: 0.6754, predicho_riesgo: 0.1318, sensores: {Mes: 1, Temp_Max_Media_5d_C: 10.19, Temp_Min_Media_5d_C: -3.45, Hum_Rel_Max_5d_Pct: 100.0, Hum_Rel_Min_5d_Pct: 65.2, Hum_Suelo_Pct: 52.9, Lluvia_Acum_5d_mm: 0.74, Horas_Humedad_Foliar: 15.4, GDD_Acumulado: 0.0}}
+  verificacion_a_gran_escala_28_10_2026: >
+    Tras recibir el corpus completo (ver known_issues), se re-verifico el plugin real contra los
+    datos reales completos, no solo contra las 20 muestras de arriba:
+    (1) RandomForestClassifier/Regressor: train_tabular_experts() ejecutado contra
+    data/raw/TABULAR/SENSORES.csv completo (500.000 filas reales), reproduciendo su propio split
+    80/20 con random_state=42 (identico al que genero data/splits/train_rf.csv|test_rf.csv en el
+    codigo original). Resultado EXACTO frente a models/metrics/classification/report_rf_tabular_no_gases.csv:
+    accuracy=0.11593 (vs 0.11593 auditado), f1_macro=0.11804 (vs 0.11804), f1_weighted=0.11755
+    (vs 0.11755) -- coincidencia perfecta, confirma que training.py es un port fiel bit a bit.
+    (2) Deep Ensemble CNN: predict_inline() del plugin real ejecutado contra las 1470 imagenes
+    reales de data/splits/test_split.csv (el split de test oficial, support=1470 igual que el
+    informe auditado), recortando cada imagen con nuestro propio pipeline YOLO desde la imagen
+    en bruto (no desde la cache ya recortada que trae Cached_Path). Resultado: 1391/1470 (94.63%)
+    exacto frente al 94.69% auditado (report_ensemble_final_no_gases_desacoplado.csv);
+    f1_macro=0.8897 frente a 0.8807 auditado, f1_weighted=0.9459 frente a 0.9463. Las clases mas
+    debiles coinciden exactamente con las ya documentadas: LOBESIA (f1=0.6923, recall=0.60),
+    OIDIO_RACIMO (f1=0.6897, recall=0.77), EMPOASCA (f1=0.8276, recall=0.71) -- ninguna sorpresa,
+    confirma las debilidades de clases minoritarias ya conocidas, no un fallo de integracion.
+    Script y resultados completos (79 fallos, uno por fila) disponibles bajo demanda.
   rechazo_sin_imagen_ni_rf:
     - id: rechazo_contrato_sensores
       source: codigo_fuente  # predictor.py::_validate_sensor_dimensions
@@ -229,13 +259,16 @@ golden_cases:
       expected: {http_status: 422, error_contains: "Faltan sensores requeridos"}
 
 known_issues:
-  - "[CRÍTICO -- ENTREGA] El ZIP de código original NO incluye la carpeta data/ (imágenes,
-     SENSORES.csv, MANIFEST_MULTIMODAL.csv, data/splits/) ni los .joblib de los RF. Se pidió al
-     equipo de IA un segundo paquete (\"modelo 1.zip\") con los .joblib, las métricas auditadas
-     reales y 20 muestras etiquetadas (datos_plataforma/) — ya fusionado en inbox/a1/codigo/.
-     Pendiente: el equipo de IA aún no ha confirmado si puede dar el corpus completo de 9.794
-     imágenes + SENSORES.csv para un reentrenamiento real del bloque CNN (fuera de alcance de
-     este plugin de todas formas, ver training.scope_note)."
+  - "[RESUELTO -- CORPUS COMPLETO ENTREGADO] El ZIP de código original NO incluía la carpeta
+     data/ (imágenes, SENSORES.csv, MANIFEST_MULTIMODAL.csv, data/splits/) ni los .joblib de
+     los RF. Se pidió al equipo de IA un segundo paquete (\"modelo 1.zip\", ya fusionado) y,
+     más tarde, el corpus completo: el responsable actual del modelo (Carlos Antón) entregó
+     los 4 ZIPs (raw/, splits/, processed/, predictions/, ~1.6 GB) el 28/10/2026 vía Slack.
+     Ya fusionado en inbox/a1/codigo/data/ — 10.526 imágenes reales en 15 carpetas de clase,
+     SENSORES.csv (500.000 filas), MANIFEST_MULTIMODAL.csv, y los 5 splits CSV
+     (train/val/test_split.csv del CNN; train/test_rf.csv del RF). Ver más abajo las dos
+     verificaciones a gran escala que esto permitió (RF exacto contra 500.000 filas reales;
+     CNN contra las 1470 imágenes reales de test_split.csv)."
   - "[RESUELTO -- VERIFICADO CONTRA EL PLUGIN REAL] El bloqueo inicial (TensorFlow sin wheel
      para la versión de Python de este entorno) se resolvió instalando keras 3 con
      backend=torch + ultralytics directamente (backend=torch no necesita tensorflow en

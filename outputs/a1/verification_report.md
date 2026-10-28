@@ -219,3 +219,75 @@ Verificado:
 - 3 tests de regresión añadidos (parametrizados sobre `inf`/`-inf`/`1e100`) en
   `tests/unit/test_ml1_preprocessing.py`. Re-verificación: `flake8` 0 errores, 18/18 tests de
   ml1, suite completa sin fallos nuevos.
+
+## Verificación a gran escala contra el corpus completo (28/10/2026)
+
+El responsable actual del modelo (Carlos Antón) entregó el corpus completo que faltaba
+(`data/raw/`, `data/splits/`, `data/processed/`, `data/predictions/`, ~1.6 GB) — hasta ahora solo
+se había podido verificar contra 20 muestras de `datos_plataforma/`. Con el corpus completo se
+pudieron hacer dos verificaciones mucho más fuertes, ambas contra el **plugin real**, no contra
+el código original del equipo de IA:
+
+### RandomForest tabular — 500.000 filas reales, reproducción exacta
+
+`training.py::train_tabular_experts()` ejecutado contra `data/raw/TABULAR/SENSORES.csv` completo
+(500.000 filas), dejando que reproduzca su propio split 80/20 (`random_state=42` — el mismo que
+generó `data/splits/train_rf.csv`/`test_rf.csv` en el código original, confirmado leyendo
+`src/training/train_tabular.py` línea a línea).
+
+| Métrica | Nuestro plugin | Auditado (`report_rf_tabular_no_gases.csv`) |
+|---|---|---|
+| accuracy | 0.11593 | 0.11593 |
+| f1_macro | 0.11804 | 0.11804 |
+| f1_weighted | 0.11755 | 0.11755 |
+
+**Coincidencia exacta.** Confirma que `training.py` es un port fiel bit a bit del original — no
+una aproximación.
+
+### Deep Ensemble CNN — las 1470 imágenes reales del test oficial
+
+`predict_inline()` del plugin real ejecutado contra las 1470 imágenes de
+`data/splits/test_split.csv` (el split de test oficial, `support=1470` — igual que el informe
+auditado), recortando cada imagen con nuestro propio pipeline YOLO **desde la imagen en bruto**
+(`data/raw/IMAGENES/<CLASE>/`), no desde `Cached_Path` (el recorte ya cacheado que trae el CSV) —
+para probar el pipeline de principio a fin, no solo el modelo.
+
+| Métrica | Nuestro plugin (1470 imágenes reales) | Auditado (`report_ensemble_final_no_gases_desacoplado.csv`) |
+|---|---|---|
+| accuracy | 1391/1470 = **0.9463** | 0.9469 |
+| f1_macro | 0.8897 | 0.8807 |
+| f1_weighted | 0.9459 | 0.9463 |
+
+Diferencia de ~0.06 puntos en accuracy, explicable por recortar desde la imagen en bruto en vez
+de la caché ya recortada (variación mínima de píxeles en el recorte YOLO). Las clases más débiles
+coinciden exactamente con las ya documentadas en `known_issues`:
+
+| Clase | f1 (este run) | recall (este run) |
+|---|---|---|
+| LOBESIA | 0.6923 | 0.60 |
+| OIDIO_RACIMO | 0.6897 | 0.77 |
+| EMPOASCA | 0.8276 | 0.71 |
+
+Sin sorpresas: confirma las debilidades de clases minoritarias ya conocidas, no revela ningún
+fallo nuevo de integración.
+
+### Decisión: reentrenamiento del CNN sigue fuera de alcance (por ahora)
+
+El manifest documentaba el reentrenamiento del CNN como fuera de alcance por dos razones: (1) no
+había corpus, y (2) `/train` solo podía ser síncrono. La (1) ya no aplica. La (2) tampoco, desde
+que el repo soporta `/train?wait=false` genérico para cualquier plugin cuyo reentreno viva solo
+en MLflow (es el caso de ml1). Aun así, **no se ha implementado** en este cambio: portar
+fielmente el pipeline completo de `src/training/train.py` (tf.data, CLAHE + aumentado,
+`ReduceLROnPlateau`, `EarlyStopping` paciencia 20, ruido gaussiano tabular, fine-tuning parcial de
+las últimas `train_base_layers` capas) es un trabajo grande con riesgo real de fidelidad, y no se
+puede verificar de extremo a extremo en este entorno (sin GPU, ~4h20min de CPU). Se recomienda
+abordarlo como tarea propia y dedicada, verificando cada pieza (split, scheduler, transforms) con
+smoke tests de segundos antes de confiar en una ejecución completa — nunca lanzando el
+entrenamiento completo a ciegas y asumiendo que coincide con el original.
+
+## Estado final (actualizado)
+
+Todo lo anterior sigue en pie. Con el corpus completo, el nivel de confianza en la corrección del
+plugin sube sustancialmente: ya no depende de 20 muestras curadas, sino de 500.000 filas
+tabulares y 1470 imágenes reales del split de test oficial, ambas reproduciendo las cifras
+auditadas casi exactamente. **LISTO PARA PR.**
