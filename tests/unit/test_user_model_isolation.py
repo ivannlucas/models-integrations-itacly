@@ -597,7 +597,7 @@ def ml1(monkeypatch, tmp_path):
     def bundle(name):
         return {
             "yolo_model": None, "yolo_device": "cpu", "ensemble": {}, "class_mapping": {},
-            "rf_clase": _FakeModel(name, probe), "rf_riesgo": _FakeModel(name, probe),
+            "rf_riesgo": _FakeModel(name, probe),
         }
 
     monkeypatch.setattr(plugin.model_loader, "load_model_bundle", lambda: bundle(BASE))

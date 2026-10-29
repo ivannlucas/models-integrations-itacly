@@ -6,9 +6,9 @@ backbones (MobileNetV3Small, EfficientNetB0, DenseNet121) classifies one of 15
 pests/pathologies, and a decoupled tabular MLP head (trained jointly with each backbone)
 estimates a 0-1 epidemiological risk index from 9 IIoT sensor readings. Without an image, the
 service falls back to a RandomForest regressor for risk only (the RandomForest classifier is
-NOT used in this fallback — see inbox/a1/manifest.yaml known_issues for why: its own audited
+NOT used in this fallback — see inbox/a01/manifest.yaml known_issues for why: its own audited
 accuracy is 11.6% over 15 classes, and the memoria's claim that it IS used here does not match
-the delivered code).
+the delivered code — so it is not even loaded).
 
 Only the 2 RandomForest tabular experts are retrainable via train() — see training.py and
 manifest.yaml training.scope_note for why the CNN Deep Ensemble is out of scope.
@@ -35,7 +35,14 @@ from app.domain.services.exceptions import (
 from app.infrastructure.archive import safe_extract_zip
 from app.infrastructure.artifact_store import local_file_path
 from app.plugins.ml1_wine_pest_disease_detection import inference, model_loader, preprocessing, training
-from app.plugins.ml1_wine_pest_disease_detection.constants import FRAMEWORK, METRICS_REPORTED, MODEL_ID, VERSION
+from app.plugins.ml1_wine_pest_disease_detection.constants import (
+    FRAMEWORK,
+    IGNORED_GAS_COLS,
+    METRICS_REPORTED,
+    MODEL_ID,
+    SENSOR_COLS,
+    VERSION,
+)
 from app.plugins.ml1_wine_pest_disease_detection.mlflow_utils import (
     download_user_model_from_mlflow,
     upload_artifacts_to_mlflow,
@@ -62,7 +69,7 @@ class Ml1WinePestDiseaseDetectionPlugin(ModelPluginPort):
     # ── lifecycle ─────────────────────────────────────────────────────────────
 
     def load(self) -> None:
-        """Load YOLO, the 3-backbone Deep Ensemble and the 2 RandomForest tabular experts."""
+        """Load YOLO, the 3-backbone Deep Ensemble and the RandomForest risk regressor."""
         self._bundle = model_loader.load_model_bundle()
         logger.info("ml1 plugin loaded: %s", MODEL_ID)
 
@@ -79,14 +86,14 @@ class Ml1WinePestDiseaseDetectionPlugin(ModelPluginPort):
         self._predict_count += 1
         self._last_predict_at = datetime.now(tz=timezone.utc).isoformat()
 
-    def _resolve_rf_pair(self, mlflow_run_id: str) -> tuple[dict, str | None]:
-        """Return ({"rf_clase", "rf_riesgo"}, temp_dir) — the base pair from self._bundle, or
-        the user-retrained one from MLflow. Only the RF pair varies; YOLO and the CNN ensemble
-        always come from the fixed base bundle (see training.scope_note). Never assigns to
+    def _resolve_rf_riesgo(self, mlflow_run_id: str) -> tuple[dict, str | None]:
+        """Return ({"rf_riesgo"}, temp_dir) — the base regressor from self._bundle, or the
+        user-retrained one from MLflow. Only the RF varies; YOLO and the CNN ensemble always
+        come from the fixed base bundle (see training.scope_note). Never assigns to
         self._bundle — a concurrent request must never see another user's retrained RF."""
         bundle = self._require_loaded()
         if not mlflow_run_id:
-            return {"rf_clase": bundle["rf_clase"], "rf_riesgo": bundle["rf_riesgo"]}, None
+            return {"rf_riesgo": bundle["rf_riesgo"]}, None
         return download_user_model_from_mlflow(mlflow_run_id)
 
     # ── predict_inline ────────────────────────────────────────────────────────
@@ -102,7 +109,7 @@ class Ml1WinePestDiseaseDetectionPlugin(ModelPluginPort):
         """Diagnose one sample: image (optional) + 9 sensor readings."""
         _ = model_key, threshold
         bundle = self._require_loaded()
-        rf_pair, user_tmp = self._resolve_rf_pair(mlflow_run_id)
+        rf_override, user_tmp = self._resolve_rf_riesgo(mlflow_run_id)
         try:
             sensors_aligned = preprocessing.validate_and_align_sensors(features.get("sensors") or {})
             image_base64 = features.get("image_base64")
@@ -115,7 +122,7 @@ class Ml1WinePestDiseaseDetectionPlugin(ModelPluginPort):
                 result = inference.run_inference(bundle, img_rgb, sensors_aligned)
             else:
                 result = inference.run_inference_tabular_only(
-                    {**bundle, **rf_pair}, sensors_aligned,
+                    {**bundle, **rf_override}, sensors_aligned,
                 )
 
             self._record_prediction()
@@ -138,7 +145,7 @@ class Ml1WinePestDiseaseDetectionPlugin(ModelPluginPort):
         one bad photo must never abort the batch nor the other rows.
         """
         bundle = self._require_loaded()
-        rf_pair, user_tmp = self._resolve_rf_pair(mlflow_run_id)
+        rf_override, user_tmp = self._resolve_rf_riesgo(mlflow_run_id)
         extract_dir = tempfile.mkdtemp(prefix="ml1_batch_")
         try:
             with local_file_path(data_path) as local_path:
@@ -163,7 +170,9 @@ class Ml1WinePestDiseaseDetectionPlugin(ModelPluginPort):
                 raw_name = row.get("Path_Imagen", "N/A")
                 nombre_imagen = str(raw_name) if pd.notna(raw_name) else "N/A"
                 try:
-                    sensors = {col: row[col] for col in row.index if col != "Path_Imagen"}
+                    # Like predictor.py:317, only the sensor columns are read — any other column
+                    # (an ID, the label, a cached path...) is ignored, not a contract error.
+                    sensors = {col: row[col] for col in (*SENSOR_COLS, *IGNORED_GAS_COLS) if col in row.index}
                     sensors_aligned = preprocessing.validate_and_align_sensors(sensors)
                     image_path = preprocessing.resolve_image_path_for_batch(raw_name, search_dirs)
 
@@ -175,7 +184,7 @@ class Ml1WinePestDiseaseDetectionPlugin(ModelPluginPort):
                         result = inference.run_inference(bundle, img_rgb, sensors_aligned)
                     else:
                         result = inference.run_inference_tabular_only(
-                            {**bundle, **rf_pair}, sensors_aligned,
+                            {**bundle, **rf_override}, sensors_aligned,
                         )
                     predictions.append(BatchPrediction(id=int(idx), nombre_imagen=nombre_imagen, **result))
                 except (DataContractError, InvalidImageError) as exc:
@@ -207,6 +216,9 @@ class Ml1WinePestDiseaseDetectionPlugin(ModelPluginPort):
     def train(self, *, data_path: str, mlflow_run_id: str) -> TrainResponse:
         """Retrain the RandomForest classifier/regressor pair on a client-supplied sensor CSV.
 
+        Both are fit (the classifier only to report the accuracy/F1 metrics of the manifest
+        contract), but only the regressor is uploaded: it is the only RF predict ever uses.
+
         Fresh sklearn estimators are fit from scratch (never mutating the served ones); the
         result is uploaded ONLY to the given MLflow run. If the upload fails, the whole
         retraining result is lost by design (nothing else persists it) — so this raises
@@ -219,7 +231,6 @@ class Ml1WinePestDiseaseDetectionPlugin(ModelPluginPort):
 
         mlflow_tmp = tempfile.mkdtemp(prefix="ml1_mlflow_")
         try:
-            joblib.dump(result.rf_clase, f"{mlflow_tmp}/rf_clase_expert.joblib")
             joblib.dump(result.rf_riesgo, f"{mlflow_tmp}/rf_riesgo_expert.joblib")
             upload_artifacts_to_mlflow(
                 mlflow_tmp, mlflow_run_id,
@@ -282,7 +293,7 @@ class Ml1WinePestDiseaseDetectionPlugin(ModelPluginPort):
                 "Diagnóstico fitopatológico multimodal de la vid (VID-Deep_Ensemble): detección "
                 "YOLOv8 de hoja/racimo + Deep Ensemble (MobileNetV3/EfficientNetB0/DenseNet121) "
                 "para 15 plagas/patologías, con estimación de riesgo epidemiológico 0-1 a partir "
-                "de 9 sensores IIoT. Ver inbox/a1/manifest.yaml para el contrato completo y las "
+                "de 9 sensores IIoT. Ver inbox/a01/manifest.yaml para el contrato completo y las "
                 "discrepancias memoria-vs-código documentadas."
             ),
             task_type="classification_regression_multimodal",

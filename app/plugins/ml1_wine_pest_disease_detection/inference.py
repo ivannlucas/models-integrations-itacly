@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import numpy as np
 
+from app.domain.services.exceptions import DataContractError
 from app.plugins.ml1_wine_pest_disease_detection.constants import (
     HEALTHY_CLASSES,
     HEALTHY_CONFIDENCE_THRESHOLD,
@@ -59,10 +60,15 @@ def run_inference(bundle: dict, img_rgb: np.ndarray, sensors_aligned: np.ndarray
 def run_inference_tabular_only(bundle: dict, sensors_aligned: np.ndarray) -> dict:
     """Decoupled-mode contingency path (no image): class is NOT inferred from the RF classifier
     — predictor.py only does that when use_fusion_layer=True, which is not the production
-    config (see inbox/a1/manifest.yaml known_issues: the memoria says otherwise in 3 places,
+    config (see inbox/a01/manifest.yaml known_issues: the memoria says otherwise in 3 places,
     the code disagrees, and the RF classifier's own audited accuracy — 11.6% over 15 classes —
     explains why). Risk still comes from the RF regressor, same as the original in both modes.
     """
+    if bundle.get("rf_riesgo") is None:
+        raise DataContractError(
+            "Sin imagen no se puede estimar el riesgo: el experto RF de riesgo no está disponible "
+            "en este despliegue. Envía una imagen."
+        )
     riesgo_estimado = float(bundle["rf_riesgo"].predict(sensors_aligned)[0])
     return {
         "enfermedad": NO_IMAGE_LABEL,
