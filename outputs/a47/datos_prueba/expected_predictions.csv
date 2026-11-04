@@ -1,0 +1,16 @@
+case_id,Cycle_ID,esperado_Enfriador_Fouling,esperado_Valvula_Switch,esperado_Bomba_Leakage,esperado_Acumulador_Gas,real,acierto_modelo
+cycle_020,20,2,0,0,0,2/0/0/0,True
+cycle_023,23,2,0,0,0,2/0/0/0,True
+cycle_210,210,2,0,2,0,2/0/2/0,True
+cycle_211,211,2,2,2,1,2/2/2/0,False
+cycle_219,219,2,2,2,0,2/2/2/0,True
+cycle_231,231,2,1,2,0,2/1/2/0,True
+cycle_233,233,2,1,2,0,2/1/2/0,True
+cycle_251,251,2,0,1,0,2/0/1/0,True
+cycle_254,254,2,2,1,0,2/2/1/0,True
+cycle_256,256,2,2,1,0,2/2/1/0,True
+cycle_270,270,2,1,1,0,2/1/1/0,True
+cycle_275,275,2,1,1,0,2/1/1/0,True
+cycle_282,282,2,0,1,0,2/0/1/0,True
+cycle_294,294,2,2,0,0,2/2/0/0,True
+cycle_303,303,2,1,0,0,2/1/0/0,True

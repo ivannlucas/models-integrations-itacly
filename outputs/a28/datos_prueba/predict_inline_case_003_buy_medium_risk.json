@@ -1,0 +1,14 @@
+{
+  "mode": "inline",
+  "date": "2025-01-05",
+  "raw_material_id": "RM_PORK_SHOULDER_B",
+  "destination_profile": "fresh_short_shelf_life",
+  "current_inventory_tons": 31.0,
+  "expected_requirement_tons": 24.0,
+  "lead_time_days": 4.0,
+  "safety_coverage_days": 7.0,
+  "expected_yield_rate": 0.86,
+  "expected_waste_rate": 0.03,
+  "unit_purchase_cost": 2.9,
+  "shelf_life_days": 14
+}

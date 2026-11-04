@@ -1,0 +1,101 @@
+{
+  "mode": "inline",
+  "lots_per_day": 15,
+  "animal_feed_capacity": 90.0,
+  "composting_capacity": 140.0,
+  "biochar_capacity": 45.0,
+  "biomass_combustion_capacity": 10000.0,
+  "fallback_strategy": "Biomass combustion",
+  "lots": [
+    {
+      "subproduct_type": "Husk",
+      "season": "Dry",
+      "generated_volume_tons": 26.62127707945601,
+      "moisture_pct": 19.02847737600104
+    },
+    {
+      "subproduct_type": "Husk",
+      "season": "Rainy",
+      "generated_volume_tons": 18.80803994109137,
+      "moisture_pct": 29.931660566922545
+    },
+    {
+      "subproduct_type": "Husk",
+      "season": "Rainy",
+      "generated_volume_tons": 11.554358008199744,
+      "moisture_pct": 8.24712645810193
+    },
+    {
+      "subproduct_type": "Husk",
+      "season": "Rainy",
+      "generated_volume_tons": 15.423056064441568,
+      "moisture_pct": 12.931612648238444
+    },
+    {
+      "subproduct_type": "Straw",
+      "season": "Dry",
+      "generated_volume_tons": 18.97404097578729,
+      "moisture_pct": 22.69949286942504
+    },
+    {
+      "subproduct_type": "Bran",
+      "season": "Rainy",
+      "generated_volume_tons": 38.06280493997608,
+      "moisture_pct": 20.49090137950993
+    },
+    {
+      "subproduct_type": "Silo dust",
+      "season": "Rainy",
+      "generated_volume_tons": 53.51074785831268,
+      "moisture_pct": 14.171298857058218
+    },
+    {
+      "subproduct_type": "Straw",
+      "season": "Dry",
+      "generated_volume_tons": 40.99615665445583,
+      "moisture_pct": 18.59968860748574
+    },
+    {
+      "subproduct_type": "Straw",
+      "season": "Rainy",
+      "generated_volume_tons": 0.1,
+      "moisture_pct": 11.387474486671406
+    },
+    {
+      "subproduct_type": "Straw",
+      "season": "Rainy",
+      "generated_volume_tons": 34.52057239709038,
+      "moisture_pct": 15.094391484736713
+    },
+    {
+      "subproduct_type": "Bran",
+      "season": "Rainy",
+      "generated_volume_tons": 25.696797761044813,
+      "moisture_pct": 2.4450978598380155
+    },
+    {
+      "subproduct_type": "Bran",
+      "season": "Dry",
+      "generated_volume_tons": 56.99374562466501,
+      "moisture_pct": 9.73994026638142
+    },
+    {
+      "subproduct_type": "Husk",
+      "season": "Rainy",
+      "generated_volume_tons": 24.29545634427781,
+      "moisture_pct": 10.017996499667204
+    },
+    {
+      "subproduct_type": "Bran",
+      "season": "Rainy",
+      "generated_volume_tons": 24.734163321661555,
+      "moisture_pct": 12.753660249731674
+    },
+    {
+      "subproduct_type": "Straw",
+      "season": "Rainy",
+      "generated_volume_tons": 7.586571784131847,
+      "moisture_pct": 20.84929170193845
+    }
+  ]
+}

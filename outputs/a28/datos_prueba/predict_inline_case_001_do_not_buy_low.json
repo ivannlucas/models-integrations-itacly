@@ -1,0 +1,14 @@
+{
+  "mode": "inline",
+  "date": "2025-01-05",
+  "raw_material_id": "RM_BEEF_TRIM_A",
+  "destination_profile": "cooked_standard_line",
+  "current_inventory_tons": 58.0,
+  "expected_requirement_tons": 22.0,
+  "lead_time_days": 5.0,
+  "safety_coverage_days": 10.0,
+  "expected_yield_rate": 0.89,
+  "expected_waste_rate": 0.02,
+  "unit_purchase_cost": 3.8,
+  "shelf_life_days": 28
+}

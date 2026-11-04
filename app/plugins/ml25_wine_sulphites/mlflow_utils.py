@@ -4,8 +4,9 @@ from __future__ import annotations
 import json
 import logging
 import os
-import pickle
 import shutil
+
+import joblib
 
 from app.domain.services.mlflow_tracker import BaseMLflowTracker, require_user_model
 from app.plugins.ml25_wine_sulphites.constants import (
@@ -36,10 +37,11 @@ def download_user_predictor_from_mlflow(run_id: str):
         bound_path = os.path.join(local_path, BOUND_RF_MODEL_FILENAME)
         meta_path = os.path.join(local_path, METADATA_FILENAME)
 
-        with open(qual_path, "rb") as f:
-            model_qual = pickle.load(f)
-        with open(bound_path, "rb") as f:
-            model_bound = pickle.load(f)
+        # joblib.load, not pickle.load: train() writes these files with joblib.dump (same as the
+        # base artifacts), whose numpy arrays pickle.load cannot read
+        # ("UnpicklingError: STACK_GLOBAL requires str").
+        model_qual = joblib.load(qual_path)
+        model_bound = joblib.load(bound_path)
         with open(meta_path) as f:
             metadata = json.load(f)
 
