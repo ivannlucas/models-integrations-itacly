@@ -1,0 +1,59 @@
+{
+  "Fouling": {
+    "prediccion": "Crítico",
+    "confianza": 0.9604,
+    "sensor_mas_relevante": "FS1",
+    "importancia_sensor": 0.2876,
+    "ventana_s": [
+      9.1,
+      11.1
+    ],
+    "intensidad": 0.9108,
+    "urgencia": "Alta",
+    "intervalo_ciclos": 0,
+    "riesgo_score": 1.0,
+    "riesgo_nivel": "CRÍTICO"
+  },
+  "Válvula": {
+    "prediccion": "Sano",
+    "confianza": 1.0,
+    "sensor_mas_relevante": "FS1",
+    "importancia_sensor": 0.3119,
+    "ventana_s": [
+      8.7,
+      10.5
+    ],
+    "intensidad": 0.8957,
+    "urgencia": "Ninguna",
+    "riesgo_score": 0.0,
+    "riesgo_nivel": "NORMAL"
+  },
+  "Bomba": {
+    "prediccion": "Sano",
+    "confianza": 0.9999,
+    "sensor_mas_relevante": "TS2",
+    "importancia_sensor": 0.2526,
+    "ventana_s": [
+      37.6,
+      39.9
+    ],
+    "intensidad": 0.8957,
+    "urgencia": "Ninguna",
+    "riesgo_score": 0.0,
+    "riesgo_nivel": "NORMAL"
+  },
+  "Acumulador": {
+    "prediccion": "Sano",
+    "confianza": 0.989,
+    "sensor_mas_relevante": "TS2",
+    "importancia_sensor": 0.355,
+    "ventana_s": [
+      9.0,
+      11.0
+    ],
+    "intensidad": 0.8978,
+    "urgencia": "Ninguna",
+    "riesgo_score": 0.0,
+    "riesgo_nivel": "NORMAL"
+  }
+}

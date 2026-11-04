@@ -1,5 +1,6 @@
 """Unit tests for Ml25WineSulphitesPlugin.train() and model_loader helpers."""
 import json
+import shutil
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -185,6 +186,36 @@ def test_train_does_not_reload_base_model(wine_csv, tmp_path):
     """The served base model is not reloaded or replaced after a retrain."""
     load_mock, _, _ = _train_capturing_upload(wine_csv, tmp_path)
     load_mock.assert_not_called()
+
+
+def test_retrained_model_round_trips_through_mlflow(wine_csv, tmp_path):
+    """What train() uploads to the run is what predict loads back from it.
+
+    train() writes the RFs with joblib.dump; the loader used pickle.load, which cannot read
+    them ("UnpicklingError: STACK_GLOBAL requires str"), so every prediction with a retrained
+    modelo-25 failed. The other tests mock the whole download and never caught it.
+    """
+    from app.plugins.ml25_wine_sulphites.mlflow_utils import download_user_predictor_from_mlflow
+
+    _, uploaded, _ = _train_capturing_upload(wine_csv, tmp_path / "base")
+
+    def _download(dest_dir, artifact_path):
+        model_dir = Path(dest_dir) / artifact_path
+        model_dir.mkdir(parents=True)
+        for name, content in uploaded.items():
+            (model_dir / name).write_bytes(content)
+        return str(model_dir)
+
+    with patch("app.plugins.ml25_wine_sulphites.mlflow_utils.BaseMLflowTracker") as tracker_cls:
+        tracker_cls.return_value.download_artifacts.side_effect = _download
+        model_qual, model_bound, metadata, temp_dir = download_user_predictor_from_mlflow("run-abc123")
+
+    try:
+        for model in (model_qual, model_bound):
+            assert model.predict(np.zeros((1, model.n_features_in_))).shape == (1,)
+        assert "quality_cv" in metadata["metrics"]
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
 
 
 # ── model_loader helpers ──────────────────────────────────────────────────────

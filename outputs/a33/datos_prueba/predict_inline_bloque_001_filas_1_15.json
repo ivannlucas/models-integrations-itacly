@@ -1,0 +1,101 @@
+{
+  "mode": "inline",
+  "lots_per_day": 15,
+  "animal_feed_capacity": 90.0,
+  "composting_capacity": 140.0,
+  "biochar_capacity": 45.0,
+  "biomass_combustion_capacity": 10000.0,
+  "fallback_strategy": "Biomass combustion",
+  "lots": [
+    {
+      "subproduct_type": "Husk",
+      "season": "Rainy",
+      "generated_volume_tons": 12.53581586819494,
+      "moisture_pct": 19.48103407628226
+    },
+    {
+      "subproduct_type": "Silo dust",
+      "season": "Dry",
+      "generated_volume_tons": 60.1242613388751,
+      "moisture_pct": 12.715916798277473
+    },
+    {
+      "subproduct_type": "Husk",
+      "season": "Dry",
+      "generated_volume_tons": 46.172934640527885,
+      "moisture_pct": 21.42845614091188
+    },
+    {
+      "subproduct_type": "Straw",
+      "season": "Dry",
+      "generated_volume_tons": 50.41271004729212,
+      "moisture_pct": 20.99686680273937
+    },
+    {
+      "subproduct_type": "Bran",
+      "season": "Rainy",
+      "generated_volume_tons": 32.55187627255256,
+      "moisture_pct": 31.823850396405163
+    },
+    {
+      "subproduct_type": "Straw",
+      "season": "Rainy",
+      "generated_volume_tons": 58.07459257381273,
+      "moisture_pct": 16.29926233207015
+    },
+    {
+      "subproduct_type": "Silo dust",
+      "season": "Rainy",
+      "generated_volume_tons": 49.85468789104666,
+      "moisture_pct": 12.531818543570944
+    },
+    {
+      "subproduct_type": "Silo dust",
+      "season": "Dry",
+      "generated_volume_tons": 55.39475814910509,
+      "moisture_pct": 9.903132359142605
+    },
+    {
+      "subproduct_type": "Husk",
+      "season": "Rainy",
+      "generated_volume_tons": 44.643324223583406,
+      "moisture_pct": 24.15701794445286
+    },
+    {
+      "subproduct_type": "Husk",
+      "season": "Dry",
+      "generated_volume_tons": 21.179016912153696,
+      "moisture_pct": 17.97078786490619
+    },
+    {
+      "subproduct_type": "Husk",
+      "season": "Rainy",
+      "generated_volume_tons": 14.54879118972811,
+      "moisture_pct": 13.50492529998212
+    },
+    {
+      "subproduct_type": "Silo dust",
+      "season": "Rainy",
+      "generated_volume_tons": 9.036638824736876,
+      "moisture_pct": 25.706063786980096
+    },
+    {
+      "subproduct_type": "Bran",
+      "season": "Rainy",
+      "generated_volume_tons": 11.018699967754404,
+      "moisture_pct": 9.466568280096896
+    },
+    {
+      "subproduct_type": "Silo dust",
+      "season": "Rainy",
+      "generated_volume_tons": 9.644142495238988,
+      "moisture_pct": 18.57865943162804
+    },
+    {
+      "subproduct_type": "Husk",
+      "season": "Dry",
+      "generated_volume_tons": 7.838859074449967,
+      "moisture_pct": 28.874939335075737
+    }
+  ]
+}

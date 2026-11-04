@@ -1,0 +1,6 @@
+case_id,date,raw_material_id,destination_profile,current_inventory_tons,expected_requirement_tons,lead_time_days,safety_coverage_days,expected_yield_rate,expected_waste_rate,unit_purchase_cost,shelf_life_days,esperado_purchase_trigger_proba,esperado_purchase_trigger_flag,esperado_recommended_action,esperado_quantity_optimizer_recommendation_tons,esperado_order_quantity_tons,esperado_risk_level,esperado_coverage_gap_tons
+case_001_do_not_buy_low,2025-01-05,RM_BEEF_TRIM_A,cooked_standard_line,58.0,22.0,5.0,10.0,0.89,0.02,3.8,28,0.2658,0,DO_NOT_BUY,0.0,0.0,LOW,0.0
+case_002_buy_high_risk,2025-01-26,RM_BEEF_TRIM_A,cooked_standard_line,36.0,24.0,6.0,11.0,0.88,0.02,3.88,28,0.8588,1,BUY,29.817,29.817,HIGH,22.286
+case_003_buy_medium_risk,2025-01-05,RM_PORK_SHOULDER_B,fresh_short_shelf_life,31.0,24.0,4.0,7.0,0.86,0.03,2.9,14,0.6681,1,BUY,20.379,20.379,MEDIUM,6.714
+case_004_buy_high_risk_near_zero_stock,2025-03-02,RM_PORK_SHOULDER_B,fresh_short_shelf_life,20.0,28.0,5.0,7.0,0.84,0.03,3.08,14,0.9241,1,BUY,44.183,44.183,HIGH,28.0
+case_005_gating_forces_zero_despite_positive_raw_recommendation,2025-03-09,RM_BEEF_TRIM_A,cooked_standard_line,52.0,22.0,5.0,10.0,0.89,0.02,3.99,28,0.3883,0,DO_NOT_BUY,1.638,0.0,LOW,0.0

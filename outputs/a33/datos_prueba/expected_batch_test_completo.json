@@ -1,0 +1,12 @@
+{
+  "n_rows": 10000,
+  "distribution_pct": {
+    "composting": 37.18,
+    "animal_feed": 27.27,
+    "biomass_combustion": 17.86,
+    "biochar": 17.69
+  },
+  "total_estimated_emissions_kg": 30893908.4,
+  "capacity_fallback_count": 0,
+  "tolerance_pct": 0.5
+}

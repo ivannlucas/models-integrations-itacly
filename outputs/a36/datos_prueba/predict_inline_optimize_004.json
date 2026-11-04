@@ -1,0 +1,14 @@
+{
+  "mode": "inline",
+  "model_key": "optimize",
+  "decision_mode": "hybrid",
+  "seed": 5043,
+  "F_milk": 5154.72,
+  "T_in": 6.33,
+  "Fat_perc": 3.68,
+  "Viscosity": 2.06,
+  "t_ciclo": 505.0,
+  "T_serv": 78.82,
+  "Delta_P": 1.169,
+  "Regeneration_perc": 89.67
+}
