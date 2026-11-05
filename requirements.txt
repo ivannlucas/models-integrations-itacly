@@ -71,6 +71,11 @@ scipy>=1.11.0
 # uses are byte-identical to 1.4.3 and a seeded run gives identical results.
 deap==1.4.4
 
+# Added for ml35 (dairy pasteurization water optimization) — Genetic Algorithm (pygad.GA with
+# random_seed=42). Pinned to the AI team's delivery (inbox/a35/codigo/requirements.txt) so the
+# seeded optimization reproduces their optimization_results_*.csv.
+pygad==3.5.0
+
 # Added for ml45 (grain dryer PCC detection) — DNFLExplainer's TemporalExplainer uses SHAP
 # GradientExplainer for the LSTM branch. Deliberate deviation from this repo's usual pattern
 # (SHAP normally delegated to the external explainability microservice) — the PCC catalog is

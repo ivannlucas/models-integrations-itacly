@@ -198,12 +198,11 @@ class Ml35DairyAnnCleaningCostPlugin(ModelPluginPort):
         """Run pygad GA to find minimal-water setpoints respecting PU ≥ 13."""
         import pygad  # pylint: disable=import-outside-toplevel
 
-        ctx = {k: float(features[k]) for k in (
+        model, scaler_X, scaler_y = ctx
+        context = {k: float(features[k]) for k in (
             "temp_entrada_leche", "temp_ambiente",
             "horas_desde_limpieza", "presion_diferencial_bar",
         )}
-
-        model, scaler_X, scaler_y = ctx
 
         def _fitness(ga_instance, solution, solution_idx):
             t_leche, t_agua, flujo = float(solution[0]), float(solution[1]), float(solution[2])
@@ -211,9 +210,9 @@ class Ml35DairyAnnCleaningCostPlugin(ModelPluginPort):
             if t_leche < TEMP_MIN_CELSIUS or pu < PU_MIN:
                 return 1e-8
             df = _build_df(
-                ctx["temp_entrada_leche"], ctx["temp_ambiente"],
+                context["temp_entrada_leche"], context["temp_ambiente"],
                 t_leche, t_leche, t_agua, flujo,
-                ctx["horas_desde_limpieza"], ctx["presion_diferencial_bar"],
+                context["horas_desde_limpieza"], context["presion_diferencial_bar"],
             )
             consumo = _infer(model, scaler_X, scaler_y, df)
             return 1.0 / (consumo + 1e-6)
@@ -237,9 +236,9 @@ class Ml35DairyAnnCleaningCostPlugin(ModelPluginPort):
 
         def _consumo(t_l, t_a, flujo):
             df = _build_df(
-                ctx["temp_entrada_leche"], ctx["temp_ambiente"],
+                context["temp_entrada_leche"], context["temp_ambiente"],
                 t_l, t_l, t_a, flujo,
-                ctx["horas_desde_limpieza"], ctx["presion_diferencial_bar"],
+                context["horas_desde_limpieza"], context["presion_diferencial_bar"],
             )
             return _infer(model, scaler_X, scaler_y, df)
 
