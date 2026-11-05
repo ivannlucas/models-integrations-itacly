@@ -15,15 +15,23 @@ import pytest
 import torch
 from sklearn.preprocessing import StandardScaler
 
-from app.plugins.ml48_dairy_dnsl_critical_point_detection import constants, trainer
+from app.plugins.ml48_dairy_dnsl_critical_point_detection import (
+    constants,
+    mlflow_utils,
+    plugin,
+    trainer,
+)
 from app.plugins.ml48_dairy_dnsl_critical_point_detection.constants import SENSOR_COLUMNS
 from app.plugins.ml48_dairy_dnsl_critical_point_detection.model_loader import CNN_Pasteurizer
+from app.plugins.ml48_dairy_dnsl_critical_point_detection.train_dto import TrainRequest
 
 TARGETS = ["Target_Fouling", "Target_Valvula", "Target_Bomba", "Target_Acumulador"]
 
 
-def _cycles(n_cycles=20, steps=12, target_names=TARGETS, seed=0):
+def _cycles(n_cycles=20, steps=12, target_names=None, seed=0):
     """Labelled cycles whose sensor level depends on the label, so the label is learnable."""
+    if target_names is None:
+        target_names = TARGETS
     rng = np.random.default_rng(seed)
     rows = []
     for cid in range(n_cycles):
@@ -36,8 +44,9 @@ def _cycles(n_cycles=20, steps=12, target_names=TARGETS, seed=0):
     return pd.DataFrame(rows)
 
 
-@pytest.fixture
-def csv_path(tmp_path):
+@pytest.fixture(name="csv_path")
+def fixture_csv_path(tmp_path):
+    """Write 20 synthetic labelled cycles to a CSV and return its path."""
     path = tmp_path / "plant_cycles.csv"
     _cycles().to_csv(path, index=False)
     return str(path)
@@ -46,6 +55,7 @@ def csv_path(tmp_path):
 # ── Datos ─────────────────────────────────────────────────────────────────────
 
 def test_each_cycle_keeps_its_own_label():
+    """Each cycle's tensor row carries that cycle's own labels."""
     df = trainer.engineer_cycle_features(_cycles(n_cycles=3))
     cols = trainer.feature_columns(df)
     _, y = trainer.build_tensors(df, [0, 1, 2], cols, StandardScaler().fit(df[cols]))
@@ -54,13 +64,18 @@ def test_each_cycle_keeps_its_own_label():
 
 @pytest.mark.parametrize("names", [TARGETS, ["Fouling", "Valvula", "Bomba", "Acumulador"]])
 def test_training_csv_accepts_original_and_legacy_target_names(tmp_path, names):
+    """Both Target_* and legacy target column names are accepted."""
     path = tmp_path / "cycles.csv"
     _cycles(n_cycles=2, target_names=names).to_csv(path, index=False)
     assert list(trainer.load_training_frame(str(path))[TARGETS].iloc[-1]) == [1, 1, 1, 1]
 
 
-@pytest.mark.parametrize("bad,match", [("no_targets", "Target_Fouling"), ("no_sensor", "PS3"), ("label_3", "0, 1 o 2")])
+@pytest.mark.parametrize(
+    "bad,match",
+    [("no_targets", "Target_Fouling"), ("no_sensor", "PS3"), ("label_3", "0, 1 o 2")],
+)
 def test_invalid_training_csv_is_a_clear_error(tmp_path, bad, match):
+    """Missing targets/sensors or out-of-range labels raise a clear ValueError."""
     df = _cycles(n_cycles=2)
     if bad == "no_targets":
         df = df.drop(columns=TARGETS)
@@ -75,17 +90,21 @@ def test_invalid_training_csv_is_a_clear_error(tmp_path, bad, match):
 
 
 def test_split_is_by_cycle_deterministic_and_70_15_15():
-    first, second = trainer.split_cycle_ids(np.arange(100)), trainer.split_cycle_ids(np.arange(100))
+    """The cycle split is deterministic and 70/15/15."""
+    first = trainer.split_cycle_ids(np.arange(100))
+    second = trainer.split_cycle_ids(np.arange(100))
     assert [list(a) for a in first] == [list(b) for b in second]
     assert tuple(len(part) for part in first) == (70, 15, 15)
 
 
 def test_too_few_cycles_is_a_clear_error():
+    """Splitting too few cycles raises a clear ValueError."""
     with pytest.raises(ValueError, match="ciclos"):
         trainer.split_cycle_ids(np.arange(3))
 
 
 def test_tensors_follow_ascending_cycle_id_like_the_original():
+    """Tensors are built in ascending Cycle_ID order, as in the original."""
     df = trainer.engineer_cycle_features(_cycles(n_cycles=3))
     cols = trainer.feature_columns(df)
     _, y = trainer.build_tensors(df, [2, 0, 1], cols, StandardScaler().fit(df[cols]))
@@ -93,19 +112,26 @@ def test_tensors_follow_ascending_cycle_id_like_the_original():
 
 
 def test_augmentation_noise_is_the_originals_global_numpy_stream():
-    # preprocess.py draws np.random.normal per sensor after seed_everything(42); default_rng differs.
+    """Augmentation noise comes from the global numpy RNG stream, as in the original."""
+    # preprocess.py draws np.random.normal per sensor after seed_everything(42);
+    # default_rng differs.
     df = _cycles(n_cycles=6)
     np.random.seed(42)
-    augmented, ids = trainer._augment_train_cycles(df, np.array([4, 1, 3]))  # pylint: disable=protected-access
+    augmented, ids = trainer._augment_train_cycles(  # pylint: disable=protected-access
+        df, np.array([4, 1, 3])
+    )
     assert list(ids[3:]) == [6, 7, 8]  # copies of 1, 3, 4, ascending like the original + 50000
 
     np.random.seed(42)
     source = df[df["Cycle_ID"].isin([1, 3, 4])]
-    expected_ps1 = source["PS1"].to_numpy() + np.random.normal(0, source["PS1"].std() * 0.2, size=len(source))
+    expected_ps1 = source["PS1"].to_numpy() + np.random.normal(
+        0, source["PS1"].std() * 0.2, size=len(source)
+    )
     assert np.allclose(augmented[augmented["Cycle_ID"] >= 6]["PS1"].to_numpy(), expected_ps1)
 
 
 def test_digital_twin_follows_the_inference_switch(csv_path, monkeypatch):
+    """The digital-twin TS1 shift is applied in training only when requested."""
     monkeypatch.setitem(constants.TRAIN_HYPERPARAMS, "epochs", 1)
     monkeypatch.setattr(trainer, "_device", lambda: torch.device("cpu"))
     off = trainer.train_full(csv_path, apply_twin=False)
@@ -116,6 +142,7 @@ def test_digital_twin_follows_the_inference_switch(csv_path, monkeypatch):
 
 
 def test_metrics_follow_the_reported_formulas():
+    """Test metrics follow the formulas reported in the memoria."""
     y_true = np.array([[0, 0, 0, 0], [1, 1, 1, 1], [2, 2, 2, 2], [0, 1, 2, 0]])
     y_pred = np.array([[0, 0, 0, 0], [1, 1, 1, 1], [2, 2, 2, 2], [0, 1, 2, 1]])
     metrics = trainer.compute_test_metrics(y_true, y_pred)
@@ -127,18 +154,25 @@ def test_metrics_follow_the_reported_formulas():
 
 
 def test_hyperparameters_are_the_delivered_config_yaml():
+    """Training and fine-tuning hyperparameters match the delivered config.yaml."""
     hp = constants.TRAIN_HYPERPARAMS
     assert (hp["learning_rate"], hp["dropout_rate"], hp["max_lambda"]) == (
         0.0022243234786004373, 0.20219689010649033, 3.7585293696964697)
-    assert (hp["epochs"], hp["warmup_epochs"], hp["ramp_up_epochs"], hp["patience"], hp["batch_size"]) == (
-        300, 10, 80, 15, 32)
-    assert (hp["noise_level"], hp["test_size_1"], hp["test_size_2"], hp["random_state"]) == (0.2, 0.30, 0.50, 42)
-    assert constants.FINE_TUNE_HYPERPARAMS == {"epochs": 50, "patience": 7, "lr_divisor": 10, "batch_size": 32}
+    assert (
+        hp["epochs"], hp["warmup_epochs"], hp["ramp_up_epochs"], hp["patience"], hp["batch_size"]
+    ) == (300, 10, 80, 15, 32)
+    assert (
+        hp["noise_level"], hp["test_size_1"], hp["test_size_2"], hp["random_state"]
+    ) == (0.2, 0.30, 0.50, 42)
+    assert constants.FINE_TUNE_HYPERPARAMS == {
+        "epochs": 50, "patience": 7, "lr_divisor": 10, "batch_size": 32,
+    }
 
 
 # ── Procedimientos ───────────────────────────────────────────────────────────
 
 def _base_artifacts():
+    """Build a seeded base model, fitted scaler and feature columns."""
     df = trainer.engineer_cycle_features(_cycles())
     cols = trainer.feature_columns(df)
     scaler = StandardScaler().fit(df[cols])
@@ -149,6 +183,7 @@ def _base_artifacts():
 
 
 def test_fine_tune_only_updates_the_four_heads(csv_path, monkeypatch):
+    """Fine-tuning updates only the heads and never mutates the base model."""
     monkeypatch.setitem(constants.FINE_TUNE_HYPERPARAMS, "epochs", 2)
     base, scaler, cols = _base_artifacts()
     before = {k: v.clone() for k, v in base.state_dict().items()}
@@ -160,14 +195,18 @@ def test_fine_tune_only_updates_the_four_heads(csv_path, monkeypatch):
         if name.startswith("features."):
             assert torch.equal(after[name], before[name]), f"backbone weight changed: {name}"
     assert any(not torch.equal(after[n], before[n]) for n in after if n.startswith("head_"))
-    assert all(torch.equal(base.state_dict()[k], v) for k, v in before.items()), "base model mutated"
+    assert all(
+        torch.equal(base.state_dict()[k], v) for k, v in before.items()
+    ), "base model mutated"
     assert result.scaler is scaler and result.feature_cols == cols
 
 
 def test_full_training_returns_hold_out_metrics_and_its_shap_background(csv_path, monkeypatch):
+    """Full training returns hold-out metrics and a SHAP background from the test cycles."""
     monkeypatch.setitem(constants.TRAIN_HYPERPARAMS, "epochs", 2)
     result = trainer.train_full(csv_path)
-    assert (result.metrics["n_train"], result.metrics["n_val"], result.metrics["n_test"]) == (14, 3, 3)
+    split_sizes = (result.metrics["n_train"], result.metrics["n_val"], result.metrics["n_test"])
+    assert split_sizes == (14, 3, 3)
     _, _, test_ids = trainer.split_cycle_ids(np.arange(20))
     assert result.shap_background.shape == (3, 28, 600)
     assert result.shap_background_cycle_ids == sorted(int(c) for c in test_ids)
@@ -175,32 +214,35 @@ def test_full_training_returns_hold_out_metrics_and_its_shap_background(csv_path
 
 # ── Cadena completa: train() del plugin → MLflow → predict con ese run ───────
 
-@pytest.fixture
-def plugin_with_mlflow(monkeypatch, tmp_path):
+@pytest.fixture(name="plugin_with_mlflow")
+def fixture_plugin_with_mlflow(monkeypatch, tmp_path):
     """Real plugin + real mlflow_utils; only the MLflow server is replaced by a folder per run."""
-    from app.plugins.ml48_dairy_dnsl_critical_point_detection import mlflow_utils, plugin
-
     store = tmp_path / "mlflow"
 
     class FolderTracker:
+        """MLflow tracker stand-in that stores each run's artifacts in a local folder."""
+
         TRACKING_URI = "file://test"
 
         def __init__(self, run_id=""):
             self.run_id = run_id
 
         def connect(self, run_id):
+            """Point the tracker at an existing run."""
             self.run_id = run_id
 
         def log_metrics(self, metrics, step=0):
-            pass
+            """Ignore metrics; only artifacts matter for these tests."""
 
         def set_tags(self, tags):
-            pass
+            """Ignore tags; only artifacts matter for these tests."""
 
         def upload_artifacts(self, local_dir, artifact_path=""):
+            """Copy local artifacts into this run's folder."""
             shutil.copytree(local_dir, store / self.run_id / artifact_path, dirs_exist_ok=True)
 
         def download_artifacts(self, dest_dir, artifact_path=""):
+            """Copy this run's artifacts out, or return '' if there are none."""
             source = store / self.run_id / artifact_path
             if not source.exists():
                 return ""
@@ -217,7 +259,10 @@ def plugin_with_mlflow(monkeypatch, tmp_path):
 
 
 @pytest.mark.parametrize("mode", ["fine_tune", "full"])
-def test_train_registers_a_new_model_in_mlflow_and_predict_uses_it(plugin_with_mlflow, csv_path, monkeypatch, mode):
+def test_train_registers_a_new_model_in_mlflow_and_predict_uses_it(
+    plugin_with_mlflow, csv_path, monkeypatch, mode
+):
+    """train() uploads a new model and SHAP background to MLflow and predict uses them."""
     instance, base, store = plugin_with_mlflow
     monkeypatch.setitem(constants.FINE_TUNE_HYPERPARAMS, "epochs", 2)
     monkeypatch.setitem(constants.TRAIN_HYPERPARAMS, "epochs", 2)
@@ -227,16 +272,23 @@ def test_train_registers_a_new_model_in_mlflow_and_predict_uses_it(plugin_with_m
 
     assert response.mode == mode and response.mlflow_run_id == "run-ft"
     uploaded = sorted(p.name for p in (store / "run-ft" / "model").iterdir())
-    assert uploaded == sorted([constants.MODEL_FILENAME, constants.SCALER_FILENAME,
-                               constants.FEATURE_COLUMNS_FILENAME, constants.TS1_MEAN_FILENAME,
-                               constants.SHAP_BACKGROUND_FILENAME, constants.SHAP_BACKGROUND_META_FILENAME])
-    meta = json.loads((store / "run-ft" / "model" / constants.SHAP_BACKGROUND_META_FILENAME).read_text())
+    assert uploaded == sorted([
+        constants.MODEL_FILENAME, constants.SCALER_FILENAME,
+        constants.FEATURE_COLUMNS_FILENAME, constants.TS1_MEAN_FILENAME,
+        constants.SHAP_BACKGROUND_FILENAME, constants.SHAP_BACKGROUND_META_FILENAME,
+    ])
+    meta_path = store / "run-ft" / "model" / constants.SHAP_BACKGROUND_META_FILENAME
+    meta = json.loads(meta_path.read_text())
     assert len(meta["cycle_ids"]) == response.n_test
 
     ctx = instance._context("run-ft")  # pylint: disable=protected-access
     try:
         registered = ctx["model"].state_dict()
-        assert any(not torch.equal(registered[k].cpu(), base_before[k]) for k in base_before if k.startswith("head_"))
+        assert any(
+            not torch.equal(registered[k].cpu(), base_before[k])
+            for k in base_before
+            if k.startswith("head_")
+        )
         assert ctx["shap_background"].shape == (response.n_test, 28, 600)
     finally:
         shutil.rmtree(ctx["temp_dir"], ignore_errors=True)
@@ -245,8 +297,7 @@ def test_train_registers_a_new_model_in_mlflow_and_predict_uses_it(plugin_with_m
 
 
 def test_train_request_defaults_to_fine_tune_and_accepts_full():
-    from app.plugins.ml48_dairy_dnsl_critical_point_detection.train_dto import TrainRequest
-
+    """TrainRequest defaults to fine_tune, accepts full and rejects others."""
     assert TrainRequest(data_path="x.csv", mlflow_run_id="run-1").mode == "fine_tune"
     assert TrainRequest(data_path="x.csv", mlflow_run_id="run-1", mode="full").mode == "full"
     with pytest.raises(ValueError):
@@ -254,8 +305,8 @@ def test_train_request_defaults_to_fine_tune_and_accepts_full():
 
 
 def test_train_request_maps_the_platform_transport_mode_to_fine_tune():
-    """The platform always sends mode="batch" (train-task-manager.ts) and the orchestrator forwards it."""
-    from app.plugins.ml48_dairy_dnsl_critical_point_detection.train_dto import TrainRequest
-
+    """The platform always sends mode="batch" (train-task-manager.ts) and the orchestrator
+    forwards it."""
     for transport in ("batch", "inline"):
-        assert TrainRequest(data_path="x.csv", mlflow_run_id="run-1", mode=transport).mode == "fine_tune"
+        request = TrainRequest(data_path="x.csv", mlflow_run_id="run-1", mode=transport)
+        assert request.mode == "fine_tune"

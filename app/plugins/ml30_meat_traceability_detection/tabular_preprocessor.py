@@ -13,7 +13,7 @@ import numpy as np
 import pandas as pd
 
 
-class TabularPreprocessor:
+class TabularPreprocessor:  # pylint: disable=too-many-instance-attributes
     """Median-fill + standardize numeric features and one-hot encode categoricals."""
 
     def __init__(self, numeric_features: List[str], categorical_features: List[str]) -> None:
@@ -54,7 +54,7 @@ class TabularPreprocessor:
         self.fitted = True
         return self
 
-    def transform(self, df: pd.DataFrame) -> np.ndarray:
+    def transform(self, df: pd.DataFrame) -> np.ndarray:  # pylint: disable=too-many-locals
         """Transform a DataFrame into the standardized + one-hot feature matrix."""
         if not self.fitted:
             raise RuntimeError("TabularPreprocessor no esta ajustado.")

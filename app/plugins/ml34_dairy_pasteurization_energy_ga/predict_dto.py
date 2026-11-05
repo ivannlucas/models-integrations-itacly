@@ -33,8 +33,16 @@ class PredictBatchRequest(BaseModel):
 
     model_config = ConfigDict(protected_namespaces=())
     mode: Literal["batch"] = "batch"
-    data_path: str = Field(..., description="Path to CSV — 5 MLP features, or 3 GA scenario features when model_key='optimize'")
-    model_key: str | None = Field(default=None, description="'optimize' runs the GA per row; omitted/other runs the MLP surrogate")
+    data_path: str = Field(
+        ...,
+        description=(
+            "Path to CSV — 5 MLP features, or 3 GA scenario features when model_key='optimize'"
+        ),
+    )
+    model_key: str | None = Field(
+        default=None,
+        description="'optimize' runs the GA per row; omitted/other runs the MLP surrogate",
+    )
     mlflow_run_id: str = ""
 
 
@@ -74,21 +82,32 @@ class PredictInlineRequest(BaseModel):
     # mode the GA chooses them, so they are optional here (see validator).
     F_flow: float | None = Field(
         default=None,
-        description="Caudal volumétrico de leche (L/h) — requerido en inline MLP; lo decide el GA en optimize",
+        description=(
+            "Caudal volumétrico de leche (L/h) — requerido en inline MLP; "
+            "lo decide el GA en optimize"
+        ),
     )
     T_servicio: float | None = Field(
         default=None,
-        description="Temperatura del fluido de servicio (°C) — requerido en inline MLP; lo decide el GA en optimize",
+        description=(
+            "Temperatura del fluido de servicio (°C) — requerido en inline MLP; "
+            "lo decide el GA en optimize"
+        ),
     )
 
     # GA reproducibility — used only when model_key == "optimize".
-    seed: int = Field(default=1, description="Semilla del GA para reproducibilidad por escenario (solo optimize)")
+    seed: int = Field(
+        default=1, description="Semilla del GA para reproducibilidad por escenario (solo optimize)"
+    )
 
     @model_validator(mode="after")
     def _require_setpoints_for_mlp(self) -> "PredictInlineRequest":
         """MLP inline needs the two setpoints; the GA optimize path does not."""
         if self.model_key != "optimize":
-            missing = [n for n, v in (("F_flow", self.F_flow), ("T_servicio", self.T_servicio)) if v is None]
+            missing = [
+                n for n, v in (("F_flow", self.F_flow), ("T_servicio", self.T_servicio))
+                if v is None
+            ]
             if missing:
                 raise ValueError(
                     f"En modo inline (MLP) los setpoints {missing} son obligatorios; "

@@ -7,13 +7,19 @@ from typing import Any
 import numpy as np
 import torch
 
-from app.plugins.ml43_cereals_dnsl_anomaly_fault_detection._vendor.preprocess import STATS_CREATION, stats_windows
+from app.plugins.ml43_cereals_dnsl_anomaly_fault_detection._vendor.preprocess import (
+    STATS_CREATION,
+    stats_windows,
+)
 from app.plugins.ml43_cereals_dnsl_anomaly_fault_detection.constants import SENSOR_COLUMNS
 
 logger = logging.getLogger(__name__)
 
 
-def scale_sequences(X_arr: np.ndarray, scaler_x) -> np.ndarray:
+def scale_sequences(
+    X_arr: np.ndarray,  # pylint: disable=invalid-name  # public kwarg name
+    scaler_x,
+) -> np.ndarray:
     """Scale raw sequences [N,T,F] with the fitted StandardScaler, if any."""
     n_feat = X_arr.shape[-1]
     if scaler_x is None:
@@ -21,15 +27,25 @@ def scale_sequences(X_arr: np.ndarray, scaler_x) -> np.ndarray:
     return scaler_x.transform(X_arr.reshape(-1, n_feat)).reshape(X_arr.shape).astype(np.float32)
 
 
-def compute_scaled_stats(X_arr: np.ndarray, scaler_num) -> np.ndarray:
+def compute_scaled_stats(
+    X_arr: np.ndarray,  # pylint: disable=invalid-name  # public kwarg name
+    scaler_num,
+) -> np.ndarray:
     """Compute per-window statistics for the fuzzy branch and scale them, if a scaler exists."""
-    df_stats = stats_windows(X_arr, feature_names=SENSOR_COLUMNS, stats_creation=STATS_CREATION, ddof=0)
+    df_stats = stats_windows(
+        X_arr, feature_names=SENSOR_COLUMNS, stats_creation=STATS_CREATION, ddof=0
+    )
     if scaler_num is None:
         return df_stats.values.astype(np.float32)
     return scaler_num.transform(df_stats.values).astype(np.float32)
 
 
-def run_model(model, X_scaled: np.ndarray, stats_scaled: np.ndarray, batch_size: int = 64) -> np.ndarray:
+def run_model(
+    model,
+    X_scaled: np.ndarray,  # pylint: disable=invalid-name  # public kwarg name
+    stats_scaled: np.ndarray,
+    batch_size: int = 64,
+) -> np.ndarray:
     """Run the DNF model over scaled sequences/stats and return anomaly probabilities [N]."""
     x_tensor = torch.from_numpy(X_scaled)
     s_tensor = torch.from_numpy(stats_scaled)
@@ -76,14 +92,14 @@ def _stringify_timestamp(value: Any) -> str | None:
     return None if value is None else str(value)
 
 
-def format_batch_predictions(
-    X_arr: np.ndarray,
+def format_batch_predictions(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
+    X_arr: np.ndarray,  # pylint: disable=invalid-name  # public kwarg name
     scores: np.ndarray,
     cycle_ids: list | None,
     threshold: float,
     explainer,
     xai_background,
-    X_scaled: np.ndarray,
+    X_scaled: np.ndarray,  # pylint: disable=invalid-name  # public kwarg name
     stats_scaled: np.ndarray,
     window_timestamps: list | None = None,
 ) -> list[dict[str, Any]]:

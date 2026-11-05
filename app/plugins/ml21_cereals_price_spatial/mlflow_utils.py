@@ -4,9 +4,10 @@ from __future__ import annotations
 import json
 import logging
 import os
+import shutil
+import tempfile
 
 import joblib
-import shutil
 
 from app.domain.services.mlflow_tracker import BaseMLflowTracker, require_user_model
 from app.plugins.ml21_cereals_price_spatial.constants import (
@@ -29,7 +30,6 @@ def download_user_model_from_mlflow(run_id: str):
     Returns (models_by_horizon, metadata, temp_dir).
     Caller MUST shutil.rmtree(temp_dir) after inference — use try/finally.
     """
-    import tempfile
     tmp = tempfile.mkdtemp(prefix="mlflow_ml21_")
     try:
         local_path = BaseMLflowTracker(run_id).download_artifacts(tmp, artifact_path="model")

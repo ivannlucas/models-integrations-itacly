@@ -88,7 +88,9 @@ def create_sequences(data_x: np.ndarray, lookback: int) -> np.ndarray:
     return np.array(sequences)
 
 
-def prepare_inference_input(df: pd.DataFrame, train_config: dict, scalers: dict) -> dict:
+def prepare_inference_input(  # pylint: disable=too-many-locals
+    df: pd.DataFrame, train_config: dict, scalers: dict
+) -> dict:
     """Port of src/predict/predictor.py::prepare_input.
 
     Parameters

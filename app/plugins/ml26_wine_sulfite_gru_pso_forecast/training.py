@@ -117,7 +117,10 @@ def build_windows(
 def regression_report(
     y_true: np.ndarray, y_pred: np.ndarray, target_names: list[str]
 ) -> dict[str, Any]:
-    """src/training/evaluation/metrics.py::regression_report (MAE, RMSE, MAPE per target + overall)."""
+    """src/training/evaluation/metrics.py::regression_report.
+
+    MAE, RMSE, MAPE per target + overall.
+    """
     report: dict[str, Any] = {}
     for index, target in enumerate(target_names):
         err = y_pred[:, index] - y_true[:, index]
@@ -131,8 +134,13 @@ def regression_report(
     return report
 
 
-def _evaluate(network: nn.Module, loader: DataLoader, y_mean, y_std, target_names) -> tuple[np.ndarray, np.ndarray]:
-    """train_sequence.py::_evaluate: de-normalized, clipped predictions and de-normalized targets."""
+def _evaluate(
+    network: nn.Module, loader: DataLoader, y_mean, y_std, target_names
+) -> tuple[np.ndarray, np.ndarray]:
+    """train_sequence.py::_evaluate.
+
+    De-normalized, clipped predictions and de-normalized targets.
+    """
     network.eval()
     preds, targets = [], []
     with torch.no_grad():
@@ -214,7 +222,9 @@ def train_with_config(  # pylint: disable=too-many-locals,too-many-statements
     val_loader = loader(x_val, y_val, False)
     test_loader = loader(x_test, y_test, False) if len(x_test) else None
 
-    network = build_gru_from_config(model_cfg, input_dim=x_train.shape[-1], output_dim=y_train.shape[-1])
+    network = build_gru_from_config(
+        model_cfg, input_dim=x_train.shape[-1], output_dim=y_train.shape[-1]
+    )
     optimizer = torch.optim.AdamW(network.parameters(), lr=float(model_cfg["learning_rate"]),
                                   weight_decay=float(model_cfg.get("weight_decay", 0.0)))
     criterion = nn.SmoothL1Loss()
@@ -243,7 +253,9 @@ def train_with_config(  # pylint: disable=too-many-locals,too-many-statements
         scheduler.step(val_rmse)
         epochs_run = epoch
         train_loss = float(np.mean(losses)) if losses else 0.0
-        logger.info("ml26 train epoch=%d train_loss=%.6f val_rmse=%.6f", epoch, train_loss, val_rmse)
+        logger.info(
+            "ml26 train epoch=%d train_loss=%.6f val_rmse=%.6f", epoch, train_loss, val_rmse
+        )
         if on_epoch:
             on_epoch(epoch, train_loss, val_rmse)
         if val_rmse + 1e-6 < best_rmse:
@@ -264,7 +276,8 @@ def train_with_config(  # pylint: disable=too-many-locals,too-many-statements
         test_pred, test_true = _evaluate(network, test_loader, y_mean, y_std, base.target_names)
         test_report = regression_report(test_true, test_pred, base.target_names)
     trained = replace(
-        base, network=network, mean=mean.squeeze(0).astype(np.float32), std=std.squeeze(0).astype(np.float32),
+        base, network=network,
+        mean=mean.squeeze(0).astype(np.float32), std=std.squeeze(0).astype(np.float32),
         y_mean=y_mean.squeeze(0).astype(np.float32), y_std=y_std.squeeze(0).astype(np.float32),
         config=dict(model_cfg), source="retrained",
     )

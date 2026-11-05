@@ -17,8 +17,9 @@ from tests.unit.tiny_promoting_plugin import (
 PREFIX = "/models/tiny"
 
 
-@pytest.fixture
-def tiny_client():
+@pytest.fixture(name="tiny_client")
+def fixture_tiny_client():
+    """TestClient over a router for TinyPromotingPlugin (versioned base), load failures off."""
     TinyPromotingPlugin.fail_load = False
     app = FastAPI()
     container = ModelContainer(TinyPromotingPlugin())
@@ -34,6 +35,7 @@ def tiny_client():
 
 
 def test_train_without_run_answers_the_new_base_version(tiny_client):
+    """/train without a run answers and exposes in /stats the new base version v1."""
     resp = tiny_client.post(f"{PREFIX}/train", json={"data_path": "d1"})
     assert resp.status_code == 200
     assert resp.json()["base_version"]["version"] == "v1"
@@ -41,17 +43,22 @@ def test_train_without_run_answers_the_new_base_version(tiny_client):
 
 
 def test_rollback_endpoint(tiny_client):
+    """/rollback goes back to the parent by default, or to an explicit version."""
     tiny_client.post(f"{PREFIX}/train", json={"data_path": "d1"})
     tiny_client.post(f"{PREFIX}/train", json={"data_path": "d2"})
     resp = tiny_client.post(f"{PREFIX}/rollback")
     assert resp.status_code == 200
     body = resp.json()
-    assert body["base_version"]["version"] == "v1" and body["previous_base_version"]["version"] == "v2"
+    assert (
+        body["base_version"]["version"] == "v1"
+        and body["previous_base_version"]["version"] == "v2"
+    )
     resp = tiny_client.post(f"{PREFIX}/rollback", json={"version": "v0"})
     assert resp.status_code == 200 and resp.json()["base_version"]["version"] == "v0"
 
 
 def test_rollback_errors(tiny_client):
+    """/rollback answers 409 without parent, 404 for an unknown version and 500 if reload fails."""
     assert tiny_client.post(f"{PREFIX}/rollback").status_code == 409            # v0, no parent
     assert tiny_client.post(f"{PREFIX}/rollback", json={"version": "v7"}).status_code == 404
     tiny_client.post(f"{PREFIX}/train", json={"data_path": "d1"})
@@ -61,18 +68,21 @@ def test_rollback_errors(tiny_client):
 
 
 def test_train_reload_failure_is_500(tiny_client):
+    """/train answers 500 (and reverts to v0) when the new base fails to load."""
     TinyPromotingPlugin.fail_load = True
     resp = tiny_client.post(f"{PREFIX}/train", json={"data_path": "d1"})
     assert resp.status_code == 500 and "vuelve a v0" in resp.json()["detail"]
 
 
 def test_models_without_versions_answer_501_on_rollback(client):
+    """/rollback on a model without versioned base answers 501."""
     entry = TEST_REGISTRY[0]
     resp = client.post(f"{entry.prefix}/rollback")
     assert resp.status_code == 501
 
 
 def test_rollback_unexpected_error_is_500(tiny_client):
+    """An unexpected error while moving the active version maps to 500."""
     container = tiny_client.app.state.containers["tiny"]
     tiny_client.post(f"{PREFIX}/train", json={"data_path": "d1"})
 

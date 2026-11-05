@@ -29,7 +29,7 @@ MAX_ANNOTATED_SIZE = 640
 JPEG_QUALITY = 70
 
 
-def yolo_results_to_dict(
+def yolo_results_to_dict(  # pylint: disable=too-many-locals
     results: Any, original_image: np.ndarray, conf_threshold: float = 0.28
 ) -> dict:
     """Convert an ultralytics Results object to the platform output dict.
@@ -47,11 +47,11 @@ def yolo_results_to_dict(
         # (the checkpoint's own embedded names are known to be wrong, see
         # constants.TRAINING_CLASS_ID_TO_CODE for the full explanation and evidence).
 
-        for i in range(len(class_ids)):
+        for i, class_id in enumerate(class_ids):
             conf = float(confidences[i])
             if conf < conf_threshold:
                 continue
-            cls_code = TRAINING_CLASS_ID_TO_CODE.get(int(class_ids[i]), str(class_ids[i]))
+            cls_code = TRAINING_CLASS_ID_TO_CODE.get(int(class_id), str(class_id))
             detections.append({
                 "class": cls_code,
                 "class_name": CLASS_NAMES.get(cls_code, cls_code),
@@ -84,14 +84,16 @@ def yolo_results_to_dict(
     }
 
 
-def _render_annotated_image(image: np.ndarray, detections: List[Dict[str, Any]]) -> str:
+def _render_annotated_image(  # pylint: disable=too-many-locals
+    image: np.ndarray, detections: List[Dict[str, Any]]
+) -> str:
     """Draw bounding boxes on the image and return it as base64 JPEG."""
     img = Image.fromarray(image).convert("RGB")
 
     w, h = img.size
     if max(w, h) > MAX_ANNOTATED_SIZE:
         scale = MAX_ANNOTATED_SIZE / max(w, h)
-        img = img.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
+        img = img.resize((int(w * scale), int(h * scale)), Image.LANCZOS)  # pylint: disable=no-member
         scale_w = int(w * scale) / w
         scale_h = int(h * scale) / h
     else:

@@ -12,13 +12,22 @@ from app.plugins.ml45_cereals_dnsl_critical_point_detection.constants import SEN
 
 
 class PredictBatchRequest(BaseModel):
+    """Batch request: CSV of sensor readings (windows of 240 rows)."""
+
     model_config = ConfigDict(protected_namespaces=())
     mode: Literal["batch"] = "batch"
-    data_path: str = Field(..., description="Path to CSV with timestamp, sensor columns, and optionally cycle_id/fault_name")
+    data_path: str = Field(
+        ...,
+        description=(
+            "Path to CSV with timestamp, sensor columns, and optionally cycle_id/fault_name"
+        ),
+    )
     mlflow_run_id: str = Field(default="", description="MLflow run ID for user-trained model")
 
 
 class PredictBatchResponse(BaseModel):
+    """Batch response: one prediction row per window."""
+
     model_config = ConfigDict(protected_namespaces=())
     model_id: str
     predictions: list[dict[str, Any]]
@@ -26,21 +35,59 @@ class PredictBatchResponse(BaseModel):
 
 
 class PredictInlineRequest(BaseModel):
+    """Inline request: a CSV path or per-sensor time-series arrays."""
+
     model_config = ConfigDict(protected_namespaces=())
     mode: Literal["inline"] = "inline"
-    data_path: str | None = Field(default=None, description="Path to CSV (alternative to sending sensor arrays)")
-    plenum_temp: list[float] | None = Field(default=None, description="Plenum temperature time-series (°C)")
-    exhaust_air_temp: list[float] | None = Field(default=None, description="Exhaust air temperature time-series (°C)")
-    exhaust_air_humidity: list[float] | None = Field(default=None, description="Exhaust air humidity time-series (%)")
-    static_pressure: list[float] | None = Field(default=None, description="Static pressure time-series (mbar)")
-    burner_power: list[float] | None = Field(default=None, description="Burner power time-series (%)")
+    data_path: str | None = Field(
+        default=None,
+        description="Path to CSV (alternative to sending sensor arrays)",
+    )
+    plenum_temp: list[float] | None = Field(
+        default=None,
+        description="Plenum temperature time-series (°C)",
+    )
+    exhaust_air_temp: list[float] | None = Field(
+        default=None,
+        description="Exhaust air temperature time-series (°C)",
+    )
+    exhaust_air_humidity: list[float] | None = Field(
+        default=None,
+        description="Exhaust air humidity time-series (%)",
+    )
+    static_pressure: list[float] | None = Field(
+        default=None,
+        description="Static pressure time-series (mbar)",
+    )
+    burner_power: list[float] | None = Field(
+        default=None,
+        description="Burner power time-series (%)",
+    )
     fan_speed: list[float] | None = Field(default=None, description="Fan speed time-series (RPM)")
-    discharge_frequency: list[float] | None = Field(default=None, description="Discharge frequency time-series (Hz)")
-    grain_moisture_in: list[float] | None = Field(default=None, description="Inlet grain moisture time-series (%)")
-    ambient_temp: list[float] | None = Field(default=None, description="Ambient temperature time-series (°C)")
-    ambient_humidity: list[float] | None = Field(default=None, description="Ambient humidity time-series (%)")
-    setpoint_temp: list[float] | None = Field(default=None, description="Setpoint temperature time-series (°C)")
-    timestamp: list[str] | None = Field(default=None, description="Timestamp per row — same length as the sensor arrays")
+    discharge_frequency: list[float] | None = Field(
+        default=None,
+        description="Discharge frequency time-series (Hz)",
+    )
+    grain_moisture_in: list[float] | None = Field(
+        default=None,
+        description="Inlet grain moisture time-series (%)",
+    )
+    ambient_temp: list[float] | None = Field(
+        default=None,
+        description="Ambient temperature time-series (°C)",
+    )
+    ambient_humidity: list[float] | None = Field(
+        default=None,
+        description="Ambient humidity time-series (%)",
+    )
+    setpoint_temp: list[float] | None = Field(
+        default=None,
+        description="Setpoint temperature time-series (°C)",
+    )
+    timestamp: list[str] | None = Field(
+        default=None,
+        description="Timestamp per row — same length as the sensor arrays",
+    )
     cycle_id: str | int | None = Field(default=None, description="Cycle identifier (optional)")
     model_key: str | None = None
     threshold: float | None = None
@@ -59,6 +106,8 @@ class PredictInlineRequest(BaseModel):
 
 
 class PredictInlineResponse(BaseModel):
+    """Inline response: prediction and explanation of the first window."""
+
     model_config = ConfigDict(protected_namespaces=())
     model_id: str
     window_index: int = 1

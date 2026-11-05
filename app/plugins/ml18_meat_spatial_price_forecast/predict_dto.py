@@ -39,7 +39,10 @@ class PredictInlineRequest(BaseModel):
     model_key: str | None = None
     threshold: float | None = Field(
         default=None,
-        description="No usado por este modelo (no hay umbral de decisión); se acepta por compatibilidad de contrato.",
+        description=(
+            "No usado por este modelo (no hay umbral de decisión); se acepta por compatibilidad "
+            "de contrato."
+        ),
     )
     rows: list[dict[str, Any]] = Field(
         ...,

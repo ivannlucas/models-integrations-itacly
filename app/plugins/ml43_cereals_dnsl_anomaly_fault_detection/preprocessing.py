@@ -1,4 +1,8 @@
-"""Input validation, null imputation and sequence building for ml43-cereals-dnsl-anomaly-fault-detection."""
+"""Input validation, null imputation and sequence building.
+
+For ml43-cereals-dnsl-anomaly-fault-detection.
+"""
+
 from __future__ import annotations
 
 import logging
@@ -7,7 +11,9 @@ import numpy as np
 import pandas as pd
 
 from app.domain.services.exceptions import InsufficientSensorWindowError
-from app.plugins.ml43_cereals_dnsl_anomaly_fault_detection._vendor.preprocess import create_sequences
+from app.plugins.ml43_cereals_dnsl_anomaly_fault_detection._vendor.preprocess import (
+    create_sequences,
+)
 from app.plugins.ml43_cereals_dnsl_anomaly_fault_detection.constants import (
     ID_COLUMN,
     NORMAL_TOKENS,

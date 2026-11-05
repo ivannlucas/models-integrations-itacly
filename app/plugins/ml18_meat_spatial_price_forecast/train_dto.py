@@ -52,7 +52,10 @@ class TrainResponse(BaseModel):
     mlflow_run_id: str = ""
     upload_warning: str | None = Field(
         default=None,
-        description="Aviso si falló la subida a MLflow; el modelo base se publica igualmente (502 solo si falla la publicación del base)",
+        description=(
+            "Aviso si falló la subida a MLflow; el modelo base se publica igualmente "
+            "(502 solo si falla la publicación del base)"
+        ),
     )
     base_version: VersionInfo | None = Field(
         default=None, description="Versión del modelo base publicada por este reentreno"

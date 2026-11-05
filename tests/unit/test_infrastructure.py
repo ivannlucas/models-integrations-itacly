@@ -3,16 +3,26 @@
 Covers ModelContainer, ModelRuntimeService, ArtifactStore (local path ops),
 and router_factory edge cases (exception mapping).
 """
+# pylint: disable=protected-access
 
 from __future__ import annotations
 
-
-import pytest
 from unittest.mock import MagicMock, patch as patch_unit
 
+import pytest
+from pydantic import BaseModel
+
 from app.application.dto.stats_dto import RuntimeStats, StatsResponse
+from app.application.use_cases.train_model_use_case import TrainModelUseCase
 from app.domain.ports.model_plugin_port import ModelPluginPort
+from app.domain.services.exceptions import TrainingNotSupportedError
 from app.domain.services.model_runtime_service import ModelRuntimeService
+from app.infrastructure.artifact_store import (
+    ARTIFACTS_ROOT,
+    ArtifactStore,
+    _build_s3_client,
+    _file_needs_download,
+)
 from app.infrastructure.http.dependencies.container import ModelContainer
 
 
@@ -33,15 +43,18 @@ class FakeModelPlugin(ModelPluginPort):
         """Return True if the model is loaded."""
         return self._loaded
 
-    def predict_batch(self, *, data_path):
+    def predict_batch(self, *, data_path):  # pylint: disable=arguments-differ  # minimal fake
         """Return a fake batch prediction dict."""
         return {"model_id": "test", "predictions": [], "output_path": None}
 
-    def predict_inline(self, *, data_path=None, features, model_key=None, threshold=None):
+    def predict_inline(  # pylint: disable=arguments-differ  # minimal fake
+        self, *, data_path=None, features, model_key=None, threshold=None
+    ):
         """Return a fake inline prediction dict."""
+        _ = data_path, features, model_key, threshold
         return {"model_id": "test", "prediction": "test", "confidence": 1.0}
 
-    def stats(self):
+    def stats(self):  # pylint: disable=arguments-differ  # minimal fake
         """Return a fake StatsResponse."""
         return StatsResponse(
             model_name="test",
@@ -55,9 +68,8 @@ class FakeModelPlugin(ModelPluginPort):
             runtime_stats=RuntimeStats(total_predictions=0, avg_latency_ms=None),
         )
 
-    def train(self, *, data_path):
+    def train(self, *, data_path):  # pylint: disable=arguments-differ  # minimal fake
         """Raise TrainingNotSupportedError."""
-        from app.domain.services.exceptions import TrainingNotSupportedError
         raise TrainingNotSupportedError("Not supported")
 
 
@@ -132,10 +144,11 @@ class TestModelRuntimeService:
 
 # ── Router factory exception edge cases ───────────────────────────────────
 
-class TestRouterFactoryEdgeCases:
+class TestRouterFactoryEdgeCases:  # pylint: disable=too-few-public-methods
     """Tests the exception-mapping paths in router_factory.py."""
 
-    def test_extra_predict_exceptions_maps_to_422(self, app, client):
+    @pytest.mark.usefixtures("app")
+    def test_extra_predict_exceptions_maps_to_422(self, client):
         """Verify extra_predict_exceptions map to HTTP 422."""
         resp = client.post(
             "/models/ml25-wine-sulphites/predict",
@@ -144,14 +157,11 @@ class TestRouterFactoryEdgeCases:
         assert resp.status_code == 422
 
 
-class TestTrainModelUseCase:
+class TestTrainModelUseCase:  # pylint: disable=too-few-public-methods
     """Tests for TrainModelUseCase error path."""
 
     def test_extra_params_triggers_else_branch(self):
         """Verify TrainModelUseCase.execute else-branch raises when request has no .pop()."""
-        from app.application.use_cases.train_model_use_case import TrainModelUseCase
-        from pydantic import BaseModel
-
         class ExtraRequest(BaseModel):
             """Test request with extra params for else-branch coverage."""
             data_path: str = ""
@@ -172,14 +182,12 @@ class TestArtifactStoreLocal:
 
     def test_local_dir_construction(self):
         """Verify ArtifactStore builds the local directory path correctly."""
-        from app.infrastructure.artifact_store import ArtifactStore, ARTIFACTS_ROOT
         store = ArtifactStore("test_model")
         assert store._model_name == "test_model"
         assert store._local_dir == ARTIFACTS_ROOT / "test_model"
 
     def test_path_returns_local_path(self):
         """Verify path() returns the correct local Path."""
-        from app.infrastructure.artifact_store import ArtifactStore, ARTIFACTS_ROOT
         store = ArtifactStore("test_model")
         with patch_unit("pathlib.Path.exists", return_value=True):
             path = store.path("some_file.pkl")
@@ -188,7 +196,6 @@ class TestArtifactStoreLocal:
     def test_path_raises_file_not_found_when_no_s3(self, monkeypatch):
         """Verify path() raises FileNotFoundError when file is missing and no S3."""
         monkeypatch.delenv("STORAGE_BUCKET", raising=False)
-        from app.infrastructure.artifact_store import ArtifactStore
         store = ArtifactStore("nonexistent_model_xyz")
         with pytest.raises(FileNotFoundError):
             store.path("not_existing.pkl")
@@ -196,7 +203,6 @@ class TestArtifactStoreLocal:
     def test_download_all_raises_when_no_bucket(self, monkeypatch):
         """Verify download_all_if_needed raises EnvironmentError when STORAGE_BUCKET is not set."""
         monkeypatch.delenv("STORAGE_BUCKET", raising=False)
-        from app.infrastructure.artifact_store import ArtifactStore
         store = ArtifactStore("test_model")
         with pytest.raises(EnvironmentError, match="STORAGE_BUCKET"):
             store.download_all_if_needed()
@@ -209,19 +215,16 @@ class TestFileNeedsDownload:
 
     def test_missing_file_returns_true(self, tmp_path):
         """Verify True when the local file does not exist."""
-        from app.infrastructure.artifact_store import _file_needs_download
         assert _file_needs_download(tmp_path / "missing.pkl", 100) is True
 
     def test_matching_size_returns_false(self, tmp_path):
         """Verify False when local file size matches the remote size."""
-        from app.infrastructure.artifact_store import _file_needs_download
         p = tmp_path / "file.pkl"
         p.write_bytes(b"x" * 50)
         assert _file_needs_download(p, 50) is False
 
     def test_size_mismatch_returns_true(self, tmp_path):
         """Verify True when local file size differs from the remote size."""
-        from app.infrastructure.artifact_store import _file_needs_download
         p = tmp_path / "file.pkl"
         p.write_bytes(b"x" * 50)
         assert _file_needs_download(p, 99) is True
@@ -235,7 +238,6 @@ class TestArtifactStoreS3:
     def test_download_all_if_needed_with_bucket_triggers_download(self, monkeypatch):
         """Verify download_all_if_needed calls _download_all when STORAGE_BUCKET is set."""
         monkeypatch.setenv("STORAGE_BUCKET", "test-bucket")
-        from app.infrastructure.artifact_store import ArtifactStore
         with patch_unit("app.infrastructure.artifact_store.ArtifactStore._download_all") as mock_dl:
             ArtifactStore("test_model").download_all_if_needed()
             mock_dl.assert_called_once()
@@ -243,7 +245,6 @@ class TestArtifactStoreS3:
     def test_path_triggers_download_when_file_missing_and_bucket_set(self, monkeypatch, tmp_path):
         """Verify path() calls _download_all when the file is absent and STORAGE_BUCKET is set."""
         monkeypatch.setenv("STORAGE_BUCKET", "test-bucket")
-        from app.infrastructure.artifact_store import ArtifactStore
         with patch_unit("app.infrastructure.artifact_store.ArtifactStore._download_all") as mock_dl:
             store = ArtifactStore("test_model")
             store._local_dir = tmp_path / "missing_dir"
@@ -258,7 +259,6 @@ class TestArtifactStoreS3:
         monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "testsecret")
         monkeypatch.setenv("CUSTOM_REGION", "eu-west-1")
         with patch_unit("boto3.client") as mock_boto3:
-            from app.infrastructure.artifact_store import _build_s3_client
             _build_s3_client()
             mock_boto3.assert_called_once()
             kwargs = mock_boto3.call_args[1]
@@ -274,7 +274,6 @@ class TestArtifactStoreS3:
         mock_paginator.paginate.return_value = [{}]  # page with no Contents key
         mock_s3.get_paginator.return_value = mock_paginator
         with patch_unit("app.infrastructure.artifact_store._build_s3_client", return_value=mock_s3):
-            from app.infrastructure.artifact_store import ArtifactStore
             store = ArtifactStore("test_model")
             store._local_dir = tmp_path
             store._download_all()
@@ -291,7 +290,6 @@ class TestArtifactStoreS3:
         }]
         mock_s3.get_paginator.return_value = mock_paginator
         with patch_unit("app.infrastructure.artifact_store._build_s3_client", return_value=mock_s3):
-            from app.infrastructure.artifact_store import ArtifactStore
             store = ArtifactStore("test_model")
             store._local_dir = tmp_path
             store._download_all()
@@ -308,7 +306,6 @@ class TestArtifactStoreS3:
         }]
         mock_s3.get_paginator.return_value = mock_paginator
         with patch_unit("app.infrastructure.artifact_store._build_s3_client", return_value=mock_s3):
-            from app.infrastructure.artifact_store import ArtifactStore
             store = ArtifactStore("test_model")
             store._local_dir = tmp_path
             store._download_all()
@@ -327,7 +324,6 @@ class TestArtifactStoreS3:
         mock_s3.get_paginator.return_value = mock_paginator
         mock_s3.download_file.side_effect = RuntimeError("connection refused")
         with patch_unit("app.infrastructure.artifact_store._build_s3_client", return_value=mock_s3):
-            from app.infrastructure.artifact_store import ArtifactStore
             store = ArtifactStore("test_model")
             store._local_dir = tmp_path
             with pytest.raises(RuntimeError, match="connection refused"):
@@ -341,14 +337,20 @@ class TestModelo10ModelLoader:
 
     def test_build_mobilenetv3_classifier(self):
         """Verify _build_mobilenetv3_classifier returns a model with the correct output size."""
-        from app.plugins.ml10_dairy_disease_vector_detection.model_loader import _build_mobilenetv3_classifier
-        import torch.nn as nn
+        # pylint: disable-next=import-outside-toplevel  # torch-heavy plugin module
+        from app.plugins.ml10_dairy_disease_vector_detection.model_loader import (
+            _build_mobilenetv3_classifier,
+        )
+        from torch import nn  # pylint: disable=import-outside-toplevel  # heavy optional lib
         model = _build_mobilenetv3_classifier(num_classes=3)
         assert isinstance(model.classifier[-1], nn.Linear)
         assert model.classifier[-1].out_features == 3
 
     def test_build_mobilenetv3_classifier_different_classes(self):
         """Verify the classifier head supports different numbers of classes."""
-        from app.plugins.ml10_dairy_disease_vector_detection.model_loader import _build_mobilenetv3_classifier
+        # pylint: disable-next=import-outside-toplevel  # torch-heavy plugin module
+        from app.plugins.ml10_dairy_disease_vector_detection.model_loader import (
+            _build_mobilenetv3_classifier,
+        )
         model = _build_mobilenetv3_classifier(num_classes=5)
         assert model.classifier[-1].out_features == 5

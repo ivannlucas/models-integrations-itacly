@@ -24,7 +24,9 @@ class PredictInlineRequest(BaseModel):
         ),
     )
     sensors: dict[str, float] = Field(..., description=_SENSORS_DESC)
-    mlflow_run_id: str = Field(default="", description="MLflow run ID de los RandomForest reentrenados por el usuario")
+    mlflow_run_id: str = Field(
+        default="", description="MLflow run ID de los RandomForest reentrenados por el usuario"
+    )
 
 
 class PredictBatchRequest(BaseModel):
@@ -34,8 +36,15 @@ class PredictBatchRequest(BaseModel):
 
     model_config = ConfigDict(protected_namespaces=())
     mode: Literal["batch"] = "batch"
-    data_path: str = Field(..., description="Ruta local o s3:// a un ZIP con el CSV de entrada y las imagenes referenciadas")
-    mlflow_run_id: str = Field(default="", description="MLflow run ID de los RandomForest reentrenados por el usuario")
+    data_path: str = Field(
+        ...,
+        description=(
+            "Ruta local o s3:// a un ZIP con el CSV de entrada y las imagenes referenciadas"
+        ),
+    )
+    mlflow_run_id: str = Field(
+        default="", description="MLflow run ID de los RandomForest reentrenados por el usuario"
+    )
 
 
 PredictRequest = Annotated[
@@ -49,8 +58,12 @@ class PredictInlineResponse(BaseModel):
 
     model_config = ConfigDict(protected_namespaces=())
     model_id: str
-    enfermedad: str = Field(..., description="Una de las 15 clases, o IMAGEN_NO_DISPONIBLE si no se aporto imagen")
-    confianza: float = Field(..., description="Probabilidad softmax de la clase ganadora [0, 1]; 0.0 sin imagen")
+    enfermedad: str = Field(
+        ..., description="Una de las 15 clases, o IMAGEN_NO_DISPONIBLE si no se aporto imagen"
+    )
+    confianza: float = Field(
+        ..., description="Probabilidad softmax de la clase ganadora [0, 1]; 0.0 sin imagen"
+    )
     riesgo: float = Field(..., description="Indice de riesgo epidemiologico [0, 1]")
     metodo: str = Field(..., description="HIBRIDO_ENSAMBLE | RIESGO_TABULAR_EXPERT")
 

@@ -17,11 +17,14 @@ from app.plugins.ml16_meat_raw_material_price_alert.constants import (
     TRAIN_CONFIG_FILENAME,
 )
 
-_METRICS = {"threshold": 0.5, "accuracy": 0.8, "precision": 0.7, "recall": 0.6, "f1": 0.65, "auc": 0.75}
+_METRICS = {
+    "threshold": 0.5, "accuracy": 0.8, "precision": 0.7, "recall": 0.6, "f1": 0.65, "auc": 0.75,
+}
 
 
-@pytest.fixture
-def instance(monkeypatch):
+@pytest.fixture(name="instance")
+def fixture_instance(monkeypatch):
+    """Real plugin with train_models stubbed and dummy loaded models/scalers."""
     monkeypatch.setattr(training, "train_models", lambda df: {
         "models": {t: f"model-{t}" for t in TARGETS},
         "scalers": {t: f"scaler-{t}" for t in TARGETS},
@@ -38,8 +41,9 @@ def instance(monkeypatch):
     return plugin
 
 
-@pytest.fixture
-def train_csv(tmp_path):
+@pytest.fixture(name="train_csv")
+def fixture_train_csv(tmp_path):
+    """Minimal raw CSV with the required columns and targets."""
     cols = [c for c in RAW_REQUIRED_COLUMNS if c != "month"] + list(TARGETS)
     df = pd.DataFrame({c: [0.0] * 3 for c in cols})
     df["fecha"] = ["2024-01-01", "2024-02-01", "2024-03-01"]
@@ -49,10 +53,13 @@ def train_csv(tmp_path):
 
 
 def test_declares_its_base_folder():
-    assert plugin_mod.Ml16MeatRawMaterialPriceAlertPlugin.BASE_ARTIFACT_FOLDER == ARTIFACT_FOLDER_NAME
+    """The plugin declares its artifact folder as BASE_ARTIFACT_FOLDER."""
+    plugin_cls = plugin_mod.Ml16MeatRawMaterialPriceAlertPlugin
+    assert plugin_cls.BASE_ARTIFACT_FOLDER == ARTIFACT_FOLDER_NAME
 
 
 def test_train_without_run_publishes_the_new_base(instance, train_csv, isolated_base_store):
+    """train() without a run publishes v1 with every per-target artifact and the config."""
     resp = instance.train(data_path=train_csv, mlflow_run_id="")
     assert resp.base_version.version == "v1" and resp.upload_warning is None
     assert resp.base_version.metrics["target_animales_f1"] == 0.65
@@ -64,6 +71,7 @@ def test_train_without_run_publishes_the_new_base(instance, train_csv, isolated_
 
 
 def test_train_with_run_uploads_and_failure_is_a_warning(instance, train_csv, monkeypatch):
+    """train() with a run uploads to MLflow; an upload failure becomes a warning."""
     tracker = MagicMock()
     monkeypatch.setattr(plugin_mod, "BaseMLflowTracker", MagicMock(return_value=tracker))
     resp = instance.train(data_path=train_csv, mlflow_run_id="run-1")

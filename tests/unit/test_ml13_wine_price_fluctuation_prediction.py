@@ -6,14 +6,35 @@ wiring and invariants, not correctness (golden cases live in inbox/a13/manifest.
 checked by the verification skill).
 """
 from datetime import date, timedelta
+from unittest.mock import MagicMock
 
 import numpy as np
 import pandas as pd
 import pytest
 
-from app.domain.services.exceptions import DataContractError, InsufficientDataError
-from app.plugins.ml13_wine_price_fluctuation_prediction import preprocessing, training
-from app.plugins.ml13_wine_price_fluctuation_prediction.constants import FEATURE_COLUMNS
+from app.domain.services.exceptions import (
+    DataContractError,
+    InsufficientDataError,
+    UserModelUnavailableError,
+)
+from app.plugins.ml13_wine_price_fluctuation_prediction import (
+    mlflow_utils,
+    model_loader,
+    preprocessing,
+    training,
+)
+from app.plugins.ml13_wine_price_fluctuation_prediction import plugin as plugin_mod
+from app.plugins.ml13_wine_price_fluctuation_prediction.constants import (
+    ARTIFACT_FOLDER_NAME,
+    FEATURE_COLUMNS,
+    FEATURE_SCHEMA_FILENAME,
+    MODEL_CONFIG_FILENAME,
+    MODEL_FILENAME,
+    SCALER_FILENAME,
+)
+from app.plugins.ml13_wine_price_fluctuation_prediction.plugin import (
+    Ml13WinePriceFluctuationPredictionPlugin,
+)
 
 PREFIX = "/models/ml13-wine-price-fluctuation-prediction"
 MODEL_ID = "ml13-wine-price-fluctuation-prediction"
@@ -38,6 +59,7 @@ INLINE_PAYLOAD = {"mode": "inline", "rows": _rows(20)}
 # ── endpoint wiring (FakePlugin) ─────────────────────────────────────────────
 
 def test_health(client):
+    """The health endpoint reports the model as loaded."""
     body = client.get(f"{PREFIX}/health").json()
     assert body["status"] == "ok"
     assert body["model"] == MODEL_ID
@@ -45,10 +67,12 @@ def test_health(client):
 
 
 def test_stats(client):
+    """The stats endpoint returns the model name."""
     assert client.get(f"{PREFIX}/stats").json()["model_name"] == MODEL_ID
 
 
 def test_predict_inline(client):
+    """An inline prediction returns probability, alert flag and horizon."""
     resp = client.post(f"{PREFIX}/predict", json=INLINE_PAYLOAD)
     assert resp.status_code == 200
     body = resp.json()
@@ -59,14 +83,17 @@ def test_predict_inline(client):
 
 
 def test_predict_inline_custom_threshold(client):
+    """A custom threshold of 0.9 suppresses the rise alert."""
     resp = client.post(f"{PREFIX}/predict", json={**INLINE_PAYLOAD, "threshold": 0.9})
     assert resp.status_code == 200
     assert resp.json()["alerta_subida"] == 0
 
 
 def test_predict_inline_bulletin_schema_accepted(client):
+    """Rows using the bulletin schema ("SEMANA w/yyyy") are accepted."""
     rows = [{"bulletin": f"SEMANA {w}/2024", "price_red": 40.0 + w / 10} for w in range(1, 21)]
-    assert client.post(f"{PREFIX}/predict", json={"mode": "inline", "rows": rows}).status_code == 200
+    resp = client.post(f"{PREFIX}/predict", json={"mode": "inline", "rows": rows})
+    assert resp.status_code == 200
 
 
 def test_predict_inline_too_few_rows_rejected(client):
@@ -76,13 +103,17 @@ def test_predict_inline_too_few_rows_rejected(client):
 
 
 def test_predict_inline_missing_price_column_rejected(client):
+    """Rows without a price column are rejected with 422."""
     rows = [{"campaign": "2023/2024", "week": w} for w in range(1, 21)]
-    assert client.post(f"{PREFIX}/predict", json={"mode": "inline", "rows": rows}).status_code == 422
+    resp = client.post(f"{PREFIX}/predict", json={"mode": "inline", "rows": rows})
+    assert resp.status_code == 422
 
 
 def test_predict_inline_missing_time_key_rejected(client):
+    """Rows without campaign/week or bulletin are rejected with 422."""
     rows = [{"price_red": 40.0} for _ in range(20)]
-    assert client.post(f"{PREFIX}/predict", json={"mode": "inline", "rows": rows}).status_code == 422
+    resp = client.post(f"{PREFIX}/predict", json={"mode": "inline", "rows": rows})
+    assert resp.status_code == 422
 
 
 def test_predict_inline_insufficient_data_maps_to_422(client, fake_plugins):
@@ -94,15 +125,24 @@ def test_predict_inline_insufficient_data_maps_to_422(client, fake_plugins):
 
 
 def test_predict_batch(client):
-    resp = client.post(f"{PREFIX}/predict", json={"mode": "batch", "data_path": "/tmp/wine_prices.csv"})
+    """Batch prediction returns one row per input and counts the scored ones."""
+    resp = client.post(
+        f"{PREFIX}/predict", json={"mode": "batch", "data_path": "/tmp/wine_prices.csv"}
+    )
     assert resp.status_code == 200
     body = resp.json()
     assert body["n_rows"] == len(body["predictions"])
-    assert body["n_predictions"] == sum(p["pred_proba_up"] is not None for p in body["predictions"])
+    assert body["n_predictions"] == sum(
+        p["pred_proba_up"] is not None for p in body["predictions"]
+    )
 
 
 def test_train(client):
-    resp = client.post(f"{PREFIX}/train", json={"data_path": "/tmp/wine_prices.csv", "mlflow_run_id": "run-1"})
+    """The train endpoint returns the best model type and test metrics."""
+    resp = client.post(
+        f"{PREFIX}/train",
+        json={"data_path": "/tmp/wine_prices.csv", "mlflow_run_id": "run-1"},
+    )
     assert resp.status_code == 200
     body = resp.json()
     assert body["best_model_type"] in ("logreg", "xgboost")
@@ -113,6 +153,7 @@ def test_train(client):
 # ── preprocessing (real module) ──────────────────────────────────────────────
 
 def test_parse_bulletin_uses_campaign_end_year():
+    """Bulletins map to the campaign ending in the bulletin year; bad formats raise."""
     assert preprocessing.parse_bulletin_to_campaign_week("SEMANA 50/2023") == ("2022/2023", 50)
     assert preprocessing.parse_bulletin_to_campaign_week(" semana 1/2024 ") == ("2023/2024", 1)
     with pytest.raises(ValueError):
@@ -122,6 +163,7 @@ def test_parse_bulletin_uses_campaign_end_year():
 
 
 def test_campaign_week_to_date_crosses_year_boundary():
+    """Campaign weeks map to dates across the year boundary; bad campaigns give None."""
     first_half = pd.Series({"campaign": "2023/2024", "week": 50})
     second_half = pd.Series({"campaign": "2023/2024", "week": 1})
     assert preprocessing.parse_campaign_date(first_half).date() == date(2023, 12, 11)
@@ -130,6 +172,7 @@ def test_campaign_week_to_date_crosses_year_boundary():
 
 
 def test_price_column_priority():
+    """price_red takes priority over other price columns; no price column raises."""
     df = pd.DataFrame({"price_white": [1.0], "price_red": [2.0]})
     assert preprocessing.detect_price_column(df) == "price_red"
     with pytest.raises(ValueError):
@@ -137,6 +180,7 @@ def test_price_column_priority():
 
 
 def test_inference_features_warmup_and_merge():
+    """Inference features drop the 19 warm-up weeks and the merge keeps every input row."""
     df_raw = pd.DataFrame(_rows(30))
     df_norm, feats, price_col = preprocessing.prepare_inference_frame(df_raw)
     # Bollinger-20 is the dominant window: first valid row is the 20th week
@@ -149,6 +193,7 @@ def test_inference_features_warmup_and_merge():
 
 
 def test_fewer_than_20_weeks_raises_domain_error():
+    """Fewer than 20 valid weeks after cleaning raise InsufficientDataError."""
     rows = _rows(20)
     rows[3]["price_red"] = None  # dropped by cleaning -> 19 valid weeks
     with pytest.raises(InsufficientDataError):
@@ -167,6 +212,7 @@ def test_invalid_price_is_rejected_not_silently_used(bad_price, position):
 
 
 def test_missing_price_is_still_skipped_like_original_etl():
+    """A missing price is dropped by cleaning, as in the original ETL."""
     rows = _rows(30)
     rows[10]["price_red"] = None
     _, feats, _ = preprocessing.prepare_inference_frame(pd.DataFrame(rows))
@@ -175,19 +221,27 @@ def test_missing_price_is_still_skipped_like_original_etl():
 
 
 def test_invalid_price_maps_to_422(client, fake_plugins):
-    fake_plugins[MODEL_ID].raise_on_inline = DataContractError("'price_red' debe ser un número finito y mayor que 0")
+    """DataContractError on an invalid price maps to 422."""
+    fake_plugins[MODEL_ID].raise_on_inline = DataContractError(
+        "'price_red' debe ser un número finito y mayor que 0"
+    )
     resp = client.post(f"{PREFIX}/predict", json=INLINE_PAYLOAD)
     assert resp.status_code == 422
     assert "price_red" in resp.json()["detail"]
 
 
 def test_target_definition():
+    """The target is 1 when the next-4-week mean return exceeds the threshold."""
     idx = pd.date_range("2023-01-02", periods=40, freq="7D")
     up = pd.Series(40 * 1.02 ** np.arange(40), index=idx)  # +2%/week -> next-4 mean ~ +5.1%
-    df = preprocessing.generate_technical_features(up.to_frame("price"), target_window=4, return_threshold=0.025)
+    df = preprocessing.generate_technical_features(
+        up.to_frame("price"), target_window=4, return_threshold=0.025
+    )
     assert df["target"].eq(1).all()
     slow = pd.Series(40 * 1.005 ** np.arange(40), index=idx)  # +0.5%/week -> next-4 mean ~ +1.3%
-    df_slow = preprocessing.generate_technical_features(slow.to_frame("price"), target_window=4, return_threshold=0.025)
+    df_slow = preprocessing.generate_technical_features(
+        slow.to_frame("price"), target_window=4, return_threshold=0.025
+    )
     assert df_slow["target"].eq(0).all()
     assert df.index[-1] == idx[-5]  # the last 4 weeks have no closed future window
 
@@ -195,6 +249,7 @@ def test_target_definition():
 # ── training (real module) ───────────────────────────────────────────────────
 
 def test_adaptive_splits_ensure_both_classes():
+    """Adaptive walk-forward splits keep the gap and both classes in validation."""
     y = np.array([0] * 60 + [1, 0] * 20)
     for tr, va in training.adaptive_walk_forward_splits(len(y), y, n_splits=5, gap=4):
         assert tr[-1] + 4 < va[0]
@@ -202,29 +257,37 @@ def test_adaptive_splits_ensure_both_classes():
 
 
 def test_smart_score_caps_stability():
-    assert training.smart_score({"auc_mean": 0.8, "f1_mean": 0.5, "auc_std": 0.0}) == pytest.approx(0.75)
-    assert training.smart_score({"auc_mean": 0.8, "f1_mean": 0.5, "auc_std": 0.30}) == pytest.approx(0.55)
+    """smart_score penalises the AUC std up to a cap."""
+    stable = {"auc_mean": 0.8, "f1_mean": 0.5, "auc_std": 0.0}
+    unstable = {"auc_mean": 0.8, "f1_mean": 0.5, "auc_std": 0.30}
+    assert training.smart_score(stable) == pytest.approx(0.75)
+    assert training.smart_score(unstable) == pytest.approx(0.55)
 
 
 def test_train_models_end_to_end_on_synthetic_series():
+    """train_models picks a model and reports test metrics on a synthetic series."""
     df_price = preprocessing.clean_and_index_data(pd.DataFrame(_rows(160, seed=3)))
     result = training.train_models(df_price)
     assert result["model_type"] in ("logreg", "xgboost")
     assert result["n_test"] == 24
     assert set(result["test_metrics"]) == {"auc", "accuracy", "f1", "precision", "recall"}
-    proba = result["model"].predict_proba(result["scaler"].transform(np.zeros((1, len(FEATURE_COLUMNS)))))
+    proba = result["model"].predict_proba(
+        result["scaler"].transform(np.zeros((1, len(FEATURE_COLUMNS))))
+    )
     assert proba.shape == (1, 2)
 
 
 # ── real plugin: retraining contract (MLflow only, no silent fallback) ───────
 
-@pytest.fixture
-def real_plugin():
-    """The real plugin with a bundle trained on the synthetic series (fixed artifacts live in S3)."""
-    from app.plugins.ml13_wine_price_fluctuation_prediction.plugin import (
-        Ml13WinePriceFluctuationPredictionPlugin,
+@pytest.fixture(name="real_plugin")
+def fixture_real_plugin():
+    """The real plugin with a bundle trained on the synthetic series.
+
+    Fixed artifacts live in S3.
+    """
+    result = training.train_models(
+        preprocessing.clean_and_index_data(pd.DataFrame(_rows(160, seed=3)))
     )
-    result = training.train_models(preprocessing.clean_and_index_data(pd.DataFrame(_rows(160, seed=3))))
     plugin = Ml13WinePriceFluctuationPredictionPlugin()
     plugin._bundle = {  # pylint: disable=protected-access
         "model": result["model"], "scaler": result["scaler"],
@@ -233,23 +296,19 @@ def real_plugin():
     return plugin
 
 
-@pytest.fixture
-def train_csv(tmp_path):
+@pytest.fixture(name="train_csv")
+def fixture_train_csv(tmp_path):
+    """CSV with 160 synthetic weeks for training."""
     path = tmp_path / "wine_prices.csv"
     pd.DataFrame(_rows(160, seed=3)).to_csv(path, index=False)
     return str(path)
 
 
-def test_real_train_publishes_the_new_base_and_uploads_to_the_run(real_plugin, train_csv, monkeypatch,
-                                                                  isolated_base_store):
-    from unittest.mock import MagicMock
-
-    from app.plugins.ml13_wine_price_fluctuation_prediction import model_loader
-    from app.plugins.ml13_wine_price_fluctuation_prediction import plugin as plugin_mod
-    from app.plugins.ml13_wine_price_fluctuation_prediction.constants import (
-        ARTIFACT_FOLDER_NAME, FEATURE_SCHEMA_FILENAME, MODEL_CONFIG_FILENAME, MODEL_FILENAME, SCALER_FILENAME,
-    )
-
+# pylint: disable-next=too-many-locals
+def test_real_train_publishes_the_new_base_and_uploads_to_the_run(
+    real_plugin, train_csv, monkeypatch, isolated_base_store
+):
+    """train() publishes v1 with all artifacts and uploads them to the MLflow run."""
     repo_dir = model_loader._store.local_dir  # pylint: disable=protected-access
     before = set(repo_dir.rglob("*")) if repo_dir.exists() else set()
     tracker = MagicMock()
@@ -266,15 +325,13 @@ def test_real_train_publishes_the_new_base_and_uploads_to_the_run(real_plugin, t
 
 
 def test_real_train_without_run_publishes_the_base(real_plugin, train_csv):
+    """train() without a run id still publishes the base."""
     resp = real_plugin.train(data_path=train_csv, mlflow_run_id="")
     assert resp.base_version.version == "v1" and resp.base_version.mlflow_run_id is None
 
 
 def test_real_train_mlflow_failure_is_a_warning(real_plugin, train_csv, monkeypatch):
-    from unittest.mock import MagicMock
-
-    from app.plugins.ml13_wine_price_fluctuation_prediction import plugin as plugin_mod
-
+    """An MLflow upload failure becomes a warning, the base is still published."""
     tracker = MagicMock(upload_artifacts=MagicMock(side_effect=ConnectionError("mlflow caído")))
     monkeypatch.setattr(plugin_mod, "BaseMLflowTracker", MagicMock(return_value=tracker))
     resp = real_plugin.train(data_path=train_csv, mlflow_run_id="run-1")
@@ -282,26 +339,20 @@ def test_real_train_mlflow_failure_is_a_warning(real_plugin, train_csv, monkeypa
 
 
 def test_declares_its_base_folder():
-    from app.plugins.ml13_wine_price_fluctuation_prediction.constants import ARTIFACT_FOLDER_NAME
-    from app.plugins.ml13_wine_price_fluctuation_prediction.plugin import (
-        Ml13WinePriceFluctuationPredictionPlugin,
-    )
+    """The plugin declares its artifact folder as BASE_ARTIFACT_FOLDER."""
     assert Ml13WinePriceFluctuationPredictionPlugin.BASE_ARTIFACT_FOLDER == ARTIFACT_FOLDER_NAME
 
 
 def test_train_without_mlflow_run_id_is_accepted(client):
+    """The train endpoint accepts a request without mlflow_run_id."""
     resp = client.post(f"{PREFIX}/train", json={"data_path": "/tmp/wine_prices.csv"})
     assert resp.status_code == 200
 
 
 def test_real_predict_with_a_run_without_model_never_uses_the_base(real_plugin, monkeypatch):
-    from unittest.mock import MagicMock
-
-    from app.domain.services.exceptions import UserModelUnavailableError
-    from app.plugins.ml13_wine_price_fluctuation_prediction import mlflow_utils
-
-    monkeypatch.setattr(mlflow_utils, "BaseMLflowTracker",
-                        MagicMock(return_value=MagicMock(download_artifacts=MagicMock(return_value=""))))
+    """A run without a model raises UserModelUnavailableError instead of using the base."""
+    tracker = MagicMock(download_artifacts=MagicMock(return_value=""))
+    monkeypatch.setattr(mlflow_utils, "BaseMLflowTracker", MagicMock(return_value=tracker))
     with pytest.raises(UserModelUnavailableError, match="run-vacio"):
         real_plugin.predict_inline(features={"rows": _rows(30)}, mlflow_run_id="run-vacio")
 

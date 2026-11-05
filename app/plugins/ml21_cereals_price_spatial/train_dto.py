@@ -5,6 +5,7 @@ from app.application.dto.base_version_dto import VersionInfo
 
 
 class TrainRequest(BaseModel):
+    """Body of POST /train: training CSV path and optional MLflow run."""
     model_config = ConfigDict(protected_namespaces=())
     data_path: str = Field(
         ..., description="Path to CSV with raw panel rows + target columns"
@@ -20,6 +21,7 @@ class TrainRequest(BaseModel):
 
 
 class TrainResponse(BaseModel):
+    """Result of /train: per-horizon metrics and the new base model version."""
     model_config = ConfigDict(protected_namespaces=())
     detail: str
     mae_h1: float | None = None

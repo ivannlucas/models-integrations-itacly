@@ -7,9 +7,15 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from app.plugins.ml45_cereals_dnsl_critical_point_detection._vendor.xai.fuzzy_explainer import FuzzyExplainer
-from app.plugins.ml45_cereals_dnsl_critical_point_detection._vendor.xai.temporal_explainer import TemporalExplainer
-from app.plugins.ml45_cereals_dnsl_critical_point_detection._vendor.xai.fusion import fuse_fuzzy_lstm_reports
+from app.plugins.ml45_cereals_dnsl_critical_point_detection._vendor.xai.fuzzy_explainer import (
+    FuzzyExplainer,
+)
+from app.plugins.ml45_cereals_dnsl_critical_point_detection._vendor.xai.temporal_explainer import (
+    TemporalExplainer,
+)
+from app.plugins.ml45_cereals_dnsl_critical_point_detection._vendor.xai.fusion import (
+    fuse_fuzzy_lstm_reports,
+)
 from app.plugins.ml45_cereals_dnsl_critical_point_detection._vendor.xai.pcc import (
     DEFAULT_MONITOR_POLICY,
     SUBSYSTEMS_CONFIG,
@@ -23,7 +29,7 @@ from app.plugins.ml45_cereals_dnsl_critical_point_detection._vendor.xai.utils im
 )
 
 
-class DNFLExplainer:
+class DNFLExplainer:  # pylint: disable=too-many-instance-attributes,too-few-public-methods
     """
     Orquestador principal para explicabilidad XAI.
 
@@ -35,7 +41,7 @@ class DNFLExplainer:
       5. Reporte final compacto
     """
 
-    def __init__(
+    def __init__(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         self,
         model,
         feature_names_stats: List[str],
@@ -83,7 +89,7 @@ class DNFLExplainer:
                 model,
                 feature_names=self.feature_names_stats,
             )
-        except Exception:
+        except Exception:  # pylint: disable=broad-exception-caught  # MF names are optional
             pass
 
         # Inicializar sub-explainers
@@ -99,7 +105,7 @@ class DNFLExplainer:
             feature_names=self.feature_names_original,
         )
 
-    def explain(
+    def explain(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
         self,
         x_window,
         s_stats,
@@ -206,5 +212,7 @@ class DNFLExplainer:
                 "Probabilidad de anomalia": round(float(pcc_report.get("probability")), 2),
                 "Umbral de detección de anomalias": round(float(pcc_report.get("threshold")), 2),
                 "Margen respecto al umbral": round(float(pcc_report.get("margin")), 2),
-                "Recomendacion": str(pcc_report.get("recommendation", "Mantener monitorizacion ordinaria")),
+                "Recomendacion": str(
+                    pcc_report.get("recommendation", "Mantener monitorizacion ordinaria")
+                ),
             }

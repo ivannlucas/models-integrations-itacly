@@ -1,9 +1,12 @@
+"""Contrato de transporte de ml47 (batch por CSV o inline con series de sensores)."""
 from typing import Annotated, Any, Literal, Union
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class PredictBatchRequest(BaseModel):
+    """Petición batch: CSV con series de sensores (uno o varios ciclos)."""
+
     model_config = ConfigDict(protected_namespaces=())
     mode: Literal["batch"] = "batch"
     data_path: str = Field(..., description="Path to CSV file with sensor time-series data")
@@ -11,6 +14,8 @@ class PredictBatchRequest(BaseModel):
 
 
 class PredictBatchResponse(BaseModel):
+    """Respuesta batch: una fila de predicción por ciclo."""
+
     model_config = ConfigDict(protected_namespaces=())
     model_id: str
     predictions: list[dict[str, Any]]
@@ -18,9 +23,14 @@ class PredictBatchResponse(BaseModel):
 
 
 class PredictInlineRequest(BaseModel):
+    """Petición inline: ruta a CSV o series de los 7 sensores."""
+
     model_config = ConfigDict(protected_namespaces=())
     mode: Literal["inline"] = "inline"
-    data_path: str | None = Field(default=None, description="Path to CSV file (alternative to sending sensor arrays)")
+    data_path: str | None = Field(
+        default=None,
+        description="Path to CSV file (alternative to sending sensor arrays)",
+    )
     PS1: list[float] | None = Field(default=None, description="Pressure sensor 1 time-series (bar)")
     PS3: list[float] | None = Field(default=None, description="Pressure sensor 3 time-series (bar)")
     EPS1: list[float] | None = Field(default=None, description="Motor power time-series (W)")
@@ -28,7 +38,10 @@ class PredictInlineRequest(BaseModel):
     TS1: list[float] | None = Field(default=None, description="Temperature in time-series (°C)")
     TS2: list[float] | None = Field(default=None, description="Temperature out time-series (°C)")
     VS1: list[float] | None = Field(default=None, description="Vibration time-series (mm/s)")
-    Time_Segundos: list[float] | None = Field(default=None, description="Time in seconds for each observation")
+    Time_Segundos: list[float] | None = Field(
+        default=None,
+        description="Time in seconds for each observation",
+    )
     Cycle_ID: int | None = Field(default=None, description="Cycle identifier")
     mlflow_run_id: str = Field(default="", description="MLflow run ID for user-trained model")
 
@@ -43,6 +56,8 @@ class PredictInlineRequest(BaseModel):
 
 
 class PredictInlineResponse(BaseModel):
+    """Respuesta inline: estado y confianza de los 4 componentes."""
+
     model_config = ConfigDict(protected_namespaces=())
     model_id: str
     Enfriador_Fouling: int = Field(..., description="0=SANO, 1=WARNING, 2=CRÍTICO")
@@ -52,7 +67,10 @@ class PredictInlineResponse(BaseModel):
     Confianza_Fouling: float = Field(..., description="Confidence for Fouling prediction (0-1)")
     Confianza_Valvula: float = Field(..., description="Confidence for Valve prediction (0-1)")
     Confianza_Bomba: float = Field(..., description="Confidence for Pump prediction (0-1)")
-    Confianza_Acumulador: float = Field(..., description="Confidence for Accumulator prediction (0-1)")
+    Confianza_Acumulador: float = Field(
+        ...,
+        description="Confidence for Accumulator prediction (0-1)",
+    )
     model_name: str
 
 

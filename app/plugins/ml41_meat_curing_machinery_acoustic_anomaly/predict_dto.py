@@ -1,9 +1,11 @@
+"""Pydantic DTOs for the ml41 acoustic anomaly ``/predict`` endpoint."""
 from typing import Annotated, Any, Literal, Union
 
 from pydantic import BaseModel, ConfigDict, Field
 
 
 class PredictInlineRequest(BaseModel):
+    """Inline request: one base64 WAV plus the machine combination to score it with."""
     model_config = ConfigDict(protected_namespaces=())
     mode: Literal["inline"] = "inline"
     audio_base64: str = Field(..., description="Base64-encoded WAV recording of the machine")
@@ -24,10 +26,13 @@ class PredictInlineRequest(BaseModel):
         default=None,
         description="Override the trained decision threshold for maha_score (advanced use)",
     )
-    mlflow_run_id: str = Field(default="", description="MLflow run ID for a user-trained checkpoint")
+    mlflow_run_id: str = Field(
+        default="", description="MLflow run ID for a user-trained checkpoint"
+    )
 
 
 class PredictInlineResponse(BaseModel):
+    """Inline response: anomaly scores and predicted label for one WAV."""
     model_config = ConfigDict(protected_namespaces=())
     model_id: str
     machine: str
@@ -36,12 +41,15 @@ class PredictInlineResponse(BaseModel):
     mse_score: float = Field(
         ..., description="Reconstruction MSE — stochastic across runs (~5-6%), informational only"
     )
-    maha_score: float = Field(..., description="Mahalanobis distance in PCA latent space (deterministic)")
+    maha_score: float = Field(
+        ..., description="Mahalanobis distance in PCA latent space (deterministic)"
+    )
     predicted_label: int = Field(..., description="0 = normal, 1 = anomalous")
     threshold_used: float
 
 
 class PredictBatchRequest(BaseModel):
+    """Batch request: ZIP with manifest.csv plus the referenced WAV files."""
     model_config = ConfigDict(protected_namespaces=())
     mode: Literal["batch"] = "batch"
     data_path: str = Field(
@@ -59,6 +67,7 @@ class PredictBatchRequest(BaseModel):
 
 
 class PredictBatchResponse(BaseModel):
+    """Batch response: one prediction dict per WAV in the manifest."""
     model_config = ConfigDict(protected_namespaces=())
     model_id: str
     predictions: list[dict[str, Any]]

@@ -120,7 +120,9 @@ def load_artifact_bundle() -> dict:
     }
 
 
-def save_user_bundle(directory: Path, model, feature_columns: list[str], input_scaler, target_scaler) -> None:
+def save_user_bundle(
+    directory: Path, model, feature_columns: list[str], input_scaler, target_scaler
+) -> None:
     """Write a retrained model in the format load_user_bundle reads (gru_model.pt + scalers.json).
 
     Unlike the base model, a retrained one cannot refit its scalers from the bundled reference
@@ -132,7 +134,8 @@ def save_user_bundle(directory: Path, model, feature_columns: list[str], input_s
         json.dump({
             "feature_columns": list(feature_columns),
             "input_mean": input_scaler.mean_.tolist(), "input_scale": input_scaler.scale_.tolist(),
-            "target_mean": float(target_scaler.mean_[0]), "target_scale": float(target_scaler.scale_[0]),
+            "target_mean": float(target_scaler.mean_[0]),
+            "target_scale": float(target_scaler.scale_[0]),
         }, fh, indent=2)
 
 

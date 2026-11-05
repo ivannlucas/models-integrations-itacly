@@ -198,11 +198,11 @@ class Ml17MeatMarketPriceAnalysisPlugin(ModelPluginPort):
 
             date_str = features.get("date", "")
             t0 = time.perf_counter()
-            X = self._build_frame(features)
-            y_pred = float(model.predict(X)[0])
+            x = self._build_frame(features)
+            y_pred = float(model.predict(x)[0])
             self._record((time.perf_counter() - t0) * 1000)
 
-            xai_fv = {col: float(X.iloc[0][col]) for col in FEATURE_COLUMNS}
+            xai_fv = {col: float(x.iloc[0][col]) for col in FEATURE_COLUMNS}
             logger.info(
                 "predict_inline done — date='%s' y_pred=%.4f count=%d mlflow=%s",
                 date_str, y_pred, self._predict_count, bool(mlflow_run_id),
@@ -220,6 +220,7 @@ class Ml17MeatMarketPriceAnalysisPlugin(ModelPluginPort):
             if user_temp_dir:
                 shutil.rmtree(user_temp_dir, ignore_errors=True)
 
+    # pylint: disable-next=too-many-locals
     def predict_batch(
         self, *, data_path: str, mlflow_run_id: str = ""
     ) -> PredictBatchResponse:
@@ -235,16 +236,20 @@ class Ml17MeatMarketPriceAnalysisPlugin(ModelPluginPort):
                 row_dict = row.to_dict()
                 date_val = _find_date(row_dict)
                 try:
-                    X = self._build_frame(row_dict)
-                    y_pred = float(model.predict(X)[0])
-                    predictions.append({
-                        "row": int(idx),
-                        "date": _iso_date(date_val) if date_val is not None else "",
-                        "y_pred": y_pred,
-                        "model_id": MODEL_ID,
-                        "line": LINE,
-                        "xai_feature_values": {col: float(X.iloc[0][col]) for col in FEATURE_COLUMNS},
-                    })
+                    x = self._build_frame(row_dict)
+                    y_pred = float(model.predict(x)[0])
+                    predictions.append(
+                        {
+                            "row": int(idx),
+                            "date": _iso_date(date_val) if date_val is not None else "",
+                            "y_pred": y_pred,
+                            "model_id": MODEL_ID,
+                            "line": LINE,
+                            "xai_feature_values": {
+                                col: float(x.iloc[0][col]) for col in FEATURE_COLUMNS
+                            },
+                        }
+                    )
                 except Exception as exc:  # pylint: disable=broad-exception-caught
                     logger.warning("Error en fila %s: %s", idx, exc)
                     predictions.append({
@@ -264,6 +269,7 @@ class Ml17MeatMarketPriceAnalysisPlugin(ModelPluginPort):
             if user_temp_dir:
                 shutil.rmtree(user_temp_dir, ignore_errors=True)
 
+    # pylint: disable-next=too-many-locals
     def train(self, *, data_path: str, mlflow_run_id: str) -> TrainResponse:
         """Refit the Ridge pipeline on a user CSV (one-step-ahead t -> t+1 supervision).
 
@@ -294,20 +300,24 @@ class Ml17MeatMarketPriceAnalysisPlugin(ModelPluginPort):
             raise ValueError(f"CSV falta columnas requeridas: {missing}")
         if len(df) < 2:
             raise ValueError(
-                "Se requieren al menos 2 filas mensuales para entrenar (supervisión one-step-ahead t -> t+1)."
+                "Se requieren al menos 2 filas mensuales para entrenar (supervisión "
+                "one-step-ahead t -> t+1)."
             )
 
         df = df.copy()
         df[DATE_COLUMN] = pd.to_datetime(df[DATE_COLUMN])
         df = df.sort_values(DATE_COLUMN).reset_index(drop=True)
 
-        X_train = df.iloc[:-1][FEATURE_COLUMNS].copy()
+        x_train = df.iloc[:-1][FEATURE_COLUMNS].copy()
         y_train = df.iloc[1:][TARGET_COLUMN].to_numpy(dtype=float)
-        previous_actual = X_train[TARGET_COLUMN].to_numpy(dtype=float)
+        previous_actual = x_train[TARGET_COLUMN].to_numpy(dtype=float)
         train_series = df[TARGET_COLUMN].to_numpy(dtype=float)
 
         numeric_preprocessor = Pipeline(
-            steps=[("imputer", SimpleImputer(strategy=IMPUTER_STRATEGY)), ("scaler", StandardScaler())]
+            steps=[
+                ("imputer", SimpleImputer(strategy=IMPUTER_STRATEGY)),
+                ("scaler", StandardScaler()),
+            ]
         )
         new_model = Pipeline(steps=[
             (
@@ -319,9 +329,9 @@ class Ml17MeatMarketPriceAnalysisPlugin(ModelPluginPort):
             ),
             ("model", Ridge(alpha=RIDGE_ALPHA)),
         ])
-        new_model.fit(X_train, y_train)
+        new_model.fit(x_train, y_train)
 
-        y_pred = new_model.predict(X_train)
+        y_pred = new_model.predict(x_train)
         mae = float(np.mean(np.abs(y_train - y_pred)))
         rmse = float(np.sqrt(np.mean((y_train - y_pred) ** 2)))
 
@@ -329,7 +339,11 @@ class Ml17MeatMarketPriceAnalysisPlugin(ModelPluginPort):
         mase = (mae / diff_scale) if not np.isclose(diff_scale, 0.0) else None
 
         denom = float(np.sum((y_train - np.mean(y_train)) ** 2))
-        r2_train = (1.0 - float(np.sum((y_train - y_pred) ** 2)) / denom) if not np.isclose(denom, 0.0) else None
+        r2_train = (
+            (1.0 - float(np.sum((y_train - y_pred) ** 2)) / denom)
+            if not np.isclose(denom, 0.0)
+            else None
+        )
 
         actual_direction = np.sign(y_train - previous_actual)
         predicted_direction = np.sign(y_pred - previous_actual)
@@ -342,10 +356,14 @@ class Ml17MeatMarketPriceAnalysisPlugin(ModelPluginPort):
         metrics = {
             "mae": mae,
             "rmse": rmse,
-            "n_samples": len(X_train),
+            "n_samples": len(x_train),
             **({"mase": mase} if mase is not None else {}),
             **({"r2_train": r2_train} if r2_train is not None else {}),
-            **({"directional_accuracy": directional_accuracy} if directional_accuracy is not None else {}),
+            **(
+                {"directional_accuracy": directional_accuracy}
+                if directional_accuracy is not None
+                else {}
+            ),
         }
         bundle_dir = tempfile.mkdtemp(prefix="ml17_train_")
         try:
@@ -369,7 +387,7 @@ class Ml17MeatMarketPriceAnalysisPlugin(ModelPluginPort):
 
         logger.info(
             "train() done — mae=%.4f rmse=%.4f n=%d mlflow_run_id=%s",
-            mae, rmse, len(X_train), mlflow_run_id,
+            mae, rmse, len(x_train), mlflow_run_id,
         )
         return TrainResponse(
             detail=f"Reentrenamiento completado — modelo base {persisted.base_version['version']}.",
@@ -377,8 +395,10 @@ class Ml17MeatMarketPriceAnalysisPlugin(ModelPluginPort):
             rmse=round(rmse, 4),
             mase=round(mase, 4) if mase is not None else None,
             r2_train=round(r2_train, 4) if r2_train is not None else None,
-            directional_accuracy=round(directional_accuracy, 4) if directional_accuracy is not None else None,
-            n_samples=int(len(X_train)),
+            directional_accuracy=(
+                round(directional_accuracy, 4) if directional_accuracy is not None else None
+            ),
+            n_samples=int(len(x_train)),
             upload_warning=persisted.upload_warning,
             base_version=persisted.base_version,
         )
@@ -400,12 +420,16 @@ class Ml17MeatMarketPriceAnalysisPlugin(ModelPluginPort):
                 InputField(
                     name="date",
                     type="str",
-                    description="Fecha de referencia (YYYY-MM-DD) — genera month_sin/cos automáticamente",
+                    description=(
+                        "Fecha de referencia (YYYY-MM-DD) — genera month_sin/cos automáticamente"
+                    ),
                 ),
                 InputField(
                     name="target_price_pigmeat_class_e_es",
                     type="float",
-                    description="Precio porcino clase E España en t (€/100 kg) — lag autorregresivo",
+                    description=(
+                        "Precio porcino clase E España en t (€/100 kg) — lag autorregresivo"
+                    ),
                 ),
                 InputField(
                     name="eurostat_pigmeat_slaughter_tonnes_es",

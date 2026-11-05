@@ -96,7 +96,9 @@ def test_train_without_mlflow_run_id_returns_422(client):
 
 def test_train_returns_501(client):
     """Verify train returns HTTP 501 when no training backend is wired for ml25-wine-sulphites."""
-    resp = client.post(f"{PREFIX}/train", json={"data_path": "/tmp/wine.csv", "mlflow_run_id": "test-run-id"})
+    resp = client.post(
+        f"{PREFIX}/train", json={"data_path": "/tmp/wine.csv", "mlflow_run_id": "test-run-id"}
+    )
     assert resp.status_code == 501
 
 

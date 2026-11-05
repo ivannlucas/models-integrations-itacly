@@ -98,7 +98,9 @@ def load_training_frame(csv_path: str) -> pd.DataFrame:
         )
     df[DATE_COL] = pd.to_datetime(df[DATE_COL], errors="coerce")
     if df[DATE_COL].isna().any():
-        raise ValueError(f"La columna '{DATE_COL}' tiene valores no parseables (formato YYYY-MM-DD).")
+        raise ValueError(
+            f"La columna '{DATE_COL}' tiene valores no parseables (formato YYYY-MM-DD)."
+        )
     return df
 
 
@@ -109,7 +111,9 @@ def engineer_features(df: pd.DataFrame) -> pd.DataFrame:
     df = preprocessing.add_own_price_feature(df)
     df = preprocessing.fill_numeric(df, list(FEATURE_COLUMNS) + [TARGET_COL])
     if df[TARGET_COL].isna().all():
-        raise ValueError(f"La columna target '{TARGET_COL}' sigue completamente vacía tras la imputación.")
+        raise ValueError(
+            f"La columna target '{TARGET_COL}' sigue completamente vacía tras la imputación."
+        )
     return df
 
 
@@ -128,6 +132,7 @@ def temporal_cutoffs(df: pd.DataFrame) -> tuple[np.datetime64, np.datetime64]:
 
 
 def fit_scaler_train_only(df: pd.DataFrame, cols: list[str], train_end) -> StandardScaler:
+    """Fit a StandardScaler on *cols* using only rows dated up to *train_end*."""
     return StandardScaler().fit(df.loc[df[DATE_COL] <= train_end, cols])
 
 
@@ -174,7 +179,10 @@ def split_by_date(x, y, dates, train_end, val_end):
 def build_gru_model(input_shape: tuple[int, int]):
     """trainer.py::build_gru_model with config.yaml training.model."""
     import tensorflow as tf  # pylint: disable=import-outside-toplevel
-    from tensorflow.keras import layers, models  # pylint: disable=import-outside-toplevel
+    from tensorflow.keras import (  # pylint: disable=import-outside-toplevel,import-error,no-name-in-module
+        layers,
+        models,
+    )
 
     model = models.Sequential([
         layers.Input(shape=input_shape),
@@ -183,11 +191,16 @@ def build_gru_model(input_shape: tuple[int, int]):
         layers.Dense(DENSE_UNITS, activation="relu"),
         layers.Dense(1),
     ])
+    # no-member below: tf.keras is a lazy loader pylint cannot see.
     model.compile(
-        optimizer=tf.keras.optimizers.Adam(learning_rate=LEARNING_RATE),
-        loss="mse" if LOSS == "mse" else tf.keras.losses.Huber(),
-        metrics=[tf.keras.metrics.MeanAbsoluteError(name="mae"),
-                 tf.keras.metrics.MeanAbsolutePercentageError(name="mape")],
+        optimizer=tf.keras.optimizers.Adam(  # pylint: disable=no-member
+            learning_rate=LEARNING_RATE
+        ),
+        loss="mse" if LOSS == "mse" else tf.keras.losses.Huber(),  # pylint: disable=no-member
+        metrics=[tf.keras.metrics.MeanAbsoluteError(name="mae"),  # pylint: disable=no-member
+                 tf.keras.metrics.MeanAbsolutePercentageError(  # pylint: disable=no-member
+                     name="mape"
+                 )],
     )
     return model
 
@@ -206,7 +219,7 @@ def regression_metrics(y_true: np.ndarray, y_pred: np.ndarray, prefix: str) -> d
     }
 
 
-def train_gru(
+def train_gru(  # pylint: disable=too-many-locals
     csv_path: str,
     *,
     epochs: int = TRAIN_EPOCHS,
@@ -216,7 +229,8 @@ def train_gru(
     import tensorflow as tf  # pylint: disable=import-outside-toplevel
 
     start = time.time()
-    tf.keras.utils.set_random_seed(TRAIN_SEED)
+    # no-member below: tf.keras is a lazy loader pylint cannot see.
+    tf.keras.utils.set_random_seed(TRAIN_SEED)  # pylint: disable=no-member
 
     df = engineer_features(load_training_frame(csv_path))
     train_end, val_end = temporal_cutoffs(df)
@@ -229,15 +243,19 @@ def train_gru(
 
     x, y, dates = build_training_sequences(df)
     x_train, y_train, x_val, y_val, x_test, y_test = split_by_date(x, y, dates, train_end, val_end)
-    logger.info("ml18 train: X_train=%s X_val=%s X_test=%s", x_train.shape, x_val.shape, x_test.shape)
+    logger.info(
+        "ml18 train: X_train=%s X_val=%s X_test=%s", x_train.shape, x_val.shape, x_test.shape
+    )
 
     model = build_gru_model((x_train.shape[1], x_train.shape[2]))
-    callbacks = [tf.keras.callbacks.EarlyStopping(
+    callbacks = [tf.keras.callbacks.EarlyStopping(  # pylint: disable=no-member
         monitor="val_loss", patience=EARLY_STOPPING_PATIENCE, restore_best_weights=True,
     )]
     if on_epoch is not None:
-        callbacks.append(tf.keras.callbacks.LambdaCallback(
-            on_epoch_end=lambda epoch, logs: on_epoch(epoch, {k: float(v) for k, v in (logs or {}).items()}),
+        callbacks.append(tf.keras.callbacks.LambdaCallback(  # pylint: disable=no-member
+            on_epoch_end=lambda epoch, logs: on_epoch(
+                epoch, {k: float(v) for k, v in (logs or {}).items()}
+            ),
         ))
     history = model.fit(
         x_train, y_train, validation_data=(x_val, y_val), epochs=epochs,
@@ -245,7 +263,9 @@ def train_gru(
     )
 
     metrics: dict = {}
-    for prefix, xs, ys in (("train", x_train, y_train), ("val", x_val, y_val), ("test", x_test, y_test)):
+    for prefix, xs, ys in (
+        ("train", x_train, y_train), ("val", x_val, y_val), ("test", x_test, y_test)
+    ):
         pred = y_scaler.inverse_transform(model.predict(xs, verbose=0).reshape(-1, 1)).ravel()
         real = y_scaler.inverse_transform(ys.reshape(-1, 1)).ravel()
         metrics.update(regression_metrics(real, pred, prefix))
@@ -276,7 +296,8 @@ def save_training_artifacts(artifact_dir: Path, result: TrainingResult) -> None:
     _scaler_to_json(result.x_scaler, artifact_dir / X_SCALER_FILENAME)
     _scaler_to_json(result.y_scaler, artifact_dir / Y_SCALER_FILENAME)
     with open(artifact_dir / BEST_CONFIG_FILENAME, "w", encoding="utf-8") as fh:
-        json.dump({"type": "GRU", "units": HIDDEN_UNITS, "dropout": DROPOUT, "dense_units": DENSE_UNITS,
-                   "learning_rate": LEARNING_RATE, "loss": LOSS}, fh, indent=2)
+        json.dump({"type": "GRU", "units": HIDDEN_UNITS, "dropout": DROPOUT,
+                   "dense_units": DENSE_UNITS, "learning_rate": LEARNING_RATE, "loss": LOSS},
+                  fh, indent=2)
     with open(artifact_dir / METRICS_FILENAME, "w", encoding="utf-8") as fh:
         json.dump({**result.metrics, "evaluated_on": "train+val+test_splits"}, fh, indent=2)

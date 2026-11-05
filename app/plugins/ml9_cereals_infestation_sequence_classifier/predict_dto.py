@@ -21,7 +21,9 @@ class PredictBatchRequest(BaseModel):
             "por sample_id y devuelve una fila por ventana válida."
         ),
     )
-    mlflow_run_id: str = Field(default="", description="MLflow run ID de un modelo reentrenado por el usuario")
+    mlflow_run_id: str = Field(
+        default="", description="MLflow run ID de un modelo reentrenado por el usuario"
+    )
 
 
 class PredictBatchResponse(BaseModel):
@@ -30,11 +32,15 @@ class PredictBatchResponse(BaseModel):
     model_config = ConfigDict(protected_namespaces=())
     model_id: str
     n_windows: int = Field(..., description="Ventanas válidas puntuadas")
-    n_series: int = Field(..., description="sample_id distintos que produjeron al menos una ventana")
+    n_series: int = Field(
+        ..., description="sample_id distintos que produjeron al menos una ventana"
+    )
     predictions: list[dict[str, Any]]
     class_distribution: dict[str, int] = Field(
         default_factory=dict,
-        description="Ventanas predichas por clase — señal de deriva recomendada por la memoria (§10)",
+        description=(
+            "Ventanas predichas por clase — señal de deriva recomendada por la memoria (§10)"
+        ),
     )
     evaluated_metrics: dict[str, float] | None = Field(
         default=None,
@@ -69,14 +75,17 @@ class PredictInlineRequest(BaseModel):
             f"Lista de al menos {WINDOW_SIZE} observaciones horarias consecutivas del mismo "
             "sample_id, ordenadas de más antigua a más reciente, con las columnas sample_id, "
             "timestamp, co2_ppm, temp_c, ambient_rh_pct y humidity_grain_pct. Se puntúa la ventana "
-            "más reciente del histórico recibido. IMPORTANTE: las variables derivadas (diferencias, "
-            "pendientes, medias y desviaciones móviles) se calculan sobre TODAS las filas aportadas, "
+            "más reciente del histórico recibido. IMPORTANTE: las variables derivadas "
+            "(diferencias, pendientes, medias y desviaciones móviles) se calculan sobre TODAS las "
+            "filas aportadas, "
             f"así que {WINDOW_SIZE} filas es el mínimo operativo, no el óptimo — aportar el mayor "
             "histórico disponible de la serie reproduce con más fidelidad el comportamiento del "
             "modelo original (ver manifest known_issues sensibilidad_al_historial_aportado)."
         ),
     )
-    mlflow_run_id: str = Field(default="", description="MLflow run ID de un modelo reentrenado por el usuario")
+    mlflow_run_id: str = Field(
+        default="", description="MLflow run ID de un modelo reentrenado por el usuario"
+    )
 
 
 class PredictInlineResponse(BaseModel):
@@ -85,7 +94,9 @@ class PredictInlineResponse(BaseModel):
     model_config = ConfigDict(protected_namespaces=())
     model_id: str
     sample_id: str
-    window_index: int = Field(..., description="Índice de la ventana puntuada dentro de la serie recibida")
+    window_index: int = Field(
+        ..., description="Índice de la ventana puntuada dentro de la serie recibida"
+    )
     timestamp_start: str
     timestamp_end: str = Field(..., description="Instante al que se refiere la clase predicha")
     pred_class: int = Field(..., description="0=sano, 1=insectos, 2=moho_critico")
@@ -107,7 +118,8 @@ class PredictInlineResponse(BaseModel):
     )
     model_name: str
     xai_feature_values: dict[str, Any] | None = Field(
-        default=None, description="Valores usados en la explicación — consumido por el servicio XAI",
+        default=None,
+        description="Valores usados en la explicación — consumido por el servicio XAI",
     )
 
 

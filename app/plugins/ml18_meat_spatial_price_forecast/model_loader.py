@@ -43,7 +43,10 @@ def _load_bundle(model_path, x_scaler_path, y_scaler_path) -> dict:
     import tensorflow as tf
 
     model_bundle = joblib.load(model_path)
-    model = tf.keras.models.model_from_json(model_bundle["model_json"])
+    # no-member: tf.keras is a lazy loader pylint cannot see.
+    model = tf.keras.models.model_from_json(  # pylint: disable=no-member
+        model_bundle["model_json"]
+    )
     model.set_weights(model_bundle["weights"])
     return {
         "model": model,

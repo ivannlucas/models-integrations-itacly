@@ -43,7 +43,9 @@ LABEL_NAMES = {0: 'sano', 1: 'insectos', 2: 'moho_critico'}
 
 
 @dataclass
-class SequenceTrainingResult:
+class SequenceTrainingResult:  # pylint: disable=too-many-instance-attributes
+    """Trained sequence model with its checkpoint, history, metrics, predictions and scaler."""
+
     model_type: str
     model: nn.Module
     checkpoint: dict[str, Any]
@@ -55,8 +57,10 @@ class SequenceTrainingResult:
 
 
 class SequenceDataset(Dataset):
-    def __init__(self, X: np.ndarray, y: np.ndarray | None = None):
-        self.X = torch.as_tensor(X, dtype=torch.float32)
+    """Torch dataset over (N, T, F) sequences with optional integer labels."""
+
+    def __init__(self, X: np.ndarray, y: np.ndarray | None = None):  # pylint: disable=invalid-name  # vendored API name
+        self.X = torch.as_tensor(X, dtype=torch.float32)  # pylint: disable=invalid-name  # vendored API name
         self.y = None if y is None else torch.as_tensor(y, dtype=torch.long)
 
     def __len__(self) -> int:
@@ -68,8 +72,10 @@ class SequenceDataset(Dataset):
         return self.X[idx], self.y[idx]
 
 
-class SequenceClassifier(nn.Module):
-    def __init__(
+class SequenceClassifier(nn.Module):  # pylint: disable=too-many-instance-attributes
+    """GRU/LSTM encoder whose last time-step state feeds a dropout + linear classification head."""
+
+    def __init__(  # pylint: disable=too-many-arguments
         self,
         *,
         model_type: str,
@@ -106,14 +112,15 @@ class SequenceClassifier(nn.Module):
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Return class logits from the last time step of the RNN output."""
         out, _ = self.rnn(x)
         last_state = out[:, -1, :]
         return self.head(last_state)
 
 
 class _TensorSequenceDataset(Dataset):
-    def __init__(self, X: np.ndarray, y: np.ndarray | None = None):
-        self.X = torch.as_tensor(X, dtype=torch.float32)
+    def __init__(self, X: np.ndarray, y: np.ndarray | None = None):  # pylint: disable=invalid-name  # vendored API name
+        self.X = torch.as_tensor(X, dtype=torch.float32)  # pylint: disable=invalid-name  # vendored API name
         self.y = None if y is None else torch.as_tensor(y, dtype=torch.long)
 
     def __len__(self) -> int:
@@ -126,6 +133,7 @@ class _TensorSequenceDataset(Dataset):
 
 
 def set_global_seed(seed: int) -> None:
+    """Seed numpy and torch (CPU/CUDA) and force deterministic cuDNN."""
     seed = int(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
@@ -135,32 +143,39 @@ def set_global_seed(seed: int) -> None:
 
 
 def resolve_device(cfg: dict[str, Any]) -> torch.device:
+    """Return CUDA if the config requests it and it is available, otherwise CPU."""
     requested = str(cfg.get('training', {}).get('device', 'cpu')).lower().strip()
     if requested in {'cuda', 'gpu'} and torch.cuda.is_available():
         return torch.device('cuda')
     return torch.device('cpu')
 
 
-def fit_scaler(X_train: np.ndarray) -> StandardScaler:
+def fit_scaler(X_train: np.ndarray) -> StandardScaler:  # pylint: disable=invalid-name  # vendored API name
+    """Fit a StandardScaler over every time step of the training sequences."""
     scaler = StandardScaler()
     scaler.fit(X_train.reshape(-1, X_train.shape[-1]))
     return scaler
 
 
-def transform_sequences(scaler: StandardScaler, X: np.ndarray) -> np.ndarray:
+def transform_sequences(scaler: StandardScaler, X: np.ndarray) -> np.ndarray:  # pylint: disable=invalid-name  # vendored API name
+    """Scale (N, T, F) sequences feature-wise with *scaler*, returning float32."""
     flat = X.reshape(-1, X.shape[-1])
     scaled = scaler.transform(flat)
     return scaled.reshape(X.shape).astype(np.float32)
 
 
 def build_class_weights(y: np.ndarray, num_classes: int) -> torch.Tensor:
+    """Inverse-frequency class weights (absent classes counted as 1)."""
     counts = np.bincount(y.astype(int), minlength=num_classes).astype(np.float32)
     counts[counts == 0.0] = 1.0
     weights = counts.sum() / (num_classes * counts)
     return torch.as_tensor(weights, dtype=torch.float32)
 
 
-def build_model(model_type: str, input_size: int, num_classes: int, params: dict[str, Any]) -> SequenceClassifier:
+def build_model(
+    model_type: str, input_size: int, num_classes: int, params: dict[str, Any]
+) -> SequenceClassifier:
+    """Build a SequenceClassifier from the hyper-parameter dict *params*."""
     return SequenceClassifier(
         model_type=model_type,
         input_size=input_size,
@@ -172,7 +187,9 @@ def build_model(model_type: str, input_size: int, num_classes: int, params: dict
     )
 
 
-def _make_loader(X: np.ndarray, y: np.ndarray | None, batch_size: int, *, shuffle: bool) -> DataLoader:
+def _make_loader(
+    X: np.ndarray, y: np.ndarray | None, batch_size: int, *, shuffle: bool  # pylint: disable=invalid-name  # vendored API name
+) -> DataLoader:
     dataset = _TensorSequenceDataset(X, y)
     return DataLoader(dataset, batch_size=max(1, int(batch_size)), shuffle=shuffle, drop_last=False)
 
@@ -180,11 +197,12 @@ def _make_loader(X: np.ndarray, y: np.ndarray | None, batch_size: int, *, shuffl
 @torch.no_grad()
 def predict_sequence_proba(
     model: nn.Module,
-    X: np.ndarray,
+    X: np.ndarray,  # pylint: disable=invalid-name  # vendored API name
     *,
     batch_size: int = 128,
     device: torch.device | str = 'cpu',
 ) -> np.ndarray:
+    """Return softmax class probabilities for the sequences *X* (batched, no grad)."""
     if len(X) == 0:
         return np.zeros((0, 0), dtype=np.float32)
     loader = _make_loader(X, None, batch_size, shuffle=False)
@@ -202,12 +220,13 @@ def predict_sequence_proba(
 @torch.no_grad()
 def evaluate_sequence_model(
     model: nn.Module,
-    X: np.ndarray,
+    X: np.ndarray,  # pylint: disable=invalid-name  # vendored API name
     y: np.ndarray,
     *,
     batch_size: int = 128,
     device: torch.device | str = 'cpu',
 ) -> dict[str, Any]:
+    """Predict *X* and return classification metrics against *y* plus y_pred/y_proba."""
     proba = predict_sequence_proba(model, X, batch_size=batch_size, device=device)
     pred = np.argmax(proba, axis=1) if len(proba) else np.zeros((0,), dtype=int)
     labels = sorted(np.unique(y).tolist()) if len(y) else [0, 1, 2]
@@ -215,8 +234,12 @@ def evaluate_sequence_model(
         'accuracy': float(accuracy_score(y, pred)) if len(y) else 0.0,
         'balanced_accuracy': float(balanced_accuracy_score(y, pred)) if len(y) else 0.0,
         'f1_macro': float(f1_score(y, pred, average='macro', zero_division=0)) if len(y) else 0.0,
-        'precision_macro': float(precision_score(y, pred, average='macro', zero_division=0)) if len(y) else 0.0,
-        'recall_macro': float(recall_score(y, pred, average='macro', zero_division=0)) if len(y) else 0.0,
+        'precision_macro': (
+            float(precision_score(y, pred, average='macro', zero_division=0)) if len(y) else 0.0
+        ),
+        'recall_macro': (
+            float(recall_score(y, pred, average='macro', zero_division=0)) if len(y) else 0.0
+        ),
         'log_loss': float(log_loss(y, proba, labels=labels)) if len(y) else 0.0,
     }
     return {
@@ -238,33 +261,33 @@ def _run_epoch(
     train_mode = optimizer is not None
     model.train(train_mode)
 
-    for X_batch, y_batch in loader:
-        X_batch = X_batch.to(device)
+    for x_batch, y_batch in loader:
+        x_batch = x_batch.to(device)
         y_batch = y_batch.to(device)
 
         if train_mode:
             optimizer.zero_grad(set_to_none=True)
-            logits = model(X_batch)
+            logits = model(x_batch)
             loss = criterion(logits, y_batch)
             loss.backward()
             optimizer.step()
         else:
             with torch.no_grad():
-                logits = model(X_batch)
+                logits = model(x_batch)
                 loss = criterion(logits, y_batch)
 
-        batch_size = int(X_batch.shape[0])
+        batch_size = int(x_batch.shape[0])
         running += float(loss.item()) * batch_size
         total += batch_size
 
     return running / max(total, 1)
 
 
-def train_sequence_model(
+def train_sequence_model(  # pylint: disable=too-many-arguments,too-many-locals
     model_type: str,
-    X_train: np.ndarray,
+    X_train: np.ndarray,  # pylint: disable=invalid-name  # vendored API name
     y_train: np.ndarray,
-    X_val: np.ndarray,
+    X_val: np.ndarray,  # pylint: disable=invalid-name  # vendored API name
     y_val: np.ndarray,
     *,
     params: dict[str, Any],
@@ -275,6 +298,7 @@ def train_sequence_model(
     device: torch.device | str = 'cpu',
     init_state_dict: dict[str, Any] | None = None,
 ) -> SequenceTrainingResult:
+    """Train with AdamW + early stopping on the selection metric; keep the best-epoch weights."""
     seq_train_cfg = cfg.get('sequence', {}).get('training', {})
     max_epochs = int(seq_train_cfg.get('max_epochs', 25))
     patience = int(seq_train_cfg.get('patience', 5))
@@ -284,8 +308,8 @@ def train_sequence_model(
     learning_rate = float(params.get('learning_rate', seq_train_cfg.get('learning_rate', 1e-3)))
     weight_decay = float(params.get('weight_decay', seq_train_cfg.get('weight_decay', 0.0)))
 
-    X_train_s = transform_sequences(scaler, X_train)
-    X_val_s = transform_sequences(scaler, X_val)
+    x_train_s = transform_sequences(scaler, X_train)
+    x_val_s = transform_sequences(scaler, X_val)
 
     model = build_model(model_type, X_train.shape[-1], num_classes, params)
     if init_state_dict is not None:
@@ -293,10 +317,12 @@ def train_sequence_model(
         model.load_state_dict(init_state_dict)
     model = model.to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
-    criterion = nn.CrossEntropyLoss(weight=class_weights.to(device) if class_weights is not None else None)
+    criterion = nn.CrossEntropyLoss(
+        weight=class_weights.to(device) if class_weights is not None else None
+    )
 
-    train_loader = _make_loader(X_train_s, y_train, batch_size, shuffle=True)
-    val_loader = _make_loader(X_val_s, y_val, batch_size, shuffle=False)
+    train_loader = _make_loader(x_train_s, y_train, batch_size, shuffle=True)
+    val_loader = _make_loader(x_val_s, y_val, batch_size, shuffle=False)
 
     best_state = copy.deepcopy(model.state_dict())
     best_metric = -np.inf
@@ -308,9 +334,15 @@ def train_sequence_model(
     for epoch in range(1, max_epochs + 1):
         train_loss = _run_epoch(model, train_loader, criterion, optimizer, device)
         val_loss = _run_epoch(model, val_loader, criterion, None, device)
-        val_eval = evaluate_sequence_model(model, X_val_s, y_val, batch_size=batch_size, device=device)
+        val_eval = evaluate_sequence_model(
+            model, x_val_s, y_val, batch_size=batch_size, device=device
+        )
         val_metrics = val_eval['metrics']
-        selection_metric = float(val_metrics.get(cfg.get('sequence', {}).get('selection_metric', 'f1_macro'), val_metrics['f1_macro']))
+        selection_metric = float(
+            val_metrics.get(
+                cfg.get('sequence', {}).get('selection_metric', 'f1_macro'), val_metrics['f1_macro']
+            )
+        )
 
         history_rows.append(
             {
@@ -335,7 +367,9 @@ def train_sequence_model(
             break
 
     model.load_state_dict(best_state)
-    final_eval = evaluate_sequence_model(model, X_val_s, y_val, batch_size=batch_size, device=device)
+    final_eval = evaluate_sequence_model(
+        model, x_val_s, y_val, batch_size=batch_size, device=device
+    )
     final_metrics = final_eval['metrics']
     history = pd.DataFrame(history_rows)
 
@@ -381,11 +415,11 @@ def train_sequence_model(
     )
 
 
-def search_sequence_model(
+def search_sequence_model(  # pylint: disable=too-many-arguments,too-many-locals
     model_type: str,
-    X_train: np.ndarray,
+    X_train: np.ndarray,  # pylint: disable=invalid-name  # vendored API name
     y_train: np.ndarray,
-    X_val: np.ndarray,
+    X_val: np.ndarray,  # pylint: disable=invalid-name  # vendored API name
     y_val: np.ndarray,
     *,
     cfg: dict[str, Any],
@@ -395,6 +429,7 @@ def search_sequence_model(
     device: torch.device | str,
     quick: bool = False,
 ) -> tuple[pd.DataFrame, pd.DataFrame, SequenceTrainingResult]:
+    """Grid-search the configured hyper-parameters and return summary, history and best result."""
     search_cfg = cfg.get('sequence', {}).get('search', {}).get(model_type, {})
     param_grid = list(ParameterGrid(search_cfg)) if search_cfg else [{}]
     if quick:
@@ -425,7 +460,9 @@ def search_sequence_model(
             class_weights=class_weights,
             device=device,
         )
-        metric_value = float(result.metrics.get(selection_metric, result.metrics.get('f1_macro', 0.0)))
+        metric_value = float(
+            result.metrics.get(selection_metric, result.metrics.get('f1_macro', 0.0))
+        )
         summary_rows.append(
             {
                 'model_type': model_type,
@@ -451,12 +488,17 @@ def search_sequence_model(
             best_result = result
 
     assert best_result is not None
-    summary_df = pd.DataFrame(summary_rows).sort_values('selection_value', ascending=False).reset_index(drop=True)
+    summary_df = (
+        pd.DataFrame(summary_rows)
+        .sort_values('selection_value', ascending=False)
+        .reset_index(drop=True)
+    )
     history_df = pd.DataFrame(fold_rows).sort_values(['trial_id', 'epoch']).reset_index(drop=True)
     return summary_df, history_df, best_result
 
 
 def save_pickle(obj: Any, path: str | Path) -> None:
+    """Pickle *obj* to *path*, creating parent directories."""
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
     with open(p, 'wb') as f:
@@ -464,17 +506,22 @@ def save_pickle(obj: Any, path: str | Path) -> None:
 
 
 def load_pickle(path: str | Path) -> Any:
+    """Load a pickled object from *path*."""
     with open(path, 'rb') as f:
         return pickle.load(f)
 
 
 def save_checkpoint(path: str | Path, checkpoint: dict[str, Any]) -> None:
+    """Save a checkpoint dict with torch.save, creating parent directories."""
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
     torch.save(checkpoint, p)
 
 
-def load_checkpoint(path: str | Path, *, map_location: str | torch.device = 'cpu') -> dict[str, Any]:
+def load_checkpoint(
+    path: str | Path, *, map_location: str | torch.device = 'cpu'
+) -> dict[str, Any]:
+    """Load a checkpoint and attach the rebuilt model (eval mode) under the "model" key."""
     checkpoint = torch.load(Path(path), map_location=map_location, weights_only=True)
     model_config = checkpoint['model_config']
     model = SequenceClassifier(

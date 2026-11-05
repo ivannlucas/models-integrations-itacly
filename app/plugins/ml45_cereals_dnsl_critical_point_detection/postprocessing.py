@@ -25,6 +25,7 @@ logger = logging.getLogger(__name__)
 
 
 def build_explainer(model, stats_columns: list[str], model_cfg: dict) -> DNFLExplainer:
+    """Build the DNFL explainer (SHAP + fuzzy rules + PCC monitor) for *model*."""
     pcc_cfg = {
         "subsystems": PCC_SUBSYSTEMS_CONFIG,
         "catalog": PCC_CATALOG_RECORDS,
@@ -40,7 +41,7 @@ def build_explainer(model, stats_columns: list[str], model_cfg: dict) -> DNFLExp
     )
 
 
-def explain_window(
+def explain_window(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     explainer: DNFLExplainer,
     x_window: np.ndarray,
     s_stats: np.ndarray,
@@ -81,13 +82,15 @@ def explain_window(
     # fields already in `row`) — dropped here so the output has one column per real value
     # instead of two names for the same number.
     final_report = dict(result["final_report"])
-    for _redundant_key in ("Probabilidad de anomalia", "Umbral de detección de anomalias", "Margen respecto al umbral"):
+    for _redundant_key in (
+        "Probabilidad de anomalia", "Umbral de detección de anomalias", "Margen respecto al umbral"
+    ):
         final_report.pop(_redundant_key, None)
     row.update(final_report)
     return row
 
 
-def build_predictions(
+def build_predictions(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     model,
     sequences_scaled: np.ndarray,
     stats_scaled: np.ndarray,
@@ -102,11 +105,11 @@ def build_predictions(
     explainer = build_explainer(model, stats_columns, model_cfg)
 
     predictions: list[dict] = []
-    for idx in range(len(sequences_scaled)):
+    for idx, x_window in enumerate(sequences_scaled):
         try:
             row = explain_window(
                 explainer,
-                x_window=sequences_scaled[idx],
+                x_window=x_window,
                 s_stats=stats_scaled[idx],
                 xai_background=xai_background,
                 threshold=threshold,

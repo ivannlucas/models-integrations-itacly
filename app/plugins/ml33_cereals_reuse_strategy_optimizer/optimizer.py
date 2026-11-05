@@ -2,8 +2,9 @@
 
 Ported from ``src/predict/exact_optimizer.py`` in the original model delivery
 (``inbox/a33``, originally delivered as
-``a33-cnp-cereals-neuroevolutivo-reduccion-ambiental-residuos`` — see manifest.yaml). The formulas and
-solver setup are kept numerically identical to the source so the manifest's golden cases
+``a33-cnp-cereals-neuroevolutivo-reduccion-ambiental-residuos`` — see manifest.yaml).
+The formulas and solver setup are kept numerically identical to the source so the
+manifest's golden cases
 (extracted from the delivery's own ``data/predictions/inference_with_constraints.csv``)
 reproduce exactly.
 
@@ -57,7 +58,7 @@ from app.plugins.ml33_cereals_reuse_strategy_optimizer.constants import (
 logger = logging.getLogger(__name__)
 
 
-def strategy_emissions(
+def strategy_emissions(  # pylint: disable=too-many-return-statements
     volume_tons: float,
     moisture_pct: float,
     strategy: str,
@@ -115,13 +116,13 @@ def _greedy_block(
     remaining = dict(capacities)
     assigned: list[str] = []
     sources: list[str] = []
-    for i in range(len(volumes)):
+    for i, volume in enumerate(volumes):
         best_strategy = None
         best_emissions = float("inf")
         for strategy in STRATEGY_ORDER:
-            if volumes[i] > remaining.get(strategy, 0.0):
+            if volume > remaining.get(strategy, 0.0):
                 continue
-            candidate = strategy_emissions(volumes[i], moistures[i], strategy, subproducts[i])
+            candidate = strategy_emissions(volume, moistures[i], strategy, subproducts[i])
             if candidate < best_emissions:
                 best_emissions = candidate
                 best_strategy = strategy
@@ -129,13 +130,13 @@ def _greedy_block(
             assigned.append(fallback_strategy)
             sources.append(ASSIGNMENT_SOURCE_CAPACITY_FALLBACK)
         else:
-            remaining[best_strategy] -= volumes[i]
+            remaining[best_strategy] -= volume
             assigned.append(best_strategy)
             sources.append(ASSIGNMENT_SOURCE_EXACT)
     return assigned, sources
 
 
-def solve_block(
+def solve_block(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
     volumes: np.ndarray,
     moistures: np.ndarray,
     subproducts: np.ndarray,
@@ -254,7 +255,7 @@ def candidate_breakdown(
     return candidates
 
 
-class ExactEmissionsOptimizer:
+class ExactEmissionsOptimizer:  # pylint: disable=too-few-public-methods
     """Deployed decision engine: exact per-block emissions minimization.
 
     Args:
@@ -277,7 +278,8 @@ class ExactEmissionsOptimizer:
         self.logger = logger_ or logger
         self.capacity_fallback_count = 0
 
-    def infer_dataframe(self, dataframe: pd.DataFrame) -> pd.DataFrame:
+    def infer_dataframe(  # pylint: disable=too-many-locals
+            self, dataframe: pd.DataFrame) -> pd.DataFrame:
         """Assign strategies for a full dataframe, block by block.
 
         Args:
@@ -328,7 +330,9 @@ class ExactEmissionsOptimizer:
             )
 
         estimated_emissions = [
-            strategy_emissions(float(volumes[i]), float(moistures[i]), assigned[i], str(subproducts[i]))
+            strategy_emissions(
+                float(volumes[i]), float(moistures[i]), assigned[i], str(subproducts[i])
+            )
             for i in range(n_rows)
         ]
         candidates = [

@@ -1,3 +1,4 @@
+# pylint: disable=too-many-lines  # one fake response per model (48 models) lives here
 """Shared fixtures for endpoint unit tests.
 
 Strategy
@@ -54,6 +55,7 @@ from app.domain.services.exceptions import (
     UnsupportedMachineConfigurationError,
 )
 from app.domain.services.model_runtime_service import ModelRuntimeService
+from app.infrastructure import artifact_store, base_model_publisher
 from app.infrastructure.http.router_factory import make_model_router
 from app.plugins.ml25_wine_sulphites.predict_dto import (
     PredictBatchResponse as Ml25WineBatchResp,
@@ -289,7 +291,9 @@ from app.plugins.ml47_dairy_dnsl_pasteurization_fault_detection.train_dto import
     TrainRequest as Ml47Dairy_TrainReq,
     TrainResponse as Ml47DairyTrainResp,
 )
-from app.plugins.ml10_dairy_disease_vector_detection.train_dto import TrainRequest as Ml10Dairy_TrainReq
+from app.plugins.ml10_dairy_disease_vector_detection.train_dto import (
+    TrainRequest as Ml10Dairy_TrainReq,
+)
 from app.plugins.ml47_dairy_dnsl_pasteurization_fault_detection.predict_dto import (
     PredictBatchResponse as Ml47DairyBatchResp,
     PredictInlineResponse as Ml47DairyInlineResp,
@@ -417,7 +421,7 @@ from tests.unit.train_job_fakes import InMemoryJobStore, RecordingExecutor
 
 
 @dataclass
-class ModelEntry:
+class ModelEntry:  # pylint: disable=too-many-instance-attributes  # mirrors app.registry
     """Defines the metadata and types for a model plugin."""
     model_id: str
     prefix: str
@@ -432,7 +436,7 @@ class ModelEntry:
 
 # ── Fake plugin ────────────────────────────────────────────────────────────
 
-class FakePlugin(ModelPluginPort):
+class FakePlugin(ModelPluginPort):  # pylint: disable=too-many-instance-attributes
     """Deterministic fake plugin.
 
     ``inline_factory`` and ``batch_factory`` receive the plugin instance plus
@@ -483,7 +487,7 @@ class FakePlugin(ModelPluginPort):
         _ = mlflow_run_id, data_path
         if self.raise_on_inline is not None:
             exc, self.raise_on_inline = self.raise_on_inline, None
-            raise exc
+            raise exc  # pylint: disable=raising-bad-type  # checked not None above
         self._predict_count += 1
         self._last_predict_at = datetime.now(tz=timezone.utc).isoformat()
         return self._inline_factory(
@@ -497,7 +501,7 @@ class FakePlugin(ModelPluginPort):
         _ = mlflow_run_id
         if self.raise_on_batch is not None:
             exc, self.raise_on_batch = self.raise_on_batch, None
-            raise exc
+            raise exc  # pylint: disable=raising-bad-type  # checked not None above
         self._predict_count += 1
         self._last_predict_at = datetime.now(tz=timezone.utc).isoformat()
         kwargs: dict[str, Any] = {"data_path": data_path}
@@ -516,7 +520,9 @@ class FakePlugin(ModelPluginPort):
             task_type="fake",
             framework="fake",
             inputs=[InputField(name="fake_input", type="float", description="Fake input field")],
-            outputs=[OutputField(name="fake_output", type="float", description="Fake output field")],
+            outputs=[
+                OutputField(name="fake_output", type="float", description="Fake output field")
+            ],
             metrics={},
             runtime_stats=RuntimeStats(
                 total_predictions=self._predict_count,
@@ -536,8 +542,12 @@ class FakePlugin(ModelPluginPort):
 
 # ── Fake response factories per model ──────────────────────────────────────
 
-def _ml25_wine_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> Ml25WineInlineResp:
+
+def _ml25_wine_inline(
+    plugin: FakePlugin, *, features: dict, model_key, threshold
+) -> Ml25WineInlineResp:
     """Return a fake inline prediction response for the wine sulphite intervention model."""
+    _ = plugin, features, model_key
     return Ml25WineInlineResp(
         model_id="ml25-wine-sulphites",
         threshold=threshold,
@@ -563,6 +573,7 @@ def _ml25_wine_inline(plugin: FakePlugin, *, features: dict, model_key, threshol
 
 def _ml25_wine_batch(plugin: FakePlugin, *, data_path: str) -> Ml25WineBatchResp:
     """Return a fake batch prediction response for the wine sulphite intervention model."""
+    _ = plugin, data_path
     return Ml25WineBatchResp(
         model_id="ml25-wine-sulphites",
         predictions=[
@@ -578,26 +589,40 @@ def _ml25_wine_batch(plugin: FakePlugin, *, data_path: str) -> Ml25WineBatchResp
     )
 
 
-def _ml10_dairy_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> Ml10DairyInlineResp:
+def _ml10_dairy_inline(
+    plugin: FakePlugin, *, features: dict, model_key, threshold
+) -> Ml10DairyInlineResp:
     """Return a fake inline prediction response for the Ml10DairyDiseaseVectorDetection plugin."""
+    _ = plugin, features, model_key, threshold
     return Ml10DairyInlineResp(
         model_id="ml10-dairy-disease-vector-detection",
         prediction="fly",
         confidence=0.91,
         vectors_count=1,
         detections=[
-            {"species": "fly", "det_conf": 0.85, "cls_conf": 0.91, "bbox": {"x1": 30, "y1": 40, "x2": 80, "y2": 90}},
+            {
+                "species": "fly",
+                "det_conf": 0.85,
+                "cls_conf": 0.91,
+                "bbox": {"x1": 30, "y1": 40, "x2": 80, "y2": 90},
+            },
         ],
         species_summary={"fly": 1},
         annotated_image="ZmFrZQ==",
         heatmap_crops=[
-            {"species": "fly", "cls_conf": 0.91, "crop_base64": "ZmFrZQ==", "bbox": {"x1": 30, "y1": 40, "x2": 80, "y2": 90}},
+            {
+                "species": "fly",
+                "cls_conf": 0.91,
+                "crop_base64": "ZmFrZQ==",
+                "bbox": {"x1": 30, "y1": 40, "x2": 80, "y2": 90},
+            },
         ],
     )
 
 
 def _ml10_dairy_batch(plugin: FakePlugin, *, data_path: str) -> Ml10DairyBatchResp:
     """Return a fake batch prediction response for the Ml10DairyDiseaseVectorDetection plugin."""
+    _ = plugin, data_path
     return Ml10DairyBatchResp(
         model_id="ml10-dairy-disease-vector-detection",
         predictions=[
@@ -607,8 +632,18 @@ def _ml10_dairy_batch(plugin: FakePlugin, *, data_path: str) -> Ml10DairyBatchRe
                 "confidence": 0.88,
                 "vectors_count": 2,
                 "detections": [
-                    {"species": "tick", "det_conf": 0.82, "cls_conf": 0.88, "bbox": {"x1": 10, "y1": 20, "x2": 50, "y2": 60}},
-                    {"species": "tick", "det_conf": 0.75, "cls_conf": 0.81, "bbox": {"x1": 100, "y1": 120, "x2": 150, "y2": 160}},
+                    {
+                        "species": "tick",
+                        "det_conf": 0.82,
+                        "cls_conf": 0.88,
+                        "bbox": {"x1": 10, "y1": 20, "x2": 50, "y2": 60},
+                    },
+                    {
+                        "species": "tick",
+                        "det_conf": 0.75,
+                        "cls_conf": 0.81,
+                        "bbox": {"x1": 100, "y1": 120, "x2": 150, "y2": 160},
+                    },
                 ],
                 "species_summary": {"tick": 2},
             }
@@ -619,6 +654,7 @@ def _ml10_dairy_batch(plugin: FakePlugin, *, data_path: str) -> Ml10DairyBatchRe
 
 def _ml10_dairy_train(plugin: FakePlugin, *, data_path: str) -> BaseTrainResponse:
     """Return a fake training response for the Ml10DairyDiseaseVectorDetection plugin."""
+    _ = plugin, data_path
     return BaseTrainResponse(
         detail="Training completed successfully",
         metrics={
@@ -632,8 +668,11 @@ def _ml10_dairy_train(plugin: FakePlugin, *, data_path: str) -> BaseTrainRespons
     )
 
 
-def _ml8_cereals_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> Ml8CerealsInlineResp:
+def _ml8_cereals_inline(
+    plugin: FakePlugin, *, features: dict, model_key, threshold
+) -> Ml8CerealsInlineResp:
     """Return a fake inline prediction response for the ml8 cereals model."""
+    _ = plugin, features, model_key, threshold
     return Ml8CerealsInlineResp(
         model_id="ml8-cereals-img-anomaly-detector",
         categoria="sano",
@@ -647,6 +686,7 @@ def _ml8_cereals_inline(plugin: FakePlugin, *, features: dict, model_key, thresh
 
 def _ml8_cereals_batch(plugin: FakePlugin, *, data_path: str) -> Ml8CerealsBatchResp:
     """Return a fake batch prediction response for the ml8 cereals model."""
+    _ = plugin, data_path
     return Ml8CerealsBatchResp(
         model_id="ml8-cereals-img-anomaly-detector",
         predictions=[
@@ -657,8 +697,18 @@ def _ml8_cereals_batch(plugin: FakePlugin, *, data_path: str) -> Ml8CerealsBatch
                 "cereal": "trigo",
                 "confianza_categoria": 0.95,
                 "confianza_cereal": 0.91,
-                "probabilidades_categoria": {"sano": 0.95, "hongos": 0.02, "insectos": 0.02, "otros": 0.01},
-                "probabilidades_cereal": {"trigo": 0.91, "maiz": 0.04, "arroz": 0.03, "sorgo": 0.02},
+                "probabilidades_categoria": {
+                    "sano": 0.95,
+                    "hongos": 0.02,
+                    "insectos": 0.02,
+                    "otros": 0.01,
+                },
+                "probabilidades_cereal": {
+                    "trigo": 0.91,
+                    "maiz": 0.04,
+                    "arroz": 0.03,
+                    "sorgo": 0.02,
+                },
             }
         ],
         output_path=None,
@@ -667,6 +717,7 @@ def _ml8_cereals_batch(plugin: FakePlugin, *, data_path: str) -> Ml8CerealsBatch
 
 def _ml8_cereals_train(plugin: FakePlugin, *, data_path: str) -> Ml8CerealsTrainResp:
     """Return a fake training response for the ml8 cereals model."""
+    _ = plugin, data_path
     return Ml8CerealsTrainResp(
         detail="Entrenamiento completado",
         train_samples=80,
@@ -681,8 +732,11 @@ def _ml8_cereals_train(plugin: FakePlugin, *, data_path: str) -> Ml8CerealsTrain
     )
 
 
-def _ml5_cow_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> Ml5CowInlineResp:
+def _ml5_cow_inline(
+    plugin: FakePlugin, *, features: dict, model_key, threshold
+) -> Ml5CowInlineResp:
     """Return a fake inline prediction response for the ml5 cow-behaviour model."""
+    _ = plugin, features, model_key
     return Ml5CowInlineResp(
         model_id="ml5-meat-cow-behaviour",
         threshold=threshold if threshold is not None else 0.5,
@@ -697,6 +751,7 @@ def _ml5_cow_inline(plugin: FakePlugin, *, features: dict, model_key, threshold)
 
 def _ml5_cow_batch(plugin: FakePlugin, *, data_path: str) -> Ml5CowBatchResp:
     """Return a fake batch prediction response for the ml5 cow-behaviour model."""
+    _ = plugin, data_path
     return Ml5CowBatchResp(
         model_id="ml5-meat-cow-behaviour",
         predictions=[
@@ -720,6 +775,7 @@ def _ml5_cow_batch(plugin: FakePlugin, *, data_path: str) -> Ml5CowBatchResp:
 
 def _ml5_cow_train(plugin: FakePlugin, *, data_path: str) -> BaseTrainResponse:
     """Return a fake training response for the ml5 cow-behaviour classifier."""
+    _ = plugin, data_path
     return BaseTrainResponse(
         detail="Entrenamiento del clasificador SlowFast completado.",
         metrics={
@@ -733,6 +789,7 @@ def _ml5_cow_train(plugin: FakePlugin, *, data_path: str) -> BaseTrainResponse:
 
 def _ml1_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> Ml1InlineResp:
     """Fake inline response for the ml1 vineyard pest/disease model."""
+    _ = plugin, model_key, threshold
     if features.get("image_base64"):
         return Ml1InlineResp(
             model_id="ml1-wine-pest-disease-detection",
@@ -740,12 +797,16 @@ def _ml1_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> 
         )
     return Ml1InlineResp(
         model_id="ml1-wine-pest-disease-detection",
-        enfermedad="IMAGEN_NO_DISPONIBLE", confianza=0.0, riesgo=0.31, metodo="RIESGO_TABULAR_EXPERT",
+        enfermedad="IMAGEN_NO_DISPONIBLE",
+        confianza=0.0,
+        riesgo=0.31,
+        metodo="RIESGO_TABULAR_EXPERT",
     )
 
 
 def _ml1_batch(plugin: FakePlugin, *, data_path: str) -> Ml1BatchResp:
     """Fake batch response for the ml1 vineyard pest/disease model."""
+    _ = plugin, data_path
     preds = [
         Ml1BatchPred(id=0, nombre_imagen="leaf_001.jpg", enfermedad="MILDIU",
                      confianza=0.87, riesgo=0.42, metodo="HIBRIDO_ENSAMBLE"),
@@ -758,6 +819,7 @@ def _ml1_batch(plugin: FakePlugin, *, data_path: str) -> Ml1BatchResp:
 
 def _ml1_train(plugin: FakePlugin, *, data_path: str) -> Ml1TrainResp:
     """Fake training response for the ml1 RandomForest tabular experts."""
+    _ = plugin, data_path
     return Ml1TrainResp(
         detail="Expertos RandomForest reentrenados",
         accuracy=0.95, f1_macro=0.88, f1_weighted=0.94, mae_riesgo=0.19, n_train=16, n_test=4,
@@ -765,8 +827,11 @@ def _ml1_train(plugin: FakePlugin, *, data_path: str) -> Ml1TrainResp:
     )
 
 
-def _ml2_fungal_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> Ml2FungalInlineResp:
+def _ml2_fungal_inline(
+    plugin: FakePlugin, *, features: dict, model_key, threshold
+) -> Ml2FungalInlineResp:
     """Fake inline response for the ml2 fungal CNN model."""
+    _ = plugin, features, model_key, threshold
     return Ml2FungalInlineResp(
         model_id="ml2-fungal-cnn-disease-detection",
         prediction="healthy",
@@ -778,6 +843,7 @@ def _ml2_fungal_inline(plugin: FakePlugin, *, features: dict, model_key, thresho
 
 def _ml2_fungal_batch(plugin: FakePlugin, *, data_path: str) -> Ml2FungalBatchResp:
     """Fake batch response for the ml2 fungal CNN model."""
+    _ = plugin, data_path
     return Ml2FungalBatchResp(
         model_id="ml2-fungal-cnn-disease-detection",
         predictions=[{"filename": "leaf_001.jpg", "model_id": "ml2-fungal-cnn-disease-detection",
@@ -790,6 +856,7 @@ def _ml2_fungal_batch(plugin: FakePlugin, *, data_path: str) -> Ml2FungalBatchRe
 
 def _ml2_fungal_train(plugin: FakePlugin, *, data_path: str) -> Ml2FungalTrainResp:
     """Fake training response for the ml2 fungal CNN model."""
+    _ = plugin, data_path
     return Ml2FungalTrainResp(
         detail="Entrenamiento completado",
         accuracy=0.97,
@@ -805,8 +872,11 @@ def _ml2_fungal_train(plugin: FakePlugin, *, data_path: str) -> Ml2FungalTrainRe
     )
 
 
-def _ml7_grain_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> Ml7GrainInlineResp:
+def _ml7_grain_inline(
+    plugin: FakePlugin, *, features: dict, model_key, threshold
+) -> Ml7GrainInlineResp:
     """Fake inline response for the ml7 grain pest detector."""
+    _ = plugin, features, model_key
     return Ml7GrainInlineResp(
         model_id="ml7-cereals-grain-pest-detection",
         prediction="sz",
@@ -823,6 +893,7 @@ def _ml7_grain_inline(plugin: FakePlugin, *, features: dict, model_key, threshol
 
 def _ml7_grain_batch(plugin: FakePlugin, *, data_path: str) -> Ml7GrainBatchResp:
     """Fake batch response for the ml7 grain pest detector."""
+    _ = plugin, data_path
     return Ml7GrainBatchResp(
         model_id="ml7-cereals-grain-pest-detection",
         predictions=[{"filename": "img_001.jpg", "prediction": "sz", "confidence": 0.81,
@@ -833,14 +904,18 @@ def _ml7_grain_batch(plugin: FakePlugin, *, data_path: str) -> Ml7GrainBatchResp
 
 def _ml7_grain_train(plugin: FakePlugin, *, data_path: str) -> Ml7GrainTrainResp:
     """Fake training response for the ml7 grain pest detector."""
+    _ = plugin, data_path
     return Ml7GrainTrainResp(
         detail="Fine-tuning completado", map50=0.87, map50_95=0.62,
         precision=0.84, recall=0.81, n_images=120, upload_warning=None,
     )
 
 
-def _ml30_trace_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> Ml30TraceInlineResp:
+def _ml30_trace_inline(
+    plugin: FakePlugin, *, features: dict, model_key, threshold
+) -> Ml30TraceInlineResp:
     """Fake inline response for the ml30 traceability model."""
+    _ = plugin, features, model_key, threshold
     return Ml30TraceInlineResp(
         model_id="ml30-meat-traceability-detection",
         pred_traceability_incident=1,
@@ -853,6 +928,7 @@ def _ml30_trace_inline(plugin: FakePlugin, *, features: dict, model_key, thresho
 
 def _ml30_trace_batch(plugin: FakePlugin, *, data_path: str) -> Ml30TraceBatchResp:
     """Fake batch response for the ml30 traceability model."""
+    _ = plugin, data_path
     return Ml30TraceBatchResp(
         model_id="ml30-meat-traceability-detection",
         predictions=[{"row_id": 0, "pred_traceability_incident": 1, "pred_score": 0.82,
@@ -863,6 +939,7 @@ def _ml30_trace_batch(plugin: FakePlugin, *, data_path: str) -> Ml30TraceBatchRe
 
 def _ml30_trace_train(plugin: FakePlugin, *, data_path: str) -> Ml30TraceTrainResp:
     """Fake training response for the ml30 traceability model."""
+    _ = plugin, data_path
     return Ml30TraceTrainResp(
         detail="Training completed", accuracy=0.87, f1=0.6, roc_auc=0.72,
         n_train=800, n_test=200, training_time_s=12.3, upload_warning=None,
@@ -871,6 +948,7 @@ def _ml30_trace_train(plugin: FakePlugin, *, data_path: str) -> Ml30TraceTrainRe
 
 def _ml41_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> Ml41InlineResp:
     """Fake inline prediction response for the ml41 acoustic anomaly model."""
+    _ = plugin, model_key
     return Ml41InlineResp(
         model_id="ml41-meat-curing-machinery-acoustic-anomaly",
         machine=features.get("machine", "fan"),
@@ -885,6 +963,7 @@ def _ml41_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) ->
 
 def _ml41_batch(plugin: FakePlugin, *, data_path: str) -> Ml41BatchResp:
     """Fake batch prediction response for the ml41 acoustic anomaly model."""
+    _ = plugin, data_path
     return Ml41BatchResp(
         model_id="ml41-meat-curing-machinery-acoustic-anomaly",
         predictions=[
@@ -901,6 +980,7 @@ def _ml41_batch(plugin: FakePlugin, *, data_path: str) -> Ml41BatchResp:
 
 def _ml41_train(plugin: FakePlugin, *, data_path: str) -> Ml41TrainResp:
     """Fake training response for the ml41 acoustic anomaly model."""
+    _ = plugin, data_path
     return Ml41TrainResp(
         detail="Entrenamiento completado para 1 combinación(es)",
         per_combination=[
@@ -914,7 +994,11 @@ def _ml41_train(plugin: FakePlugin, *, data_path: str) -> Ml41TrainResp:
 
 
 def _ml26_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> Ml26InlineResp:
-    """Fake inline response for the ml26 wine sulfite GRU-PSO 72 h forecast (values of golden caso_001)."""
+    """Fake inline response for the ml26 wine sulfite GRU-PSO 72 h forecast.
+
+    Values of golden caso_001.
+    """
+    _ = plugin, model_key, threshold
     readings = features.get("readings") or []
     lot = features.get("lot") or {}
     return Ml26InlineResp(
@@ -933,6 +1017,7 @@ def _ml26_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) ->
 
 def _ml26_batch(plugin: FakePlugin, *, data_path: str) -> Ml26BatchResp:
     """Fake batch response for the ml26 wine sulfite GRU-PSO 72 h forecast."""
+    _ = plugin, data_path
     return Ml26BatchResp(
         model_id="ml26-wine-sulfite-gru-pso-forecast",
         model_source="fixed",
@@ -946,20 +1031,35 @@ def _ml26_batch(plugin: FakePlugin, *, data_path: str) -> Ml26BatchResp:
 
 def _ml26_train(plugin: FakePlugin, *, data_path: str) -> Ml26TrainResp:
     """Fake fine-tuning response for the ml26 wine sulfite GRU-PSO 72 h forecast."""
+    _ = plugin, data_path
     return Ml26TrainResp(
-        detail="Fine-tuning completado a partir de gru_pso (sin nueva búsqueda PSO — ver manifest KI-04).",
-        n_lots_train=420, n_lots_val=90, n_lots_test=90,
-        n_windows_train=14108, n_windows_val=2971, epochs_run=10, best_epoch=2,
-        val_rmse_future_free_sulfite_72h=2.21, val_mae_future_free_sulfite_72h=1.61,
-        val_rmse_underprotection_risk_72h=0.069, val_mae_underprotection_risk_72h=0.046,
-        val_overall_rmse=1.56, val_overall_mae=0.83,
+        detail=(
+            "Fine-tuning completado a partir de gru_pso "
+            "(sin nueva búsqueda PSO — ver manifest KI-04)."
+        ),
+        n_lots_train=420,
+        n_lots_val=90,
+        n_lots_test=90,
+        n_windows_train=14108,
+        n_windows_val=2971,
+        epochs_run=10,
+        best_epoch=2,
+        val_rmse_future_free_sulfite_72h=2.21,
+        val_mae_future_free_sulfite_72h=1.61,
+        val_rmse_underprotection_risk_72h=0.069,
+        val_mae_underprotection_risk_72h=0.046,
+        val_overall_rmse=1.56,
+        val_overall_mae=0.83,
         mlflow_run_id="run-test-ml26",
         upload_warning=None,
     )
 
 
-def _ml31_residue_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> Ml31ResidueOptimizeResp:
+def _ml31_residue_inline(
+    plugin: FakePlugin, *, features: dict, model_key, threshold
+) -> Ml31ResidueOptimizeResp:
     """Fake inline response for the ml31 LP residue optimizer."""
+    _ = plugin, features, model_key, threshold
     return Ml31ResidueOptimizeResp(
         model_id="ml31-cereals-residue-optimizer",
         reference_year=2023,
@@ -986,6 +1086,7 @@ def _ml31_residue_inline(plugin: FakePlugin, *, features: dict, model_key, thres
 
 def _ml31_residue_batch(plugin: FakePlugin, *, data_path: str) -> Ml31ResidueBatchResp:
     """Fake batch response for the ml31 LP residue optimizer."""
+    _ = plugin, data_path
     return Ml31ResidueBatchResp(
         model_id="ml31-cereals-residue-optimizer",
         predictions=[{"row": 0, "reference_year": 2023, "optimization_mode": "minimize_residue",
@@ -996,8 +1097,11 @@ def _ml31_residue_batch(plugin: FakePlugin, *, data_path: str) -> Ml31ResidueBat
     )
 
 
-def _ml33_reuse_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> Ml33ReuseInlineResp:
+def _ml33_reuse_inline(
+    plugin: FakePlugin, *, features: dict, model_key, threshold
+) -> Ml33ReuseInlineResp:
     """Fake inline response for the ml33 cereal reuse-strategy MILP optimizer."""
+    _ = plugin, model_key, threshold
     n_lots = len(features.get("lots", [])) or 1
     fake_candidates = [
         {"strategy": "Animal feed", "estimated_emissions_kg": 120.5, "feasible": True},
@@ -1026,13 +1130,19 @@ def _ml33_reuse_inline(plugin: FakePlugin, *, features: dict, model_key, thresho
 
 def _ml33_reuse_batch(plugin: FakePlugin, *, data_path: str) -> Ml33ReuseBatchResp:
     """Fake batch response for the ml33 cereal reuse-strategy MILP optimizer."""
+    _ = plugin, data_path
     return Ml33ReuseBatchResp(
         model_id="ml33-cereals-reuse-strategy-optimizer",
         n_rows=1,
-        predictions=[{
-            "row": 0, "ai_assigned_strategy": "Composting", "ai_assignment_source": "exact_min_emissions",
-            "ai_is_fallback": False, "estimated_emissions_kg": 85.3,
-        }],
+        predictions=[
+            {
+                "row": 0,
+                "ai_assigned_strategy": "Composting",
+                "ai_assignment_source": "exact_min_emissions",
+                "ai_is_fallback": False,
+                "estimated_emissions_kg": 85.3,
+            }
+        ],
         distribution={"counts": {"Composting": 1}, "percentages": {"Composting": 100.0}},
         capacity_fallback_count=0,
         total_estimated_emissions_kg=85.3,
@@ -1040,8 +1150,11 @@ def _ml33_reuse_batch(plugin: FakePlugin, *, data_path: str) -> Ml33ReuseBatchRe
     )
 
 
-def _ml4_thermal_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> Ml4ThermalInlineResp:
+def _ml4_thermal_inline(
+    plugin: FakePlugin, *, features: dict, model_key, threshold
+) -> Ml4ThermalInlineResp:
     """Fake inline response for the ml4 thermal mastitis model."""
+    _ = plugin, features, model_key
     return Ml4ThermalInlineResp(
         model_id="ml4-lactic-cnn-thermal-early-disease-detection",
         threshold=threshold,
@@ -1056,16 +1169,26 @@ def _ml4_thermal_inline(plugin: FakePlugin, *, features: dict, model_key, thresh
 
 def _ml4_thermal_batch(plugin: FakePlugin, *, data_path: str) -> Ml4ThermalBatchResp:
     """Fake batch response for the ml4 thermal mastitis model."""
+    _ = plugin, data_path
     return Ml4ThermalBatchResp(
         model_id="ml4-lactic-cnn-thermal-early-disease-detection",
-        predictions=[{"filename": "udder_001.jpg", "prediction": "Healthy", "confidence": 0.88,
-                      "predicted_class_index": 0, "probability_healthy": 0.88, "probability_scm": 0.12}],
+        predictions=[
+            {
+                "filename": "udder_001.jpg",
+                "prediction": "Healthy",
+                "confidence": 0.88,
+                "predicted_class_index": 0,
+                "probability_healthy": 0.88,
+                "probability_scm": 0.12,
+            }
+        ],
         output_path=None,
     )
 
 
 def _ml4_thermal_train(plugin: FakePlugin, *, data_path: str) -> Ml4ThermalTrainResp:
     """Fake training response for the ml4 thermal mastitis model."""
+    _ = plugin, data_path
     return Ml4ThermalTrainResp(
         detail="Reentrenamiento completado", accuracy=0.62, precision=0.60, recall=0.64,
         f1=0.62, auc=0.61, n_train=33, n_val=9, training_time_s=4.2,
@@ -1073,8 +1196,11 @@ def _ml4_thermal_train(plugin: FakePlugin, *, data_path: str) -> Ml4ThermalTrain
     )
 
 
-def _ml6_poultry_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> Ml6PoultryInlineResp:
+def _ml6_poultry_inline(
+    plugin: FakePlugin, *, features: dict, model_key, threshold
+) -> Ml6PoultryInlineResp:
     """Fake inline response for the ml6 poultry disease ensemble (golden case thermal_test_002)."""
+    _ = plugin, features
     return Ml6PoultryInlineResp(
         model_id="ml6-meat-poultry-disease-classification",
         task=model_key or "thermal",
@@ -1082,7 +1208,11 @@ def _ml6_poultry_inline(plugin: FakePlugin, *, features: dict, model_key, thresh
         prediction="healthy",
         predicted_class_index=0,
         confidence=2 / 3,
-        model_predictions={"densenet121": "sick", "efficientnet_v2s": "healthy", "resnet50": "healthy"},
+        model_predictions={
+            "densenet121": "sick",
+            "efficientnet_v2s": "healthy",
+            "resnet50": "healthy",
+        },
         model_probabilities={
             "densenet121": {"healthy": 0.41, "sick": 0.59},
             "efficientnet_v2s": {"healthy": 0.62, "sick": 0.38},
@@ -1095,15 +1225,26 @@ def _ml6_poultry_inline(plugin: FakePlugin, *, features: dict, model_key, thresh
 
 def _ml6_poultry_batch(plugin: FakePlugin, *, data_path: str) -> Ml6PoultryBatchResp:
     """Fake batch response for the ml6 poultry disease ensemble."""
+    _ = plugin, data_path
     return Ml6PoultryBatchResp(
         model_id="ml6-meat-poultry-disease-classification",
         task="rgb",
         n_images=1,
-        predictions=[{
-            "filename": "pcrncd.14.jpg", "path": "pcrncd/pcrncd.14.jpg", "true_class": "ncd",
-            "prediction": "ncd", "predicted_class_index": 2, "confidence": 1.0,
-            "model_predictions": {"vgg19_bn": "ncd", "efficientnet_b7": "ncd", "mobilenet_v3l": "ncd"},
-        }],
+        predictions=[
+            {
+                "filename": "pcrncd.14.jpg",
+                "path": "pcrncd/pcrncd.14.jpg",
+                "true_class": "ncd",
+                "prediction": "ncd",
+                "predicted_class_index": 2,
+                "confidence": 1.0,
+                "model_predictions": {
+                    "vgg19_bn": "ncd",
+                    "efficientnet_b7": "ncd",
+                    "mobilenet_v3l": "ncd",
+                },
+            }
+        ],
         evaluated_metrics=None,
         output_path=None,
     )
@@ -1111,19 +1252,33 @@ def _ml6_poultry_batch(plugin: FakePlugin, *, data_path: str) -> Ml6PoultryBatch
 
 def _ml6_poultry_train(plugin: FakePlugin, *, data_path: str) -> Ml6PoultryTrainResp:
     """Fake retraining response for the ml6 poultry disease ensemble."""
+    _ = plugin, data_path
     return Ml6PoultryTrainResp(
         detail="Reentrenamiento del ensemble 'thermal' completado",
-        task="thermal", accuracy=0.8, precision_weighted=0.7964, recall_weighted=0.8, f1_weighted=0.796,
-        per_class={"healthy": {"precision": 0.75, "recall": 0.6429, "f1": 0.6923, "support": 14},
-                   "sick": {"precision": 0.8214, "recall": 0.8846, "f1": 0.8519, "support": 26}},
-        models={"resnet50": {"test": {"accuracy": 0.775}, "best_val_accuracy": 0.81, "epochs_run": 14}},
-        n_train=177, n_val=37, n_test=40, training_time_s=124.2,
-        mlflow_run_id="test-run-id", upload_warning=None,
+        task="thermal",
+        accuracy=0.8,
+        precision_weighted=0.7964,
+        recall_weighted=0.8,
+        f1_weighted=0.796,
+        per_class={
+            "healthy": {"precision": 0.75, "recall": 0.6429, "f1": 0.6923, "support": 14},
+            "sick": {"precision": 0.8214, "recall": 0.8846, "f1": 0.8519, "support": 26},
+        },
+        models={
+            "resnet50": {"test": {"accuracy": 0.775}, "best_val_accuracy": 0.81, "epochs_run": 14}
+        },
+        n_train=177,
+        n_val=37,
+        n_test=40,
+        training_time_s=124.2,
+        mlflow_run_id="test-run-id",
+        upload_warning=None,
     )
 
 
 def _ml23_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> Ml23InlineResp:
     """Fake inline response for the ml23 GRU dairy price forecast model."""
+    _ = plugin, features, model_key, threshold
     return Ml23InlineResp(
         model_id="ml23-lactic-market-price-forecast",
         prediction=0.9187,
@@ -1137,12 +1292,19 @@ def _ml23_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) ->
 
 def _ml23_batch(plugin: FakePlugin, *, data_path: str) -> Ml23BatchResp:
     """Fake batch response for the ml23 GRU dairy price forecast model."""
+    _ = plugin, data_path
     return Ml23BatchResp(
         model_id="ml23-lactic-market-price-forecast",
         predictions=[
-            {"fecha": "2023-01-01", "producto": "leche_entera", "canal": "T.ESPAÑA",
-             "current_price": 0.9234, "y_pred": 0.9187, "model_id": "ml23-lactic-market-price-forecast",
-             "horizon": 6},
+            {
+                "fecha": "2023-01-01",
+                "producto": "leche_entera",
+                "canal": "T.ESPAÑA",
+                "current_price": 0.9234,
+                "y_pred": 0.9187,
+                "model_id": "ml23-lactic-market-price-forecast",
+                "horizon": 6,
+            },
         ],
         output_path=None,
     )
@@ -1150,6 +1312,7 @@ def _ml23_batch(plugin: FakePlugin, *, data_path: str) -> Ml23BatchResp:
 
 def _ml23_train(plugin: FakePlugin, *, data_path: str) -> Ml23TrainResp:
     """Fake training response for the ml23 GRU dairy price forecast model."""
+    _ = plugin, data_path
     return Ml23TrainResp(
         detail="Reentrenamiento completado",
         mae=0.0135, rmse=0.017, mape_pct=1.33, r2=0.899, direction_acc_pct=90.6,
@@ -1159,6 +1322,7 @@ def _ml23_train(plugin: FakePlugin, *, data_path: str) -> Ml23TrainResp:
 
 def _ml17_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> Ml17InlineResp:
     """Fake inline response for the ml17 Ridge pork price forecast model."""
+    _ = plugin, features, model_key, threshold
     return Ml17InlineResp(
         model_id="ml17-meat-market-price-analysis",
         line="official_v1_4",
@@ -1181,6 +1345,7 @@ def _ml17_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) ->
 
 def _ml17_batch(plugin: FakePlugin, *, data_path: str) -> Ml17BatchResp:
     """Fake batch response for the ml17 Ridge pork price forecast model."""
+    _ = plugin, data_path
     return Ml17BatchResp(
         model_id="ml17-meat-market-price-analysis",
         line="official_v1_4",
@@ -1194,6 +1359,7 @@ def _ml17_batch(plugin: FakePlugin, *, data_path: str) -> Ml17BatchResp:
 
 def _ml17_train(plugin: FakePlugin, *, data_path: str) -> Ml17TrainResp:
     """Fake training response for the ml17 Ridge pork price forecast model."""
+    _ = plugin, data_path
     return Ml17TrainResp(
         detail="Reentrenamiento completado — modelo persistido en MLflow run fake-run-id "
                "(el artefacto fijo S3 no se ha modificado).",
@@ -1207,8 +1373,11 @@ def _ml17_train(plugin: FakePlugin, *, data_path: str) -> Ml17TrainResp:
     )
 
 
-def _ml35_dairy_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> Ml35DairyInlineResp:
+def _ml35_dairy_inline(
+    plugin: FakePlugin, *, features: dict, model_key, threshold
+) -> Ml35DairyInlineResp:
     """Fake inline prediction response for the ml35 dairy ANN plugin."""
+    _ = plugin, features, model_key, threshold
     return Ml35DairyInlineResp(
         model_id="ml35-dairy-ann-cleaning-cost",
         consumo_agua_l=24500.0,
@@ -1218,6 +1387,7 @@ def _ml35_dairy_inline(plugin: FakePlugin, *, features: dict, model_key, thresho
 
 def _ml35_dairy_batch(plugin: FakePlugin, *, data_path: str) -> Ml35DairyBatchResp:
     """Fake batch prediction response for the ml35 dairy ANN plugin."""
+    _ = plugin, data_path
     return Ml35DairyBatchResp(
         model_id="ml35-dairy-ann-cleaning-cost",
         predictions=[{"row": 0, "consumo_agua_l": 24500.0, "pu_logrado": 45.3}],
@@ -1227,11 +1397,13 @@ def _ml35_dairy_batch(plugin: FakePlugin, *, data_path: str) -> Ml35DairyBatchRe
 
 def _ml35_dairy_train(plugin: FakePlugin, *, data_path: str) -> Ml35DairyTrainResp:
     """Fake training response for the ml35 dairy ANN plugin."""
+    _ = plugin, data_path
     return Ml35DairyTrainResp(detail="Fine-tuning completado", mae=320.0, r2=0.993, n_samples=500)
 
 
 def _ml34_dairy_inline(plugin: FakePlugin, *, features: dict, model_key, threshold):
     """Fake inline/optimize prediction response for the ml34 pasteurization plugin."""
+    _ = plugin, features, threshold
     if model_key == "optimize":
         return Ml34DairyOptimizeResp(
             model_id="ml34-dairy-pasteurization-energy-ga",
@@ -1251,11 +1423,14 @@ def _ml34_dairy_inline(plugin: FakePlugin, *, features: dict, model_key, thresho
     )
 
 
-def _ml34_dairy_batch(plugin: FakePlugin, *, data_path: str, model_key: str | None = None) -> Ml34DairyBatchResp:
+def _ml34_dairy_batch(
+    plugin: FakePlugin, *, data_path: str, model_key: str | None = None
+) -> Ml34DairyBatchResp:
     """Fake batch prediction response for the ml34 pasteurization plugin.
 
     Mirrors the real predict_batch's GA-vs-MLP dispatch on model_key.
     """
+    _ = plugin, data_path
     if model_key == "optimize":
         return Ml34DairyBatchResp(
             model_id="ml34-dairy-pasteurization-energy-ga",
@@ -1284,6 +1459,7 @@ def _ml34_dairy_batch(plugin: FakePlugin, *, data_path: str, model_key: str | No
 
 def _ml34_dairy_train(plugin: FakePlugin, *, data_path: str) -> Ml34DairyTrainResp:
     """Fake fine-tuning response for the ml34 pasteurization plugin."""
+    _ = plugin, data_path
     return Ml34DairyTrainResp(
         detail="Fine-tuning completado",
         rmse_E_consumo=5.38, mae_E_consumo=4.26, r2_E_consumo=0.9779,
@@ -1292,17 +1468,20 @@ def _ml34_dairy_train(plugin: FakePlugin, *, data_path: str) -> Ml34DairyTrainRe
     )
 
 
-_ML36_OPTIMIZE = dict(
-    decision_mode="hybrid", used_adaptive_ga=True, seed=43,
-    recommended_T_serv=73.41, recommended_Delta_P=0.605, recommended_Regeneration_perc=93.398,
-    recommended_CO2_pred=15.5859, recommended_T_out_pred=72.6594, recommended_factible=True,
-    policy_T_serv=73.55, policy_Delta_P=0.6, policy_Regeneration_perc=93.4,
-    policy_CO2_pred=15.604, policy_T_out_pred=72.7915, co2_saving_vs_policy=0.0181,
-)
+_ML36_OPTIMIZE = {
+    "decision_mode": "hybrid", "used_adaptive_ga": True, "seed": 43,
+    "recommended_T_serv": 73.41, "recommended_Delta_P": 0.605,
+    "recommended_Regeneration_perc": 93.398,
+    "recommended_CO2_pred": 15.5859, "recommended_T_out_pred": 72.6594,
+    "recommended_factible": True,
+    "policy_T_serv": 73.55, "policy_Delta_P": 0.6, "policy_Regeneration_perc": 93.4,
+    "policy_CO2_pred": 15.604, "policy_T_out_pred": 72.7915, "co2_saving_vs_policy": 0.0181,
+}
 
 
 def _ml36_dairy_inline(plugin: FakePlugin, *, features: dict, model_key, threshold):
     """Fake inline/optimize prediction response for the ml36 DNL CO2 optimizer plugin."""
+    _ = plugin, features, threshold
     if model_key == "optimize":
         return Ml36DairyOptimizeResp(
             model_id="ml36-dairy-dnl-co2-emissions-optimizer", **_ML36_OPTIMIZE,
@@ -1313,8 +1492,11 @@ def _ml36_dairy_inline(plugin: FakePlugin, *, features: dict, model_key, thresho
     )
 
 
-def _ml36_dairy_batch(plugin: FakePlugin, *, data_path: str, model_key: str | None = None) -> Ml36DairyBatchResp:
+def _ml36_dairy_batch(
+    plugin: FakePlugin, *, data_path: str, model_key: str | None = None
+) -> Ml36DairyBatchResp:
     """Fake batch prediction response for the ml36 plugin (GA-vs-MLP dispatch on model_key)."""
+    _ = plugin, data_path
     if model_key == "optimize":
         return Ml36DairyBatchResp(
             model_id="ml36-dairy-dnl-co2-emissions-optimizer",
@@ -1333,18 +1515,37 @@ def _ml36_dairy_batch(plugin: FakePlugin, *, data_path: str, model_key: str | No
 
 
 def _ml36_dairy_train(plugin: FakePlugin, *, data_path: str) -> Ml36DairyTrainResp:
-    """Fake retraining response for ml36 (figures of the real retrain on the delivered master dataset)."""
+    """Fake retraining response for ml36.
+
+    Figures of the real retrain on the delivered master dataset.
+    """
+    _ = plugin, data_path
     return Ml36DairyTrainResp(
-        detail="Reentrenamiento completado (procedimiento train del equipo de IA); métricas sobre el split de test",
-        mae_t_out=0.0191, mse_t_out=0.000591, r2_t_out=0.9995,
-        mae_co2=0.3076, mse_co2=0.147652, r2_co2=0.8951,
-        n_samples=51389, n_train=35930, n_val=7755, n_test=7704, epochs_executed=131,
-        best_val_loss=0.00081977, training_time_s=59.8,
+        detail=(
+            "Reentrenamiento completado (procedimiento train del equipo de IA); "
+            "métricas sobre el split de test"
+        ),
+        mae_t_out=0.0191,
+        mse_t_out=0.000591,
+        r2_t_out=0.9995,
+        mae_co2=0.3076,
+        mse_co2=0.147652,
+        r2_co2=0.8951,
+        n_samples=51389,
+        n_train=35930,
+        n_val=7755,
+        n_test=7704,
+        epochs_executed=131,
+        best_val_loss=0.00081977,
+        training_time_s=59.8,
     )
 
 
-def _ml46_dairy_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> Ml46DairyInlineResp:
+def _ml46_dairy_inline(
+    plugin: FakePlugin, *, features: dict, model_key, threshold
+) -> Ml46DairyInlineResp:
     """Fake inline prediction response for the ml46 dairy fouling/clog detection plugin."""
+    _ = plugin, features, model_key, threshold
     return Ml46DairyInlineResp(
         model_id="ml46-dairy-fouling-clog-detection",
         asset_id="asset_00",
@@ -1373,6 +1574,7 @@ def _ml46_dairy_inline(plugin: FakePlugin, *, features: dict, model_key, thresho
 
 def _ml46_dairy_batch(plugin: FakePlugin, *, data_path: str) -> Ml46DairyBatchResp:
     """Fake batch prediction response for the ml46 dairy fouling/clog detection plugin."""
+    _ = plugin, data_path
     return Ml46DairyBatchResp(
         model_id="ml46-dairy-fouling-clog-detection",
         predictions=[{
@@ -1387,6 +1589,7 @@ def _ml46_dairy_batch(plugin: FakePlugin, *, data_path: str) -> Ml46DairyBatchRe
 
 def _ml46_dairy_train(plugin: FakePlugin, *, data_path: str) -> Ml46DairyTrainResp:
     """Fake fine-tuning response for the ml46 dairy fouling/clog detection plugin."""
+    _ = plugin, data_path
     return Ml46DairyTrainResp(
         detail="Fine-tuning completado sobre el checkpoint no_clock servido.",
         n_windows=500, epochs=8,
@@ -1399,8 +1602,11 @@ def _ml46_dairy_train(plugin: FakePlugin, *, data_path: str) -> Ml46DairyTrainRe
     )
 
 
-def _ml47_dairy_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> Ml47DairyInlineResp:
+def _ml47_dairy_inline(
+    plugin: FakePlugin, *, features: dict, model_key, threshold
+) -> Ml47DairyInlineResp:
     """Fake inline response for the m47 DNSL model."""
+    _ = plugin, features, model_key, threshold
     return Ml47DairyInlineResp(
         model_id="ml47-dairy-dnsl-pasteurization-fault-detection",
         Enfriador_Fouling=0,
@@ -1417,16 +1623,31 @@ def _ml47_dairy_inline(plugin: FakePlugin, *, features: dict, model_key, thresho
 
 def _ml47_dairy_train(plugin: FakePlugin, *, data_path: str) -> Ml47DairyTrainResp:
     """Fake calibration response for ml47 (metrics of the real fine-tune on delivered data)."""
+    _ = plugin, data_path
     return Ml47DairyTrainResp(
-        detail="Calibración a planta de las 4 cabezas del modelo servido (procedimiento fine_tune del equipo de IA).",
-        mode="fine_tune", exact_match=0.96, accuracy=0.99, precision_macro=0.9792,
-        recall_macro=0.9929, f1_macro=0.9852, n_train=231, n_val=50, n_test=50, epochs_run=14,
-        training_time_s=5.1, mlflow_run_id="run-test-123", upload_warning=None,
+        detail=(
+            "Calibración a planta de las 4 cabezas del modelo servido "
+            "(procedimiento fine_tune del equipo de IA)."
+        ),
+        mode="fine_tune",
+        exact_match=0.96,
+        accuracy=0.99,
+        precision_macro=0.9792,
+        recall_macro=0.9929,
+        f1_macro=0.9852,
+        n_train=231,
+        n_val=50,
+        n_test=50,
+        epochs_run=14,
+        training_time_s=5.1,
+        mlflow_run_id="run-test-123",
+        upload_warning=None,
     )
 
 
 def _ml47_dairy_batch(plugin: FakePlugin, *, data_path: str) -> Ml47DairyBatchResp:
     """Fake batch response for the m47 DNSL model."""
+    _ = plugin, data_path
     return Ml47DairyBatchResp(
         model_id="ml47-dairy-dnsl-pasteurization-fault-detection",
         predictions=[{
@@ -1453,22 +1674,40 @@ def _ml48_xai_result(state: str = "Normal") -> dict:
     """xai_result fake con el contrato de modelo-43 (claves del final_report)."""
     result: dict = {"Estado_del_sistema": {"Estado_interpretativo": state}}
     if state == "Normal":
-        result["Mensaje_operativo"] = ["Todos los componentes en estado Sano: no se requiere intervención."]
+        result["Mensaje_operativo"] = [
+            "Todos los componentes en estado Sano: no se requiere intervención."
+        ]
     else:
         result["Bloques_principales"] = ["Fouling"]
         result["Variables_clave"] = ["TS1", "TS2", "FS1"]
-        result["Acciones_sugeridas"] = ["Fouling: Detener producción y ejecutar limpieza CIP inmediata"]
-    result["Detalle_componentes"] = [{"componente": "Fouling", "prediccion": "Crítico" if state != "Normal" else "Sano"}]
+        result["Acciones_sugeridas"] = [
+            "Fouling: Detener producción y ejecutar limpieza CIP inmediata"
+        ]
+    result["Detalle_componentes"] = [
+        {"componente": "Fouling", "prediccion": "Crítico" if state != "Normal" else "Sano"}
+    ]
     return result
 
 
-def _ml48_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> Ml48DairyInlineResp:
-    """Fake inline response for the ml48 DNSL + XAI model (xai_result / xai_error, contrato de modelo-43)."""
+def _ml48_inline(
+    plugin: FakePlugin, *, features: dict, model_key, threshold
+) -> Ml48DairyInlineResp:
+    """Fake inline response for the ml48 DNSL + XAI model.
+
+    Returns xai_result / xai_error (contrato de modelo-43).
+    """
+    _ = plugin, model_key, threshold
     with_xai = features.get("include_xai", True)
     return Ml48DairyInlineResp(
         model_id="ml48-dairy-dnsl-critical-point-detection",
-        Enfriador_Fouling=0, Valvula_Switch=0, Bomba_Leakage=0, Acumulador_Gas=0,
-        Confianza_Fouling=0.99, Confianza_Valvula=0.98, Confianza_Bomba=0.97, Confianza_Acumulador=0.96,
+        Enfriador_Fouling=0,
+        Valvula_Switch=0,
+        Bomba_Leakage=0,
+        Acumulador_Gas=0,
+        Confianza_Fouling=0.99,
+        Confianza_Valvula=0.98,
+        Confianza_Bomba=0.97,
+        Confianza_Acumulador=0.96,
         model_name="ml48-dairy-dnsl-critical-point-detection",
         xai_result=_ml48_xai_result("Normal") if with_xai else None,
         xai_error=None,
@@ -1477,31 +1716,60 @@ def _ml48_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) ->
 
 def _ml48_batch(plugin: FakePlugin, *, data_path: str) -> Ml48DairyBatchResp:
     """Fake batch response for ml48: XAI por ciclo, con el ciclo 2 con xai_error (error parcial)."""
+    _ = plugin, data_path
     rows = []
     for cid in (1, 2, 3):
         failed = cid == 2
-        rows.append({
-            "Cycle_ID": cid, "Enfriador_Fouling": 0, "Valvula_Switch": 0, "Bomba_Leakage": 0, "Acumulador_Gas": 0,
-            "Confianza_Fouling": 0.99, "Confianza_Valvula": 0.98, "Confianza_Bomba": 0.97, "Confianza_Acumulador": 0.96,
-            "model_name": "ml48-dairy-dnsl-critical-point-detection",
-            "xai_result": None if failed else _ml48_xai_result("Normal"),
-            "xai_error": "boom" if failed else None,
-        })
-    return Ml48DairyBatchResp(model_id="ml48-dairy-dnsl-critical-point-detection", predictions=rows, output_path=None)
+        rows.append(
+            {
+                "Cycle_ID": cid,
+                "Enfriador_Fouling": 0,
+                "Valvula_Switch": 0,
+                "Bomba_Leakage": 0,
+                "Acumulador_Gas": 0,
+                "Confianza_Fouling": 0.99,
+                "Confianza_Valvula": 0.98,
+                "Confianza_Bomba": 0.97,
+                "Confianza_Acumulador": 0.96,
+                "model_name": "ml48-dairy-dnsl-critical-point-detection",
+                "xai_result": None if failed else _ml48_xai_result("Normal"),
+                "xai_error": "boom" if failed else None,
+            }
+        )
+    return Ml48DairyBatchResp(
+        model_id="ml48-dairy-dnsl-critical-point-detection", predictions=rows, output_path=None
+    )
 
 
 def _ml48_train(plugin: FakePlugin, *, data_path: str) -> Ml48DairyTrainResp:
     """Fake calibration response for ml48 (same procedure and figures as ml47's fine_tune)."""
+    _ = plugin, data_path
     return Ml48DairyTrainResp(
-        detail="Calibración a planta de las 4 cabezas del modelo servido (procedimiento fine_tune del equipo de IA).",
-        mode="fine_tune", exact_match=0.96, accuracy=0.99, precision_macro=0.9792,
-        recall_macro=0.9929, f1_macro=0.9852, n_train=231, n_val=50, n_test=50, epochs_run=14,
-        training_time_s=5.1, mlflow_run_id="run-test-123", upload_warning=None,
+        detail=(
+            "Calibración a planta de las 4 cabezas del modelo servido "
+            "(procedimiento fine_tune del equipo de IA)."
+        ),
+        mode="fine_tune",
+        exact_match=0.96,
+        accuracy=0.99,
+        precision_macro=0.9792,
+        recall_macro=0.9929,
+        f1_macro=0.9852,
+        n_train=231,
+        n_val=50,
+        n_test=50,
+        epochs_run=14,
+        training_time_s=5.1,
+        mlflow_run_id="run-test-123",
+        upload_warning=None,
     )
 
 
-def _ml40_meat_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> Ml40MeatInlineResp:
-    """Fake inline prediction response for the ml40 refrigeration/aeration fault diagnosis plugin."""
+def _ml40_meat_inline(
+    plugin: FakePlugin, *, features: dict, model_key, threshold
+) -> Ml40MeatInlineResp:
+    """Fake inline prediction response for the ml40 refrigeration/aeration fault diagnosis."""
+    _ = plugin, features, model_key, threshold
     return Ml40MeatInlineResp(
         model_id="ml40-meat-refrigeration-aeration-fault-diagnosis",
         system="aireado",
@@ -1518,6 +1786,7 @@ def _ml40_meat_inline(plugin: FakePlugin, *, features: dict, model_key, threshol
 
 def _ml40_meat_batch(plugin: FakePlugin, *, data_path: str) -> Ml40MeatBatchResp:
     """Fake batch prediction response for the ml40 refrigeration/aeration fault diagnosis plugin."""
+    _ = plugin, data_path
     return Ml40MeatBatchResp(
         model_id="ml40-meat-refrigeration-aeration-fault-diagnosis",
         system="refrigeracion",
@@ -1534,6 +1803,7 @@ def _ml40_meat_batch(plugin: FakePlugin, *, data_path: str) -> Ml40MeatBatchResp
 
 def _ml40_meat_train(plugin: FakePlugin, *, data_path: str) -> Ml40MeatTrainResp:
     """Fake retraining response for the ml40 refrigeration/aeration fault diagnosis plugin."""
+    _ = plugin, data_path
     return Ml40MeatTrainResp(
         detail="Reentrenamiento completado para el sistema aireado con el procedimiento original.",
         system="aireado",
@@ -1557,6 +1827,7 @@ def _ml45_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) ->
     anomaly_probability/decision_threshold and were dropped from the real contract in
     postprocessing.py::explain_window / predict_dto.py.
     """
+    _ = plugin, features, model_key, threshold
     return Ml45InlineResp(
         model_id="ml45-cereals-dnsl-critical-point-detection",
         window_index=1,
@@ -1567,7 +1838,10 @@ def _ml45_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) ->
         decision_threshold=0.73,
         **{
             "Estado interpretativo": "Vigilancia",
-            "Evidencia": "No se identifica un perfil catalogado de criticidad, pero hay indicios de anomalia.",
+            "Evidencia": (
+                "No se identifica un perfil catalogado de criticidad, "
+                "pero hay indicios de anomalia."
+            ),
             "Recomendacion": "Se recomienda vigilancia reforzada y seguimiento.",
         },
     )
@@ -1575,20 +1849,26 @@ def _ml45_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) ->
 
 def _ml45_batch(plugin: FakePlugin, *, data_path: str) -> Ml45BatchResp:
     """Fake batch response for the m45 grain-dryer PCC detection model (see _ml45_inline)."""
+    _ = plugin, data_path
     return Ml45BatchResp(
         model_id="ml45-cereals-dnsl-critical-point-detection",
-        predictions=[{
-            "window_index": 1,
-            "cycle_id": 2400,
-            "timestamp_init": "2029-04-15 00:00:00",
-            "timestamp_end": "2029-04-15 03:59:00",
-            "predicted_anomaly_label": "No Fallo",
-            "anomaly_probability": 0.43,
-            "decision_threshold": 0.73,
-            "Estado interpretativo": "Vigilancia",
-            "Evidencia": "No se identifica un perfil catalogado de criticidad, pero hay indicios de anomalia.",
-            "Recomendacion": "Se recomienda vigilancia reforzada y seguimiento.",
-        }],
+        predictions=[
+            {
+                "window_index": 1,
+                "cycle_id": 2400,
+                "timestamp_init": "2029-04-15 00:00:00",
+                "timestamp_end": "2029-04-15 03:59:00",
+                "predicted_anomaly_label": "No Fallo",
+                "anomaly_probability": 0.43,
+                "decision_threshold": 0.73,
+                "Estado interpretativo": "Vigilancia",
+                "Evidencia": (
+                    "No se identifica un perfil catalogado de criticidad, "
+                    "pero hay indicios de anomalia."
+                ),
+                "Recomendacion": "Se recomienda vigilancia reforzada y seguimiento.",
+            }
+        ],
         output_path=None,
     )
 
@@ -1600,6 +1880,7 @@ def _ml45_train(plugin: FakePlugin, *, data_path: str) -> Ml45TrainResp:
     on (modelo 43-44-45 audit, point 6) — previously a single n_windows covered both,
     because metrics used to be computed on the same data the model fine-tuned on.
     """
+    _ = plugin, data_path
     return Ml45TrainResp(
         detail="Entrenamiento completado",
         accuracy=0.92, fallo_auc=0.91, fallo_precision=0.88, fallo_recall=0.84,
@@ -1611,46 +1892,93 @@ def _ml45_train(plugin: FakePlugin, *, data_path: str) -> Ml45TrainResp:
     )
 
 
-def _ml28_meat_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> Ml28MeatInlineResp:
+def _ml28_meat_inline(
+    plugin: FakePlugin, *, features: dict, model_key, threshold
+) -> Ml28MeatInlineResp:
     """Fake inline response for the ml28 meat raw-material procurement rules engine."""
+    _ = plugin, features, model_key, threshold
     return Ml28MeatInlineResp(
         model_id="ml28-meat-neuroevolutionary-raw-materials-prediction",
-        date="2025-01-26", raw_material_id="RM_BEEF_TRIM_A", destination_profile="cooked_standard_line",
-        current_inventory_tons=36.0, expected_requirement_tons=24.0, lead_time_days=6.0,
-        safety_coverage_days=11.0, expected_yield_rate=0.88, expected_waste_rate=0.02,
-        unit_purchase_cost=3.88, shelf_life_days=28,
-        purchase_trigger_proba=0.8588, purchase_trigger_flag=1, recommended_action="BUY",
-        quantity_optimizer_recommendation_tons=29.817, order_quantity_tons=29.817,
-        decision_reason="Projected stock after lead time is below safety stock. Purchase triggered and quantity optimized under current policy.",
-        projected_stock_after_lead_time_tons=15.429, safety_stock_tons=37.714, coverage_gap_tons=22.286,
-        risk_level="HIGH", baseline_order_quantity_tons=40.75, delta_order_vs_baseline_tons=-10.933,
-        excess_tons=41.337, stockout_tons=0.0,
+        date="2025-01-26",
+        raw_material_id="RM_BEEF_TRIM_A",
+        destination_profile="cooked_standard_line",
+        current_inventory_tons=36.0,
+        expected_requirement_tons=24.0,
+        lead_time_days=6.0,
+        safety_coverage_days=11.0,
+        expected_yield_rate=0.88,
+        expected_waste_rate=0.02,
+        unit_purchase_cost=3.88,
+        shelf_life_days=28,
+        purchase_trigger_proba=0.8588,
+        purchase_trigger_flag=1,
+        recommended_action="BUY",
+        quantity_optimizer_recommendation_tons=29.817,
+        order_quantity_tons=29.817,
+        decision_reason=(
+            "Projected stock after lead time is below safety stock. "
+            "Purchase triggered and quantity optimized under current policy."
+        ),
+        projected_stock_after_lead_time_tons=15.429,
+        safety_stock_tons=37.714,
+        coverage_gap_tons=22.286,
+        risk_level="HIGH",
+        baseline_order_quantity_tons=40.75,
+        delta_order_vs_baseline_tons=-10.933,
+        excess_tons=41.337,
+        stockout_tons=0.0,
     )
 
 
 def _ml28_meat_batch(plugin: FakePlugin, *, data_path: str) -> Ml28MeatBatchResp:
     """Fake batch response for the ml28 meat raw-material procurement rules engine."""
+    _ = plugin, data_path
     return Ml28MeatBatchResp(
         model_id="ml28-meat-neuroevolutionary-raw-materials-prediction",
-        predictions=[{
-            "date": "2025-01-05", "raw_material_id": "RM_BEEF_TRIM_A", "destination_profile": "cooked_standard_line",
-            "current_inventory_tons": 58.0, "expected_requirement_tons": 22.0, "lead_time_days": 5.0,
-            "safety_coverage_days": 10.0, "expected_yield_rate": 0.89, "expected_waste_rate": 0.02,
-            "unit_purchase_cost": 3.80, "shelf_life_days": 28,
-            "purchase_trigger_proba": 0.2658, "purchase_trigger_flag": 0, "recommended_action": "DO_NOT_BUY",
-            "quantity_optimizer_recommendation_tons": 0.0, "order_quantity_tons": 0.0,
-            "decision_reason": "Coverage remains above safety threshold; purchase blocked.",
-            "projected_stock_after_lead_time_tons": 42.286, "safety_stock_tons": 31.429, "coverage_gap_tons": 0.0,
-            "risk_level": "LOW", "baseline_order_quantity_tons": 3.767, "delta_order_vs_baseline_tons": -3.767,
-            "excess_tons": 35.56, "stockout_tons": 0.0,
-        }],
-        summary={"row_count": 1, "triggered_orders": 0, "aggregate_excess_reduction_pct": 20.959, "stockout_guardrail_pass": True},
+        predictions=[
+            {
+                "date": "2025-01-05",
+                "raw_material_id": "RM_BEEF_TRIM_A",
+                "destination_profile": "cooked_standard_line",
+                "current_inventory_tons": 58.0,
+                "expected_requirement_tons": 22.0,
+                "lead_time_days": 5.0,
+                "safety_coverage_days": 10.0,
+                "expected_yield_rate": 0.89,
+                "expected_waste_rate": 0.02,
+                "unit_purchase_cost": 3.80,
+                "shelf_life_days": 28,
+                "purchase_trigger_proba": 0.2658,
+                "purchase_trigger_flag": 0,
+                "recommended_action": "DO_NOT_BUY",
+                "quantity_optimizer_recommendation_tons": 0.0,
+                "order_quantity_tons": 0.0,
+                "decision_reason": "Coverage remains above safety threshold; purchase blocked.",
+                "projected_stock_after_lead_time_tons": 42.286,
+                "safety_stock_tons": 31.429,
+                "coverage_gap_tons": 0.0,
+                "risk_level": "LOW",
+                "baseline_order_quantity_tons": 3.767,
+                "delta_order_vs_baseline_tons": -3.767,
+                "excess_tons": 35.56,
+                "stockout_tons": 0.0,
+            }
+        ],
+        summary={
+            "row_count": 1,
+            "triggered_orders": 0,
+            "aggregate_excess_reduction_pct": 20.959,
+            "stockout_guardrail_pass": True,
+        },
         output_path=None,
     )
 
 
-def _ml3_wine_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> Ml3WineInlineResp:
+def _ml3_wine_inline(
+    plugin: FakePlugin, *, features: dict, model_key, threshold
+) -> Ml3WineInlineResp:
     """Fake inline response for the ml3 wine disease/pest Deep Ensemble plugin."""
+    _ = plugin, features, model_key, threshold
     return Ml3WineInlineResp(
         model_id="ml3-wine-disease-pest-forecast",
         id_serie=552,
@@ -1674,6 +2002,7 @@ def _ml3_wine_inline(plugin: FakePlugin, *, features: dict, model_key, threshold
 
 def _ml3_wine_batch(plugin: FakePlugin, *, data_path: str) -> Ml3WineBatchResp:
     """Fake batch response for the ml3 wine disease/pest Deep Ensemble plugin."""
+    _ = plugin, data_path
     return Ml3WineBatchResp(
         model_id="ml3-wine-disease-pest-forecast",
         predictions=[
@@ -1692,6 +2021,7 @@ def _ml3_wine_batch(plugin: FakePlugin, *, data_path: str) -> Ml3WineBatchResp:
 
 def _ml3_wine_train(plugin: FakePlugin, *, data_path: str) -> Ml3WineTrainResp:
     """Fake retraining response for the ml3 wine disease/pest Deep Ensemble plugin."""
+    _ = plugin, data_path
     return Ml3WineTrainResp(
         detail="Reentrenamiento completo del Deep Ensemble (LSTM + CNN + BiGRU) desde cero.",
         n_windows_train=100000,
@@ -1711,7 +2041,9 @@ def _ml3_wine_train(plugin: FakePlugin, *, data_path: str) -> Ml3WineTrainResp:
 
 
 def _ml43_cereals_inline(plugin: FakePlugin, *, features: dict, model_key, threshold):
-    """ml43-cereals-dnsl-anomaly-fault-detection has no inline mode — mirrors the real plugin's rejection.
+    """ml43-cereals-dnsl-anomaly-fault-detection has no inline mode.
+
+    Mirrors the real plugin's rejection.
 
     Unreachable in practice: PredictRequest only accepts mode="batch", so a real
     request with mode="inline" is rejected by Pydantic before FakePlugin.predict_inline
@@ -1719,41 +2051,52 @@ def _ml43_cereals_inline(plugin: FakePlugin, *, features: dict, model_key, thres
     (inline_factory, batch_factory) tuple like every other model.
     """
     raise InsufficientSensorWindowError(
-        "ml43-cereals-dnsl-anomaly-fault-detection no soporta predicción inline (una sola lectura). "
+        "ml43-cereals-dnsl-anomaly-fault-detection no soporta predicción inline "
+        "(una sola lectura). "
         "Usa el modo batch con un CSV de al menos 180 registros consecutivos."
     )
 
 
 def _ml43_cereals_batch(plugin: FakePlugin, *, data_path: str) -> Ml43CerealsBatchResp:
-    """Fake batch prediction response for the ml43-cereals-dnsl-anomaly-fault-detection anomaly detector plugin.
+    """Fake batch prediction response for the ml43-cereals-dnsl-anomaly-fault-detection plugin.
 
     predicted_anomaly_label/xai_result reflect the real post-Feedback-3 backend shape:
     Spanish label ("No Fallo", not "No Failure") and a populated XAI report even for a
     non-anomalous window (XAI now runs for every window, not only Failure ones)."""
+    _ = plugin, data_path
     return Ml43CerealsBatchResp(
         model_id="ml43-cereals-dnsl-anomaly-fault-detection",
-        predictions=[{
-            "window_index": 1,
-            "cycle_id": "cycle_001",
-            "timestamp_init": "2026-01-11 08:00:00",
-            "timestamp_end": "2026-01-11 08:02:59",
-            "predicted_anomaly_label": "No Fallo",
-            "anomaly_probability": 0.0512,
-            "decision_threshold": 0.41,
-            "xai_feature_values": {"temp_zona1": 80.0, "temp_zona2": 82.0},
-            "xai_result": {
-                "Estado_del_sistema": {"Estado_interpretativo": "Normal", "Probabilidad_anomalia": 0.0512},
-                "Mensaje_operativo": ["No se requieren acciones correctivas.", "Mantener monitorización ordinaria."],
-            },
-            "xai_error": None,
-        }],
+        predictions=[
+            {
+                "window_index": 1,
+                "cycle_id": "cycle_001",
+                "timestamp_init": "2026-01-11 08:00:00",
+                "timestamp_end": "2026-01-11 08:02:59",
+                "predicted_anomaly_label": "No Fallo",
+                "anomaly_probability": 0.0512,
+                "decision_threshold": 0.41,
+                "xai_feature_values": {"temp_zona1": 80.0, "temp_zona2": 82.0},
+                "xai_result": {
+                    "Estado_del_sistema": {
+                        "Estado_interpretativo": "Normal",
+                        "Probabilidad_anomalia": 0.0512,
+                    },
+                    "Mensaje_operativo": [
+                        "No se requieren acciones correctivas.",
+                        "Mantener monitorización ordinaria.",
+                    ],
+                },
+                "xai_error": None,
+            }
+        ],
         output_path=None,
         warning=None,
     )
 
 
 def _ml43_cereals_train(plugin: FakePlugin, *, data_path: str) -> Ml43CerealsTrainResp:
-    """Fake training response for the ml43-cereals-dnsl-anomaly-fault-detection anomaly detector plugin."""
+    """Fake training response for the ml43-cereals-dnsl-anomaly-fault-detection plugin."""
+    _ = plugin, data_path
     return Ml43CerealsTrainResp(
         detail="Entrenamiento completado",
         accuracy=0.92,
@@ -1774,8 +2117,11 @@ def _ml43_cereals_train(plugin: FakePlugin, *, data_path: str) -> Ml43CerealsTra
     )
 
 
-def _ml9_cereals_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> Ml9CerealsInlineResp:
+def _ml9_cereals_inline(
+    plugin: FakePlugin, *, features: dict, model_key, threshold
+) -> Ml9CerealsInlineResp:
     """Fake inline prediction response for the ml9 cereal infestation sequence classifier."""
+    _ = plugin, model_key
     confidence = 0.9982911
     return Ml9CerealsInlineResp(
         model_id="ml9-cereals-infestation-sequence-classifier",
@@ -1800,17 +2146,25 @@ def _ml9_cereals_inline(plugin: FakePlugin, *, features: dict, model_key, thresh
 
 def _ml9_cereals_batch(plugin: FakePlugin, *, data_path: str) -> Ml9CerealsBatchResp:
     """Fake batch prediction response for the ml9 cereal infestation sequence classifier."""
+    _ = plugin, data_path
     return Ml9CerealsBatchResp(
         model_id="ml9-cereals-infestation-sequence-classifier",
         n_windows=37,
         n_series=1,
-        predictions=[{
-            "sample_id": "S_0_0061", "window_index": 4,
-            "timestamp_start": "2026-01-03T00:00:00", "timestamp_end": "2026-01-04T23:00:00",
-            "pred_class": 0, "pred_label": "sano",
-            "proba_sano": 0.9982911, "proba_insectos": 0.0016914126, "proba_moho_critico": 0.0000174922,
-            "confidence": 0.9982911,
-        }],
+        predictions=[
+            {
+                "sample_id": "S_0_0061",
+                "window_index": 4,
+                "timestamp_start": "2026-01-03T00:00:00",
+                "timestamp_end": "2026-01-04T23:00:00",
+                "pred_class": 0,
+                "pred_label": "sano",
+                "proba_sano": 0.9982911,
+                "proba_insectos": 0.0016914126,
+                "proba_moho_critico": 0.0000174922,
+                "confidence": 0.9982911,
+            }
+        ],
         class_distribution={"sano": 37, "insectos": 0, "moho_critico": 0},
         evaluated_metrics=None,
         output_path=None,
@@ -1819,6 +2173,7 @@ def _ml9_cereals_batch(plugin: FakePlugin, *, data_path: str) -> Ml9CerealsBatch
 
 def _ml9_cereals_train(plugin: FakePlugin, *, data_path: str) -> Ml9CerealsTrainResp:
     """Fake fine-tuning response for the ml9 cereal infestation sequence classifier."""
+    _ = plugin, data_path
     return Ml9CerealsTrainResp(
         detail="Fine-tuning completado sobre el checkpoint servido (GRU).",
         n_series_train=195, n_series_validation=45, n_series_test=60,
@@ -1833,8 +2188,11 @@ def _ml9_cereals_train(plugin: FakePlugin, *, data_path: str) -> Ml9CerealsTrain
     )
 
 
-def _ml21_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> Ml21CerealsInlineResp:
+def _ml21_inline(
+    plugin: FakePlugin, *, features: dict, model_key, threshold
+) -> Ml21CerealsInlineResp:
     """Fake inline response for the ml21 ESP-CEREAL spatial cereal price model."""
+    _ = plugin, features, model_key, threshold
     return Ml21CerealsInlineResp(
         model_id="ml21-cereals-price-spatial",
         province="Burgos",
@@ -1842,12 +2200,34 @@ def _ml21_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) ->
         month="2024-01",
         geo_risk=False,
         timing_label="SEGUIMIENTO ACTIVO",
-        causal_drivers=["Trigo Internacional (al alza, z=1.23)", "EUR/USD (a la baja, z=0.87)", "Precipitacion (al alza, z=0.65)"],
+        causal_drivers=[
+            "Trigo Internacional (al alza, z=1.23)",
+            "EUR/USD (a la baja, z=0.87)",
+            "Precipitacion (al alza, z=0.65)",
+        ],
         card_text="FICHA DE DECISION DATAGIA v1.1\n...",
         predictions={
-            "H1": {"horizon": 1, "signal": "NEUTRAL/ESPERA", "confidence": 55.0, "expected_return": 0.012, "prob_up": 0.55},
-            "H2": {"horizon": 2, "signal": "ALCISTA", "confidence": 68.0, "expected_return": 0.025, "prob_up": 0.68},
-            "H3": {"horizon": 3, "signal": "NEUTRAL/ESPERA", "confidence": 52.0, "expected_return": 0.008, "prob_up": 0.52},
+            "H1": {
+                "horizon": 1,
+                "signal": "NEUTRAL/ESPERA",
+                "confidence": 55.0,
+                "expected_return": 0.012,
+                "prob_up": 0.55,
+            },
+            "H2": {
+                "horizon": 2,
+                "signal": "ALCISTA",
+                "confidence": 68.0,
+                "expected_return": 0.025,
+                "prob_up": 0.68,
+            },
+            "H3": {
+                "horizon": 3,
+                "signal": "NEUTRAL/ESPERA",
+                "confidence": 52.0,
+                "expected_return": 0.008,
+                "prob_up": 0.52,
+            },
         },
         model_version="1.0.0",
         xai_feature_values={"corn_intl_eur_lag_1": 185.0, "wheat_intl_eur_lag_1": 210.0},
@@ -1856,6 +2236,7 @@ def _ml21_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) ->
 
 def _ml21_batch(plugin: FakePlugin, *, data_path: str) -> Ml21CerealsBatchResp:
     """Fake batch response for the ml21 ESP-CEREAL spatial cereal price model."""
+    _ = plugin, data_path
     return Ml21CerealsBatchResp(
         model_id="ml21-cereals-price-spatial",
         predictions=[
@@ -1863,10 +2244,18 @@ def _ml21_batch(plugin: FakePlugin, *, data_path: str) -> Ml21CerealsBatchResp:
                 "row": 0,
                 "provincia": "Burgos",
                 "cereal_predominante": "trigo",
-                "ret_h1": 0.012, "ret_h2": 0.025, "ret_h3": 0.008,
-                "prob_up_h1": 0.55, "prob_up_h2": 0.68, "prob_up_h3": 0.52,
-                "signal_h1": "NEUTRAL/ESPERA", "signal_h2": "ALCISTA", "signal_h3": "NEUTRAL/ESPERA",
-                "confidence_h1": 55.0, "confidence_h2": 68.0, "confidence_h3": 52.0,
+                "ret_h1": 0.012,
+                "ret_h2": 0.025,
+                "ret_h3": 0.008,
+                "prob_up_h1": 0.55,
+                "prob_up_h2": 0.68,
+                "prob_up_h3": 0.52,
+                "signal_h1": "NEUTRAL/ESPERA",
+                "signal_h2": "ALCISTA",
+                "signal_h3": "NEUTRAL/ESPERA",
+                "confidence_h1": 55.0,
+                "confidence_h2": 68.0,
+                "confidence_h3": 52.0,
             }
         ],
         output_path=None,
@@ -1875,6 +2264,7 @@ def _ml21_batch(plugin: FakePlugin, *, data_path: str) -> Ml21CerealsBatchResp:
 
 def _ml21_train(plugin: FakePlugin, *, data_path: str) -> Ml21CerealsTrainResp:
     """Fake training response for the ml21 ESP-CEREAL spatial cereal price model."""
+    _ = plugin, data_path
     return Ml21CerealsTrainResp(
         detail="Training completado — 6 modelos entrenados (3H × reg+clf)",
         mae_h1=0.0508, mae_h2=0.0674, mae_h3=0.1012,
@@ -1888,6 +2278,7 @@ def _ml21_train(plugin: FakePlugin, *, data_path: str) -> Ml21CerealsTrainResp:
 
 def _ml16_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> Ml16InlineResp:
     """Fake inline response for the ml16 meat raw-material price alert model."""
+    _ = plugin, model_key, threshold
     return Ml16InlineResp(
         model_id="ml16-meat-raw-material-price-alert",
         fecha="2024-12-01",
@@ -1908,6 +2299,7 @@ def _ml16_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) ->
 
 def _ml16_batch(plugin: FakePlugin, *, data_path: str) -> Ml16BatchResp:
     """Fake batch response for the ml16 meat raw-material price alert model."""
+    _ = plugin, data_path
     return Ml16BatchResp(
         model_id="ml16-meat-raw-material-price-alert",
         predictions=[{
@@ -1924,6 +2316,7 @@ def _ml16_batch(plugin: FakePlugin, *, data_path: str) -> Ml16BatchResp:
 
 def _ml16_train(plugin: FakePlugin, *, data_path: str) -> Ml16TrainResp:
     """Fake retraining response for the ml16 meat raw-material price alert model."""
+    _ = plugin, data_path
     return Ml16TrainResp(
         detail="Reentrenamiento completado (XGBoost + LogisticRegression, procedimiento original).",
         n_train_rows=35,
@@ -1946,6 +2339,7 @@ def _ml16_train(plugin: FakePlugin, *, data_path: str) -> Ml16TrainResp:
 
 def _ml14_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> Ml14InlineResp:
     """Fake inline response for the ml14 GRU wine phytosanitary price forecast model."""
+    _ = plugin, model_key, threshold
     return Ml14InlineResp(
         model_id="ml14-wine-phyto-price-forecast",
         predicted_price=121.394124,
@@ -1963,6 +2357,7 @@ def _ml14_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) ->
 
 def _ml14_batch(plugin: FakePlugin, *, data_path: str) -> Ml14BatchResp:
     """Fake batch response for the ml14 GRU wine phytosanitary price forecast model."""
+    _ = plugin, data_path
     return Ml14BatchResp(
         model_id="ml14-wine-phyto-price-forecast",
         predictions=[
@@ -1984,6 +2379,7 @@ def _ml14_batch(plugin: FakePlugin, *, data_path: str) -> Ml14BatchResp:
 
 def _ml15_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> Ml15InlineResp:
     """Fake inline response for the ml15 national phytosanitary IPI (Ridge) forecast model."""
+    _ = plugin, model_key, threshold
     return Ml15InlineResp(
         model_id="ml15-wine-ipi-price-forecast",
         origin_date=features.get("date", "2025-01-01"),
@@ -2002,6 +2398,7 @@ def _ml15_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) ->
 
 def _ml15_batch(plugin: FakePlugin, *, data_path: str) -> Ml15BatchResp:
     """Fake batch response for the ml15 national phytosanitary IPI (Ridge) forecast model."""
+    _ = plugin, data_path
     return Ml15BatchResp(
         model_id="ml15-wine-ipi-price-forecast",
         predictions=[
@@ -2022,6 +2419,7 @@ def _ml15_batch(plugin: FakePlugin, *, data_path: str) -> Ml15BatchResp:
 
 def _ml15_train(plugin: FakePlugin, *, data_path: str) -> Ml15TrainResp:
     """Fake retraining response for the ml15 national phytosanitary IPI (Ridge) forecast model."""
+    _ = plugin, data_path
     return Ml15TrainResp(
         detail="Reentrenamiento completado (Ridge, procedimiento original).",
         n_train_rows=85,
@@ -2041,6 +2439,7 @@ def _ml15_train(plugin: FakePlugin, *, data_path: str) -> Ml15TrainResp:
 
 def _ml13_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> Ml13InlineResp:
     """Fake inline response for the ml13 wine price fluctuation (LogReg price-rise alert) model."""
+    _ = plugin, model_key
     decision_threshold = 0.5 if threshold is None else threshold
     proba = 0.6123
     return Ml13InlineResp(
@@ -2067,6 +2466,7 @@ def _ml13_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) ->
 
 def _ml13_batch(plugin: FakePlugin, *, data_path: str) -> Ml13BatchResp:
     """Fake batch response for the ml13 wine price fluctuation model."""
+    _ = plugin, data_path
     return Ml13BatchResp(
         model_id="ml13-wine-price-fluctuation-prediction",
         model_type="logreg",
@@ -2087,6 +2487,7 @@ def _ml13_batch(plugin: FakePlugin, *, data_path: str) -> Ml13BatchResp:
 
 def _ml13_train(plugin: FakePlugin, *, data_path: str) -> Ml13TrainResp:
     """Fake retraining response for the ml13 wine price fluctuation model."""
+    _ = plugin, data_path
     return Ml13TrainResp(
         detail="Reentrenamiento completado (procedimiento original; modelo seleccionado: logreg).",
         best_model_type="logreg",
@@ -2112,10 +2513,13 @@ def _ml13_train(plugin: FakePlugin, *, data_path: str) -> Ml13TrainResp:
 
 def _ml18_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> Ml18InlineResp:
     """Fake inline response for the ml18 GRU meat spatial price forecast model."""
+    _ = plugin, model_key, threshold
     rows = features.get("rows", [])
     ccaa = rows[0].get("CCAA", "MADRID") if rows else "MADRID"
     producto = rows[0].get("Producto", "CARNE POLLO") if rows else "CARNE POLLO"
-    preds = [{"CCAA": ccaa, "Producto": producto, "Fecha": "2022-01-01", "predicted_price": 4.542946}]
+    preds = [
+        {"CCAA": ccaa, "Producto": producto, "Fecha": "2022-01-01", "predicted_price": 4.542946}
+    ]
     return Ml18InlineResp(
         model_id="ml18-meat-spatial-price-forecast",
         predictions=preds,
@@ -2125,7 +2529,15 @@ def _ml18_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) ->
 
 def _ml18_batch(plugin: FakePlugin, *, data_path: str) -> Ml18BatchResp:
     """Fake batch response for the ml18 GRU meat spatial price forecast model."""
-    preds = [{"CCAA": "ANDALUCIA", "Producto": "CARNE POLLO", "Fecha": "2022-01-01", "predicted_price": 4.542946}]
+    _ = plugin, data_path
+    preds = [
+        {
+            "CCAA": "ANDALUCIA",
+            "Producto": "CARNE POLLO",
+            "Fecha": "2022-01-01",
+            "predicted_price": 4.542946,
+        }
+    ]
     return Ml18BatchResp(
         model_id="ml18-meat-spatial-price-forecast",
         predictions=preds,
@@ -2135,12 +2547,24 @@ def _ml18_batch(plugin: FakePlugin, *, data_path: str) -> Ml18BatchResp:
 
 
 _ML24_ROW = {
-    "anchor_product": "TOTAL LECHE LIQUIDA", "context_products": "", "feature_period": "2026-06",
-    "feature_period_dt": "2026-06-01", "period": "2026-07", "period_dt": "2026-07-01",
-    "ccaa": "CASTILLA Y LEON", "ccaa_code": "CYL", "model_id": "spatial_price_model",
-    "model_name": "spatial_price_model", "horizon_months": 1, "y_pred": 0.88,
-    "y_baseline_calibrated": 0.95, "y_persist_1": 0.95, "y_persist_12": 0.95,
-    "selected_anchor_features": "", "selected_context_features": "", "selected_exog": "exog__milk_mom_1w_lag_1",
+    "anchor_product": "TOTAL LECHE LIQUIDA",
+    "context_products": "",
+    "feature_period": "2026-06",
+    "feature_period_dt": "2026-06-01",
+    "period": "2026-07",
+    "period_dt": "2026-07-01",
+    "ccaa": "CASTILLA Y LEON",
+    "ccaa_code": "CYL",
+    "model_id": "spatial_price_model",
+    "model_name": "spatial_price_model",
+    "horizon_months": 1,
+    "y_pred": 0.88,
+    "y_baseline_calibrated": 0.95,
+    "y_persist_1": 0.95,
+    "y_persist_12": 0.95,
+    "selected_anchor_features": "",
+    "selected_context_features": "",
+    "selected_exog": "exog__milk_mom_1w_lag_1",
 }
 _ML24_FRESHNESS = {"main_source_last_period": "2026-06", "main_source_lag_months": 4,
                    "exog_last_period": "2026-09", "exog_lag_months": 1}
@@ -2148,6 +2572,7 @@ _ML24_FRESHNESS = {"main_source_last_period": "2026-06", "main_source_lag_months
 
 def _ml24_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> Ml24InlineResp:
     """Fake inline response for the ml24 dairy spatial price forecast (one row per horizon)."""
+    _ = plugin, model_key, threshold
     rows = [{**_ML24_ROW, "horizon_months": h} for h in (features.get("horizons") or [1, 3, 6])]
     return Ml24InlineResp(model_id="ml24-dairy-spatial-price-forecast", predictions=rows,
                           n_predictions=len(rows), data_freshness=_ML24_FRESHNESS, warnings=[])
@@ -2155,6 +2580,7 @@ def _ml24_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) ->
 
 def _ml24_batch(plugin: FakePlugin, *, data_path: str) -> Ml24BatchResp:
     """Fake batch response for the ml24 dairy spatial price forecast."""
+    _ = plugin, data_path
     rows = [{**_ML24_ROW, "horizon_months": h} for h in (1, 3, 6)]
     return Ml24BatchResp(model_id="ml24-dairy-spatial-price-forecast", predictions=rows,
                          n_predictions=len(rows), data_freshness=_ML24_FRESHNESS, warnings=[],
@@ -2165,16 +2591,22 @@ def _ml19_horizons() -> list[Ml19Horizon]:
     """Shared fake multi-horizon payload for ml19 inline/batch fakes."""
     return [
         Ml19Horizon(
-            horizon=1, predicted_for="2020-02",
+            horizon=1,
+            predicted_for="2020-02",
             reg=Ml19Reg(model_name="Ridge", pred=1.024653, signal=1, signal_str="LONG"),
-            clf=Ml19Clf(model_name="LogReg", prob_up=0.545627, pred_class=1, signal=1, signal_str="LONG"),
-            ensemble_signal=1, ensemble_str="LONG", confidence="ALTA",
+            clf=Ml19Clf(
+                model_name="LogReg", prob_up=0.545627, pred_class=1, signal=1, signal_str="LONG"
+            ),
+            ensemble_signal=1,
+            ensemble_str="LONG",
+            confidence="ALTA",
         ),
     ]
 
 
 def _ml19_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> Ml19InlineResp:
     """Fake inline response for the ml19 cereals cost forecast model."""
+    _ = plugin, model_key, threshold
     date_label = (features or {}).get("date") or "2020-01"
     return Ml19InlineResp(
         model_id="ml19-cereals-cost-forecast",
@@ -2187,6 +2619,7 @@ def _ml19_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) ->
 
 def _ml19_batch(plugin: FakePlugin, *, data_path: str) -> Ml19BatchResp:
     """Fake batch response for the ml19 cereals cost forecast model."""
+    _ = plugin, data_path
     preds = [
         Ml19BatchPred(
             date_requested="2020-01", date_label="2020-01",
@@ -2245,17 +2678,35 @@ FAKE_FACTORIES: dict[str, tuple[Callable, Callable]] = {
 
 def _ml14_train(plugin: FakePlugin, *, data_path: str) -> Ml14TrainResp:
     """Fake train response for ml14 (GRU values of the delivered model_comparison.json)."""
+    _ = plugin, data_path
     return Ml14TrainResp(
         detail="GRU reentrenada con el procedimiento del equipo de IA",
-        mae=1.699, mae_std=0.0269, rmse=2.2873, rmse_std=0.0268, mape_pct=1.3933, mape_pct_std=0.017,
-        r2=0.7108, r2_std=0.0068, direction_acc_pct=77.7, skill_score=0.6435, drift_rmse=2.5406,
-        naive_rmse=3.8856, beats_drift=True, n_train=830, n_test=211, epochs_run_seed_42=60,
-        n_seeds=3, training_time_s=20.0, mlflow_run_id="run-test-ml14", upload_warning=None,
+        mae=1.699,
+        mae_std=0.0269,
+        rmse=2.2873,
+        rmse_std=0.0268,
+        mape_pct=1.3933,
+        mape_pct_std=0.017,
+        r2=0.7108,
+        r2_std=0.0068,
+        direction_acc_pct=77.7,
+        skill_score=0.6435,
+        drift_rmse=2.5406,
+        naive_rmse=3.8856,
+        beats_drift=True,
+        n_train=830,
+        n_test=211,
+        epochs_run_seed_42=60,
+        n_seeds=3,
+        training_time_s=20.0,
+        mlflow_run_id="run-test-ml14",
+        upload_warning=None,
     )
 
 
 def _ml18_train(plugin: FakePlugin, *, data_path: str) -> Ml18TrainResp:
     """Fake train response for ml18 (values of the delivered metrics.json)."""
+    _ = plugin, data_path
     return Ml18TrainResp(
         detail="GRU reentrenada desde cero con el procedimiento del equipo de IA",
         train_mae=0.749, train_rmse=1.5227, train_mape_pct=9.7449, train_r2=0.8492,
@@ -2268,38 +2719,82 @@ def _ml18_train(plugin: FakePlugin, *, data_path: str) -> Ml18TrainResp:
 
 def _ml24_train(plugin: FakePlugin, *, data_path: str) -> Ml24TrainResp:
     """Fake train response for ml24 (test values of the delivered metrics.csv)."""
+    _ = plugin, data_path
+
     def split(mae, smape, mae_b, smape_b, n):
         return {"mae": mae, "smape": smape, "mae_baseline": mae_b, "smape_baseline": smape_b,
                 "accuracy_pct": 100 - smape, "n": n}
 
     def horizon(n_train, test, w1, alpha, n_features):
-        return {"train": split(0.016, 2.3, 0.042, 6.1, n_train), "validation": split(0.0149, 2.13, 0.0159, 2.28, 204),
-                "test": test, "baseline_w_persist_1": w1, "baseline_w_persist_12": 1 - w1, "ml_alpha": alpha,
-                "n_features": n_features}
+        return {
+            "train": split(0.016, 2.3, 0.042, 6.1, n_train),
+            "validation": split(0.0149, 2.13, 0.0159, 2.28, 204),
+            "test": test,
+            "baseline_w_persist_1": w1,
+            "baseline_w_persist_12": 1 - w1,
+            "ml_alpha": alpha,
+            "n_features": n_features,
+        }
 
     return Ml24TrainResp(
-        detail="spatial_price_model reentrenado desde cero (h=1/3/6) con el procedimiento del equipo de IA",
+        detail=(
+            "spatial_price_model reentrenado desde cero (h=1/3/6) "
+            "con el procedimiento del equipo de IA"
+        ),
         h1=horizon(3655, split(0.013005, 1.870961, 0.014319, 2.059862, 204), 0.5, 0.4, 34),
         h3=horizon(3621, split(0.013768, 1.979459, 0.014839, 2.132642, 204), 0.45, 0.65, 30),
         h6=horizon(3366, split(0.014242, 2.045819, 0.015036, 2.158799, 204), 0.5, 0.55, 34),
-        validation_year=2019, test_year=2020, task_type="GPU", training_time_s=60.0,
-        mlflow_run_id="run-test-ml24", upload_warning=None,
+        validation_year=2019,
+        test_year=2020,
+        task_type="GPU",
+        training_time_s=60.0,
+        mlflow_run_id="run-test-ml24",
+        upload_warning=None,
     )
 
 
 def _ml19_train(plugin: FakePlugin, *, data_path: str) -> Ml19TrainResp:
     """Fake train response for ml19 (walk-forward metrics of the delivered selection)."""
+    _ = plugin, data_path
+
     def horizon(h, reg, sharpe, clf, auc):
-        return {"horizon": h,
-                "reg": {"model_name": reg, "corr": 0.6, "dir_acc": 0.8, "sharpe": sharpe, "mae": 2.0, "rmse": 2.5, "r2": 0.3},
-                "clf": {"model_name": clf, "acc": 0.7, "f1": 0.7, "auc": auc, "brier": 0.2, "sharpe": 1.5}}
+        return {
+            "horizon": h,
+            "reg": {
+                "model_name": reg,
+                "corr": 0.6,
+                "dir_acc": 0.8,
+                "sharpe": sharpe,
+                "mae": 2.0,
+                "rmse": 2.5,
+                "r2": 0.3,
+            },
+            "clf": {
+                "model_name": clf,
+                "acc": 0.7,
+                "f1": 0.7,
+                "auc": auc,
+                "brier": 0.2,
+                "sharpe": 1.5,
+            },
+        }
 
     return Ml19TrainResp(
         detail="Reentrenamiento completado (pipeline oficial).",
-        horizons=[horizon(1, "Ridge", 2.61, "LogReg", 0.802), horizon(2, "XGBoost", 1.66, "XGBoost", 0.778),
-                  horizon(3, "XGBoost", 2.71, "XGBoost", 0.842)],
-        n_features=48, lasso_alpha=0.5, train_end="2019-12-31", n_rows=234, data_start="2006-04-01",
-        data_end="2025-09-01", training_time_s=70.0, mlflow_run_id="", upload_warning=None,
+        horizons=[
+            horizon(1, "Ridge", 2.61, "LogReg", 0.802),
+            horizon(2, "XGBoost", 1.66, "XGBoost", 0.778),
+            horizon(3, "XGBoost", 2.71, "XGBoost", 0.842),
+        ],
+        n_features=48,
+        lasso_alpha=0.5,
+        train_end="2019-12-31",
+        n_rows=234,
+        data_start="2006-04-01",
+        data_end="2025-09-01",
+        training_time_s=70.0,
+        mlflow_run_id="",
+        upload_warning=None,
     )
 
 
@@ -2349,7 +2844,11 @@ TEST_REGISTRY: list[ModelEntry] = [
         plugin_class=FakePlugin,
         predict_request_type=Ml24_Request,
         predict_response_type=Ml24_Response,
-        extra_predict_exceptions=(SeriesContractError, UnknownCcaaError, InsufficientPriceHistoryError),
+        extra_predict_exceptions=(
+            SeriesContractError,
+            UnknownCcaaError,
+            InsufficientPriceHistoryError,
+        ),
         train_request_type=Ml24_TrainReq,
         train_response_type=Ml24TrainResp,
     ),
@@ -2737,30 +3236,32 @@ TEST_REGISTRY: list[ModelEntry] = [
 
 # ── App / client fixtures ──────────────────────────────────────────────────
 
-class _FakeContainer:
+class _FakeContainer:  # pylint: disable=too-few-public-methods  # attribute holder
     """Lightweight stand-in for ModelContainer used only in tests."""
 
     def __init__(self, plugin: FakePlugin) -> None:
-        """Initialize the fake container with a plugin."""
+        """Initialize the fake container with a plugin and its use cases."""
         self._plugin = plugin
         self.service = ModelRuntimeService(plugin)
+        self.predict_use_case = PredictModelUseCase(plugin)
+        self.stats_use_case = GetStatsUseCase(plugin)
+        self.train_use_case = TrainModelUseCase(plugin)
+        # Sync /train asks it whether an async job of the model is running (never, here).
+        self.submit_train_job_use_case = SubmitTrainJobUseCase(
+            plugin,
+            plugin._model_id,  # pylint: disable=protected-access
+            InMemoryJobStore(),
+            RecordingExecutor(),
+        )
 
 
 def _build_container(plugin: FakePlugin) -> Any:
     """Build a fake container with the appropriate use cases for the given plugin."""
-    container = _FakeContainer(plugin)
-    container.predict_use_case = PredictModelUseCase(plugin)
-    container.stats_use_case = GetStatsUseCase(plugin)
-    container.train_use_case = TrainModelUseCase(plugin)
-    # Sync /train asks it whether an async job of the model is running (never, here).
-    container.submit_train_job_use_case = SubmitTrainJobUseCase(
-        plugin, plugin._model_id, InMemoryJobStore(), RecordingExecutor()  # pylint: disable=protected-access
-    )
-    return container
+    return _FakeContainer(plugin)
 
 
-@pytest.fixture
-def fake_plugins() -> dict[str, FakePlugin]:
+@pytest.fixture(name="fake_plugins")
+def fixture_fake_plugins() -> dict[str, FakePlugin]:
     """One fake plugin per TEST_REGISTRY entry, already ``load()``-ed."""
     plugins: dict[str, FakePlugin] = {}
     for entry in TEST_REGISTRY:
@@ -2777,8 +3278,8 @@ def fake_plugins() -> dict[str, FakePlugin]:
     return plugins
 
 
-@pytest.fixture
-def app(fake_plugins: dict[str, FakePlugin]) -> FastAPI:
+@pytest.fixture(name="app")
+def fixture_app(fake_plugins: dict[str, FakePlugin]) -> FastAPI:
     """A FastAPI app wired to fake containers — no real ML artifacts touched."""
     application = FastAPI(title="Luce ML Models API (test)")
     application.state.containers = {}
@@ -2845,8 +3346,6 @@ def isolated_base_store(monkeypatch, tmp_path_factory):
     """train() of the models that promote their base publishes a new version. In tests it goes
     to a temp folder without S3, never to the repo's artifacts/ or the real bucket. The
     container uses the same _store_for, so promotion/rollback tests see the same store."""
-    from app.infrastructure import artifact_store, base_model_publisher
-
     root = tmp_path_factory.mktemp("base_store")
     monkeypatch.setattr(artifact_store, "_ACTIVE_VERSIONS", {})
     monkeypatch.setattr(

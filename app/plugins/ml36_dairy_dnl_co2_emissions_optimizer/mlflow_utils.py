@@ -55,8 +55,12 @@ def download_user_model_from_mlflow(run_id: str):
         )
         model.eval()
 
-        scaler_X = joblib.load(os.path.join(local_path, SCALER_X_FILENAME))  # pylint: disable=invalid-name
-        scaler_Y = joblib.load(os.path.join(local_path, SCALER_Y_FILENAME))  # pylint: disable=invalid-name
+        scaler_X = joblib.load(  # pylint: disable=invalid-name
+            os.path.join(local_path, SCALER_X_FILENAME)
+        )
+        scaler_Y = joblib.load(  # pylint: disable=invalid-name
+            os.path.join(local_path, SCALER_Y_FILENAME)
+        )
 
         logger.info("Downloaded user model from MLflow run_id=%s", run_id)
         return model, scaler_X, scaler_Y, config, tmp

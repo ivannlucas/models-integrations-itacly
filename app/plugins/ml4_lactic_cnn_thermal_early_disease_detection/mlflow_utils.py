@@ -10,10 +10,10 @@ from __future__ import annotations
 
 import logging
 import os
+import shutil
 import tempfile
 
 import torch
-import shutil
 
 from app.domain.services.mlflow_tracker import BaseMLflowTracker, require_user_model
 from app.plugins.ml4_lactic_cnn_thermal_early_disease_detection.constants import (
@@ -54,7 +54,7 @@ def download_user_model_from_mlflow(run_id: str):
 
         # Imported lazily to avoid a hard torch/timm dependency at module import time for callers
         # that never retrain (mirrors ml8_cereals_img_anomaly_detector's mlflow_utils.py).
-        from app.plugins.ml4_lactic_cnn_thermal_early_disease_detection.model_loader import (
+        from app.plugins.ml4_lactic_cnn_thermal_early_disease_detection.model_loader import (  # pylint: disable=import-outside-toplevel
             BaselineModel,
             _safe_device,
         )

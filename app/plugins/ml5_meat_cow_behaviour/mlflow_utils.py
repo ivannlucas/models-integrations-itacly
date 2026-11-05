@@ -32,15 +32,18 @@ def download_user_model_from_mlflow(run_id: str) -> tuple[dict, str] | None:
     The behaviour-class mapping is never user-trained — it is always
     ``constants.TRAINING_BEHAVIOR_TO_IDX`` (the classifier's 12 classes are fixed by the
     delivered dataset/contract, unlike e.g. modelo10's variable ImageFolder classes) —
-    so, unlike ml10_dairy_disease_vector_detection's equivalent helper, there is no separate class-names file
-    to download here.
+    so, unlike ml10_dairy_disease_vector_detection's equivalent helper, there is no separate
+    class-names file to download here.
     """
+
     if not run_id:
         return None
 
     tmp_dir = tempfile.mkdtemp(prefix="mlflow_ml5_")
     try:
-        local_path = BaseMLflowTracker(run_id).download_artifacts(tmp_dir, artifact_path="classifier")
+        local_path = BaseMLflowTracker(run_id).download_artifacts(
+            tmp_dir, artifact_path="classifier"
+        )
         if not local_path:
             logger.warning(
                 "mlflow_run_id=%s no tiene artefacto 'classifier'.", run_id
@@ -51,7 +54,9 @@ def download_user_model_from_mlflow(run_id: str) -> tuple[dict, str] | None:
         checkpoint_path = os.path.join(local_path, CLASSIFIER_FILENAME)
         if not os.path.exists(checkpoint_path):
             logger.warning(
-                "mlflow_run_id=%s: falta %s en el artefacto 'classifier'.", run_id, CLASSIFIER_FILENAME,
+                "mlflow_run_id=%s: falta %s en el artefacto 'classifier'.",
+                run_id,
+                CLASSIFIER_FILENAME,
             )
             shutil.rmtree(tmp_dir, ignore_errors=True)
             return None

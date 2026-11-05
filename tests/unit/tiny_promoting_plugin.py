@@ -17,21 +17,25 @@ TINY_FOLDER = "tiny_model"
 
 
 class TinyTrainRequest(BaseModel):
+    """Train request: data_path becomes the new base's value."""
     data_path: str
     mlflow_run_id: str = ""
 
 
 class TinyTrainResponse(BaseModel):
+    """Train response with the published base version."""
     value: str
     base_version: VersionInfo | None = None
     upload_warning: str | None = None
 
 
 class TinyPredictRequest(BaseModel):
+    """Predict request (inline only)."""
     mode: str = "inline"
 
 
 class TinyPredictResponse(BaseModel):
+    """Predict response carrying the served value."""
     value: str
 
 
@@ -55,7 +59,9 @@ class TinyPromotingPlugin(ModelPluginPort):
     def is_loaded(self) -> bool:
         return self.value is not None
 
-    def predict_inline(self, *, features: dict, model_key=None, threshold=None, mlflow_run_id: str = ""):
+    def predict_inline(
+        self, *, features: dict, model_key=None, threshold=None, mlflow_run_id: str = ""
+    ):
         return TinyPredictResponse(value=self.value)
 
     def predict_batch(self, *, data_path: str, mlflow_run_id: str = ""):

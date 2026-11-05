@@ -18,7 +18,8 @@ logger = logging.getLogger(__name__)
 RF_RIESGO_MLFLOW_FILENAME = "rf_riesgo_expert.joblib"
 
 
-@require_user_model  # None or an artifact load error, with run_id -> UserModelUnavailableError (422)
+# None or an artifact load error, with run_id -> UserModelUnavailableError (422)
+@require_user_model
 def download_user_model_from_mlflow(run_id: str):
     """Download the user-retrained RandomForest risk regressor from MLflow (the only RF the
     decoupled production mode uses — runs from before this change also carry an RF classifier,
@@ -45,7 +46,10 @@ def download_user_model_from_mlflow(run_id: str):
 
 
 def upload_artifacts_to_mlflow(artifact_dir: str, mlflow_run_id: str, metrics: dict) -> None:
-    """Log metrics and upload the retrained RF risk regressor to MLflow under artifact_path="model"."""
+    """Log metrics and upload the retrained RF risk regressor to MLflow.
+
+    Uploaded under artifact_path="model".
+    """
     tracker = BaseMLflowTracker(mlflow_run_id)
     tracker.connect(mlflow_run_id)
     tracker.log_metrics({k: v for k, v in metrics.items() if isinstance(v, (int, float))})

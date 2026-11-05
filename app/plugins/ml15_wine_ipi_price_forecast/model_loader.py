@@ -26,7 +26,10 @@ def reference_data_paths() -> tuple[str, str]:
     """Return (prices_path, financial_path) for the two bundled reference CSVs used by
     history.py to derive features from a simple IPI value/date — raises FileNotFoundError
     (via ArtifactStore) if they are not present locally/in S3."""
-    return str(_store.path(REFERENCE_PRICES_FILENAME)), str(_store.path(REFERENCE_FINANCIAL_FILENAME))
+    return (
+        str(_store.path(REFERENCE_PRICES_FILENAME)),
+        str(_store.path(REFERENCE_FINANCIAL_FILENAME)),
+    )
 
 
 def load_artifact() -> dict:

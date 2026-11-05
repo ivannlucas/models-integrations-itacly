@@ -25,6 +25,7 @@ INLINE_PAYLOAD = {"mode": "inline", "rows": [_ROW] * 12}
 
 
 def test_health(client):
+    """GET /health reports the model as ok and loaded."""
     body = client.get(f"{PREFIX}/health").json()
     assert body["status"] == "ok"
     assert body["model"] == MODEL_ID
@@ -32,10 +33,12 @@ def test_health(client):
 
 
 def test_stats(client):
+    """GET /stats returns the model name."""
     assert client.get(f"{PREFIX}/stats").json()["model_name"] == MODEL_ID
 
 
 def test_predict_inline(client):
+    """Inline /predict with 12 rows returns one predicted_price per prediction."""
     resp = client.post(f"{PREFIX}/predict", json=INLINE_PAYLOAD)
     assert resp.status_code == 200
     body = resp.json()
@@ -55,7 +58,8 @@ def test_predict_inline_insufficient_rows_maps_to_422(client, fake_plugins):
     """InsufficientRowsError raised by the plugin (no (CCAA, Producto) group reaches the
     12-month lookback) must map to HTTP 422, not 500."""
     fake_plugins[MODEL_ID].raise_on_inline = InsufficientRowsError(
-        "No se generaron secuencias: cada combinación CCAA-Producto necesita al menos 12 meses de histórico real consecutivos."
+        "No se generaron secuencias: cada combinación CCAA-Producto necesita al menos "
+        "12 meses de histórico real consecutivos."
     )
     resp = client.post(f"{PREFIX}/predict", json=INLINE_PAYLOAD)
     assert resp.status_code == 422
@@ -63,7 +67,10 @@ def test_predict_inline_insufficient_rows_maps_to_422(client, fake_plugins):
 
 
 def test_predict_batch(client):
-    resp = client.post(f"{PREFIX}/predict", json={"mode": "batch", "data_path": "/tmp/a18_panel.csv"})
+    """Batch /predict returns predictions consistent with n_predictions."""
+    resp = client.post(
+        f"{PREFIX}/predict", json={"mode": "batch", "data_path": "/tmp/a18_panel.csv"}
+    )
     assert resp.status_code == 200
     body = resp.json()
     assert body["model_id"] == MODEL_ID
@@ -71,7 +78,10 @@ def test_predict_batch(client):
 
 
 def test_train_returns_200_with_metrics(client):
-    resp = client.post(f"{PREFIX}/train", json={"data_path": "/tmp/x.csv", "mlflow_run_id": "test-run-id"})
+    """/train returns 200 with the expected metric keys."""
+    resp = client.post(
+        f"{PREFIX}/train", json={"data_path": "/tmp/x.csv", "mlflow_run_id": "test-run-id"}
+    )
     assert resp.status_code == 200
     body = resp.json()
     assert {"test_mape_pct", "test_r2", "val_mape_pct", "n_train", "epochs_run"} <= body.keys()

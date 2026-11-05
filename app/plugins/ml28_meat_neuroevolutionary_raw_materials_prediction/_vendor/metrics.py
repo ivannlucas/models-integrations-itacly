@@ -18,7 +18,9 @@ def percentage_reduction(
 
     baseline_array = np.asarray(baseline, dtype=float)
     candidate_array = np.asarray(candidate, dtype=float)
-    result = np.full(np.broadcast_shapes(baseline_array.shape, candidate_array.shape), np.nan, dtype=float)
+    result = np.full(
+        np.broadcast_shapes(baseline_array.shape, candidate_array.shape), np.nan, dtype=float
+    )
     baseline_broadcast, candidate_broadcast = np.broadcast_arrays(baseline_array, candidate_array)
     positive_baseline = baseline_broadcast > 0
     np.divide(
@@ -42,7 +44,9 @@ def percentage_change(
 
     baseline_array = np.asarray(baseline, dtype=float)
     candidate_array = np.asarray(candidate, dtype=float)
-    result = np.full(np.broadcast_shapes(baseline_array.shape, candidate_array.shape), np.nan, dtype=float)
+    result = np.full(
+        np.broadcast_shapes(baseline_array.shape, candidate_array.shape), np.nan, dtype=float
+    )
     baseline_broadcast, candidate_broadcast = np.broadcast_arrays(baseline_array, candidate_array)
     positive_baseline = baseline_broadcast > 0
     np.divide(
@@ -88,7 +92,9 @@ def compute_policy_metrics(
 
     baseline_excess = float(pd.to_numeric(period_df["baseline_excess_tons"], errors="coerce").sum())
     policy_excess = float(pd.to_numeric(period_df["excess_tons"], errors="coerce").sum())
-    baseline_stockout = float(pd.to_numeric(period_df["baseline_stockout_tons"], errors="coerce").sum())
+    baseline_stockout = float(
+        pd.to_numeric(period_df["baseline_stockout_tons"], errors="coerce").sum()
+    )
     policy_stockout = float(pd.to_numeric(period_df["stockout_tons"], errors="coerce").sum())
     absolute_reduction = baseline_excess - policy_excess
     return {
@@ -97,11 +103,15 @@ def compute_policy_metrics(
         "baseline_excess_tons": baseline_excess,
         "policy_excess_tons": policy_excess,
         "absolute_excess_reduction_tons": float(absolute_reduction),
-        "aggregate_excess_reduction_pct": float(percentage_reduction(baseline_excess, policy_excess)),
+        "aggregate_excess_reduction_pct": float(
+            percentage_reduction(baseline_excess, policy_excess)
+        ),
         "baseline_stockout_tons": baseline_stockout,
         "policy_stockout_tons": policy_stockout,
         "stockout_tons": policy_stockout,
-        "aggregate_stockout_change_pct": float(percentage_change(baseline_stockout, policy_stockout)),
+        "aggregate_stockout_change_pct": float(
+            percentage_change(baseline_stockout, policy_stockout)
+        ),
         "guardrail": {
             "name": guardrail_name,
             "allowed_stockout_increase_pct": float(allowed_stockout_increase_pct),

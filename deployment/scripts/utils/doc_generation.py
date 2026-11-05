@@ -1,29 +1,40 @@
 # scripts/doc_generation.py
 # Purpose: Automate documentation creation for code files, preserving directory structure.
+"""Generate documentation for code files (locally or in Confluence), preserving the tree."""
 
 import argparse
 import subprocess
 import sys
 from pathlib import Path
 
-from confluence import get_confluence_client, create_or_update_confluence_page, ensure_page_hierarchy_exists
-from files import load_agent_instructions, get_files_to_process, determine_root_path, save_output_file, \
-    read_file_content, ALLOWED_EXTENSIONS
-from ia import setup_generative_model, process_file_with_ia, MAX_TOTAL_TOKENS
-from ui import log_message
+from confluence import (  # pylint: disable=import-error  # sibling script module
+    get_confluence_client, create_or_update_confluence_page, ensure_page_hierarchy_exists,
+)
+from files import (  # pylint: disable=import-error  # sibling script module
+    load_agent_instructions, get_files_to_process, determine_root_path, save_output_file,
+    read_file_content, ALLOWED_EXTENSIONS,
+)
+from ia import (  # pylint: disable=import-error  # sibling script module
+    setup_generative_model, process_file_with_ia, MAX_TOTAL_TOKENS,
+)
+from ui import log_message  # pylint: disable=import-error  # sibling script module
 
 # Definimos la ruta del prompt
 PROMPT_FILENAME = "doc_generation.txt"
 
 
-def main():
+def main():  # pylint: disable=too-many-locals,too-many-branches,too-many-statements
+    """Parse CLI args and generate the documentation for every selected file."""
     parser = argparse.ArgumentParser(
-        description="Generates documentation for a file or directory, preserving the folder structure.",
+        description=(
+            "Generates documentation for a file or directory, preserving the folder structure."
+        ),
         formatter_class=argparse.RawTextHelpFormatter
     )
     # Argumentos
     parser.add_argument("path", nargs='?', default=None, type=str,
-                        help="Path to the file/directory. If omitted, analyzes modified files in Git.")
+                        help=("Path to the file/directory. If omitted, analyzes modified "
+                              "files in Git."))
     parser.add_argument("--output-dir", type=str, default="docs",
                         help="Directory to save the generated Markdown files.")
 
@@ -33,7 +44,8 @@ def main():
     parser.add_argument("--swagger-output", type=str, default="swagger.yaml",
                         help="Output path for the swagger.yaml file if generated.")
     parser.add_argument("--confluence", action="store_true",
-                        help="Enables automatic upload to Confluence, saving files locally instead.")
+                        help=("Enables automatic upload to Confluence, saving files locally "
+                              "instead."))
     parser.add_argument("--space", type=str,
                         help="Confluence space key to upload the documentation.")
     parser.add_argument("--parent-id", type=str, default=None,
@@ -86,7 +98,11 @@ def main():
             log_message(f"Token limit reached ({MAX_TOTAL_TOKENS}). Stopping.", "WARNING")
             break
 
-        log_message(f"Processing file: {filepath}. File {file_number_processed} from {len(files_to_process)}", "INFO")
+        log_message(
+            f"Processing file: {filepath}. "
+            f"File {file_number_processed} from {len(files_to_process)}",
+            "INFO",
+        )
         file_number_processed += 1
         language = ALLOWED_EXTENSIONS.get(filepath.suffix)
         if not language:
@@ -100,15 +116,22 @@ def main():
 
         # Llamada a la función de procesamiento
         # Esperamos una respuesta JSON (is_json_output=True por defecto)
-        result, tokens_call, consumption_call = process_file_with_ia(model, agent_instructions, code_content,
-                                                                     str(filepath))
+        result, tokens_call, consumption_call = process_file_with_ia(
+            model, agent_instructions, code_content, str(filepath)
+        )
         total_tokens_used += tokens_call
         consumption_total += consumption_call
-        log_message(f"Tokens consumed: {tokens_call} | Total: {total_tokens_used} --> {round(consumption_total, 4)} $",
-                    "INFO")
+        log_message(
+            f"Tokens consumed: {tokens_call} | Total: {total_tokens_used} "
+            f"--> {round(consumption_total, 4)} $",
+            "INFO",
+        )
 
         if not result or not isinstance(result, dict):
-            log_message(f"Skipping file {filepath} due to processing error or invalid format.", "WARNING")
+            log_message(
+                f"Skipping file {filepath} due to processing error or invalid format.",
+                "WARNING",
+            )
             continue
 
         documentation = result.get("documentation")
@@ -130,17 +153,19 @@ def main():
             # --- Lógica de Subprocesos para ciertos tipos de ficheros
             if args.extra_docs:
                 file_type = result.get("classification")
-                if file_type == "ModelInference_API" or file_type == "WebService_General":
+                if file_type in ("ModelInference_API", "WebService_General"):
                     log_message(f"{file_type} file detected, generating Swagger...", "INFO")
                     subprocess.run(
-                        f"python ./deployment/scripts/utils/swagger_generation.py {filepath} --output {args.swagger_output}",
-                        shell=True, text=True)
+                        f"python ./deployment/scripts/utils/swagger_generation.py {filepath} "
+                        f"--output {args.swagger_output}",
+                        shell=True, text=True, check=False)
 
                 elif file_type == "DataPipeline_ETL":
                     log_message(f"{file_type} file detected, generating Data Catalog...", "INFO")
                     subprocess.run(
-                        f"python ./deployment/scripts/utils/data_catalog_generation.py {filepath} --output-dir {args.output_dir}/catalog",
-                        shell=True, text=True)
+                        f"python ./deployment/scripts/utils/data_catalog_generation.py {filepath} "
+                        f"--output-dir {args.output_dir}/catalog",
+                        shell=True, text=True, check=False)
                 else:
                     log_message(f"No extra documentation needed for {file_type} files", "INFO")
 
@@ -166,7 +191,11 @@ def main():
                         hierarchy_cache[hierarchy_parts] = final_parent_id
                         document_parent_id = final_parent_id
                     else:
-                        log_message(f"Could not ensure parent hierarchy for {filepath}. Skipping upload.", "ERROR")
+                        log_message(
+                            f"Could not ensure parent hierarchy for {filepath}. "
+                            "Skipping upload.",
+                            "ERROR",
+                        )
                         continue
 
             try:
@@ -177,7 +206,7 @@ def main():
                     body=documentation,
                     parent_id=document_parent_id
                 )
-            except Exception as e:
+            except Exception as e:  # pylint: disable=broad-exception-caught  # keep going with next file
                 log_message(f"Skipping upload for {page_title} due to an error: {e}", "WARNING")
 
     log_message("DOCUMENTATION PROCESS FINISHED", "HEADER")

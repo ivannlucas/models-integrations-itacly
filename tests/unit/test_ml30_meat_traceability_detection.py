@@ -1,4 +1,5 @@
 """Endpoint tests for the ``ml30-meat-traceability-detection`` model."""
+from app.domain.services.exceptions import DataContractError
 
 PREFIX = "/models/ml30-meat-traceability-detection"
 
@@ -6,6 +7,7 @@ INLINE_PAYLOAD = {"mode": "inline", "sensor_temp_c": 7.5, "stage": "deboning"}
 
 
 def test_health(client):
+    """GET /health reports the model as loaded and ok."""
     body = client.get(f"{PREFIX}/health").json()
     assert body["status"] == "ok"
     assert body["model"] == "ml30-meat-traceability-detection"
@@ -13,7 +15,9 @@ def test_health(client):
 
 
 def test_stats(client):
-    assert client.get(f"{PREFIX}/stats").json()["model_name"] == "ml30-meat-traceability-detection"
+    """GET /stats returns the model name."""
+    body = client.get(f"{PREFIX}/stats").json()
+    assert body["model_name"] == "ml30-meat-traceability-detection"
 
 
 def test_predict_inline_rejected(client):
@@ -25,8 +29,7 @@ def test_predict_inline_rejected(client):
 
 
 def test_predict_batch_data_contract_error_maps_to_422(client, fake_plugins):
-    from app.domain.services.exceptions import DataContractError
-
+    """DataContractError from the plugin maps to HTTP 422 with its message."""
     fake_plugins["ml30-meat-traceability-detection"].raise_on_batch = DataContractError(
         "El CSV no sigue el formato del modelo."
     )
@@ -36,13 +39,17 @@ def test_predict_batch_data_contract_error_maps_to_422(client, fake_plugins):
 
 
 def test_predict_batch(client):
+    """A batch predict returns the model id."""
     resp = client.post(f"{PREFIX}/predict", json={"mode": "batch", "data_path": "/tmp/events.csv"})
     assert resp.status_code == 200
     assert resp.json()["model_id"] == "ml30-meat-traceability-detection"
 
 
 def test_train(client):
-    resp = client.post(f"{PREFIX}/train", json={"data_path": "/tmp/train.csv", "mlflow_run_id": "test-run-id"})
+    """POST /train returns metrics and the MLflow run id."""
+    resp = client.post(
+        f"{PREFIX}/train", json={"data_path": "/tmp/train.csv", "mlflow_run_id": "test-run-id"}
+    )
     assert resp.status_code == 200
     body = resp.json()
     assert body["detail"] == "Training completed"

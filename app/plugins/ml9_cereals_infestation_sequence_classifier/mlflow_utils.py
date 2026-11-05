@@ -12,7 +12,10 @@ import shutil
 from typing import Any
 
 from app.domain.services.mlflow_tracker import BaseMLflowTracker, require_user_model
-from app.plugins.ml9_cereals_infestation_sequence_classifier._vendor.sequential import load_checkpoint, load_pickle
+from app.plugins.ml9_cereals_infestation_sequence_classifier._vendor.sequential import (
+    load_checkpoint,
+    load_pickle,
+)
 from app.plugins.ml9_cereals_infestation_sequence_classifier.constants import (
     BUNDLE_FILENAME,
     MODEL_FILENAME,
@@ -58,7 +61,8 @@ def download_user_model_from_mlflow(run_id: str) -> tuple[dict, Any, dict, str] 
         scaler_path = _first_existing(local_path, USER_SCALER_FILENAME, SCALER_FILENAME)
         if not model_path or not bundle_path or not scaler_path:
             logger.error(
-                "MLflow run_id=%s does not contain the expected ml9 artifacts (checkpoint/bundle/scaler)",
+                "MLflow run_id=%s does not contain the expected ml9 artifacts "
+                "(checkpoint/bundle/scaler)",
                 run_id,
             )
             shutil.rmtree(tmp, ignore_errors=True)

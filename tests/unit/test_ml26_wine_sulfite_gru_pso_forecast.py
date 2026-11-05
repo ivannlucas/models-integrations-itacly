@@ -1,17 +1,23 @@
 """Tests for ``ml26-wine-sulfite-gru-pso-forecast``.
 
-Endpoint tests use the FakePlugin wiring from conftest (no artifacts). The unit tests below exercise
-the real plugin helpers (preprocessing, postprocessing, restricted unpickler, fine-tuning) on small
-toy inputs — wiring only; numeric correctness against the golden dataset lives in
+Endpoint tests use the FakePlugin wiring from conftest (no artifacts). The unit tests below
+exercise the real plugin helpers (preprocessing, postprocessing, restricted unpickler, fine-tuning)
+on small toy inputs — wiring only; numeric correctness against the golden dataset lives in
 outputs/a26/verification_report.md.
 """
 import pickle
+from unittest.mock import MagicMock
 
 import numpy as np
 import pandas as pd
 import pytest
 
-from app.domain.services.exceptions import InsufficientSequenceHistoryError
+from app.domain.services.exceptions import (
+    InsufficientSequenceHistoryError,
+    ModelNotLoadedError,
+    ModelPersistenceError,
+    UserModelUnavailableError,
+)
 from app.plugins.ml26_wine_sulfite_gru_pso_forecast import preprocessing
 from app.plugins.ml26_wine_sulfite_gru_pso_forecast.constants import WINDOW
 from app.plugins.ml26_wine_sulfite_gru_pso_forecast.exceptions import InvalidWineryInputError
@@ -20,10 +26,11 @@ PREFIX = "/models/ml26-wine-sulfite-gru-pso-forecast"
 MODEL_ID = "ml26-wine-sulfite-gru-pso-forecast"
 
 FEATURES = [
-    "volume_l", "ambient_temp_c", "stage_progress", "hours_since_last_lab", "last_so2_addition_mg_l",
-    "hours_since_last_addition", "temperature_c", "dissolved_oxygen_mg_l", "density_g_ml", "co2_g_l",
-    "ph_lab", "free_sulfite_lab", "total_sulfite_lab", "lab_sample", "wine_type_red", "wine_type_rose",
-    "wine_type_white", "stage_fermentation", "stage_must", "stage_pre_bottling", "stage_stabilization",
+    "volume_l", "ambient_temp_c", "stage_progress", "hours_since_last_lab",
+    "last_so2_addition_mg_l", "hours_since_last_addition", "temperature_c",
+    "dissolved_oxygen_mg_l", "density_g_ml", "co2_g_l", "ph_lab", "free_sulfite_lab",
+    "total_sulfite_lab", "lab_sample", "wine_type_red", "wine_type_rose", "wine_type_white",
+    "stage_fermentation", "stage_must", "stage_pre_bottling", "stage_stabilization",
     "stage_storage",
 ]
 LOT = {"lot_id": "LOT-T1", "wine_type": "red", "volume_l": 8000.0, "ambient_temp_c": 16.0}
@@ -44,7 +51,9 @@ def _readings(n: int, lot_id: str = "LOT-T1", with_progress: bool = True) -> lis
             "co2_g_l": 0.3,
         }
         if i % 4 == 0:
-            row.update({"ph_lab": 3.4, "free_sulfite_lab": 20.0 - 0.1 * i, "total_sulfite_lab": 60.0})
+            row.update(
+                {"ph_lab": 3.4, "free_sulfite_lab": 20.0 - 0.1 * i, "total_sulfite_lab": 60.0}
+            )
         if i == 5:
             row["dose_mg_l"] = 4.0
         if with_progress:
@@ -56,18 +65,23 @@ def _readings(n: int, lot_id: str = "LOT-T1", with_progress: bool = True) -> lis
 # ── Endpoint wiring (FakePlugin) ─────────────────────────────────────────────
 
 def test_health(client):
+    """The health endpoint reports the model."""
     body = client.get(f"{PREFIX}/health").json()
     assert body["status"] == "ok"
     assert body["model"] == MODEL_ID
 
 
 def test_stats(client):
+    """The stats endpoint returns the model name."""
     body = client.get(f"{PREFIX}/stats").json()
     assert body["model_name"] == MODEL_ID
 
 
 def test_predict_inline_operational(client):
-    resp = client.post(f"{PREFIX}/predict", json={"mode": "inline", "lot": LOT, "readings": _readings(30)})
+    """An operational inline prediction returns a risk band and a risk in [0, 1]."""
+    resp = client.post(
+        f"{PREFIX}/predict", json={"mode": "inline", "lot": LOT, "readings": _readings(30)}
+    )
     assert resp.status_code == 200
     body = resp.json()
     assert body["model_id"] == MODEL_ID
@@ -82,6 +96,7 @@ def test_predict_inline_without_stage_progress_rejected(client):
 
 
 def test_predict_inline_stage_progress_out_of_range_rejected(client):
+    """A stage_progress outside [0, 1] is rejected with 422."""
     readings = _readings(30)
     readings[-1]["stage_progress"] = 1.5
     payload = {"mode": "inline", "lot": LOT, "readings": readings}
@@ -89,27 +104,38 @@ def test_predict_inline_stage_progress_out_of_range_rejected(client):
 
 
 def test_predict_inline_feature_window(client):
+    """An inline prediction from a raw feature_window is accepted."""
     payload = {"mode": "inline", "feature_window": [[0.0] * 22] * 24}
     assert client.post(f"{PREFIX}/predict", json=payload).status_code == 200
 
 
 def test_predict_inline_short_history_rejected(client):
-    resp = client.post(f"{PREFIX}/predict", json={"mode": "inline", "lot": LOT, "readings": _readings(10)})
+    """Fewer readings than the window are rejected with 422."""
+    resp = client.post(
+        f"{PREFIX}/predict", json={"mode": "inline", "lot": LOT, "readings": _readings(10)}
+    )
     assert resp.status_code == 422
 
 
 def test_predict_inline_both_modes_rejected(client):
-    payload = {"mode": "inline", "lot": LOT, "readings": _readings(30), "feature_window": [[0.0] * 22] * 24}
+    """Sending both readings and feature_window is rejected with 422."""
+    payload = {"mode": "inline", "lot": LOT, "readings": _readings(30),
+               "feature_window": [[0.0] * 22] * 24}
     assert client.post(f"{PREFIX}/predict", json=payload).status_code == 422
 
 
 def test_predict_inline_unknown_wine_type_rejected(client):
-    payload = {"mode": "inline", "lot": {**LOT, "wine_type": "sparkling"}, "readings": _readings(30)}
+    """An unknown wine type is rejected with 422."""
+    payload = {"mode": "inline", "lot": {**LOT, "wine_type": "sparkling"},
+               "readings": _readings(30)}
     assert client.post(f"{PREFIX}/predict", json=payload).status_code == 422
 
 
 def test_predict_batch(client):
-    resp = client.post(f"{PREFIX}/predict", json={"mode": "batch", "data_path": "/tmp/lecturas.csv"})
+    """Batch prediction returns one prediction per lot."""
+    resp = client.post(
+        f"{PREFIX}/predict", json={"mode": "batch", "data_path": "/tmp/lecturas.csv"}
+    )
     assert resp.status_code == 200
     body = resp.json()
     assert body["n_lots"] == 1
@@ -117,7 +143,10 @@ def test_predict_batch(client):
 
 
 def test_train(client):
-    resp = client.post(f"{PREFIX}/train", json={"data_path": "/tmp/sequential.csv", "mlflow_run_id": "run-1"})
+    """The train endpoint returns the validation RMSE."""
+    resp = client.post(
+        f"{PREFIX}/train", json={"data_path": "/tmp/sequential.csv", "mlflow_run_id": "run-1"}
+    )
     assert resp.status_code == 200
     assert "val_overall_rmse" in resp.json()
 
@@ -127,8 +156,11 @@ def test_train(client):
     InvalidWineryInputError("lot_id huérfano"),
 ])
 def test_domain_errors_map_to_422(client, fake_plugins, exc):
+    """The plugin's domain errors map to 422."""
     fake_plugins[MODEL_ID].raise_on_inline = exc
-    resp = client.post(f"{PREFIX}/predict", json={"mode": "inline", "lot": LOT, "readings": _readings(30)})
+    resp = client.post(
+        f"{PREFIX}/predict", json={"mode": "inline", "lot": LOT, "readings": _readings(30)}
+    )
     assert resp.status_code == 422
 
 
@@ -139,6 +171,7 @@ def _frames(n=30, **kw):
 
 
 def test_prepare_windows_shape_and_metadata():
+    """prepare_windows returns one (WINDOW, 22) window with its metadata and last row."""
     lots, readings = _frames(30)
     raw = preprocessing.build_raw_frame(lots, readings)
     x, meta, last = preprocessing.prepare_windows(raw, FEATURES)
@@ -150,6 +183,7 @@ def test_prepare_windows_shape_and_metadata():
 
 
 def test_stage_progress_is_used_as_provided():
+    """stage_progress reaches the window exactly as provided."""
     lots, readings = _frames(30)
     raw = preprocessing.build_raw_frame(lots, readings)
     x, _, _ = preprocessing.prepare_windows(raw, FEATURES)
@@ -157,12 +191,14 @@ def test_stage_progress_is_used_as_provided():
 
 
 def test_missing_stage_progress_column_rejected():
+    """Readings without a stage_progress column are rejected."""
     lots, readings = _frames(30, with_progress=False)
     with pytest.raises(InvalidWineryInputError, match="stage_progress"):
         preprocessing.build_raw_frame(lots, readings)
 
 
 def test_partial_stage_progress_rejected():
+    """A missing stage_progress in some reading is rejected."""
     lots, readings = _frames(30)
     readings.loc[5, "stage_progress"] = np.nan
     with pytest.raises(InvalidWineryInputError, match="stage_progress es obligatorio"):
@@ -170,6 +206,7 @@ def test_partial_stage_progress_rejected():
 
 
 def test_stage_progress_out_of_range_rejected():
+    """A stage_progress outside [0, 1] is rejected."""
     lots, readings = _frames(30)
     readings.loc[5, "stage_progress"] = -0.1
     with pytest.raises(InvalidWineryInputError, match=r"\[0, 1\]"):
@@ -177,6 +214,7 @@ def test_stage_progress_out_of_range_rejected():
 
 
 def test_lab_values_carried_forward():
+    """Lab values and hours since the last lab are carried forward."""
     lots, readings = _frames(30)
     raw = preprocessing.build_raw_frame(lots, readings)
     x, _, _ = preprocessing.prepare_windows(raw, FEATURES)
@@ -186,6 +224,7 @@ def test_lab_values_carried_forward():
 
 
 def test_short_history_raises():
+    """A history shorter than the window raises InsufficientSequenceHistoryError."""
     lots, readings = _frames(20)
     raw = preprocessing.build_raw_frame(lots, readings)
     with pytest.raises(InsufficientSequenceHistoryError):
@@ -193,6 +232,7 @@ def test_short_history_raises():
 
 
 def test_orphan_lot_rejected():
+    """Readings for a lot not in the lot table are rejected."""
     lots = pd.DataFrame([LOT])
     readings = pd.DataFrame(_readings(30, lot_id="LOT-OTHER"))
     with pytest.raises(InvalidWineryInputError):
@@ -200,6 +240,7 @@ def test_orphan_lot_rejected():
 
 
 def test_unknown_stage_rejected():
+    """An unknown stage is rejected."""
     lots, readings = _frames(30)
     readings.loc[3, "stage"] = "aging"
     with pytest.raises(InvalidWineryInputError):
@@ -207,6 +248,7 @@ def test_unknown_stage_rejected():
 
 
 def test_batch_csv_split_and_inconsistent_lot():
+    """The batch CSV splits into lots and readings; inconsistent lot data is rejected."""
     df = pd.DataFrame(_readings(30)).assign(wine_type="red", volume_l=8000.0, ambient_temp_c=16.0)
     lots, readings = preprocessing.frames_from_batch_csv(df)
     assert len(lots) == 1 and "wine_type" not in readings.columns
@@ -216,6 +258,7 @@ def test_batch_csv_split_and_inconsistent_lot():
 
 
 def test_feature_window_validation():
+    """A feature_window with the wrong width is rejected."""
     assert preprocessing.validate_feature_window([[0.0] * 22] * 24, 22).shape == (1, 24, 22)
     with pytest.raises(InvalidWineryInputError):
         preprocessing.validate_feature_window([[0.0] * 21] * 24, 22)
@@ -225,27 +268,40 @@ def test_feature_window_validation():
 
 def _tiny_loaded_model():
     torch = pytest.importorskip("torch")
-    from app.plugins.ml26_wine_sulfite_gru_pso_forecast._vendor.gru_model import build_gru_from_config
+    # pylint: disable-next=import-outside-toplevel  # torch-heavy, after importorskip
+    from app.plugins.ml26_wine_sulfite_gru_pso_forecast._vendor.gru_model import (
+        build_gru_from_config,
+    )
+    # pylint: disable-next=import-outside-toplevel  # torch-heavy, after importorskip
     from app.plugins.ml26_wine_sulfite_gru_pso_forecast.model_loader import LoadedModel
 
     torch.manual_seed(0)
-    cfg = {"hidden_dim": 8, "num_layers": 1, "dropout": 0.0, "head_dropout": 0.0, "bidirectional": True,
-           "batch_size": 16, "learning_rate": 1e-3, "weight_decay": 1e-4, "epochs": 2, "patience": 2,
-           "lr_patience": 1, "lr_decay_factor": 0.5, "gradient_clip": 1.0, "input_dim": 22}
+    cfg = {"hidden_dim": 8, "num_layers": 1, "dropout": 0.0, "head_dropout": 0.0,
+           "bidirectional": True, "batch_size": 16, "learning_rate": 1e-3, "weight_decay": 1e-4,
+           "epochs": 2, "patience": 2, "lr_patience": 1, "lr_decay_factor": 0.5,
+           "gradient_clip": 1.0, "input_dim": 22}
     net = build_gru_from_config(cfg, input_dim=22, output_dim=2).eval()
     return LoadedModel(network=net, feature_names=FEATURES,
                        target_names=["future_free_sulfite_72h", "underprotection_risk_72h"],
                        mean=np.zeros((1, 22), np.float32), std=np.ones((1, 22), np.float32),
-                       y_mean=np.array([25.0, 0.5], np.float32), y_std=np.array([7.0, 0.26], np.float32),
+                       y_mean=np.array([25.0, 0.5], np.float32),
+                       y_std=np.array([7.0, 0.26], np.float32),
                        config=cfg, source="fixed")
 
 
 def test_predict_windows_clips_risk_and_rounds():
-    from app.plugins.ml26_wine_sulfite_gru_pso_forecast.postprocessing import predict_windows, risk_band
+    """predict_windows clips the risk to [0, 1] and rounds to 6 decimals; risk bands match."""
+    # pylint: disable-next=import-outside-toplevel  # torch-heavy plugin module
+    from app.plugins.ml26_wine_sulfite_gru_pso_forecast.postprocessing import (
+        predict_windows,
+        risk_band,
+    )
 
     model = _tiny_loaded_model()
     model.y_std[1] = 1e6  # force out-of-range raw risk -> must be clipped to [0, 1]
-    preds = predict_windows(model, np.random.default_rng(0).normal(size=(3, 24, 22)).astype(np.float32))
+    preds = predict_windows(
+        model, np.random.default_rng(0).normal(size=(3, 24, 22)).astype(np.float32)
+    )
     assert preds.shape == (3, 2)
     assert ((preds[:, 1] >= 0.0) & (preds[:, 1] <= 1.0)).all()
     assert np.allclose(preds, np.round(preds, 6))
@@ -253,7 +309,13 @@ def test_predict_windows_clips_risk_and_rounds():
 
 
 def test_user_model_roundtrip(tmp_path):
-    from app.plugins.ml26_wine_sulfite_gru_pso_forecast.model_loader import load_user_model, save_user_model
+    """A user model saved and loaded back predicts identically."""
+    # pylint: disable-next=import-outside-toplevel  # torch-heavy plugin module
+    from app.plugins.ml26_wine_sulfite_gru_pso_forecast.model_loader import (
+        load_user_model,
+        save_user_model,
+    )
+    # pylint: disable-next=import-outside-toplevel  # torch-heavy plugin module
     from app.plugins.ml26_wine_sulfite_gru_pso_forecast.postprocessing import predict_windows
 
     model = _tiny_loaded_model()
@@ -265,8 +327,12 @@ def test_user_model_roundtrip(tmp_path):
 
 
 def test_restricted_unpickler_rejects_foreign_globals(tmp_path):
+    """The restricted unpickler rejects globals outside the allow-list."""
     pytest.importorskip("torch")
-    from app.plugins.ml26_wine_sulfite_gru_pso_forecast._vendor.sequence_bundle import load_sequence_bundle
+    # pylint: disable-next=import-outside-toplevel  # torch-heavy, after importorskip
+    from app.plugins.ml26_wine_sulfite_gru_pso_forecast._vendor.sequence_bundle import (
+        load_sequence_bundle,
+    )
 
     path = tmp_path / "evil.pkl"
     path.write_bytes(pickle.dumps(pd.Timestamp("2026-01-01")))
@@ -279,11 +345,15 @@ def _sequential_training_frame(n_lots: int = 8, steps: int = 70) -> pd.DataFrame
     for lot in range(n_lots):
         for i in range(steps):
             rows.append({
-                "lot_id": f"L{lot:02d}", "timestamp_index": i, "wine_type": ["red", "rose", "white"][lot % 3],
-                "volume_l": 5000.0 + 100 * lot, "ambient_temp_c": 15.0, "stage": "fermentation" if i < 40 else "storage",
-                "temperature_c": 18.0, "dissolved_oxygen_mg_l": 1.0 + 0.01 * i, "density_g_ml": 1.05, "co2_g_l": 0.4,
+                "lot_id": f"L{lot:02d}", "timestamp_index": i,
+                "wine_type": ["red", "rose", "white"][lot % 3],
+                "volume_l": 5000.0 + 100 * lot, "ambient_temp_c": 15.0,
+                "stage": "fermentation" if i < 40 else "storage",
+                "temperature_c": 18.0, "dissolved_oxygen_mg_l": 1.0 + 0.01 * i,
+                "density_g_ml": 1.05, "co2_g_l": 0.4,
                 "ph_lab": 3.4, "free_sulfite_lab": 25.0 - 0.1 * i, "total_sulfite_lab": 70.0,
-                "actual_dose_mg_l": 3.0 if i % 20 == 0 else 0.0, "free_sulfite_mg_l": 25.0 - 0.1 * i + 0.2 * lot,
+                "actual_dose_mg_l": 3.0 if i % 20 == 0 else 0.0,
+                "free_sulfite_mg_l": 25.0 - 0.1 * i + 0.2 * lot,
                 "stage_progress": (i / 39) if i < 40 else (i - 40) / (steps - 41),
             })
     return pd.DataFrame(rows)
@@ -293,8 +363,12 @@ def test_training_starts_from_scratch_with_the_users_normalization():
     """Port of train_sequence_with_config: a NEW model (seed 7) and z-score stats of the user's
     train split, not the served model's weights or normalization (the old fine-tuning did that)."""
     torch = pytest.importorskip("torch")
+    # pylint: disable-next=import-outside-toplevel  # torch-heavy, after importorskip
     from app.plugins.ml26_wine_sulfite_gru_pso_forecast import training
-    from app.plugins.ml26_wine_sulfite_gru_pso_forecast._vendor.gru_model import build_gru_from_config
+    # pylint: disable-next=import-outside-toplevel  # torch-heavy, after importorskip
+    from app.plugins.ml26_wine_sulfite_gru_pso_forecast._vendor.gru_model import (
+        build_gru_from_config,
+    )
 
     base = _tiny_loaded_model()
     before = {k: v.clone() for k, v in base.network.state_dict().items()}
@@ -306,20 +380,26 @@ def test_training_starts_from_scratch_with_the_users_normalization():
 
     assert result.epochs_run == 1 and result.n_lots["train"] == 5
     assert set(result.val_report[base.target_names[0]]) == {"mae", "rmse", "mape"}
-    np.testing.assert_allclose(result.model.mean, x_train.mean(axis=(0, 1), keepdims=True).squeeze(0), rtol=1e-6)
+    np.testing.assert_allclose(
+        result.model.mean, x_train.mean(axis=(0, 1), keepdims=True).squeeze(0), rtol=1e-6
+    )
     np.testing.assert_allclose(result.model.y_mean, y_train.mean(axis=0), rtol=1e-6)
     for key, value in base.network.state_dict().items():
         assert torch.equal(value, before[key])          # the served model is never touched
 
     training.set_global_seed(7)
     fresh = build_gru_from_config(cfg, 22, 2).state_dict()
-    one_epoch = training.train_with_config(base, data, {**cfg, "patience": 1}).model.network.state_dict()
+    one_epoch = training.train_with_config(
+        base, data, {**cfg, "patience": 1}
+    ).model.network.state_dict()
     assert any(not torch.equal(fresh[k], one_epoch[k]) for k in fresh)
     assert all(fresh[k].shape == one_epoch[k].shape for k in fresh)
 
 
 def test_training_requires_validation_lots():
+    """Training without enough lots for a validation split raises ValueError."""
     pytest.importorskip("torch")
+    # pylint: disable-next=import-outside-toplevel  # torch-heavy, after importorskip
     from app.plugins.ml26_wine_sulfite_gru_pso_forecast import training
 
     base = _tiny_loaded_model()
@@ -331,7 +411,10 @@ def test_training_requires_validation_lots():
 # ── Real plugin class with an injected tiny model (no artifacts, MLflow mocked) ─
 
 def _real_plugin():
-    from app.plugins.ml26_wine_sulfite_gru_pso_forecast.plugin import Ml26WineSulfiteGruPsoForecastPlugin
+    # pylint: disable-next=import-outside-toplevel  # torch-heavy plugin module
+    from app.plugins.ml26_wine_sulfite_gru_pso_forecast.plugin import (
+        Ml26WineSulfiteGruPsoForecastPlugin,
+    )
 
     plugin = Ml26WineSulfiteGruPsoForecastPlugin()
     plugin._model = _tiny_loaded_model()  # pylint: disable=protected-access
@@ -339,20 +422,29 @@ def _real_plugin():
 
 
 def test_real_plugin_inline_operational_and_feature_window():
+    """The real plugin predicts from readings and from a feature_window, with XAI fields."""
     plugin = _real_plugin()
     assert plugin.is_loaded()
-    resp = plugin.predict_inline(features={"lot": LOT, "readings": _readings(30), "feature_window": None})
+    resp = plugin.predict_inline(
+        features={"lot": LOT, "readings": _readings(30), "feature_window": None}
+    )
     assert resp.lot_id == "LOT-T1" and resp.timestamp_index == 29
     assert resp.model_source == "fixed" and len(resp.xai_feature_values) == 22
     # Same contract as the feature_window path: the model's engineered features, not raw columns.
-    assert list(resp.xai_feature_values) == plugin._model.feature_names  # pylint: disable=protected-access
-    assert len(resp.xai_feature_window) == 24 and resp.xai_feature_window[-1] == list(resp.xai_feature_values.values())
-    resp_fw = plugin.predict_inline(features={"lot": None, "readings": None, "feature_window": [[0.1] * 22] * 24})
+    model = plugin._model  # pylint: disable=protected-access
+    assert list(resp.xai_feature_values) == model.feature_names
+    assert len(resp.xai_feature_window) == 24
+    # pylint: disable-next=unsubscriptable-object,no-member  # pydantic fields
+    assert resp.xai_feature_window[-1] == list(resp.xai_feature_values.values())
+    resp_fw = plugin.predict_inline(
+        features={"lot": None, "readings": None, "feature_window": [[0.1] * 22] * 24}
+    )
     assert resp_fw.lot_id is None
     assert plugin.stats().runtime_stats.total_predictions == 2
 
 
 def test_real_plugin_batch(tmp_path):
+    """The real plugin predicts one row per lot in batch mode."""
     plugin = _real_plugin()
     rows = _readings(30) + _readings(26, lot_id="LOT-T2")
     df = pd.DataFrame(rows)
@@ -366,6 +458,7 @@ def test_real_plugin_batch(tmp_path):
 
 
 def test_real_plugin_stats_contract():
+    """stats() exposes the input contract and the delivered metrics."""
     stats = _real_plugin().stats()
     names = {f.name for f in stats.inputs}
     assert {"lot.wine_type", "readings[].stage", "readings[].stage_progress"} <= names
@@ -374,29 +467,36 @@ def test_real_plugin_stats_contract():
 
 
 def test_real_plugin_train_uploads_only_to_mlflow(tmp_path, monkeypatch):
-    from unittest.mock import MagicMock
-
+    """train() uploads only to MLflow and leaves the served model untouched."""
+    # pylint: disable-next=import-outside-toplevel  # torch-heavy plugin module
     from app.plugins.ml26_wine_sulfite_gru_pso_forecast import model_loader
+    # pylint: disable-next=import-outside-toplevel  # torch-heavy plugin module
     from app.plugins.ml26_wine_sulfite_gru_pso_forecast import plugin as plugin_mod
 
-    local_before = set(model_loader._store.local_dir.rglob("*"))  # pylint: disable=protected-access
+    local_before = set(
+        model_loader._store.local_dir.rglob("*")  # pylint: disable=protected-access
+    )
     tracker = MagicMock()
     monkeypatch.setattr(plugin_mod, "BaseMLflowTracker", MagicMock(return_value=tracker))
     csv = tmp_path / "sequential.csv"
     _sequential_training_frame().to_csv(csv, index=False)
     plugin = _real_plugin()
-    before = {k: v.clone() for k, v in plugin._model.network.state_dict().items()}  # pylint: disable=protected-access
+    network = plugin._model.network  # pylint: disable=protected-access
+    before = {k: v.clone() for k, v in network.state_dict().items()}
     resp = plugin.train(data_path=str(csv), mlflow_run_id="run123")
     assert resp.n_lots_train == 5 and resp.n_windows_val > 0
     tracker.upload_artifacts.assert_called_once()
     assert resp.mlflow_run_id == "run123"
-    assert set(model_loader._store.local_dir.rglob("*")) == local_before  # nothing written locally
+    # nothing written locally
+    store = model_loader._store  # pylint: disable=protected-access
+    assert set(store.local_dir.rglob("*")) == local_before
     assert resp.upload_warning is None
     for key, value in plugin._model.network.state_dict().items():  # pylint: disable=protected-access
         assert (value == before[key]).all()  # served model untouched
 
 
 def test_real_plugin_train_requires_stage_progress(tmp_path):
+    """Training data with a missing stage_progress is rejected."""
     csv = tmp_path / "no_sp.csv"
     frame = _sequential_training_frame()
     frame.loc[3, "stage_progress"] = np.nan
@@ -406,6 +506,7 @@ def test_real_plugin_train_requires_stage_progress(tmp_path):
 
 
 def test_real_plugin_train_missing_columns(tmp_path):
+    """Training data without the target column is rejected."""
     csv = tmp_path / "bad.csv"
     _sequential_training_frame().drop(columns=["free_sulfite_mg_l"]).to_csv(csv, index=False)
     with pytest.raises(ValueError, match="free_sulfite_mg_l"):
@@ -413,37 +514,41 @@ def test_real_plugin_train_missing_columns(tmp_path):
 
 
 def test_real_plugin_uses_and_cleans_mlflow_model(tmp_path, monkeypatch):
+    """predict with a run uses the MLflow model and removes its temp dir."""
+    # pylint: disable-next=import-outside-toplevel  # torch-heavy plugin module
     from app.plugins.ml26_wine_sulfite_gru_pso_forecast import plugin as plugin_mod
+    # pylint: disable-next=import-outside-toplevel  # torch-heavy plugin module
     from app.plugins.ml26_wine_sulfite_gru_pso_forecast.model_loader import save_user_model
 
     user_dir = tmp_path / "mlflow_tmp"
     user_model = _tiny_loaded_model()
     save_user_model(user_model, user_dir / "model")
     user_model.source = "mlflow:abc"
-    monkeypatch.setattr(plugin_mod, "download_user_model_from_mlflow", lambda run_id: (user_model, str(user_dir)))
+    monkeypatch.setattr(
+        plugin_mod, "download_user_model_from_mlflow", lambda run_id: (user_model, str(user_dir))
+    )
     resp = _real_plugin().predict_inline(
-        features={"lot": LOT, "readings": _readings(30), "feature_window": None}, mlflow_run_id="abc",
+        features={"lot": LOT, "readings": _readings(30), "feature_window": None},
+        mlflow_run_id="abc",
     )
     assert resp.model_source == "mlflow:abc"
     assert not user_dir.exists()  # temp dir removed in finally
 
 
 def test_mlflow_download_without_artifacts_is_a_422_not_the_base_model(monkeypatch):
-    from unittest.mock import MagicMock
-
-    from app.domain.services.exceptions import UserModelUnavailableError
+    """A run without artifacts raises UserModelUnavailableError, never using the base."""
+    # pylint: disable-next=import-outside-toplevel  # torch-heavy plugin module
     from app.plugins.ml26_wine_sulfite_gru_pso_forecast import mlflow_utils
 
-    monkeypatch.setattr(mlflow_utils, "BaseMLflowTracker",
-                        MagicMock(return_value=MagicMock(download_artifacts=MagicMock(return_value=""))))
+    tracker = MagicMock(download_artifacts=MagicMock(return_value=""))
+    monkeypatch.setattr(mlflow_utils, "BaseMLflowTracker", MagicMock(return_value=tracker))
     with pytest.raises(UserModelUnavailableError, match="missing"):
         mlflow_utils.download_user_model_from_mlflow("missing")
 
 
 def test_real_plugin_train_fails_when_mlflow_upload_fails(tmp_path, monkeypatch):
-    from unittest.mock import MagicMock
-
-    from app.domain.services.exceptions import ModelPersistenceError
+    """A failed MLflow upload raises ModelPersistenceError."""
+    # pylint: disable-next=import-outside-toplevel  # torch-heavy plugin module
     from app.plugins.ml26_wine_sulfite_gru_pso_forecast import plugin as plugin_mod
 
     tracker = MagicMock(upload_artifacts=MagicMock(side_effect=ConnectionError("mlflow caído")))
@@ -455,8 +560,13 @@ def test_real_plugin_train_fails_when_mlflow_upload_fails(tmp_path, monkeypatch)
 
 
 def test_real_plugin_unloaded_raises():
-    from app.domain.services.exceptions import ModelNotLoadedError
-    from app.plugins.ml26_wine_sulfite_gru_pso_forecast.plugin import Ml26WineSulfiteGruPsoForecastPlugin
+    """Predicting before load raises ModelNotLoadedError."""
+    # pylint: disable-next=import-outside-toplevel  # torch-heavy plugin module
+    from app.plugins.ml26_wine_sulfite_gru_pso_forecast.plugin import (
+        Ml26WineSulfiteGruPsoForecastPlugin,
+    )
 
     with pytest.raises(ModelNotLoadedError):
-        Ml26WineSulfiteGruPsoForecastPlugin().predict_inline(features={"feature_window": [[0.0] * 22] * 24})
+        Ml26WineSulfiteGruPsoForecastPlugin().predict_inline(
+            features={"feature_window": [[0.0] * 22] * 24}
+        )

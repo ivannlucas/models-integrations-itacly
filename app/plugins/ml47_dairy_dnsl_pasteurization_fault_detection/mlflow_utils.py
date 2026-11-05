@@ -1,18 +1,25 @@
+"""MLflow helper de ml47: descarga del modelo reentrenado y subida de artefactos."""
 from __future__ import annotations
 
 import logging
 import shutil
+import tempfile
 from pathlib import Path
 
 from app.domain.services.mlflow_tracker import BaseMLflowTracker, require_user_model
-from app.plugins.ml47_dairy_dnsl_pasteurization_fault_detection.constants import ARTIFACT_FOLDER_NAME
+from app.plugins.ml47_dairy_dnsl_pasteurization_fault_detection.constants import (
+    ARTIFACT_FOLDER_NAME,
+)
 
 logger = logging.getLogger(__name__)
 
 
 @require_user_model
 def download_user_model_from_mlflow(run_id: str):
-    import tempfile
+    """Descarga el modelo reentrenado del run.
+
+    Devuelve (model, scaler, feature_cols, ts1_mean_train, temp_dir); el llamador borra temp_dir.
+    """
     tmp = tempfile.mkdtemp(prefix="mlflow_m47_")
     try:
         local_path = BaseMLflowTracker(run_id).download_artifacts(tmp, artifact_path="model")
@@ -20,7 +27,10 @@ def download_user_model_from_mlflow(run_id: str):
             shutil.rmtree(tmp, ignore_errors=True)
             return None
 
-        from app.plugins.ml47_dairy_dnsl_pasteurization_fault_detection.model_loader import load_artifacts_from_dir
+        # pylint: disable-next=import-outside-toplevel
+        from app.plugins.ml47_dairy_dnsl_pasteurization_fault_detection.model_loader import (
+            load_artifacts_from_dir,
+        )
 
         # Same loader as the base model: same dropout, weights_only=True on the user's state_dict.
         model, scaler, feature_cols, ts1_mean_train = load_artifacts_from_dir(Path(local_path))
@@ -51,7 +61,7 @@ def _upload_with_uri(
     mlflow_run_id: str = "",
     metrics: dict | None = None,
 ) -> str:
-    import mlflow
+    import mlflow  # pylint: disable=import-outside-toplevel
 
     def make_tracker(run_id: str) -> BaseMLflowTracker:
         t = BaseMLflowTracker(run_id)

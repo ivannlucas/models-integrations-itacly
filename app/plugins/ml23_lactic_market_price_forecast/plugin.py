@@ -69,6 +69,7 @@ from app.plugins.ml23_lactic_market_price_forecast.training import (
 logger = logging.getLogger(__name__)
 
 
+# pylint: disable-next=too-many-return-statements
 def _describe_feature(column: str) -> str:
     """Classify a feature_cols entry by role, mirroring a23's own
     src/get_stats/column_info.py::_describe_column() (the reference repo's
@@ -80,7 +81,10 @@ def _describe_feature(column: str) -> str:
     train/inference time from target_precio_medio (see compare_models.py and
     predictor.py::_prepare_input_df(), mirrored in predict_batch() above)."""
     if column == "current_price":
-        return "Precio actual observado en t — ancla junto al resto de features para el pronóstico a horizonte"
+        return (
+            "Precio actual observado en t — ancla junto al resto de features para el pronóstico "
+            "a horizonte"
+        )
     if column.startswith("precio_lag_"):
         return "Retardo del precio objetivo (autoregressive)"
     if column.startswith("media_movil_"):
@@ -158,23 +162,26 @@ class Ml23LacticMarketPriceForecastPlugin(ModelPluginPort):
         return model, mean, scale, manifest, temp_dir
 
     @staticmethod
-    def _scale(X: np.ndarray, mean: np.ndarray, scale: np.ndarray) -> np.ndarray:
+    def _scale(x: np.ndarray, mean: np.ndarray, scale: np.ndarray) -> np.ndarray:
         safe_scale = np.where(scale == 0, 1.0, scale)
-        return (X - mean) / safe_scale
+        return (x - mean) / safe_scale
 
     @staticmethod
     def _infer_window(model: GRUModel, window: np.ndarray) -> float:
         """Run the GRU on a [seq_len, n_features] scaled array; return scalar."""
-        X_t = torch.tensor(window[None, :, :], dtype=torch.float32)
+        x_t = torch.tensor(window[None, :, :], dtype=torch.float32)
         with torch.no_grad():
-            return float(model(X_t).cpu().numpy().reshape(-1)[0])
+            return float(model(x_t).cpu().numpy().reshape(-1)[0])
 
     def _record(self, elapsed_ms: float) -> None:
         self._predict_count += 1
         self._total_latency_ms += elapsed_ms
         self._last_predict_at = datetime.now(tz=timezone.utc).isoformat()
 
-    def _run_on_df(self, df: pd.DataFrame, model: GRUModel, mean, scale, manifest: dict) -> list[dict]:
+    # pylint: disable-next=too-many-locals
+    def _run_on_df(
+        self, df: pd.DataFrame, model: GRUModel, mean, scale, manifest: dict
+    ) -> list[dict]:
         """Slide a seq_len window per (producto, canal) group and collect predictions."""
         feature_cols: list[str] = manifest["feature_cols"]
         seq_len: int = int(manifest["seq_len"])
@@ -185,9 +192,9 @@ class Ml23LacticMarketPriceForecastPlugin(ModelPluginPort):
                 logger.warning("Not enough rows (%d) for seq_len=%d", len(df), seq_len)
                 return rows
             df_s = df.sort_values("fecha").reset_index(drop=True) if "fecha" in df.columns else df
-            X_sc = self._scale(df_s[feature_cols].values, mean, scale)
+            x_sc = self._scale(df_s[feature_cols].values, mean, scale)
             for i in range(seq_len - 1, len(df_s)):
-                pred = self._infer_window(model, X_sc[i - seq_len + 1: i + 1])
+                pred = self._infer_window(model, x_sc[i - seq_len + 1: i + 1])
                 r = df_s.iloc[i]
                 rows.append({
                     "fecha": str(r.get("fecha", "")),
@@ -208,9 +215,9 @@ class Ml23LacticMarketPriceForecastPlugin(ModelPluginPort):
             if missing:
                 logger.warning("Missing cols for (%s, %s): %s", producto, canal, missing)
                 continue
-            X_sc = self._scale(grp[feature_cols].values, mean, scale)
+            x_sc = self._scale(grp[feature_cols].values, mean, scale)
             for i in range(seq_len - 1, len(grp)):
-                pred = self._infer_window(model, X_sc[i - seq_len + 1: i + 1])
+                pred = self._infer_window(model, x_sc[i - seq_len + 1: i + 1])
                 r = grp.iloc[i]
                 rows.append({
                     "fecha": str(r.get("fecha", "")),
@@ -255,11 +262,14 @@ class Ml23LacticMarketPriceForecastPlugin(ModelPluginPort):
                 "predict_batch done — %d preds in %.1fms count=%d",
                 len(predictions), elapsed_ms, self._predict_count,
             )
-            return PredictBatchResponse(model_id=MODEL_ID, predictions=predictions, output_path=None)
+            return PredictBatchResponse(
+                model_id=MODEL_ID, predictions=predictions, output_path=None
+            )
         finally:
             if temp_dir:
                 shutil.rmtree(temp_dir, ignore_errors=True)
 
+    # pylint: disable-next=too-many-locals
     def predict_inline(
         self,
         *,
@@ -276,11 +286,11 @@ class Ml23LacticMarketPriceForecastPlugin(ModelPluginPort):
             seq_len: int = int(manifest["seq_len"])
 
             row_values = [float(features.get(col) or 0.0) for col in feature_cols]
-            X_seq = np.tile(np.array(row_values, dtype=np.float32), (seq_len, 1))
-            X_sc = self._scale(X_seq, mean, scale)
+            x_seq = np.tile(np.array(row_values, dtype=np.float32), (seq_len, 1))
+            x_sc = self._scale(x_seq, mean, scale)
 
             t0 = time.perf_counter()
-            pred = self._infer_window(model, X_sc)
+            pred = self._infer_window(model, x_sc)
             elapsed_ms = (time.perf_counter() - t0) * 1000
             self._record(elapsed_ms)
 
@@ -308,7 +318,8 @@ class Ml23LacticMarketPriceForecastPlugin(ModelPluginPort):
 
         Does not re-run the full model search (Naive/Drift/XGBoost/LSTM/GRU compared
         across CV folds) that originally selected GRU — see training.py module docstring.
-        The refit bundle is published as the new base model version (never overwriting a previous one) and, if mlflow_run_id is given, also uploaded to that run.
+        The refit bundle is published as the new base model version (never overwriting a
+        previous one) and, if mlflow_run_id is given, also uploaded to that run.
         """
         upload_dir = Path(tempfile.mkdtemp(prefix="ml23_train_upload_"))
         try:
@@ -330,7 +341,7 @@ class Ml23LacticMarketPriceForecastPlugin(ModelPluginPort):
             refit_train_df, refit_val_df = make_refit_split(
                 dev_df, val_window=cv_val_window, min_train_dates=max(TRAIN_SEQ_LEN, 1),
             )
-            train_X, train_y, val_X, val_y, test_X, test_y, test_cp, scaler = (
+            train_x, train_y, val_x, val_y, test_x, test_y, test_cp, scaler = (
                 prepare_rnn_split_with_test(
                     refit_train_df, refit_val_df, test_df, feature_cols, TRAIN_SEQ_LEN,
                 )
@@ -338,8 +349,8 @@ class Ml23LacticMarketPriceForecastPlugin(ModelPluginPort):
 
             device = torch.device("cpu")
             test_metrics, elapsed_s, best_model = train_rnn_multi_seed(
-                GRUModel, train_X.shape[2], TRAIN_HIDDEN_SIZE,
-                train_X, train_y, val_X, val_y, test_X, test_y, test_cp,
+                GRUModel, train_x.shape[2], TRAIN_HIDDEN_SIZE,
+                train_x, train_y, val_x, val_y, test_x, test_y, test_cp,
                 n_seeds=TRAIN_N_SEEDS, seed_base=TRAIN_SEED_BASE, device=device,
                 epochs=TRAIN_EPOCHS, batch_size=TRAIN_BATCH_SIZE, lr=TRAIN_LR,
                 patience=TRAIN_PATIENCE,
@@ -361,8 +372,8 @@ class Ml23LacticMarketPriceForecastPlugin(ModelPluginPort):
             with open(upload_dir / "manifest.json", "w", encoding="utf-8") as fh:
                 json.dump(manifest_out, fh, indent=2, ensure_ascii=False)
 
-            n_train = int(len(train_X))
-            n_test = int(len(test_X))
+            n_train = int(len(train_x))
+            n_test = int(len(test_x))
 
             metrics = {
                 "mae": test_metrics["MAE"], "rmse": test_metrics["RMSE"],
@@ -371,9 +382,14 @@ class Ml23LacticMarketPriceForecastPlugin(ModelPluginPort):
                 "n_train": n_train, "n_test": n_test,
             }
             persisted = persist_retrained_bundle(
-                str(upload_dir), artifact_folder=ARTIFACT_FOLDER_NAME, data_path=data_path,
-                metrics=metrics, mlflow_run_id=mlflow_run_id,
-                upload_to_mlflow=lambda: upload_artifacts_to_mlflow(str(upload_dir), mlflow_run_id, metrics=metrics),
+                str(upload_dir),
+                artifact_folder=ARTIFACT_FOLDER_NAME,
+                data_path=data_path,
+                metrics=metrics,
+                mlflow_run_id=mlflow_run_id,
+                upload_to_mlflow=lambda: upload_artifacts_to_mlflow(
+                    str(upload_dir), mlflow_run_id, metrics=metrics
+                ),
             )
 
             logger.info(
@@ -382,7 +398,10 @@ class Ml23LacticMarketPriceForecastPlugin(ModelPluginPort):
                 n_train, n_test, elapsed_s,
             )
             return TrainResponse(
-                detail=f"Reentrenamiento completado — modelo base {persisted.base_version['version']}.",
+                detail=(
+                    "Reentrenamiento completado — modelo base "
+                    f"{persisted.base_version['version']}."
+                ),
                 mae=round(test_metrics["MAE"], 4),
                 rmse=round(test_metrics["RMSE"], 4),
                 mape_pct=test_metrics["MAPE_pct"],

@@ -33,10 +33,14 @@ class TrainResponse(BaseModel):
     model_config = ConfigDict(protected_namespaces=())
     detail: str
     system: str
-    n_samples: int = Field(..., description="Filas de entrenamiento tras la ingeniería de variables")
+    n_samples: int = Field(
+        ..., description="Filas de entrenamiento tras la ingeniería de variables"
+    )
     n_runs_train: int
     n_runs_test: int
-    accuracy: float = Field(..., description="Accuracy en el 20% de ciclos de hold-out (pipeline completo)")
+    accuracy: float = Field(
+        ..., description="Accuracy en el 20% de ciclos de hold-out (pipeline completo)"
+    )
     f1_macro: float
     precision_macro: float
     recall_macro: float

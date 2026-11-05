@@ -69,7 +69,7 @@ _ACTIVE_VERSIONS: dict[str, str] = {}
 
 def _build_s3_client():
     """Build and return an S3 client configured from environment variables."""
-    import boto3  # type: ignore[import]
+    import boto3  # type: ignore[import]  # pylint: disable=import-outside-toplevel
 
     return boto3.client(
         "s3",
@@ -144,7 +144,9 @@ class ArtifactStore:
     Paths resolve against the active base version (v0 unless the model publishes versions).
     """
 
-    def __init__(self, model_name: str, root: Path | None = None, use_s3: bool | None = None) -> None:
+    def __init__(
+        self, model_name: str, root: Path | None = None, use_s3: bool | None = None
+    ) -> None:
         """Initialize the store for the given model name.
 
         root overrides ARTIFACTS_ROOT and use_s3=False ignores STORAGE_BUCKET (both for tests).
@@ -188,7 +190,9 @@ class ArtifactStore:
         bucket = self._bucket()
         if bucket:
             try:
-                obj = _build_s3_client().get_object(Bucket=bucket, Key=self._remote_root() + relative)
+                obj = _build_s3_client().get_object(
+                    Bucket=bucket, Key=self._remote_root() + relative
+                )
             except ClientError as exc:
                 if exc.response.get("Error", {}).get("Code") in ("NoSuchKey", "404", "NotFound"):
                     return None
@@ -212,8 +216,12 @@ class ArtifactStore:
     @staticmethod
     def _check_version(version: str) -> None:
         """Reject anything that is not v0 or vN (versions end up in local paths and S3 keys)."""
-        if version != BASE_VERSION and not (isinstance(version, str) and _VERSION_RE.fullmatch(version)):
-            raise BaseVersionNotFoundError(f"La versión '{version}' es inválida: debe tener el formato vN.")
+        if version != BASE_VERSION and not (
+            isinstance(version, str) and _VERSION_RE.fullmatch(version)
+        ):
+            raise BaseVersionNotFoundError(
+                f"La versión '{version}' es inválida: debe tener el formato vN."
+            )
 
     def refresh(self) -> str:
         """Read current.json and make its version the active one (v0 if there is none)."""
@@ -378,10 +386,10 @@ class ArtifactStore:
 
     # ── S3 download ───────────────────────────────────────────────────────────
 
-    def _download_all(self) -> None:
+    def _download_all(self) -> None:  # pylint: disable=too-many-locals
         """Download all files of the active version from S3, skipping unchanged ones."""
         try:
-            from tqdm import tqdm  # type: ignore[import]
+            from tqdm import tqdm  # type: ignore[import]  # pylint: disable=import-outside-toplevel
         except ImportError:
             tqdm = None
 
@@ -400,7 +408,8 @@ class ArtifactStore:
             for obj in page.get("Contents", [])
         ]
         if version == BASE_VERSION:
-            # v0 lives at the model root, next to current.json and versions/: those are not its files.
+            # v0 lives at the model root, next to current.json and versions/: those are not its
+            # files.
             objects = [
                 obj for obj in objects
                 if obj["Key"][len(remote_prefix):].split("/", 1)[0] not in _RESERVED_TOP_LEVEL
@@ -408,7 +417,9 @@ class ArtifactStore:
         remote_files = [obj for obj in objects if not _is_directory_marker(obj, objects)]
 
         if not remote_files:
-            logger.warning("No files found in S3 for model: %s (version %s)", self._model_name, version)
+            logger.warning(
+                "No files found in S3 for model: %s (version %s)", self._model_name, version
+            )
             return
 
         # Filter to only files that need downloading

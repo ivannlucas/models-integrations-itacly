@@ -50,6 +50,7 @@ def get_row_from_dataset(
     return row, date_label
 
 
+# pylint: disable-next=too-many-locals
 def predict_next_month(
     row: pd.Series, artifacts: dict, horizons: list[int] | None = None,
 ) -> dict[int, dict]:
@@ -103,7 +104,9 @@ def predict_next_month(
         if signals:
             ensemble = int(np.sign(sum(signals)))
             h_result["ensemble_signal"] = ensemble
-            h_result["ensemble_str"] = "LONG" if ensemble > 0 else ("SHORT" if ensemble < 0 else "FLAT")
+            h_result["ensemble_str"] = (
+                "LONG" if ensemble > 0 else ("SHORT" if ensemble < 0 else "FLAT")
+            )
             h_result["confidence"] = "ALTA" if len(set(signals)) == 1 else "BAJA"
 
         results[h] = h_result

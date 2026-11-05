@@ -56,7 +56,7 @@ class TrackState:
     Removed = 3
 
 
-class Track:
+class Track:  # pylint: disable=too-many-instance-attributes
     """A single tracked object with its own Kalman filter and bbox history."""
 
     _count = 0
@@ -129,7 +129,7 @@ class ByteTracker:
         self.frame_id = 0
 
     @staticmethod
-    def iou(bbox1: list[float], bbox2: list[float]) -> float:
+    def iou(bbox1: list[float], bbox2: list[float]) -> float:  # pylint: disable=too-many-locals
         """Return the intersection-over-union of two ``[x1, y1, x2, y2]`` boxes."""
         x1_min, y1_min, x1_max, y1_max = bbox1
         x2_min, y2_min, x2_max, y2_max = bbox2

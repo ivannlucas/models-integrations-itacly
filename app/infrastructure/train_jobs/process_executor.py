@@ -41,7 +41,8 @@ def _warn_if_multiple_workers() -> None:
     if workers.isdigit() and int(workers) > 1:
         logger.warning(
             "WEB_CONCURRENCY=%s: async training only guarantees one training per model (409) and "
-            "idempotent job_ids within a single process; run the service with 1 worker and 1 replica",
+            "idempotent job_ids within a single process; "
+            "run the service with 1 worker and 1 replica",
             workers,
         )
 
@@ -63,15 +64,19 @@ def _to_jsonable(response: Any) -> dict:
     elif isinstance(response, dict):
         data = response
     else:
-        raise TypeError(f"train() returned {type(response).__name__}; expected a pydantic model or a dict")
+        raise TypeError(
+            f"train() returned {type(response).__name__}; expected a pydantic model or a dict"
+        )
     return json.loads(json.dumps(data, default=_json_default))
 
 
-def _heartbeat_loop(store: TrainJobStorePort, job_id: str, stop: threading.Event, every_s: float) -> None:
+def _heartbeat_loop(
+    store: TrainJobStorePort, job_id: str, stop: threading.Event, every_s: float
+) -> None:
     while not stop.wait(every_s):
         try:
             store.heartbeat(job_id, time.time())
-        except Exception:
+        except Exception:  # pylint: disable=broad-exception-caught  # best-effort heartbeat
             logger.warning("Heartbeat failed for training job %s", job_id, exc_info=True)
 
 
@@ -83,7 +88,9 @@ def run_train_job(
     store: TrainJobStorePort,
     heartbeat_s: float = HEARTBEAT_S,
 ) -> None:
-    """Child-process entry point (also callable in-process). Training errors go to ``store``; store errors raise.
+    """Child-process entry point (also callable in-process).
+
+    Training errors go to ``store``; store errors raise.
 
     A job already terminal (e.g. marked lost by GET while this child was queued or stuck) is never
     overwritten: job status is monotonic, so consumers can trust the first terminal state they see.
@@ -100,15 +107,19 @@ def run_train_job(
     store.save(record)
 
     stop = threading.Event()
-    beater = threading.Thread(target=_heartbeat_loop, args=(store, job_id, stop, heartbeat_s), daemon=True)
+    beater = threading.Thread(
+        target=_heartbeat_loop, args=(store, job_id, stop, heartbeat_s), daemon=True
+    )
     beater.start()
     try:
         plugin = plugin_class()
         plugin.load()
         result = _to_jsonable(plugin.train(**train_kwargs))
-        final = replace(record, status=TrainJobStatus.SUCCEEDED, result=result, updated_at=time.time())
+        final = replace(
+            record, status=TrainJobStatus.SUCCEEDED, result=result, updated_at=time.time()
+        )
         logger.info("Training job %s succeeded", job_id)
-    except Exception as exc:
+    except Exception as exc:  # pylint: disable=broad-exception-caught  # reported as a failed job
         logger.exception("Training job %s failed", job_id)
         final = replace(
             record, status=TrainJobStatus.FAILED, updated_at=time.time(),
@@ -122,7 +133,8 @@ def run_train_job(
     current = store.get(job_id)
     if current is not None and current.status.is_terminal:
         logger.warning(
-            "Training job %s finished as %s but was already reported %s (%s); keeping the reported state",
+            "Training job %s finished as %s but was already reported %s (%s); "
+            "keeping the reported state",
             job_id, final.status.value, current.status.value, current.error_type,
         )
         return
@@ -133,7 +145,9 @@ def _lower_priority(nice: int) -> None:
     try:
         os.nice(nice)
     except OSError:
-        logger.warning("Could not lower the training process priority (nice %s)", nice, exc_info=True)
+        logger.warning(
+            "Could not lower the training process priority (nice %s)", nice, exc_info=True
+        )
 
 
 def _child_main(*, nice: int, **job: Any) -> None:
@@ -151,22 +165,27 @@ def _stop(proc: Any) -> None:
 
 
 def _watch(proc: Any, job_id: str, store: TrainJobStorePort, max_duration_s: float) -> None:
-    """Stop the child once it exceeds ``max_duration_s`` and report the job failed (TrainJobTimeout).
+    """Stop the child once it exceeds ``max_duration_s`` and report the job failed.
+
+    The failure is reported with error type TrainJobTimeout.
 
     A hung train() keeps heart-beating, so the stale check alone would leave it running forever.
     """
     proc.join(max_duration_s)
     if not proc.is_alive():
         return
-    logger.error("Training job %s exceeded %.0f s; stopping pid=%s", job_id, max_duration_s, proc.pid)
+    logger.error(
+        "Training job %s exceeded %.0f s; stopping pid=%s", job_id, max_duration_s, proc.pid
+    )
     _stop(proc)  # frees the 409 slot even if the store is down
     try:
         current = store.get(job_id)
         if current is None or current.status.is_terminal:
             return
         store.save(replace(
-            current, status=TrainJobStatus.FAILED, updated_at=time.time(), error_type=TIMEOUT_ERROR_TYPE,
-            error=max_duration_error(max_duration_s), http_status=500,
+            current, status=TrainJobStatus.FAILED, updated_at=time.time(),
+            error_type=TIMEOUT_ERROR_TYPE, error=max_duration_error(max_duration_s),
+            http_status=500,
         ))
     except Exception:  # pylint: disable=broad-exception-caught
         logger.exception("Could not mark training job %s as timed out", job_id)
@@ -176,7 +195,10 @@ class ProcessTrainExecutor(TrainExecutorPort):
     """One child process per job; ``is_busy`` while any submitted child is alive."""
 
     def __init__(
-        self, heartbeat_s: float = HEARTBEAT_S, max_duration_s: float = MAX_DURATION_S, nice: int = NICE,
+        self,
+        heartbeat_s: float = HEARTBEAT_S,
+        max_duration_s: float = MAX_DURATION_S,
+        nice: int = NICE,
     ) -> None:
         self._ctx = mp.get_context("spawn")  # fork + torch/OpenMP threads can deadlock
         self._heartbeat_s = heartbeat_s
@@ -192,7 +214,9 @@ class ProcessTrainExecutor(TrainExecutorPort):
             self._procs = {job_id: p for job_id, p in self._procs.items() if p.is_alive()}
             return bool(self._procs)
 
-    def submit(self, *, job_id: str, plugin_class: type, train_kwargs: dict, store: TrainJobStorePort) -> None:
+    def submit(
+        self, *, job_id: str, plugin_class: type, train_kwargs: dict, store: TrainJobStorePort
+    ) -> None:
         proc = self._ctx.Process(
             target=_child_main,
             kwargs={

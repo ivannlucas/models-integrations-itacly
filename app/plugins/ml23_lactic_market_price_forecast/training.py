@@ -17,9 +17,9 @@ import time
 import numpy as np
 import pandas as pd
 import torch
-import torch.nn as nn
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 from sklearn.preprocessing import StandardScaler
+from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
 
 META_COLS = {"fecha", "producto", "canal"}
@@ -45,7 +45,8 @@ def prepare_horizon_dataset(df: pd.DataFrame, horizon: int) -> pd.DataFrame:
     # shorter than the horizon would pass that and break later with an obscure shape error.
     if not pieces or all(piece.empty for piece in pieces):
         raise ValueError(
-            f"El dataset no tiene ninguna serie (producto, canal) con más de {horizon} meses: no hay "
+            f"El dataset no tiene ninguna serie (producto, canal) con más de {horizon} meses: no "
+            "hay "
             f"ninguna fila con objetivo a {horizon} meses vista para entrenar."
         )
     result = pd.concat(pieces, ignore_index=True)
@@ -112,26 +113,27 @@ def build_sequences_by_group(
     df: pd.DataFrame, feature_cols: list[str], seq_len: int, scaler: StandardScaler,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Build sliding-window sequences per (producto, canal) group (ported verbatim)."""
-    X_all, y_all = [], []
+    x_all, y_all = [], []
     for _, grp in df.groupby(["producto", "canal"]):
         grp = grp.sort_values("fecha")
-        X_raw = grp[feature_cols].values
+        x_raw = grp[feature_cols].values
         y_raw = grp[TARGET_COL].values
         if len(grp) < seq_len:
             continue
-        X_scaled = scaler.transform(X_raw)
-        for i in range(len(X_scaled) - seq_len + 1):
-            X_all.append(X_scaled[i: i + seq_len])
+        x_scaled = scaler.transform(x_raw)
+        for i in range(len(x_scaled) - seq_len + 1):
+            x_all.append(x_scaled[i: i + seq_len])
             y_all.append(y_raw[i + seq_len - 1])
-    return np.array(X_all), np.array(y_all)
+    return np.array(x_all), np.array(y_all)
 
 
+# pylint: disable-next=too-many-locals
 def build_eval_sequences_with_bridge(
     history_df: pd.DataFrame, target_df: pd.DataFrame, feature_cols: list[str],
     seq_len: int, scaler: StandardScaler,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Build evaluation sequences bridged from history (ported verbatim)."""
-    X_all, y_all, cp_all = [], [], []
+    x_all, y_all, cp_all = [], [], []
     for (prod, canal), target_grp in target_df.groupby(["producto", "canal"]):
         history_grp = history_df[
             (history_df["producto"] == prod) & (history_df["canal"] == canal)
@@ -141,41 +143,53 @@ def build_eval_sequences_with_bridge(
         combined = pd.concat([bridge, target_grp], ignore_index=True)
         if len(combined) < seq_len:
             continue
-        X_raw = combined[feature_cols].values
+        x_raw = combined[feature_cols].values
         y_raw = combined[TARGET_COL].values
         cp_raw = combined[CURRENT_PRICE_COL].values
-        X_scaled = scaler.transform(X_raw)
-        for i in range(len(X_scaled) - seq_len + 1):
+        x_scaled = scaler.transform(x_raw)
+        for i in range(len(x_scaled) - seq_len + 1):
             target_idx = i + seq_len - 1
             if target_idx >= len(bridge):
-                X_all.append(X_scaled[i: i + seq_len])
+                x_all.append(x_scaled[i: i + seq_len])
                 y_all.append(y_raw[target_idx])
                 cp_all.append(cp_raw[target_idx])
-    return np.array(X_all), np.array(y_all), np.array(cp_all)
+    return np.array(x_all), np.array(y_all), np.array(cp_all)
 
 
 def prepare_rnn_split_with_test(  # pylint: disable=too-many-locals
-    train_df: pd.DataFrame, val_df: pd.DataFrame, test_df: pd.DataFrame,
-    feature_cols: list[str], seq_len: int,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, StandardScaler]:
+    train_df: pd.DataFrame,
+    val_df: pd.DataFrame,
+    test_df: pd.DataFrame,
+    feature_cols: list[str],
+    seq_len: int,
+) -> tuple[
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    StandardScaler,
+]:
     """Prepare train/val/test sequences for the final refit (ported verbatim)."""
     scaler = StandardScaler()
     scaler.fit(train_df[feature_cols].values)
 
-    train_X, train_y = build_sequences_by_group(train_df, feature_cols, seq_len, scaler)
-    val_X, val_y, _ = build_eval_sequences_with_bridge(
+    train_x, train_y = build_sequences_by_group(train_df, feature_cols, seq_len, scaler)
+    val_x, val_y, _ = build_eval_sequences_with_bridge(
         train_df, val_df, feature_cols, seq_len, scaler
     )
-    if len(train_X) == 0 or len(val_X) == 0:
+    if len(train_x) == 0 or len(val_x) == 0:
         raise ValueError("No hay suficientes secuencias RNN para el split solicitado.")
 
     history_for_test = pd.concat([train_df, val_df], ignore_index=True)
-    test_X, test_y, test_cp = build_eval_sequences_with_bridge(
+    test_x, test_y, test_cp = build_eval_sequences_with_bridge(
         history_for_test, test_df, feature_cols, seq_len, scaler
     )
-    if len(test_X) == 0:
+    if len(test_x) == 0:
         raise ValueError("No hay suficientes secuencias RNN para test.")
-    return train_X, train_y, val_X, val_y, test_X, test_y, test_cp, scaler
+    return train_x, train_y, val_x, val_y, test_x, test_y, test_cp, scaler
 
 
 def calc_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> dict[str, float]:
@@ -209,15 +223,15 @@ def calc_direction_metrics(
 
 
 def train_rnn(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
-    model: nn.Module, train_X: np.ndarray, train_y: np.ndarray,
-    val_X: np.ndarray, val_y: np.ndarray,
+    model: nn.Module, train_x: np.ndarray, train_y: np.ndarray,
+    val_x: np.ndarray, val_y: np.ndarray,
     *, epochs: int, batch_size: int, lr: float, patience: int, device: torch.device,
 ) -> tuple[dict[str, float], nn.Module]:
     """Train one RNN instance with early stopping (ported verbatim, logging stripped)."""
     model = model.to(device)
-    train_t = torch.tensor(train_X, dtype=torch.float32)
+    train_t = torch.tensor(train_x, dtype=torch.float32)
     train_yt = torch.tensor(train_y, dtype=torch.float32)
-    val_t = torch.tensor(val_X, dtype=torch.float32).to(device)
+    val_t = torch.tensor(val_x, dtype=torch.float32).to(device)
 
     train_dl = DataLoader(TensorDataset(train_t, train_yt), batch_size=batch_size, shuffle=True)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=1e-5)
@@ -263,21 +277,35 @@ def train_rnn(  # pylint: disable=too-many-arguments,too-many-positional-argumen
     return calc_metrics(val_y, final_val_preds), model
 
 
-def predict_rnn(model: nn.Module, X: np.ndarray, device: torch.device) -> np.ndarray:
+def predict_rnn(model: nn.Module, x: np.ndarray, device: torch.device) -> np.ndarray:
     """Run batched inference with an already-trained RNN (ported verbatim)."""
     model = model.to(device)
-    X_t = torch.tensor(X, dtype=torch.float32).to(device)
+    x_t = torch.tensor(x, dtype=torch.float32).to(device)
     model.eval()
     with torch.no_grad():
-        return model(X_t).cpu().numpy()
+        return model(x_t).cpu().numpy()
 
 
-def train_rnn_multi_seed(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
-    model_cls: type, input_size: int, hidden_size: int,
-    train_X: np.ndarray, train_y: np.ndarray, val_X: np.ndarray, val_y: np.ndarray,
-    test_X: np.ndarray, test_y: np.ndarray, test_cp: np.ndarray,
-    *, n_seeds: int, seed_base: int, device: torch.device, epochs: int, batch_size: int,
-    lr: float, patience: int,
+# pylint: disable-next=too-many-arguments,too-many-positional-arguments,too-many-locals
+def train_rnn_multi_seed(
+    model_cls: type,
+    input_size: int,
+    hidden_size: int,
+    train_x: np.ndarray,
+    train_y: np.ndarray,
+    val_x: np.ndarray,
+    val_y: np.ndarray,
+    test_x: np.ndarray,
+    test_y: np.ndarray,
+    test_cp: np.ndarray,
+    *,
+    n_seeds: int,
+    seed_base: int,
+    device: torch.device,
+    epochs: int,
+    batch_size: int,
+    lr: float,
+    patience: int,
 ) -> tuple[dict[str, float], float, nn.Module]:
     """Train with multiple seeds; return the best-by-validation-RMSE model and its test
     metrics (ported from train_rnn_multi_seed(..., return_best_eval=True) — the policy
@@ -292,13 +320,13 @@ def train_rnn_multi_seed(  # pylint: disable=too-many-arguments,too-many-positio
         torch.manual_seed(seed)
         model = model_cls(input_size, hidden_size=hidden_size)
         val_metrics, trained_model = train_rnn(
-            model, train_X, train_y, val_X, val_y,
+            model, train_x, train_y, val_x, val_y,
             epochs=epochs, batch_size=batch_size, lr=lr, patience=patience, device=device,
         )
         if val_metrics["RMSE"] < best_val_rmse:
             best_val_rmse = val_metrics["RMSE"]
             best_model = trained_model
-            test_preds = predict_rnn(trained_model, test_X, device=device)
+            test_preds = predict_rnn(trained_model, test_x, device=device)
             test_metrics = calc_metrics(test_y, test_preds)
             test_metrics.update(calc_direction_metrics(test_y, test_preds, test_cp))
             best_test_metrics = test_metrics

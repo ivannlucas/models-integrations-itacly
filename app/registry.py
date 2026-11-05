@@ -43,12 +43,16 @@ from app.plugins.ml25_wine_sulphites.train_dto import (
     TrainResponse as Ml25Wine_TrainResp,
 )
 
-from app.plugins.ml10_dairy_disease_vector_detection.plugin import Ml10DairyDiseaseVectorDetectionPlugin
+from app.plugins.ml10_dairy_disease_vector_detection.plugin import (
+    Ml10DairyDiseaseVectorDetectionPlugin,
+)
 from app.plugins.ml10_dairy_disease_vector_detection.predict_dto import (
     PredictRequest as Ml10Dairy_Request,
     PredictResponse as Ml10Dairy_Response,
 )
-from app.plugins.ml10_dairy_disease_vector_detection.train_dto import TrainRequest as Ml10Dairy_TrainReq
+from app.plugins.ml10_dairy_disease_vector_detection.train_dto import (
+    TrainRequest as Ml10Dairy_TrainReq,
+)
 from app.application.dto.train_dto import TrainResponse as Ml10Dairy_TrainResp
 
 from app.plugins.ml8_cereals_img_anomaly_detector.plugin import Ml8CerealsImgAnomalyDetectorPlugin
@@ -87,7 +91,8 @@ from app.plugins.ml5_meat_cow_behaviour.predict_dto import (
     PredictResponse as Ml5Cow_Response,
 )
 from app.plugins.ml5_meat_cow_behaviour.train_dto import TrainRequest as Ml5Cow_TrainReq
-from app.application.dto.train_dto import TrainResponse as Ml5Cow_TrainResp
+# Same shared TrainResponse DTO as ml10, aliased per model for the registry entry.
+from app.application.dto.train_dto import TrainResponse as Ml5Cow_TrainResp  # pylint: disable=reimported
 
 from app.plugins.ml7_cereals_grain_pest_detection.plugin import Ml7CerealsGrainPestDetectionPlugin
 from app.plugins.ml7_cereals_grain_pest_detection.predict_dto import (
@@ -247,7 +252,9 @@ from app.plugins.ml46_dairy_fouling_clog_detection.train_dto import (
     TrainRequest as Ml46Dairy_TrainReq,
     TrainResponse as Ml46Dairy_TrainResp,
 )
-from app.plugins.ml47_dairy_dnsl_pasteurization_fault_detection.plugin import Ml47DairyDnslPasteurizationFaultDetectionPlugin
+from app.plugins.ml47_dairy_dnsl_pasteurization_fault_detection.plugin import (
+    Ml47DairyDnslPasteurizationFaultDetectionPlugin,
+)
 from app.plugins.ml47_dairy_dnsl_pasteurization_fault_detection.predict_dto import (
     PredictRequest as Ml47Dairy_Request,
     PredictResponse as Ml47Dairy_Response,
@@ -256,7 +263,9 @@ from app.plugins.ml47_dairy_dnsl_pasteurization_fault_detection.train_dto import
     TrainRequest as Ml47Dairy_TrainReq,
     TrainResponse as Ml47Dairy_TrainResp,
 )
-from app.plugins.ml48_dairy_dnsl_critical_point_detection.plugin import Ml48DairyDnslCriticalPointDetectionPlugin
+from app.plugins.ml48_dairy_dnsl_critical_point_detection.plugin import (
+    Ml48DairyDnslCriticalPointDetectionPlugin,
+)
 from app.plugins.ml48_dairy_dnsl_critical_point_detection.predict_dto import (
     PredictRequest as Ml48Dairy_Request,
     PredictResponse as Ml48Dairy_Response,
@@ -307,7 +316,9 @@ from app.plugins.ml28_meat_neuroevolutionary_raw_materials_prediction.predict_dt
     PredictRequest as Ml28Meat_Request,
     PredictResponse as Ml28Meat_Response,
 )
-from app.plugins.ml43_cereals_dnsl_anomaly_fault_detection.plugin import Ml43CerealsDnslAnomalyFaultDetectionPlugin
+from app.plugins.ml43_cereals_dnsl_anomaly_fault_detection.plugin import (
+    Ml43CerealsDnslAnomalyFaultDetectionPlugin,
+)
 from app.plugins.ml43_cereals_dnsl_anomaly_fault_detection.predict_dto import (
     PredictRequest as Ml43Cereals_Request,
     PredictResponse as Ml43Cereals_Response,
@@ -337,7 +348,9 @@ from app.plugins.ml21_cereals_price_spatial.train_dto import (
     TrainResponse as Ml21CerealsTrainResp,
 )
 
-from app.plugins.ml16_meat_raw_material_price_alert.plugin import Ml16MeatRawMaterialPriceAlertPlugin
+from app.plugins.ml16_meat_raw_material_price_alert.plugin import (
+    Ml16MeatRawMaterialPriceAlertPlugin,
+)
 from app.plugins.ml16_meat_raw_material_price_alert.predict_dto import (
     PredictRequest as Ml16_Request,
     PredictResponse as Ml16_Response,
@@ -358,7 +371,9 @@ from app.plugins.ml14_wine_phyto_price_forecast.train_dto import (
 )
 
 from app.plugins.ml26_wine_sulfite_gru_pso_forecast.exceptions import InvalidWineryInputError
-from app.plugins.ml26_wine_sulfite_gru_pso_forecast.plugin import Ml26WineSulfiteGruPsoForecastPlugin
+from app.plugins.ml26_wine_sulfite_gru_pso_forecast.plugin import (
+    Ml26WineSulfiteGruPsoForecastPlugin,
+)
 from app.plugins.ml26_wine_sulfite_gru_pso_forecast.predict_dto import (
     PredictRequest as Ml26_Request,
     PredictResponse as Ml26_Response,
@@ -409,6 +424,7 @@ from app.plugins.ml24_dairy_spatial_price_forecast.train_dto import (
 # ── Registry entry dataclass ──────────────────────────────────────────────────
 
 @dataclass
+# pylint: disable-next=too-many-instance-attributes
 class ModelEntry:
     """Defines the metadata and types for a model plugin."""
     model_id: str
@@ -814,7 +830,11 @@ REGISTRY: list[ModelEntry] = [
         plugin_class=Ml24DairySpatialPriceForecastPlugin,
         predict_request_type=Ml24_Request,
         predict_response_type=Ml24_Response,
-        extra_predict_exceptions=(SeriesContractError, UnknownCcaaError, InsufficientPriceHistoryError),
+        extra_predict_exceptions=(
+            SeriesContractError,
+            UnknownCcaaError,
+            InsufficientPriceHistoryError,
+        ),
         train_request_type=Ml24_TrainReq,
         train_response_type=Ml24_TrainResp,
     ),

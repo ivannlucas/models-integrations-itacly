@@ -40,7 +40,10 @@ class PredictInlineRequest(BaseModel):
     model_key: str | None = None
     threshold: float | None = Field(
         default=None,
-        description="Override opcional de policy['watch_foul_prob_thr'] (por defecto el calibrado del artefacto).",
+        description=(
+            "Override opcional de policy['watch_foul_prob_thr'] (por defecto el calibrado del "
+            "artefacto)."
+        ),
     )
     rows: list[dict[str, Any]] = Field(
         ...,
@@ -74,7 +77,9 @@ class PredictInlineResponse(BaseModel):
     p_stage1: float
     p_stage2: float
     p_foul_h: float = Field(..., description="Probabilidad de inicio de ensuciamiento en 30 min")
-    p_actionable_foul_h: float = Field(..., description="Probabilidad de ensuciamiento no planificado en 120 min")
+    p_actionable_foul_h: float = Field(
+        ..., description="Probabilidad de ensuciamiento no planificado en 120 min"
+    )
     p_clog_h: float = Field(..., description="Probabilidad de inicio de obstrucción en 15 min")
     pred_tte_foul_min: float
     pred_tte_clog_min: float
@@ -83,7 +88,9 @@ class PredictInlineResponse(BaseModel):
     priority: str
     recommended_action: str
     activated_predicates: str
-    is_alert: bool = Field(..., description="True si esta ventana genera un episodio de alerta accionable")
+    is_alert: bool = Field(
+        ..., description="True si esta ventana genera un episodio de alerta accionable"
+    )
     model_name: str
     xai_feature_values: dict[str, Any] | None = Field(
         default=None, description="Valores de features usados — consumido por el servicio XAI",

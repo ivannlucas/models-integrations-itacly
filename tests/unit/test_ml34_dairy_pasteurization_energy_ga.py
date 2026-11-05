@@ -26,6 +26,7 @@ OPTIMIZE_PAYLOAD = {
 
 
 def test_health(client):
+    """GET /health reports the model as loaded and ok."""
     body = client.get(f"{PREFIX}/health").json()
     assert body["status"] == "ok"
     assert body["model"] == "ml34-dairy-pasteurization-energy-ga"
@@ -33,11 +34,13 @@ def test_health(client):
 
 
 def test_stats(client):
+    """GET /stats returns the model name."""
     body = client.get(f"{PREFIX}/stats").json()
     assert body["model_name"] == "ml34-dairy-pasteurization-energy-ga"
 
 
 def test_predict_inline(client):
+    """An inline estimate returns predicted energy and outlet temperature."""
     resp = client.post(f"{PREFIX}/predict", json=INLINE_PAYLOAD)
     assert resp.status_code == 200
     body = resp.json()
@@ -47,11 +50,13 @@ def test_predict_inline(client):
 
 
 def test_predict_inline_missing_required_field(client):
+    """An inline estimate without F_flow is rejected with 422."""
     payload = {k: v for k, v in INLINE_PAYLOAD.items() if k != "F_flow"}
     assert client.post(f"{PREFIX}/predict", json=payload).status_code == 422
 
 
 def test_predict_optimize(client):
+    """An optimize request returns the GA's flow, service temperature and seed."""
     resp = client.post(f"{PREFIX}/predict", json=OPTIMIZE_PAYLOAD)
     assert resp.status_code == 200
     body = resp.json()
@@ -63,6 +68,7 @@ def test_predict_optimize(client):
 
 
 def test_predict_optimize_default_seed(client):
+    """An optimize request without seed uses seed 1."""
     payload = {k: v for k, v in OPTIMIZE_PAYLOAD.items() if k != "seed"}
     resp = client.post(f"{PREFIX}/predict", json=payload)
     assert resp.status_code == 200
@@ -70,6 +76,7 @@ def test_predict_optimize_default_seed(client):
 
 
 def test_predict_optimize_missing_scenario_field(client):
+    """An optimize request without Delta_P is rejected with 422."""
     payload = {k: v for k, v in OPTIMIZE_PAYLOAD.items() if k != "Delta_P"}
     assert client.post(f"{PREFIX}/predict", json=payload).status_code == 422
 
@@ -85,7 +92,10 @@ def test_predict_optimize_thermal_violation_maps_to_422(client, fake_plugins):
 
 
 def test_predict_batch(client):
-    resp = client.post(f"{PREFIX}/predict", json={"mode": "batch", "data_path": "/tmp/pasteurizacion.csv"})
+    """A batch estimate returns per-row energy predictions."""
+    resp = client.post(
+        f"{PREFIX}/predict", json={"mode": "batch", "data_path": "/tmp/pasteurizacion.csv"}
+    )
     assert resp.status_code == 200
     body = resp.json()
     assert body["model_id"] == "ml34-dairy-pasteurization-energy-ga"
@@ -117,6 +127,7 @@ def test_predict_batch_optimize(client):
 
 
 def test_train(client):
+    """POST /train returns the fine-tuning metrics."""
     resp = client.post(
         f"{PREFIX}/train", json={"data_path": "/tmp/train.csv", "mlflow_run_id": "test-run-id"}
     )
@@ -128,5 +139,6 @@ def test_train(client):
 
 
 def test_train_requires_mlflow_run_id(client):
+    """POST /train without mlflow_run_id is rejected with 422."""
     resp = client.post(f"{PREFIX}/train", json={"data_path": "/tmp/train.csv"})
     assert resp.status_code == 422

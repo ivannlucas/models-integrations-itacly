@@ -21,6 +21,7 @@ INLINE_PAYLOAD = {"mode": "inline", "rows": [_ROW] * 10}
 
 
 def test_health(client):
+    """The health endpoint reports the model as loaded."""
     body = client.get(f"{PREFIX}/health").json()
     assert body["status"] == "ok"
     assert body["model"] == MODEL_ID
@@ -28,11 +29,13 @@ def test_health(client):
 
 
 def test_stats(client):
+    """The stats endpoint returns the model name."""
     body = client.get(f"{PREFIX}/stats").json()
     assert body["model_name"] == MODEL_ID
 
 
 def test_predict_inline(client):
+    """An inline prediction returns binary alerts and probabilities for both targets."""
     resp = client.post(f"{PREFIX}/predict", json=INLINE_PAYLOAD)
     assert resp.status_code == 200
     body = resp.json()
@@ -44,7 +47,8 @@ def test_predict_inline(client):
 
 
 def test_predict_inline_too_few_rows_rejected(client):
-    """rows below the DTO min_length (10 = warmup 6 + lookback 3 + 1) must fail Pydantic validation."""
+    """rows below the DTO min_length (10 = warmup 6 + lookback 3 + 1) must fail Pydantic
+    validation."""
     payload = {"mode": "inline", "rows": [_ROW] * 5}
     resp = client.post(f"{PREFIX}/predict", json=payload)
     assert resp.status_code == 422
@@ -62,7 +66,10 @@ def test_predict_inline_insufficient_rows_maps_to_422(client, fake_plugins):
 
 
 def test_predict_batch(client):
-    resp = client.post(f"{PREFIX}/predict", json={"mode": "batch", "data_path": "/tmp/dataset_base.csv"})
+    """Batch prediction returns one prediction per row with both targets."""
+    resp = client.post(
+        f"{PREFIX}/predict", json={"mode": "batch", "data_path": "/tmp/dataset_base.csv"}
+    )
     assert resp.status_code == 200
     body = resp.json()
     assert body["model_id"] == MODEL_ID
@@ -71,6 +78,7 @@ def test_predict_batch(client):
 
 
 def test_train(client):
+    """The train endpoint returns train and test row counts."""
     resp = client.post(
         f"{PREFIX}/train",
         json={"data_path": "/tmp/dataset_base.csv", "mlflow_run_id": "test-run-id"},

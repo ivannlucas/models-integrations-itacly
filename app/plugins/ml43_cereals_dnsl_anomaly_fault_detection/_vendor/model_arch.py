@@ -7,8 +7,8 @@ adapted to remove the project-specific logger import.
 import logging
 
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
+from torch import nn
 
 logger = logging.getLogger(__name__)
 
@@ -30,15 +30,16 @@ class FuzzyMembershipLayer(nn.Module):
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Grado de pertenencia gaussiano de cada feature a cada función de pertenencia."""
         x_exp = x.unsqueeze(-1)
         sigmas = torch.clamp(torch.abs(self.sigmas), min=1e-6)
         return torch.exp(-((x_exp - self.centers) ** 2) / (2 * sigmas ** 2))
 
 
-class FuzzyRuleLayer(nn.Module):
+class FuzzyRuleLayer(nn.Module):  # pylint: disable=too-many-instance-attributes
     """Capa de reglas fuzzy estilo ANFIS (diferenciable)."""
 
-    def __init__(
+    def __init__(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         self,
         n_features: int,
         n_mf: int,
@@ -85,6 +86,7 @@ class FuzzyRuleLayer(nn.Module):
     def forward(
         self, x: torch.Tensor, membership: torch.Tensor
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Evalúa las reglas difusas: salida de anomalía, activaciones, alpha y consecuentes."""
         if membership.dim() != 3:
             raise RuntimeError(f"membership debe ser 3D [B,F,M], recibido: {membership.shape}")
 
@@ -125,7 +127,7 @@ class FuzzyRuleLayer(nn.Module):
         return output_anomaly, rule_activations, alpha_probs, consequents_anom
 
 
-class ParallelDeepNeuroFuzzyModel(nn.Module):
+class ParallelDeepNeuroFuzzyModel(nn.Module):  # pylint: disable=too-many-instance-attributes
     """Modelo híbrido paralelo Deep Learning + Neuro-Fuzzy."""
 
     def __init__(self, model_cfg: dict, seed: int = 42):
@@ -190,19 +192,20 @@ class ParallelDeepNeuroFuzzyModel(nn.Module):
             temperature=fuzzy_cfg["temperature"],
         )
 
-    def forward(
+    def forward(  # pylint: disable=too-many-locals
         self,
         x_window: torch.Tensor,
         s_stats: torch.Tensor,
     ) -> dict[str, torch.Tensor]:
+        """Fusiona la rama LSTM+atención y la rama neuro-difusa en el score de anomalía."""
         if x_window.dim() != 3:
             raise RuntimeError(f"x_window debe ser [B,T,F], recibido: {tuple(x_window.shape)}")
 
-        B, _, F_in = x_window.shape
-        if F_in != self.n_features:
+        _, _, f_in = x_window.shape
+        if f_in != self.n_features:
             raise RuntimeError(
                 f"Última dimensión de x_window inválida: "
-                f"esperado {self.n_features}, recibido {F_in}"
+                f"esperado {self.n_features}, recibido {f_in}"
             )
 
         lstm_out, _ = self.lstm_branch(x_window)

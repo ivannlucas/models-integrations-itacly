@@ -4,8 +4,10 @@
 persisted to a specific MLflow run; the retrained LeafCNN is never written to the local/S3
 base artifact (``leafcnn_best.pth``), only uploaded to that MLflow run's ``model`` artifact
 path, exactly like every other plugin in this repo with real training support
-(ml10_dairy_disease_vector_detection, ml8_cereals_img_anomaly_detector, ml30_meat_traceability_detection).
+(ml10_dairy_disease_vector_detection, ml8_cereals_img_anomaly_detector,
+ml30_meat_traceability_detection).
 """
+
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.application.dto.train_dto import MlflowRunId

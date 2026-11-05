@@ -35,7 +35,7 @@ def safe_device() -> torch.device:
     try:
         torch.nn.Conv2d(1, 1, 1).cuda()(torch.zeros(1, 1, 4, 4).cuda())
         return torch.device("cuda")
-    except Exception:
+    except Exception:  # pylint: disable=broad-exception-caught  # any CUDA failure → CPU fallback
         logger.warning("CUDA detectada pero no funcional para operaciones de red — usando CPU.")
         return torch.device("cpu")
 
@@ -73,11 +73,11 @@ def load_detector_and_classifier(device: torch.device):
             )
 
     # Load class names
-    with open(class_names_path, "r") as fh:
+    with open(class_names_path, "r", encoding="utf-8") as fh:
         class_names: list[str] = json.load(fh)
 
     # Load YOLO detector (lazy import to avoid heavy ultralytics import at module level)
-    from ultralytics import YOLO  # noqa: PLC0415
+    from ultralytics import YOLO  # noqa: PLC0415  # pylint: disable=import-outside-toplevel
     detector = YOLO(str(detector_path))
 
     # Load MobileNetV3 classifier

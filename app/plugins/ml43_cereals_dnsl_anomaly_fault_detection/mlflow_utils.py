@@ -1,13 +1,18 @@
-"""MLflow helpers for ml43-cereals-dnsl-anomaly-fault-detection — download/upload user-trained model bundles."""
+"""MLflow helpers for ml43-cereals-dnsl-anomaly-fault-detection.
+
+Download/upload of user-trained model bundles.
+"""
+
 from __future__ import annotations
 
 import logging
 import os
 import pickle
+import shutil
+import tempfile
 
 import numpy as np
 import torch
-import shutil
 
 from app.domain.services.mlflow_tracker import BaseMLflowTracker, require_user_model
 from app.plugins.ml43_cereals_dnsl_anomaly_fault_detection.constants import (
@@ -17,7 +22,10 @@ from app.plugins.ml43_cereals_dnsl_anomaly_fault_detection.constants import (
     SCALER_FILENAME,
     XAI_BACKGROUND_FILENAME,
 )
-from app.plugins.ml43_cereals_dnsl_anomaly_fault_detection.model_loader import build_explainer, build_model
+from app.plugins.ml43_cereals_dnsl_anomaly_fault_detection.model_loader import (
+    build_explainer,
+    build_model,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -30,8 +38,6 @@ def download_user_model_from_mlflow(run_id: str):
     or None if the run has no artifacts. Caller MUST shutil.rmtree(temp_dir) after
     inference — use try/finally.
     """
-    import tempfile
-
     tmp = tempfile.mkdtemp(prefix="mlflow_ml43_cereals_")
     try:
         local_path = BaseMLflowTracker(run_id).download_artifacts(tmp, artifact_path="model")
@@ -58,7 +64,15 @@ def download_user_model_from_mlflow(run_id: str):
         explainer = build_explainer(model, model_cfg)
 
         logger.info("Downloaded user model from MLflow run_id=%s", run_id)
-        return model, model_cfg, scaler_dict.get("scaler_x"), scaler_dict.get("scaler_num"), xai_background, explainer, tmp
+        return (
+            model,
+            model_cfg,
+            scaler_dict.get("scaler_x"),
+            scaler_dict.get("scaler_num"),
+            xai_background,
+            explainer,
+            tmp,
+        )
     except BaseException:
         shutil.rmtree(tmp, ignore_errors=True)
         raise
@@ -83,13 +97,15 @@ def get_calibrated_threshold(run_id: str, default: float) -> float:
     return float(value) if isinstance(value, (int, float)) else default
 
 
-def upload_artifacts_to_mlflow(artifact_dir: str, mlflow_run_id: str = "", metrics: dict | None = None) -> str:
+def upload_artifacts_to_mlflow(
+    artifact_dir: str, mlflow_run_id: str = "", metrics: dict | None = None
+) -> str:
     """Upload training artifacts to MLflow and return the run_id.
 
     If mlflow_run_id is provided, logs to that existing run. Otherwise starts a
     new run under the ml43-cereals-dnsl-anomaly-fault-detection experiment.
     """
-    import mlflow
+    import mlflow  # pylint: disable=import-outside-toplevel
 
     mlflow.set_tracking_uri(BaseMLflowTracker.TRACKING_URI)
 

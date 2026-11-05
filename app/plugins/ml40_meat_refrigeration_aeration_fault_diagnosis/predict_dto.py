@@ -81,10 +81,14 @@ class PredictInlineResponse(BaseModel):
     model_id: str
     system: str
     run_id: int
-    prediction: int = Field(..., description="Clase final tras RF + reglas físicas + voto por ciclo")
+    prediction: int = Field(
+        ..., description="Clase final tras RF + reglas físicas + voto por ciclo"
+    )
     prediction_name: str
     confidence: float = Field(..., description="Confianza media del ciclo (0-1)")
-    n_rows_used: int = Field(..., description="Filas realmente puntuadas tras la ingeniería de variables")
+    n_rows_used: int = Field(
+        ..., description="Filas realmente puntuadas tras la ingeniería de variables"
+    )
     model_health: str
     model_name: str
     xai_feature_values: dict[str, Any] | None = Field(

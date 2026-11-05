@@ -59,16 +59,16 @@ def _safe_device() -> str:
     try:
         torch.nn.Conv2d(1, 1, 1).cuda()(torch.zeros(1, 1, 4, 4).cuda())
         return "cuda"
-    except Exception:
+    except Exception:  # pylint: disable=broad-exception-caught  # any CUDA failure falls back to CPU
         logger.warning("CUDA detectada pero no funcional para operaciones de red — usando CPU.")
         return "cpu"
 
 
 def _load_detector(detector_path: str, device: str):
     """Build a Detectron2 Faster R-CNN predictor with the trained weights."""
-    from detectron2 import model_zoo
-    from detectron2.config import get_cfg
-    from detectron2.engine import DefaultPredictor
+    from detectron2 import model_zoo  # pylint: disable=import-outside-toplevel
+    from detectron2.config import get_cfg  # pylint: disable=import-outside-toplevel
+    from detectron2.engine import DefaultPredictor  # pylint: disable=import-outside-toplevel
 
     cfg = get_cfg()
     cfg.merge_from_file(

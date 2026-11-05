@@ -74,7 +74,8 @@ TRAIN_PATIENCE = 20              # early stopping
 TRAIN_N_SEEDS = 3
 TRAIN_SEED_BASE = 42             # the saved model is always seed 42's (canonical_seed)
 MLFLOW_ARTIFACT_PATH = "model"
-USER_SCALERS_FILENAME = "scalers.json"   # feature_columns + input/target scaler of a retrained model
+# feature_columns + input/target scaler of a retrained model
+USER_SCALERS_FILENAME = "scalers.json"
 
 # Métricas del test reportado (models/metrics/model_comparison.json, split 80/20 único) — usadas
 # en stats(), nunca en la reconstrucción de la predicción.

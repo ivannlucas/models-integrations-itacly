@@ -30,6 +30,7 @@ _PROBA = np.array([[0.9, 0.05, 0.05], [0.05, 0.9, 0.05], [0.05, 0.05, 0.9]])
 
 
 def test_xai_feature_values_present_and_aligned_after_sort():
+    """Each row keeps its own window's xai_feature_values after the sort."""
     out = build_predictions_frame(
         _WINDOW_META, _PROBA, None, has_target=False,
         x_seq=_X_SEQ, feature_columns=_FEATURE_COLUMNS,

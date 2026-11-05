@@ -1,14 +1,15 @@
 # utils/files.py
 # Description: Shared module for file system operations.
+"""File-system helpers shared by the deployment scripts."""
 
 import os
 import sys
 from pathlib import Path
 from typing import List, Optional
 
-from git import get_pr_context
+from git import get_pr_context  # pylint: disable=no-name-in-module  # sibling git.py, not GitPython
 
-from ui import log_message
+from ui import log_message  # pylint: disable=import-error  # sibling script module
 
 # Allowed file extensions, mapped to their corresponding language.
 ALLOWED_EXTENSIONS = {
@@ -37,7 +38,7 @@ def read_file_content(filepath: Path) -> Optional[str]:
     """
     try:
         return filepath.read_text(encoding='utf-8')
-    except Exception as e:
+    except Exception as e:  # pylint: disable=broad-exception-caught  # None signals unreadable
         log_message(f"Could not read file '{filepath}': {e}", "ERROR")
         return None
 
@@ -131,7 +132,9 @@ def determine_root_path(files_to_process: List[Path]) -> Path:
 
     except ValueError:
         root_path = Path.cwd().resolve()
-        log_message(f"Could not determine a common path. Using CWD as root: {root_path}", "WARNING")
+        log_message(
+            f"Could not determine a common path. Using CWD as root: {root_path}", "WARNING"
+        )
 
     log_message(f"Determined root path: {root_path}", "INFO")
     return root_path
@@ -168,5 +171,5 @@ def save_output_file(output_path: Path, content: str):
         log_message(f"Output saved successfully to: '{output_path}'", "SUCCESS")
     except IOError as e:
         log_message(f"Failed to write output file at {output_path}: {e}", "ERROR")
-    except Exception as e:
+    except Exception as e:  # pylint: disable=broad-exception-caught  # log-only, never aborts
         log_message(f"An unexpected error occurred while saving {output_path}: {e}", "ERROR")

@@ -33,7 +33,8 @@ class TrainRequest(BaseModel):
         description=(
             "Opcional, junto con reference_financial_path: CSV mensual con el mismo formato que "
             "global_phytosanitary_prices_b2020.csv. Si se indica, pasa a ser el histórico de "
-            "referencia del modelo base nuevo (lags del IPI y exógenas al predecir solo con el IPI)."
+            "referencia del modelo base nuevo (lags del IPI y exógenas al predecir solo con "
+            "el IPI)."
         ),
     )
     reference_financial_path: str = Field(
@@ -54,9 +55,15 @@ class TrainResponse(BaseModel):
 
     model_config = ConfigDict(protected_namespaces=())
     detail: str
-    n_train_rows: int = Field(..., description="Filas de entrenamiento (objetivo antes de la validación)")
+    n_train_rows: int = Field(
+        ...,
+        description="Filas de entrenamiento (objetivo antes de la validación)",
+    )
     n_test_rows: int = Field(..., description="Filas de test con valor real observado (evaluables)")
-    train_end_date: str = Field(..., description="Último mes objetivo admitido en entrenamiento (YYYY-MM-01)")
+    train_end_date: str = Field(
+        ...,
+        description="Último mes objetivo admitido en entrenamiento (YYYY-MM-01)",
+    )
     test_start_date: str
     test_end_date: str
     rmse: float | None
@@ -64,9 +71,15 @@ class TrainResponse(BaseModel):
     mape_pct: float | None
     r2: float | None
     mda_pct: float | None
-    baseline_rmse: float | None = Field(None, description="RMSE de la persistencia (y_pred = IPI actual)")
+    baseline_rmse: float | None = Field(
+        None,
+        description="RMSE de la persistencia (y_pred = IPI actual)",
+    )
     baseline_mape_pct: float | None = None
-    rmse_reduction_pct: float | None = Field(None, description="Mejora de RMSE frente a la persistencia (%)")
+    rmse_reduction_pct: float | None = Field(
+        None,
+        description="Mejora de RMSE frente a la persistencia (%)",
+    )
     mape_reduction_pct: float | None = None
     training_time_s: float
     upload_warning: str | None = None

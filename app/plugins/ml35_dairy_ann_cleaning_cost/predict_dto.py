@@ -11,6 +11,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class PredictBatchRequest(BaseModel):
+    """Batch prediction request: CSV with the 8 ANN input features per row."""
+
     model_config = ConfigDict(protected_namespaces=())
     mode: Literal["batch"] = "batch"
     data_path: str = Field(..., description="Path to CSV with 8 ANN input features")
@@ -18,6 +20,8 @@ class PredictBatchRequest(BaseModel):
 
 
 class PredictBatchResponse(BaseModel):
+    """Batch prediction response: one prediction (or error) per CSV row."""
+
     model_config = ConfigDict(protected_namespaces=())
     model_id: str
     predictions: list[dict[str, Any]]
@@ -37,14 +41,20 @@ class PredictInlineRequest(BaseModel):
     temp_ambiente: float = Field(..., description="Temperatura ambiente (°C)")
     temp_setpoint_leche: float = Field(..., description="Setpoint de temperatura de leche (°C)")
     temp_proceso_leche: float | None = Field(
-        default=None, description="Temperatura de proceso real (°C); si no se aporta = temp_setpoint_leche"
+        default=None,
+        description="Temperatura de proceso real (°C); si no se aporta = temp_setpoint_leche",
     )
     temp_agua_servicio: float | None = Field(
-        default=None, description="Temperatura del agua de servicio (°C); si no se aporta = temp_proceso_leche + 10"
+        default=None,
+        description=(
+            "Temperatura del agua de servicio (°C); si no se aporta = temp_proceso_leche + 10"
+        ),
     )
     flujo_leche_lh: float = Field(..., description="Caudal de leche (L/h)")
     horas_desde_limpieza: float = Field(..., description="Horas desde la última limpieza (h)")
-    presion_diferencial_bar: float = Field(..., description="Presión diferencial en el intercambiador (bar)")
+    presion_diferencial_bar: float = Field(
+        ..., description="Presión diferencial en el intercambiador (bar)"
+    )
 
 
 class PredictInlineResponse(BaseModel):
@@ -53,7 +63,9 @@ class PredictInlineResponse(BaseModel):
     model_config = ConfigDict(protected_namespaces=())
     model_id: str
     consumo_agua_l: float = Field(..., description="Consumo de agua de refrigeración predicho (L)")
-    pu_logrado: float = Field(..., description="Unidades de pasteurización (fórmula determinista, debe ser ≥ 13)")
+    pu_logrado: float = Field(
+        ..., description="Unidades de pasteurización (fórmula determinista, debe ser ≥ 13)"
+    )
 
 
 class PredictOptimizeRequest(BaseModel):
@@ -69,7 +81,9 @@ class PredictOptimizeRequest(BaseModel):
     temp_entrada_leche: float = Field(..., description="Temperatura de entrada de la leche (°C)")
     temp_ambiente: float = Field(..., description="Temperatura ambiente (°C)")
     horas_desde_limpieza: float = Field(..., description="Horas desde la última limpieza (h)")
-    presion_diferencial_bar: float = Field(..., description="Presión diferencial en el intercambiador (bar)")
+    presion_diferencial_bar: float = Field(
+        ..., description="Presión diferencial en el intercambiador (bar)"
+    )
 
 
 class PredictOptimizeResponse(BaseModel):

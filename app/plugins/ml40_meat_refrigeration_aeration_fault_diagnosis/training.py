@@ -50,7 +50,9 @@ def _compute_sample_weights(df: pd.DataFrame, target_col: str = "fault_numeric")
     return weights
 
 
-def _train_refrigeration(df: pd.DataFrame) -> tuple[RandomForestClassifier, StandardScaler, pd.DataFrame, dict]:
+def _train_refrigeration(
+    df: pd.DataFrame,
+) -> tuple[RandomForestClassifier, StandardScaler, pd.DataFrame, dict]:
     """Port of train_refrigeration: returns (model, scaler, test_df, train_stats)."""
     df = df.copy()
     df["fault_numeric"] = pd.to_numeric(df[TARGET_COLUMN], errors="coerce")
@@ -114,7 +116,9 @@ def train_system(engineered_df: pd.DataFrame, system: str, thresholds: dict) -> 
     metrics = {
         "accuracy": float(accuracy_score(y_true, y_final)),
         "f1_macro": float(f1_score(y_true, y_final, average="macro", zero_division=0)),
-        "precision_macro": float(precision_score(y_true, y_final, average="macro", zero_division=0)),
+        "precision_macro": float(
+            precision_score(y_true, y_final, average="macro", zero_division=0)
+        ),
         "recall_macro": float(recall_score(y_true, y_final, average="macro", zero_division=0)),
     }
     n_runs_test = int(test_df["run_id"].nunique())

@@ -27,7 +27,8 @@ class PredictBatchRequest(BaseModel):
         ...,
         description=(
             "Path to CSV — 8 base MLP features, or the 5 context columns when model_key='optimize' "
-            "(optional per-row columns in optimize: seed, decision_mode, and the 3 current setpoints)"
+            "(optional per-row columns in optimize: seed, decision_mode, and the 3 current "
+            "setpoints)"
         ),
     )
     model_key: str | None = Field(
@@ -64,9 +65,15 @@ class PredictInlineRequest(BaseModel):
 
     # Controllable variables — all three required for the MLP prediction; optional in
     # optimize (the GA decides them; if given, they are the current operation).
-    T_serv: float | None = Field(default=None, description="Temperatura del líquido de calentamiento (°C)")
-    Delta_P: float | None = Field(default=None, description="Presión de impulsión de las bombas (bar)")
-    Regeneration_perc: float | None = Field(default=None, description="Eficiencia de regeneración térmica (%)")
+    T_serv: float | None = Field(
+        default=None, description="Temperatura del líquido de calentamiento (°C)"
+    )
+    Delta_P: float | None = Field(
+        default=None, description="Presión de impulsión de las bombas (bar)"
+    )
+    Regeneration_perc: float | None = Field(
+        default=None, description="Eficiencia de regeneración térmica (%)"
+    )
 
     # Optimize-only knobs
     decision_mode: Literal["static", "adaptive", "hybrid"] = Field(
@@ -74,7 +81,10 @@ class PredictInlineRequest(BaseModel):
     )
     seed: int = Field(
         default=43,
-        description="Semilla del GA adaptativo (solo optimize). El original usa 42 + índice de fila (desde 1)",
+        description=(
+            "Semilla del GA adaptativo (solo optimize). El original usa 42 + índice de fila "
+            "(desde 1)"
+        ),
     )
 
     @model_validator(mode="after")
@@ -115,20 +125,43 @@ class PredictOptimizeResponse(BaseModel):
     seed: int = Field(..., description="Semilla del GA adaptativo utilizada")
     recommended_T_serv: float = Field(..., description="Setpoint óptimo de T_serv (°C)")
     recommended_Delta_P: float = Field(..., description="Setpoint óptimo de Delta_P")
-    recommended_Regeneration_perc: float = Field(..., description="Setpoint óptimo de regeneración (%)")
-    recommended_CO2_pred: float = Field(..., description="CO2 predicho con los setpoints recomendados (kg)")
-    recommended_T_out_pred: float = Field(..., description="T_out predicha con los setpoints recomendados (°C)")
-    recommended_factible: bool = Field(..., description="Informativo: True si recommended_T_out_pred >= 72.5 °C. No se rechaza la respuesta si es False; la plataforma debe validarlo")
+    recommended_Regeneration_perc: float = Field(
+        ..., description="Setpoint óptimo de regeneración (%)"
+    )
+    recommended_CO2_pred: float = Field(
+        ..., description="CO2 predicho con los setpoints recomendados (kg)"
+    )
+    recommended_T_out_pred: float = Field(
+        ..., description="T_out predicha con los setpoints recomendados (°C)"
+    )
+    recommended_factible: bool = Field(
+        ...,
+        description=(
+            "Informativo: True si recommended_T_out_pred >= 72.5 °C. No se rechaza la respuesta "
+            "si es False; la plataforma debe validarlo"
+        ),
+    )
     policy_T_serv: float = Field(..., description="T_serv de la política global estática")
     policy_Delta_P: float = Field(..., description="Delta_P de la política global estática")
-    policy_Regeneration_perc: float = Field(..., description="Regeneración de la política global estática")
+    policy_Regeneration_perc: float = Field(
+        ..., description="Regeneración de la política global estática"
+    )
     policy_CO2_pred: float = Field(..., description="CO2 predicho con la política global (kg)")
     policy_T_out_pred: float = Field(..., description="T_out predicha con la política global (°C)")
-    co2_saving_vs_policy: float = Field(..., description="policy_CO2_pred - recommended_CO2_pred (kg)")
-    current_CO2_pred: float | None = Field(default=None, description="CO2 predicho con la operación actual (kg)")
-    current_T_out_pred: float | None = Field(default=None, description="T_out predicha con la operación actual (°C)")
+    co2_saving_vs_policy: float = Field(
+        ..., description="policy_CO2_pred - recommended_CO2_pred (kg)"
+    )
+    current_CO2_pred: float | None = Field(
+        default=None, description="CO2 predicho con la operación actual (kg)"
+    )
+    current_T_out_pred: float | None = Field(
+        default=None, description="T_out predicha con la operación actual (°C)"
+    )
     co2_saving_vs_current: float | None = Field(
-        default=None, description="current_CO2_pred - recommended_CO2_pred (kg); solo si se aporta la operación actual",
+        default=None,
+        description=(
+            "current_CO2_pred - recommended_CO2_pred (kg); solo si se aporta la operación actual"
+        ),
     )
 
 

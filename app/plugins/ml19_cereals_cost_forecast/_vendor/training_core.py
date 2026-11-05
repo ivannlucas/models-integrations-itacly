@@ -63,6 +63,7 @@ CLF_HORIZONS = [1, 2, 3]   # horizontes clasificacion: H1, H2, H3
 
 RIDGE_ALPHA = 100
 
+# pylint: disable-next=use-dict-literal  # verbatim vendored code (AST-checked by tests)
 XGB_PARAMS = dict(
     max_depth=2,
     learning_rate=0.1,
@@ -76,7 +77,9 @@ XGB_PARAMS = dict(
 )
 
 LR_C       = 0.1           # LogisticRegression C
+# pylint: disable-next=use-dict-literal  # verbatim vendored code (AST-checked by tests)
 RF_PARAMS  = dict(n_estimators=200, max_depth=3, min_samples_leaf=10, random_state=42)
+# pylint: disable-next=use-dict-literal  # verbatim vendored code (AST-checked by tests)
 XGBC_PARAMS = dict(
     max_depth=2,
     learning_rate=0.1,
@@ -107,6 +110,7 @@ def build_multihorizon_targets(df: pd.DataFrame, horizons: list[int]) -> pd.Data
     return df
 
 
+# pylint: disable-next=unused-argument  # verbatim vendored code (AST-checked by tests)
 def _select_best_model(available: dict[str, dict], metric: str, task: str) -> str:
     """Selecciona mejor modelo segun metrica; minimiza solo errores."""
     minimize_metrics = {"mae", "rmse", "brier"}
@@ -144,14 +148,17 @@ def audit_leakage(
             break
         r = df[feat].corr(df["target_next"])
         if not np.isnan(r) and abs(r) > threshold:
+            # pylint: disable-next=logging-fstring-interpolation  # verbatim vendored code (AST-checked by tests)
             log.warning(f"  [!]  LEAKAGE: {feat}  r_target_next = {r:.4f}")
             leakage.append(feat)
 
     safe = [f for f in all_features if f not in leakage and "target_next" not in f.lower()]
+    # pylint: disable-next=logging-fstring-interpolation  # verbatim vendored code (AST-checked by tests)
     log.info(f"Auditoria leakage: {len(leakage)} eliminadas -> {len(safe)} features seguras")
     return safe
 
 
+# pylint: disable-next=too-many-arguments,too-many-positional-arguments,too-many-locals  # verbatim vendored code (AST-checked by tests)
 def select_features(
     df: pd.DataFrame,
     min_corr: float = MIN_CORR,
@@ -196,6 +203,7 @@ def select_features(
     if strict:
         contemporary = [f for f in all_features if is_contemporary_return(f)]
         if contemporary:
+            # pylint: disable-next=logging-fstring-interpolation  # verbatim vendored code (AST-checked by tests)
             log.info(f"STRICT: excluyendo {len(contemporary)} retornos contemporaneos: "
                      f"{contemporary[:5]}{'...' if len(contemporary) > 5 else ''}")
         all_features = [f for f in all_features if f not in contemporary]
@@ -212,7 +220,8 @@ def select_features(
         )
     else:
         log.info(
-            "Leakage audit omitida: no existe columna proxy 'target_next' en el dataset de seleccion."
+            "Leakage audit omitida: no existe columna proxy 'target_next' en el dataset de "
+            "seleccion."
         )
     safe_features = audit_leakage(df_sel, all_features, threshold=leakage_threshold)
 
@@ -226,6 +235,7 @@ def select_features(
 
     corr_series = pd.Series(corr_dict).sort_values(key=abs, ascending=False)
     selected = corr_series[abs(corr_series) >= min_corr]
+    # pylint: disable-next=logging-fstring-interpolation  # verbatim vendored code (AST-checked by tests)
     log.info(
         f"Features |r| >= {min_corr}: {len(selected)} de {len(safe_features)}"
         f"{'  [STRICT]' if strict else ''}"
@@ -237,6 +247,7 @@ def select_features(
     corr_matrix = df_sel[selected_feats].corr()
 
     to_drop: set[str] = set()
+    # pylint: disable-next=consider-using-enumerate  # verbatim vendored code (AST-checked by tests)
     for i in range(len(selected_feats)):
         if selected_feats[i] in to_drop:
             continue
@@ -250,6 +261,7 @@ def select_features(
                 to_drop.add(drop)
 
     final_features = [f for f in selected_feats if f not in to_drop]
+    # pylint: disable-next=logging-fstring-interpolation  # verbatim vendored code (AST-checked by tests)
     log.info(f"Tras eliminar redundancia: {len(final_features)} features finales")
 
     return final_features, corr_dict
@@ -284,10 +296,13 @@ def eval_regression(
     med_pred = float(np.median(np.abs(y_pred)))
     if med_pred > 0:
         hc = np.abs(y_pred) > med_pred
-        dir_acc_hc = float(accuracy_score(dir_true[hc], dir_pred[hc])) if hc.sum() > 0 else float("nan")
+        dir_acc_hc = (
+            float(accuracy_score(dir_true[hc], dir_pred[hc])) if hc.sum() > 0 else float("nan")
+        )
     else:
         dir_acc_hc = float("nan")
 
+    # pylint: disable-next=use-dict-literal  # verbatim vendored code (AST-checked by tests)
     return dict(
         name=name, mae=mae, rmse=rmse, r2=r2, corr=corr,
         dir_acc=dir_acc, sharpe=sharpe, dir_acc_high_conf=dir_acc_hc,
@@ -316,6 +331,7 @@ def eval_classification(
     f1  = float(f1_score(y_true, y_pred, zero_division=0))
     try:
         auc = float(roc_auc_score(y_true, probs))
+    # pylint: disable-next=broad-exception-caught  # verbatim vendored code (AST-checked by tests)
     except Exception:
         auc = 0.5
     bri = float(brier_score_loss(y_true, probs))
@@ -324,6 +340,7 @@ def eval_classification(
     sig = np.where(y_pred == 1, 1.0, -1.0) * (2.0 * y_true.astype(float) - 1.0)
     sharpe = float(sig.mean() / sig.std() * np.sqrt(12)) if sig.std() > 0 else 0.0
 
+    # pylint: disable-next=use-dict-literal  # verbatim vendored code (AST-checked by tests)
     return dict(
         name=name, acc=acc, f1=f1, auc=auc, brier=bri, sharpe=sharpe,
         # guardamos arrays para analisis posterior (distribucion, equity, etc.)
@@ -362,12 +379,14 @@ def best_lasso_alpha(
         if mean_r > best_score:
             best_score, best_alpha = mean_r, alpha
 
+    # pylint: disable-next=logging-fstring-interpolation  # verbatim vendored code (AST-checked by tests)
     log.info(f"Lasso: best_alpha={best_alpha}  CV_r={best_score:+.3f}")
     return best_alpha
 
 
 # ── src/training/walk_forward.py ──────────────────────────────────────────────
 
+# pylint: disable-next=too-many-arguments,too-many-positional-arguments,too-many-locals  # verbatim vendored code (AST-checked by tests)
 def walk_forward_regression(
     df: pd.DataFrame,
     features: list[str],
@@ -409,6 +428,7 @@ def walk_forward_regression(
     n_test = len(y) - idx0
 
     if n_test <= 0:
+        # pylint: disable-next=logging-fstring-interpolation  # verbatim vendored code (AST-checked by tests)
         log.warning(f"WF Reg [{target_col}]: sin datos de test tras {train_end}")
         return np.array([]), np.array([]), np.array([])
 
@@ -434,6 +454,7 @@ def walk_forward_regression(
         })
 
         if verbose and (i + 1) % 20 == 0:
+            # pylint: disable-next=logging-fstring-interpolation  # verbatim vendored code (AST-checked by tests)
             log.info(f"  WF Reg [{target_col}] paso {i + 1}/{n_test}")
 
     if trace_path is not None:
@@ -445,6 +466,7 @@ def walk_forward_regression(
     return y[idx0:], preds, dates[idx0:]
 
 
+# pylint: disable-next=too-many-arguments,too-many-positional-arguments,too-many-locals  # verbatim vendored code (AST-checked by tests)
 def walk_forward_classification(
     df: pd.DataFrame,
     features: list[str],
@@ -476,6 +498,7 @@ def walk_forward_classification(
     n_test = len(y) - idx0
 
     if n_test <= 0:
+        # pylint: disable-next=logging-fstring-interpolation  # verbatim vendored code (AST-checked by tests)
         log.warning(f"WF Clf [{target_col}]: sin datos de test tras {train_end}")
         return np.array([]), np.array([], dtype=int), np.array([]), np.array([])
 
@@ -509,6 +532,7 @@ def walk_forward_classification(
         })
 
         if verbose and (i + 1) % 20 == 0:
+            # pylint: disable-next=logging-fstring-interpolation  # verbatim vendored code (AST-checked by tests)
             log.info(f"  WF Clf [{target_col}] paso {i + 1}/{n_test}")
 
     if trace_path is not None:

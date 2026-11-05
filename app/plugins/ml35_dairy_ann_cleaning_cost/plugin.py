@@ -61,9 +61,9 @@ def _compute_pu(temp_proceso: float, flujo: float) -> float:
     return t_res * (10 ** ((temp_proceso - T_REF_CELSIUS) / Z_VALUE))
 
 
-def _infer(model: Any, scaler_X: Any, scaler_y: Any, df: pd.DataFrame) -> float:
+def _infer(model: Any, scaler_x: Any, scaler_y: Any, df: pd.DataFrame) -> float:
     """Scale input → ANN forward → descale output → return float (L)."""
-    x_scaled = scaler_X.transform(df)
+    x_scaled = scaler_x.transform(df)
     with torch.no_grad():
         pred_scaled = model(torch.FloatTensor(x_scaled)).numpy()
     return float(scaler_y.inverse_transform(pred_scaled)[0, 0])
@@ -92,8 +92,9 @@ def _xai_values_from_features(data: dict) -> dict[str, float] | None:
     return xai or None
 
 
-def _build_df(temp_entrada, temp_ambiente, temp_setpoint, temp_proceso, temp_agua, flujo,
-              horas, presion) -> pd.DataFrame:
+def _build_df(  # pylint: disable=too-many-arguments,too-many-positional-arguments
+    temp_entrada, temp_ambiente, temp_setpoint, temp_proceso, temp_agua, flujo, horas, presion
+) -> pd.DataFrame:
     return pd.DataFrame([[
         temp_entrada, temp_ambiente, temp_setpoint, temp_proceso,
         temp_agua, flujo, horas, presion,
@@ -105,7 +106,7 @@ class Ml35DairyAnnCleaningCostPlugin(ModelPluginPort):
 
     def __init__(self) -> None:
         self._model: Any = None
-        self._scaler_X: Any = None
+        self._scaler_X: Any = None  # pylint: disable=invalid-name  # mirrors the delivered scaler_X
         self._scaler_y: Any = None
         self._predict_count: int = 0
         self._last_predict_at: str | None = None
@@ -166,7 +167,7 @@ class Ml35DairyAnnCleaningCostPlugin(ModelPluginPort):
 
     def _run_predict(self, features: dict, ctx: tuple) -> PredictInlineResponse:
         """ANN single-sample inference with PU validation."""
-        model, scaler_X, scaler_y = ctx
+        model, scaler_x, scaler_y = ctx
         data = _resolve_features(features)
 
         temp_setpoint = float(data["temp_setpoint_leche"])
@@ -187,24 +188,26 @@ class Ml35DairyAnnCleaningCostPlugin(ModelPluginPort):
             data["temp_agua_servicio"], flujo,
             data["horas_desde_limpieza"], data["presion_diferencial_bar"],
         )
-        consumo = _infer(model, scaler_X, scaler_y, df)
+        consumo = _infer(model, scaler_x, scaler_y, df)
         return PredictInlineResponse(
             model_id=MODEL_ID,
             consumo_agua_l=round(consumo, 2),
             pu_logrado=round(pu, 4),
         )
 
-    def _run_optimize(self, features: dict, ctx: tuple) -> PredictOptimizeResponse:
+    def _run_optimize(  # pylint: disable=too-many-locals
+        self, features: dict, ctx: tuple
+    ) -> PredictOptimizeResponse:
         """Run pygad GA to find minimal-water setpoints respecting PU ≥ 13."""
         import pygad  # pylint: disable=import-outside-toplevel
 
-        model, scaler_X, scaler_y = ctx
+        model, scaler_x, scaler_y = ctx
         context = {k: float(features[k]) for k in (
             "temp_entrada_leche", "temp_ambiente",
             "horas_desde_limpieza", "presion_diferencial_bar",
         )}
 
-        def _fitness(ga_instance, solution, solution_idx):
+        def _fitness(_ga_instance, solution, _solution_idx):
             t_leche, t_agua, flujo = float(solution[0]), float(solution[1]), float(solution[2])
             pu = _compute_pu(t_leche, flujo)
             if t_leche < TEMP_MIN_CELSIUS or pu < PU_MIN:
@@ -214,7 +217,7 @@ class Ml35DairyAnnCleaningCostPlugin(ModelPluginPort):
                 t_leche, t_leche, t_agua, flujo,
                 context["horas_desde_limpieza"], context["presion_diferencial_bar"],
             )
-            consumo = _infer(model, scaler_X, scaler_y, df)
+            consumo = _infer(model, scaler_x, scaler_y, df)
             return 1.0 / (consumo + 1e-6)
 
         ga = pygad.GA(
@@ -240,7 +243,7 @@ class Ml35DairyAnnCleaningCostPlugin(ModelPluginPort):
                 t_l, t_l, t_a, flujo,
                 context["horas_desde_limpieza"], context["presion_diferencial_bar"],
             )
-            return _infer(model, scaler_X, scaler_y, df)
+            return _infer(model, scaler_x, scaler_y, df)
 
         consumo_estandar = _consumo(BASELINE_TEMP_LECHE, BASELINE_TEMP_AGUA, BASELINE_FLUJO)
         consumo_optimizado = _consumo(opt_t_leche, opt_t_agua, opt_flujo)
@@ -278,37 +281,47 @@ class Ml35DairyAnnCleaningCostPlugin(ModelPluginPort):
                 try:
                     row_dict = row.to_dict()
                     pred = self._run_predict(row_dict, ctx)
-                    predictions.append({
-                        "row": int(idx),
-                        "consumo_agua_l": pred.consumo_agua_l,
-                        "pu_logrado": pred.pu_logrado,
-                        "xai_feature_values": _xai_values_from_features(_resolve_features(row_dict)),
-                    })
-                except Exception as exc:
+                    predictions.append(
+                        {
+                            "row": int(idx),
+                            "consumo_agua_l": pred.consumo_agua_l,
+                            "pu_logrado": pred.pu_logrado,
+                            "xai_feature_values": _xai_values_from_features(
+                                _resolve_features(row_dict)
+                            ),
+                        }
+                    )
+                except Exception as exc:  # pylint: disable=broad-exception-caught  # per-row error capture
                     logger.warning("Error en fila %s: %s", idx, exc)
                     predictions.append({"row": int(idx), "error": str(exc)})
             self._record()
-            logger.info("predict_batch done — %d rows, mlflow=%s", len(predictions), bool(mlflow_run_id))
-            return PredictBatchResponse(model_id=MODEL_ID, predictions=predictions, output_path=None)
+            logger.info(
+                "predict_batch done — %d rows, mlflow=%s", len(predictions), bool(mlflow_run_id)
+            )
+            return PredictBatchResponse(
+                model_id=MODEL_ID, predictions=predictions, output_path=None
+            )
         finally:
             if user_temp_dir:
                 shutil.rmtree(user_temp_dir, ignore_errors=True)
 
     # ── train ─────────────────────────────────────────────────────────────────
 
-    def train(self, *, data_path: str, mlflow_run_id: str) -> TrainResponse:  # pylint: disable=too-many-locals
+    def train(  # pylint: disable=too-many-locals,too-many-statements
+        self, *, data_path: str, mlflow_run_id: str
+    ) -> TrainResponse:
         """Fine-tune the ANN on user-labeled data (consumo_agua_l target required)."""
         import tempfile  # pylint: disable=import-outside-toplevel
         import joblib  # pylint: disable=import-outside-toplevel
-        import torch.nn as nn  # pylint: disable=import-outside-toplevel
-        import torch.optim as optim  # pylint: disable=import-outside-toplevel
+        from torch import nn  # pylint: disable=import-outside-toplevel
+        from torch import optim  # pylint: disable=import-outside-toplevel
 
-        EPOCHS = 100
-        LR = 0.001
+        epochs = 100
+        lr = 0.001
 
         if mlflow_run_id:
             tracker: BaseMLflowTracker | None = BaseMLflowTracker(mlflow_run_id)
-            tracker.log_params({"epochs": EPOCHS, "lr": LR, "optimizer": "Adam"})
+            tracker.log_params({"epochs": epochs, "lr": lr, "optimizer": "Adam"})
         else:
             tracker = None
 
@@ -331,12 +344,12 @@ class Ml35DairyAnnCleaningCostPlugin(ModelPluginPort):
         fine_model = PasteurizationANN(input_size=len(FEATURES))
         fine_model.load_state_dict(self._model.state_dict())
         fine_model.train()
-        optimizer = optim.Adam(fine_model.parameters(), lr=LR)
+        optimizer = optim.Adam(fine_model.parameters(), lr=lr)
         criterion = nn.MSELoss()
         x_tensor = torch.FloatTensor(x_scaled)
         y_tensor = torch.FloatTensor(y_scaled)
 
-        for _ in range(EPOCHS):
+        for _ in range(epochs):
             optimizer.zero_grad()
             loss = criterion(fine_model(x_tensor), y_tensor)
             loss.backward()
@@ -356,7 +369,9 @@ class Ml35DairyAnnCleaningCostPlugin(ModelPluginPort):
         # mlflow_run_id); the served base model and its local artifacts are never replaced.
         upload_warning = None
         if not tracker:
-            raise ModelPersistenceError("Sin run de MLflow: el modelo reentrenado no se ha guardado.")
+            raise ModelPersistenceError(
+                "Sin run de MLflow: el modelo reentrenado no se ha guardado."
+            )
         if tracker:
             tracker.log_metrics({"mae": mae, "r2": r2, "n_samples": len(df)})
             try:
@@ -368,9 +383,13 @@ class Ml35DairyAnnCleaningCostPlugin(ModelPluginPort):
                 shutil.rmtree(mlflow_tmp, ignore_errors=True)
             except Exception as exc:  # pylint: disable=broad-exception-caught
                 logger.error("MLflow artifact upload failed: %s", exc)
-                raise ModelPersistenceError(f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}") from exc
+                raise ModelPersistenceError(
+                    f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}"
+                ) from exc
 
-        logger.info("train() done — mae=%.2f r2=%.4f n=%d mlflow=%s", mae, r2, len(df), bool(mlflow_run_id))
+        logger.info(
+            "train() done — mae=%.2f r2=%.4f n=%d mlflow=%s", mae, r2, len(df), bool(mlflow_run_id)
+        )
         return TrainResponse(
             detail="Fine-tuning completado",
             mae=round(mae, 2),
@@ -393,36 +412,79 @@ class Ml35DairyAnnCleaningCostPlugin(ModelPluginPort):
             task_type="regression_prescriptive",
             framework=FRAMEWORK,
             inputs=[
-                InputField(name="temp_entrada_leche", type="float",
-                           description="Temperatura de entrada de la leche (°C)"),
-                InputField(name="temp_ambiente", type="float",
-                           description="Temperatura ambiente (°C)"),
-                InputField(name="temp_setpoint_leche", type="float",
-                           description="Setpoint de temperatura de leche (°C, ≥ 72)"),
-                InputField(name="temp_proceso_leche", type="float",
-                           description="Temperatura de proceso real (°C); si no se aporta = temp_setpoint_leche"),
-                InputField(name="temp_agua_servicio", type="float",
-                           description="Temperatura del agua de servicio (°C); si no se aporta = temp_proceso_leche + 10"),
-                InputField(name="flujo_leche_lh", type="float",
-                           description="Caudal de leche (L/h)"),
-                InputField(name="horas_desde_limpieza", type="float",
-                           description="Horas desde la última limpieza — proxy de fouling (h)"),
-                InputField(name="presion_diferencial_bar", type="float",
-                           description="Presión diferencial en el intercambiador de calor (bar)"),
+                InputField(
+                    name="temp_entrada_leche",
+                    type="float",
+                    description="Temperatura de entrada de la leche (°C)",
+                ),
+                InputField(
+                    name="temp_ambiente", type="float", description="Temperatura ambiente (°C)"
+                ),
+                InputField(
+                    name="temp_setpoint_leche",
+                    type="float",
+                    description="Setpoint de temperatura de leche (°C, ≥ 72)",
+                ),
+                InputField(
+                    name="temp_proceso_leche",
+                    type="float",
+                    description=(
+                        "Temperatura de proceso real (°C); si no se aporta = temp_setpoint_leche"
+                    ),
+                ),
+                InputField(
+                    name="temp_agua_servicio",
+                    type="float",
+                    description=(
+                        "Temperatura del agua de servicio (°C); si no se aporta = "
+                        "temp_proceso_leche + 10"
+                    ),
+                ),
+                InputField(
+                    name="flujo_leche_lh", type="float", description="Caudal de leche (L/h)"
+                ),
+                InputField(
+                    name="horas_desde_limpieza",
+                    type="float",
+                    description="Horas desde la última limpieza — proxy de fouling (h)",
+                ),
+                InputField(
+                    name="presion_diferencial_bar",
+                    type="float",
+                    description="Presión diferencial en el intercambiador de calor (bar)",
+                ),
             ],
             outputs=[
-                OutputField(name="consumo_agua_l", type="float",
-                            description="Consumo de agua de refrigeración predicho (L) [modo inline]"),
-                OutputField(name="pu_logrado", type="float",
-                            description="Unidades de pasteurización logradas (PU ≥ 13 requerido)"),
-                OutputField(name="opt_temp_leche", type="float",
-                            description="Setpoint óptimo de temperatura leche (°C) [modo optimize]"),
-                OutputField(name="opt_temp_agua", type="float",
-                            description="Temperatura óptima agua de servicio (°C) [modo optimize]"),
-                OutputField(name="opt_flujo", type="float",
-                            description="Caudal óptimo de leche (L/h) [modo optimize]"),
-                OutputField(name="ahorro_pct", type="float",
-                            description="Ahorro de agua vs. baseline estándar (%) [modo optimize]"),
+                OutputField(
+                    name="consumo_agua_l",
+                    type="float",
+                    description="Consumo de agua de refrigeración predicho (L) [modo inline]",
+                ),
+                OutputField(
+                    name="pu_logrado",
+                    type="float",
+                    description="Unidades de pasteurización logradas (PU ≥ 13 requerido)",
+                ),
+                OutputField(
+                    name="opt_temp_leche",
+                    type="float",
+                    description="Setpoint óptimo de temperatura leche (°C) [modo optimize]",
+                ),
+                OutputField(
+                    name="opt_temp_agua",
+                    type="float",
+                    description="Temperatura óptima agua de servicio (°C) [modo optimize]",
+                ),
+                OutputField(
+                    name="opt_flujo",
+                    type="float",
+                    description="Caudal óptimo de leche (L/h) [modo optimize]",
+                ),
+                OutputField(
+                    name="ahorro_pct",
+                    type="float",
+                    description="Ahorro de agua vs. baseline estándar (%) [modo optimize]",
+                ),
             ],
             metrics={
                 "r2_test": 0.9932,

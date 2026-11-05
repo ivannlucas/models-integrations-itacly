@@ -39,7 +39,9 @@ def run_inference_single(
         return float(loss.item())
 
 
-def get_cls_embedding_single(model: AudioMAE, spec: torch.Tensor, device: torch.device) -> np.ndarray:
+def get_cls_embedding_single(
+    model: AudioMAE, spec: torch.Tensor, device: torch.device
+) -> np.ndarray:
     """CLS token of the encoder (no masking) for a single sample. Returns shape (embed_dim,)."""
     model.eval()
     with torch.no_grad():

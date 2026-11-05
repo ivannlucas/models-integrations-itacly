@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import shutil
+import tempfile
 
 import joblib
 
@@ -25,7 +26,6 @@ def download_user_predictor_from_mlflow(run_id: str):
     Returns (model_qual, model_bound, metadata, temp_dir).
     Caller MUST shutil.rmtree(temp_dir) after inference.
     """
-    import tempfile
     tmp = tempfile.mkdtemp(prefix="mlflow_wine_")
     try:
         local_path = BaseMLflowTracker(run_id).download_artifacts(tmp, artifact_path="model")
@@ -42,7 +42,7 @@ def download_user_predictor_from_mlflow(run_id: str):
         # ("UnpicklingError: STACK_GLOBAL requires str").
         model_qual = joblib.load(qual_path)
         model_bound = joblib.load(bound_path)
-        with open(meta_path) as f:
+        with open(meta_path, encoding="utf-8") as f:
             metadata = json.load(f)
 
         logger.info("Downloaded user predictor from MLflow run_id=%s", run_id)

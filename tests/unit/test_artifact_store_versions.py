@@ -13,19 +13,22 @@ ROOT = "artifacts/fixed/m/"
 
 @pytest.fixture(autouse=True)
 def _fresh_active_versions(monkeypatch):
+    """Start every test with an empty process-wide active-version cache."""
     monkeypatch.setattr(store_mod, "_ACTIVE_VERSIONS", {})
 
 
-@pytest.fixture
-def s3(monkeypatch):
+@pytest.fixture(name="s3")
+def fixture_s3(monkeypatch):
+    """Route ArtifactStore to an in-memory FakeS3 bucket."""
     fake = FakeS3()
     monkeypatch.setattr(store_mod, "_build_s3_client", lambda: fake)
     monkeypatch.setenv("STORAGE_BUCKET", "xai")
     return fake
 
 
-@pytest.fixture
-def bundle(tmp_path):
+@pytest.fixture(name="bundle")
+def fixture_bundle(tmp_path):
+    """Factory that writes the given files into a fresh local bundle folder."""
     def _make(**files: bytes):
         d = tmp_path / f"bundle_{len(list(tmp_path.glob('bundle_*')))}"
         d.mkdir()
@@ -36,6 +39,7 @@ def bundle(tmp_path):
 
 
 def test_without_pointer_the_base_is_v0_at_the_root(s3, tmp_path):
+    """Without current.json the active base is v0, served from the folder root."""
     s3.put(ROOT + "model.pkl", b"old")
     store = ArtifactStore("m", root=tmp_path / "cache")
     assert store.refresh() == "v0"
@@ -46,6 +50,7 @@ def test_without_pointer_the_base_is_v0_at_the_root(s3, tmp_path):
 
 
 def test_v0_download_ignores_versions_tree_and_pointer(s3, tmp_path):
+    """Downloading v0 skips the versions/ tree and the pointer file."""
     s3.put(ROOT + "model.pkl", b"old")
     s3.put(ROOT + "versions/v1/model.pkl", b"new")
     s3.put(ROOT + "versions/v1/version.json", b'{"version": "v1", "parent": "v0"}')
@@ -57,13 +62,16 @@ def test_v0_download_ignores_versions_tree_and_pointer(s3, tmp_path):
 
 
 def test_publish_inherits_the_parent_and_moves_the_pointer_last(s3, tmp_path, bundle):
+    """publish_version inherits parent files, writes version.json and moves the pointer."""
     s3.put(ROOT + "model.pkl", b"old")
     s3.put(ROOT + "panel.csv", b"ctx")
     store = ArtifactStore("m", root=tmp_path / "cache")
     store.refresh()
 
-    info = store.publish_version(bundle(**{"model.pkl": b"new"}),
-                                 {"mlflow_run_id": "run-1", "data_path": "s3://d.csv", "metrics": {"mae": 1.5}})
+    info = store.publish_version(
+        bundle(**{"model.pkl": b"new"}),
+        {"mlflow_run_id": "run-1", "data_path": "s3://d.csv", "metrics": {"mae": 1.5}},
+    )
 
     assert info["version"] == "v1" and info["parent"] == "v0" and info["mlflow_run_id"] == "run-1"
     assert info["metrics"] == {"mae": 1.5} and info["created_at"]
@@ -82,6 +90,7 @@ def test_publish_inherits_the_parent_and_moves_the_pointer_last(s3, tmp_path, bu
 
 
 def test_version_json_of_the_parent_is_not_inherited_as_an_artifact(s3, tmp_path, bundle):
+    """Each version gets its own version.json, not the parent's."""
     s3.put(ROOT + "model.pkl", b"old")
     store = ArtifactStore("m", root=tmp_path / "cache")
     store.publish_version(bundle(**{"model.pkl": b"a"}), {})
@@ -89,10 +98,14 @@ def test_version_json_of_the_parent_is_not_inherited_as_an_artifact(s3, tmp_path
     assert json.loads(s3.get(ROOT + "versions/v2/version.json"))["version"] == "v2"
 
 
-def test_failed_upload_keeps_the_pointer_and_the_next_publish_skips_the_number(s3, tmp_path, bundle):
+def test_failed_upload_keeps_the_pointer_and_the_next_publish_skips_the_number(
+    s3, tmp_path, bundle
+):
+    """A failed upload leaves the pointer alone and the next publish uses a new number."""
     s3.put(ROOT + "model.pkl", b"old")
     store = ArtifactStore("m", root=tmp_path / "cache")
-    s3.fail_upload_on = "version.json"            # every artifact uploads, version.json (last) fails
+    # every artifact uploads, version.json (last) fails
+    s3.fail_upload_on = "version.json"
     with pytest.raises(ConnectionError):
         store.publish_version(bundle(**{"model.pkl": b"new"}), {})
     assert ROOT + "current.json" not in s3.keys()
@@ -104,6 +117,7 @@ def test_failed_upload_keeps_the_pointer_and_the_next_publish_skips_the_number(s
 
 
 def test_refresh_reads_the_pointer_and_stores_of_the_same_folder_share_it(s3, tmp_path):
+    """refresh() reads the pointer, shared by stores with the same root and folder."""
     s3.put(ROOT + "current.json", b'{"version": "v1"}')
     s3.put(ROOT + "versions/v1/model.pkl", b"new")
     s3.put(ROOT + "versions/v1/version.json", b'{"version": "v1", "parent": "v0"}')
@@ -116,6 +130,7 @@ def test_refresh_reads_the_pointer_and_stores_of_the_same_folder_share_it(s3, tm
 
 
 def test_set_active_version_and_version_info(s3, tmp_path, bundle):
+    """set_active_version moves the pointer and unknown versions raise."""
     s3.put(ROOT + "model.pkl", b"old")
     store = ArtifactStore("m", root=tmp_path / "cache")
     store.publish_version(bundle(**{"model.pkl": b"a"}), {})
@@ -131,16 +146,22 @@ def test_set_active_version_and_version_info(s3, tmp_path, bundle):
         store.set_active_version("v9")
     with pytest.raises(BaseVersionNotFoundError):
         store.version_info("v9")
-    assert store.version_exists("v0") and store.version_exists("v2") and not store.version_exists("v9")
+    assert store.version_exists("v0") and store.version_exists("v2")
+    assert not store.version_exists("v9")
 
 
 def test_version_info_is_read_from_s3_when_the_version_is_not_cached(s3, tmp_path):
-    s3.put(ROOT + "versions/v4/version.json", b'{"version": "v4", "parent": "v3", "metrics": {"f1": 0.7}}')
+    """version_info falls back to S3 for versions not cached locally."""
+    s3.put(
+        ROOT + "versions/v4/version.json",
+        b'{"version": "v4", "parent": "v3", "metrics": {"f1": 0.7}}',
+    )
     store = ArtifactStore("m", root=tmp_path / "cache")
     assert store.version_info("v4")["metrics"] == {"f1": 0.7}
 
 
 def test_local_mode_without_bucket(monkeypatch, tmp_path, bundle):
+    """Without a bucket, versions and the pointer are written to the local folder."""
     monkeypatch.delenv("STORAGE_BUCKET", raising=False)
     base = tmp_path / "m"
     base.mkdir()
@@ -152,11 +173,13 @@ def test_local_mode_without_bucket(monkeypatch, tmp_path, bundle):
     assert json.loads((base / "current.json").read_text()) == {"version": "v1"}
     assert (base / "model.pkl").read_bytes() == b"old"
 
-    store_mod._ACTIVE_VERSIONS.clear()  # pylint: disable=protected-access — simulates a restart
+    # simulates a restart
+    store_mod._ACTIVE_VERSIONS.clear()  # pylint: disable=protected-access
     assert ArtifactStore("m", root=tmp_path).refresh() == "v1"
 
 
 def test_use_s3_false_ignores_the_bucket(s3, tmp_path, bundle):
+    """use_s3=False publishes locally and never touches the bucket."""
     store = ArtifactStore("m", root=tmp_path, use_s3=False)
     store.publish_version(bundle(**{"model.pkl": b"new"}), {})
     assert s3.keys() == []
@@ -164,6 +187,7 @@ def test_use_s3_false_ignores_the_bucket(s3, tmp_path, bundle):
 
 
 def test_invalid_version_strings_are_rejected_and_nothing_changes(s3, tmp_path, bundle):
+    """Path-like or malformed version strings are rejected without side effects."""
     s3.put(ROOT + "model.pkl", b"old")
     store = ArtifactStore("m", root=tmp_path / "cache")
     store.publish_version(bundle(**{"model.pkl": b"a"}), {})
@@ -179,6 +203,7 @@ def test_invalid_version_strings_are_rejected_and_nothing_changes(s3, tmp_path, 
 
 
 def test_refresh_fails_visibly_on_a_corrupt_pointer(s3, tmp_path):
+    """A pointer to an invalid version makes refresh() raise."""
     s3.put(ROOT + "current.json", b'{"version": "../evil"}')
     store = ArtifactStore("m", root=tmp_path / "cache")
     with pytest.raises(BaseVersionNotFoundError, match="evil"):

@@ -1,14 +1,19 @@
+"""Preprocesado de ml47: gemelo digital, remuestreo a 10 Hz, features y ventana fija."""
 import logging
 
 import pandas as pd
 import numpy as np
 
-from app.plugins.ml47_dairy_dnsl_pasteurization_fault_detection.constants import SENSOR_COLUMNS, WINDOW_SIZE
+from app.plugins.ml47_dairy_dnsl_pasteurization_fault_detection.constants import (
+    SENSOR_COLUMNS,
+    WINDOW_SIZE,
+)
 
 logger = logging.getLogger(__name__)
 
 
 def apply_digital_twin(df: pd.DataFrame, ts1_mean_train: float) -> pd.DataFrame:
+    """Desplaza TS1 (y TS2) para que la media de TS1 de train quede en 65 °C."""
     offset = 65.0 - ts1_mean_train
     df = df.copy()
     df["TS1"] = df["TS1"] + offset
@@ -34,15 +39,16 @@ def _resample_10hz(df: pd.DataFrame, group_cols: list[str]) -> pd.DataFrame:
 
 
 def engineer_features(df: pd.DataFrame) -> pd.DataFrame:
+    """Ordena por tiempo y añade media/desviación móvil (5) y lag 1 de cada sensor."""
     # kind="stable" makes the tiebreak for equal Time_Segundos values explicit
     # (keeps first-seen order). Pandas' default "quicksort" is NOT guaranteed
     # stable, so without this, ties could be reordered unpredictably even
     # before considering upload order.
     df = df.sort_values("Time_Segundos", kind="stable").copy()
-    X = df[SENSOR_COLUMNS]
-    rmean = X.rolling(5, min_periods=1).mean().add_suffix("_rmean")
-    rstd = X.rolling(5, min_periods=1).std().fillna(0).add_suffix("_rstd")
-    lag = X.shift(1).bfill().add_suffix("_lag1")
+    x_sensors = df[SENSOR_COLUMNS]
+    rmean = x_sensors.rolling(5, min_periods=1).mean().add_suffix("_rmean")
+    rstd = x_sensors.rolling(5, min_periods=1).std().fillna(0).add_suffix("_rstd")
+    lag = x_sensors.shift(1).bfill().add_suffix("_lag1")
     return pd.concat([df, rmean, rstd, lag], axis=1)
 
 
@@ -53,6 +59,7 @@ def build_dataframe_from_sensors(
     ts1_mean_train: float,
     apply_digital_twin_flag: bool,
 ) -> pd.DataFrame:
+    """Construye el DataFrame de features de un ciclo a partir de las series inline."""
     n_steps = len(sensor_data["PS1"])
     if time_segundos is None:
         time_segundos = [round(i * 0.1, 1) for i in range(n_steps)]
@@ -83,10 +90,12 @@ def build_dataframe_from_csv(
     ts1_mean_train: float,
     apply_digital_twin_flag: bool,
 ) -> pd.DataFrame:
+    """Lee el CSV, remuestrea a 10 Hz y construye features; devuelve (features, Cycle_ID)."""
     df = pd.read_csv(data_path)
     if "Time_Segundos" not in df.columns:
         # Raw exports of the bench (data/raw/hydraulic_raw.csv, what main.py predict reads) carry
-        # the 100 Hz clock as "Time"; predictor.apply_digital_twin_inference derives it the same way.
+        # the 100 Hz clock as "Time"; predictor.apply_digital_twin_inference derives it the same
+        # way.
         if "Time" not in df.columns:
             raise ValueError("El CSV debe traer la columna de tiempo 'Time_Segundos' (o 'Time').")
         df["Time_Segundos"] = df["Time"]
@@ -116,23 +125,24 @@ def build_dataframe_from_csv(
     return df_out[feature_cols], cycle_ids
 
 
-def pad_or_truncate(X: np.ndarray, label: str = "") -> np.ndarray:
-    if X.shape[0] < WINDOW_SIZE:
+def pad_or_truncate(x: np.ndarray, label: str = "") -> np.ndarray:
+    """Rellena con ceros o recorta las filas hasta WINDOW_SIZE pasos."""
+    if x.shape[0] < WINDOW_SIZE:
         if label:
             logger.warning(
                 "[%s] Only %d/%d timesteps available; padding %d with zeros. "
                 "Prediction quality for this cycle is not guaranteed.",
-                label, X.shape[0], WINDOW_SIZE, WINDOW_SIZE - X.shape[0],
+                label, x.shape[0], WINDOW_SIZE, WINDOW_SIZE - x.shape[0],
             )
-        pad = np.zeros((WINDOW_SIZE - X.shape[0], X.shape[1]))
-        X = np.vstack([X, pad])
-    elif X.shape[0] > WINDOW_SIZE:
+        pad = np.zeros((WINDOW_SIZE - x.shape[0], x.shape[1]))
+        x = np.vstack([x, pad])
+    elif x.shape[0] > WINDOW_SIZE:
         if label:
             logger.warning(
                 "[%s] %d timesteps available, expected %d; keeping only the first %d "
                 "(sorted by Time_Segundos). This usually means several physical cycles "
                 "share the same Cycle_ID value in the source data - check upstream.",
-                label, X.shape[0], WINDOW_SIZE, WINDOW_SIZE,
+                label, x.shape[0], WINDOW_SIZE, WINDOW_SIZE,
             )
-        X = X[:WINDOW_SIZE, :]
-    return X
+        x = x[:WINDOW_SIZE, :]
+    return x

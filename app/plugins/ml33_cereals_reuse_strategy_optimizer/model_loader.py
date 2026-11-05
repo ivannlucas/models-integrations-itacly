@@ -20,5 +20,7 @@ def load_artifacts() -> bool:
     load artifacts through ``ArtifactStore``.
     """
 
-    logger.info("ml33 reuse-strategy optimizer has no artifacts to load (self-contained MILP solver).")
+    logger.info(
+        "ml33 reuse-strategy optimizer has no artifacts to load (self-contained MILP solver)."
+    )
     return True

@@ -4,14 +4,20 @@ from __future__ import annotations
 import logging
 import os
 import pickle
+import shutil
+import tempfile
 
 import torch
-import shutil
 
 from app.domain.services.mlflow_tracker import BaseMLflowTracker, require_user_model
 from app.plugins.ml30_meat_traceability_detection.constants import (
+    FEATURE_COLUMNS,
     MODEL_FILENAME,
     PREPROCESSOR_FILENAME,
+)
+from app.plugins.ml30_meat_traceability_detection.model_loader import (
+    build_torch_mlp,
+    load_payload,
 )
 
 logger = logging.getLogger(__name__)
@@ -24,16 +30,12 @@ def download_user_model_from_mlflow(run_id: str):
     Returns (preprocessor, mlp, feature_columns, temp_dir).
     Caller MUST shutil.rmtree(temp_dir) after inference.
     """
-    import tempfile
     tmp = tempfile.mkdtemp(prefix="mlflow_ml30_")
     try:
         local_path = BaseMLflowTracker(run_id).download_artifacts(tmp, artifact_path="model")
         if not local_path:
             shutil.rmtree(tmp, ignore_errors=True)
             return None
-
-        from app.plugins.ml30_meat_traceability_detection.model_loader import build_torch_mlp, load_payload
-        from app.plugins.ml30_meat_traceability_detection.constants import FEATURE_COLUMNS
 
         preprocessor_path = os.path.join(local_path, PREPROCESSOR_FILENAME)
         state_dict_path = os.path.join(local_path, MODEL_FILENAME)

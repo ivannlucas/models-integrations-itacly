@@ -1,6 +1,8 @@
 """Direct unit tests for Ml25WineSulphitesPlugin state, load, and stats (no real artifacts)."""
 from unittest.mock import MagicMock, patch
 
+import numpy as np
+
 from app.plugins.ml25_wine_sulphites.plugin import Ml25WineSulphitesPlugin
 
 _FAKE_METADATA = {
@@ -106,8 +108,6 @@ def test_stats_mae_bound_matches_metadata():
 
 # ── predict_batch: simulation_trajectory per row ─────────────────────────────
 
-import numpy as np  # noqa: E402
-
 _WINE_COLUMNS = (
     "fixed_acidity,volatile_acidity,citric_acid,residual_sugar,chlorides,"
     "free_sulfur_dioxide,total_sulfur_dioxide,density,pH,sulphates,alcohol"
@@ -115,17 +115,19 @@ _WINE_COLUMNS = (
 _WINE_ROW = "7.0,0.27,0.36,20.7,0.045,{free},170,1.001,3.0,0.45,8.8"
 
 
-class _FakeBound:
+class _FakeBound:  # pylint: disable=too-few-public-methods
     """Bound SO2 model returning a constant 90 mg/L (in the log1p space the plugin decodes)."""
 
     def predict(self, rows):
+        """Return log1p(90) for every row."""
         return np.log1p(np.full(len(rows), 90.0))
 
 
-class _FakeQuality:
+class _FakeQuality:  # pylint: disable=too-few-public-methods
     """Quality model rising gently along the simulated doses, so there is a real optimum."""
 
     def predict(self, rows):
+        """Return a quality rising linearly from 5.8 to 6.4 across the rows."""
         return np.linspace(5.8, 6.4, len(rows))
 
 
@@ -152,6 +154,7 @@ def _without_trajectory(predictions):
 
 
 def test_predict_batch_trajectory_on_every_row_under_cap(tmp_path):
+    """Every batch row under the cap carries a trajectory with one recommended point."""
     plugin = _plugin_with_fake_models()
     resp = plugin.predict_batch(data_path=_write_csv(tmp_path, 5))
     assert len(resp.predictions) == 5
@@ -162,6 +165,7 @@ def test_predict_batch_trajectory_on_every_row_under_cap(tmp_path):
 
 
 def test_predict_batch_trajectory_first_row_only_over_cap(tmp_path, monkeypatch):
+    """Over the cap only the first batch row carries a trajectory."""
     monkeypatch.setattr("app.plugins.ml25_wine_sulphites.plugin.BATCH_TRAJECTORY_MAX_ROWS", 2)
     plugin = _plugin_with_fake_models()
     resp = plugin.predict_batch(data_path=_write_csv(tmp_path, 3))
@@ -170,6 +174,7 @@ def test_predict_batch_trajectory_first_row_only_over_cap(tmp_path, monkeypatch)
 
 
 def test_predict_batch_values_unchanged_by_trajectory(tmp_path, monkeypatch):
+    """The trajectory cap does not change the predicted values."""
     csv = _write_csv(tmp_path, 4)
     plugin = _plugin_with_fake_models()
     monkeypatch.setattr("app.plugins.ml25_wine_sulphites.plugin.BATCH_TRAJECTORY_MAX_ROWS", 1)
@@ -180,8 +185,11 @@ def test_predict_batch_values_unchanged_by_trajectory(tmp_path, monkeypatch):
 
 
 def test_predict_batch_ignores_extra_tank_column(tmp_path):
+    """An extra tank column in the batch CSV is ignored."""
     plugin = _plugin_with_fake_models()
     plain = plugin.predict_batch(data_path=_write_csv(tmp_path, 3)).predictions
-    with_tank = plugin.predict_batch(data_path=_write_csv(tmp_path, 3, extra_column=True)).predictions
+    with_tank = plugin.predict_batch(
+        data_path=_write_csv(tmp_path, 3, extra_column=True)
+    ).predictions
     assert all("error" not in p for p in with_tank)
     assert with_tank == plain

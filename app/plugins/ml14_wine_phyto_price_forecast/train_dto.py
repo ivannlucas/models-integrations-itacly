@@ -12,8 +12,9 @@ class TrainRequest(BaseModel):
     data_path: str = Field(
         ...,
         description=(
-            "Ruta local o s3:// a un CSV semanal (domingos) en uno de estos formatos: el dataset de "
-            "modelado del equipo de IA (FECHA + las 39 features, como final_dataset_for_modeling.csv) "
+            "Ruta local o s3:// a un CSV semanal (domingos) en uno de estos formatos: el dataset "
+            "de modelado del equipo de IA (FECHA + las 39 features, como "
+            "final_dataset_for_modeling.csv) "
             "o las series en bruto que acepta /predict (date, PROTECCION_FITO, CARBURANTES, "
             "COPPER_EUR_TON, GAS_EUR_MMBTU, COIL_EUR_BARRIL, DEXUSEU). Split temporal 80/20."
         ),
@@ -44,7 +45,9 @@ class TrainResponse(BaseModel):
     skill_score: float = Field(..., description="Seed 42: 1 - MSE_modelo / MSE_Naive")
     drift_rmse: float = Field(..., description="RMSE del baseline Drift en el mismo test")
     naive_rmse: float
-    beats_drift: bool = Field(..., description="Criterio de aceptación del equipo de IA: RMSE GRU < RMSE Drift")
+    beats_drift: bool = Field(
+        ..., description="Criterio de aceptación del equipo de IA: RMSE GRU < RMSE Drift"
+    )
     n_train: int
     n_test: int
     epochs_run_seed_42: int

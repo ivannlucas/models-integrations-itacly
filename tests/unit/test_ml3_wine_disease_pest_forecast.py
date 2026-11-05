@@ -1,7 +1,26 @@
 """Endpoint + unit tests for ``ml3-wine-disease-pest-forecast``."""
+from unittest.mock import patch
+
 import numpy as np
 import pandas as pd
 import pytest
+
+from app.plugins.ml3_wine_disease_pest_forecast.constants import (
+    MODEL_FEATURES,
+    RAW_FIXED_COLUMNS,
+    REPORTED_METRICS,
+    WINDOW_SIZE,
+)
+from app.plugins.ml3_wine_disease_pest_forecast.feature_engineering import (
+    apply_feature_engineering,
+)
+from app.plugins.ml3_wine_disease_pest_forecast.plugin import Ml3WineDiseasePestForecastPlugin
+from app.plugins.ml3_wine_disease_pest_forecast.postprocessing import build_treatment
+from app.plugins.ml3_wine_disease_pest_forecast.preprocessing import (
+    _tail_or_pad,
+    build_window_tensor,
+    validate_raw_columns,
+)
 
 PREFIX = "/models/ml3-wine-disease-pest-forecast"
 
@@ -21,6 +40,7 @@ INLINE_PAYLOAD = {"mode": "inline", "rows": [_ROW] * 168}
 
 
 def test_health(client):
+    """/health reports status ok, the model id and loaded=True."""
     body = client.get(f"{PREFIX}/health").json()
     assert body["status"] == "ok"
     assert body["model"] == "ml3-wine-disease-pest-forecast"
@@ -28,6 +48,7 @@ def test_health(client):
 
 
 def test_stats(client):
+    """/stats reports the model id and a task_type."""
     body = client.get(f"{PREFIX}/stats").json()
     assert body["model_name"] == "ml3-wine-disease-pest-forecast"
     assert body["task_type"]
@@ -42,7 +63,10 @@ def test_predict_inline_rejected(client):
 
 
 def test_predict_batch(client):
-    resp = client.post(f"{PREFIX}/predict", json={"mode": "batch", "data_path": "/tmp/vineyard.csv"})
+    """Batch /predict returns 200 with a list of predictions."""
+    resp = client.post(
+        f"{PREFIX}/predict", json={"mode": "batch", "data_path": "/tmp/vineyard.csv"}
+    )
     assert resp.status_code == 200
     body = resp.json()
     assert body["model_id"] == "ml3-wine-disease-pest-forecast"
@@ -50,7 +74,10 @@ def test_predict_batch(client):
 
 
 def test_train(client):
-    resp = client.post(f"{PREFIX}/train", json={"data_path": "/tmp/train.csv", "mlflow_run_id": "test-run-id"})
+    """/train returns 200 with detail, accuracy, f1_macro and n_windows_train."""
+    resp = client.post(
+        f"{PREFIX}/train", json={"data_path": "/tmp/train.csv", "mlflow_run_id": "test-run-id"}
+    )
     assert resp.status_code == 200
     body = resp.json()
     assert body["detail"]
@@ -60,26 +87,21 @@ def test_train(client):
 
 
 def test_validate_raw_columns_rejects_missing_columns():
-    from app.plugins.ml3_wine_disease_pest_forecast.preprocessing import validate_raw_columns
-
+    """validate_raw_columns raises ValueError when required columns are missing."""
     df = pd.DataFrame([{"Fecha": "2021-06-11 00:00:00", "ID_Serie": 1}])
     with pytest.raises(ValueError, match="Faltan columnas requeridas"):
         validate_raw_columns(df)
 
 
 def test_validate_raw_columns_accepts_full_contract():
-    from app.plugins.ml3_wine_disease_pest_forecast.constants import RAW_FIXED_COLUMNS
-    from app.plugins.ml3_wine_disease_pest_forecast.preprocessing import validate_raw_columns
-
+    """validate_raw_columns accepts a frame with every required column."""
     row = {"Fecha": "2021-06-11 00:00:00", "ID_Serie": 1}
     row.update({c: 0.0 for c in RAW_FIXED_COLUMNS})
     validate_raw_columns(pd.DataFrame([row]))  # must not raise
 
 
 def test_apply_feature_engineering_generates_model_features():
-    from app.plugins.ml3_wine_disease_pest_forecast.constants import MODEL_FEATURES
-    from app.plugins.ml3_wine_disease_pest_forecast.feature_engineering import apply_feature_engineering
-
+    """Feature engineering produces every model feature and accumulates leaf wetness and GDD."""
     rows = pd.DataFrame(
         [{"Fecha": pd.Timestamp("2021-06-11 00:00:00") + pd.Timedelta(hours=h),
           "Temp_Amb_C": 20.0, "Hum_Rel_Pct": 95.0, "Lluvia_mm": 2.0, "Viento_kmh": 5.0,
@@ -96,8 +118,7 @@ def test_apply_feature_engineering_generates_model_features():
 
 
 def test_tail_or_pad_pads_short_series():
-    from app.plugins.ml3_wine_disease_pest_forecast.preprocessing import _tail_or_pad
-
+    """_tail_or_pad pads a short series by repeating its first row."""
     df = pd.DataFrame({"a": [1, 2, 3]})
     padded = _tail_or_pad(df, 5)
     assert len(padded) == 5
@@ -105,8 +126,7 @@ def test_tail_or_pad_pads_short_series():
 
 
 def test_tail_or_pad_truncates_long_series():
-    from app.plugins.ml3_wine_disease_pest_forecast.preprocessing import _tail_or_pad
-
+    """_tail_or_pad keeps only the last n rows of a long series."""
     df = pd.DataFrame({"a": list(range(10))})
     tail = _tail_or_pad(df, 3)
     assert len(tail) == 3
@@ -114,11 +134,11 @@ def test_tail_or_pad_truncates_long_series():
 
 
 def test_build_window_tensor_shape_and_dtype():
-    from app.plugins.ml3_wine_disease_pest_forecast.constants import MODEL_FEATURES, WINDOW_SIZE
-    from app.plugins.ml3_wine_disease_pest_forecast.preprocessing import build_window_tensor
-
-    class _Scaler:
+    """build_window_tensor returns a (1, WINDOW_SIZE, n_features) tensor, the last date and
+    the window."""
+    class _Scaler:  # pylint: disable=too-few-public-methods
         def transform(self, df):
+            """Identity scaling to float32."""
             return df.values.astype(np.float32)
 
     df = pd.DataFrame(
@@ -135,11 +155,9 @@ def test_build_window_tensor_sorts_before_windowing_when_rows_arrive_out_of_orde
     """Regression: rows must be sorted by Fecha BEFORE taking the last WINDOW_SIZE, not
     after — otherwise an out-of-chronological-order input (e.g. a batch CSV exported
     without an explicit ORDER BY) silently windows on the wrong 168 hours."""
-    from app.plugins.ml3_wine_disease_pest_forecast.constants import MODEL_FEATURES, WINDOW_SIZE
-    from app.plugins.ml3_wine_disease_pest_forecast.preprocessing import build_window_tensor
-
-    class _Scaler:
+    class _Scaler:  # pylint: disable=too-few-public-methods
         def transform(self, df):
+            """Identity scaling to float32."""
             return df.values.astype(np.float32)
 
     df = pd.DataFrame(
@@ -156,8 +174,7 @@ def test_build_window_tensor_sorts_before_windowing_when_rows_arrive_out_of_orde
 
 
 def test_build_treatment_fallback_for_unknown_class():
-    from app.plugins.ml3_wine_disease_pest_forecast.postprocessing import build_treatment
-
+    """build_treatment falls back to 'Aviso: N/A' for unknown classes."""
     assert build_treatment("CLASE_DESCONOCIDA") == "Aviso: N/A"
     assert "Químico" in build_treatment("OIDIO")
 
@@ -167,10 +184,6 @@ def test_stats_fetches_mlflow_metrics_when_run_id_given():
     every retrain's /stats always reported the served model's static REPORTED_METRICS,
     no matter which trained run was asked about, same class of bug found and fixed in
     ml43_cereals_dnsl_anomaly_fault_detection/ml21_cereals_price_spatial (see plugin.py::stats)."""
-    from unittest.mock import patch
-
-    from app.plugins.ml3_wine_disease_pest_forecast.plugin import Ml3WineDiseasePestForecastPlugin
-
     plugin = Ml3WineDiseasePestForecastPlugin()
     with patch(
         "app.plugins.ml3_wine_disease_pest_forecast.plugin.BaseMLflowTracker"
@@ -184,9 +197,7 @@ def test_stats_fetches_mlflow_metrics_when_run_id_given():
 
 
 def test_stats_without_run_id_returns_static_metrics():
-    from app.plugins.ml3_wine_disease_pest_forecast.constants import REPORTED_METRICS
-    from app.plugins.ml3_wine_disease_pest_forecast.plugin import Ml3WineDiseasePestForecastPlugin
-
+    """stats() without a run id returns the static REPORTED_METRICS."""
     plugin = Ml3WineDiseasePestForecastPlugin()
     resp = plugin.stats()
 
@@ -201,11 +212,6 @@ def test_stats_overwrites_nested_classification_and_regression_keys():
     actually renders. Every retrain's /stats kept showing the served model's fixed
     classification.accuracy/regression.mae/etc. regardless of which run was asked
     about. mse->rmse must be an explicit sqrt, not a same-value alias."""
-    from unittest.mock import patch
-
-    from app.plugins.ml3_wine_disease_pest_forecast.constants import REPORTED_METRICS
-    from app.plugins.ml3_wine_disease_pest_forecast.plugin import Ml3WineDiseasePestForecastPlugin
-
     plugin = Ml3WineDiseasePestForecastPlugin()
     with patch(
         "app.plugins.ml3_wine_disease_pest_forecast.plugin.BaseMLflowTracker"

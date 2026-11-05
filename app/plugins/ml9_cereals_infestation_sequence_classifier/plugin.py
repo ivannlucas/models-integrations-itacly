@@ -1,10 +1,11 @@
-"""Ml9CerealsInfestationSequenceClassifierPlugin — GRU classifier over 48 h windows of stored-cereal telemetry.
+"""Ml9CerealsInfestationSequenceClassifierPlugin — GRU over 48 h stored-cereal telemetry windows.
 
 Classifies each temporal window of a monitored grain series as sano / insectos / moho_critico from
 CO2, temperature, ambient RH and grain humidity (a09 / INF-CER). See inbox/a09/manifest.yaml for the
 full input/output contract, the "Ensemble learning" title vs. LSTM-vs-GRU implementation
 discrepancy, and the synthetic-data caveat that applies to every metric reported here.
 """
+
 from __future__ import annotations
 
 import json
@@ -27,8 +28,14 @@ from app.domain.services.exceptions import (
 )
 from app.domain.services.mlflow_tracker import BaseMLflowTracker
 from app.infrastructure.artifact_store import local_file_path
-from app.plugins.ml9_cereals_infestation_sequence_classifier import model_loader, postprocessing, preprocessing
-from app.plugins.ml9_cereals_infestation_sequence_classifier._vendor.preprocess import split_sample_ids_stratified
+from app.plugins.ml9_cereals_infestation_sequence_classifier import (
+    model_loader,
+    postprocessing,
+    preprocessing,
+)
+from app.plugins.ml9_cereals_infestation_sequence_classifier._vendor.preprocess import (
+    split_sample_ids_stratified,
+)
 from app.plugins.ml9_cereals_infestation_sequence_classifier._vendor.sequential import (
     build_class_weights,
     evaluate_sequence_model,
@@ -61,7 +68,9 @@ from app.plugins.ml9_cereals_infestation_sequence_classifier.constants import (
     VERSION,
     WINDOW_SIZE,
 )
-from app.plugins.ml9_cereals_infestation_sequence_classifier.mlflow_utils import download_user_model_from_mlflow
+from app.plugins.ml9_cereals_infestation_sequence_classifier.mlflow_utils import (
+    download_user_model_from_mlflow,
+)
 from app.plugins.ml9_cereals_infestation_sequence_classifier.predict_dto import (
     PredictBatchResponse,
     PredictInlineResponse,
@@ -70,7 +79,14 @@ from app.plugins.ml9_cereals_infestation_sequence_classifier.train_dto import Tr
 
 logger = logging.getLogger(__name__)
 
-_METRIC_KEYS = ("accuracy", "balanced_accuracy", "f1_macro", "precision_macro", "recall_macro", "log_loss")
+_METRIC_KEYS = (
+    "accuracy",
+    "balanced_accuracy",
+    "f1_macro",
+    "precision_macro",
+    "recall_macro",
+    "log_loss",
+)
 
 
 class Ml9CerealsInfestationSequenceClassifierPlugin(ModelPluginPort):
@@ -93,7 +109,9 @@ class Ml9CerealsInfestationSequenceClassifierPlugin(ModelPluginPort):
 
     def is_loaded(self) -> bool:
         """Return True once the checkpoint, scaler and bundle are loaded."""
-        return self._checkpoint is not None and self._scaler is not None and self._bundle is not None
+        return (
+            self._checkpoint is not None and self._scaler is not None and self._bundle is not None
+        )
 
     def _require_loaded(self) -> None:
         if not self.is_loaded():
@@ -190,7 +208,9 @@ class Ml9CerealsInfestationSequenceClassifierPlugin(ModelPluginPort):
 
             missing = preprocessing.missing_required_columns(raw_df)
             if missing:
-                raise ValueError(f"Las filas recibidas no traen las columnas obligatorias: {missing}")
+                raise ValueError(
+                    f"Las filas recibidas no traen las columnas obligatorias: {missing}"
+                )
 
             payload, _, has_target = preprocessing.build_windows(raw_df, bundle)
             idx = preprocessing.last_window_index(payload)
@@ -206,12 +226,17 @@ class Ml9CerealsInfestationSequenceClassifierPlugin(ModelPluginPort):
             pred_df = postprocessing.build_predictions_frame(
                 payload["window_meta"], proba, payload["y_seq"], has_target=has_target,
             )
-            # build_predictions_frame sorts by (sample_id, timestamp_end); re-find the latest window.
+            # build_predictions_frame sorts by (sample_id, timestamp_end); re-find the latest
+            # window.
             row = pred_df.loc[pd.to_datetime(pred_df["timestamp_end"]).idxmax()]
 
             confidence = float(row["confidence"])
             low_confidence = bool(threshold is not None and confidence < float(threshold))
-            y_true = int(row["y_true"]) if "y_true" in pred_df.columns and pd.notna(row.get("y_true")) else None
+            y_true = (
+                int(row["y_true"])
+                if "y_true" in pred_df.columns and pd.notna(row.get("y_true"))
+                else None
+            )
 
             self._record_prediction()
             logger.info(
@@ -271,7 +296,9 @@ class Ml9CerealsInfestationSequenceClassifierPlugin(ModelPluginPort):
         if missing:
             raise ValueError(f"El CSV de entrenamiento no trae las columnas requeridas: {missing}")
 
-        payload, runtime_cfg, _ = preprocessing.build_windows(raw_df, self._bundle, require_target=True)
+        payload, runtime_cfg, _ = preprocessing.build_windows(
+            raw_df, self._bundle, require_target=True
+        )
         if len(payload["X_seq"]) == 0:
             raise ValueError(
                 f"El CSV no genera ninguna ventana de entrenamiento: se necesitan al menos "
@@ -292,7 +319,9 @@ class Ml9CerealsInfestationSequenceClassifierPlugin(ModelPluginPort):
             mask = np.isin(group_seq, np.asarray(split_ids[key]))
             subsets[key] = (payload["X_seq"][mask], payload["y_seq"][mask])
         (x_train, y_train), (x_val, y_val), (x_test, y_test) = (
-            subsets["train_sample_ids"], subsets["validation_sample_ids"], subsets["test_sample_ids"],
+            subsets["train_sample_ids"],
+            subsets["validation_sample_ids"],
+            subsets["test_sample_ids"],
         )
         if min(len(x_train), len(x_val), len(x_test)) == 0:
             raise ValueError(
@@ -316,7 +345,9 @@ class Ml9CerealsInfestationSequenceClassifierPlugin(ModelPluginPort):
 
         baseline = self._metrics_from_windows(x_test, y_test)
 
-        tracker: BaseMLflowTracker | None = BaseMLflowTracker(mlflow_run_id) if mlflow_run_id else None
+        tracker: BaseMLflowTracker | None = (
+            BaseMLflowTracker(mlflow_run_id) if mlflow_run_id else None
+        )
         if tracker:
             tracker.log_params({
                 "modo": "fine_tuning",
@@ -353,9 +384,14 @@ class Ml9CerealsInfestationSequenceClassifierPlugin(ModelPluginPort):
         artifact_path = self._persist_retrained(result, metrics, tracker)
 
         logger.info(
-            "ml9 train() done — ventanas train/val/test=%d/%d/%d f1_macro=%.4f (baseline %.4f) mlflow=%s",
-            len(x_train), len(x_val), len(x_test), metrics["f1_macro"],
-            baseline["f1_macro"], bool(mlflow_run_id),
+            "ml9 train() done — ventanas train/val/test=%d/%d/%d f1_macro=%.4f (baseline %.4f) "
+            "mlflow=%s",
+            len(x_train),
+            len(x_val),
+            len(x_test),
+            metrics["f1_macro"],
+            baseline["f1_macro"],
+            bool(mlflow_run_id),
         )
         return TrainResponse(
             detail=(
@@ -378,7 +414,12 @@ class Ml9CerealsInfestationSequenceClassifierPlugin(ModelPluginPort):
         )
 
     def _metrics_from_windows(
-        self, x_seq: np.ndarray, y_seq: np.ndarray, *, checkpoint: dict | None = None, scaler: Any = None,
+        self,
+        x_seq: np.ndarray,
+        y_seq: np.ndarray,
+        *,
+        checkpoint: dict | None = None,
+        scaler: Any = None,
     ) -> dict[str, float]:
         """Evaluate a model (the base one unless checkpoint/scaler are given) on built windows."""
         checkpoint = checkpoint if checkpoint is not None else self._checkpoint
@@ -405,7 +446,9 @@ class Ml9CerealsInfestationSequenceClassifierPlugin(ModelPluginPort):
         Raises ModelPersistenceError if it cannot be saved: the result would be lost.
         """
         if not tracker:
-            raise ModelPersistenceError("Sin run de MLflow: el modelo reentrenado no se ha guardado.")
+            raise ModelPersistenceError(
+                "Sin run de MLflow: el modelo reentrenado no se ha guardado."
+            )
 
         user_bundle = dict(self._bundle or {})
         user_bundle["model_files"] = {"winner": USER_MODEL_FILENAME}
@@ -424,7 +467,9 @@ class Ml9CerealsInfestationSequenceClassifierPlugin(ModelPluginPort):
             tracker.upload_artifacts(mlflow_tmp, artifact_path="model")
         except Exception as exc:  # pylint: disable=broad-exception-caught
             logger.error("MLflow artifact upload failed: %s", exc)
-            raise ModelPersistenceError(f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}") from exc
+            raise ModelPersistenceError(
+                f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}"
+            ) from exc
         finally:
             shutil.rmtree(mlflow_tmp, ignore_errors=True)
         return f"runs:/{tracker.run_id}/model/{USER_MODEL_FILENAME}"
@@ -433,60 +478,108 @@ class Ml9CerealsInfestationSequenceClassifierPlugin(ModelPluginPort):
 
     def stats(self, mlflow_run_id: str = "") -> StatsResponse:
         """Return model metadata, the input/output contract and the real hold-out metrics."""
-        inputs = [
-            InputField(
-                name=GROUP_COLUMN, type="string",
-                description="Identificador de la serie monitorizada (silo/lote). Agrupa las observaciones.",
-            ),
-            InputField(
-                name=TIMESTAMP_COLUMN, type="datetime",
-                description="Marca temporal horaria de la observación. Debe parsear y no tener nulos.",
-            ),
-        ] + [
-            InputField(
-                name=name, type="float",
-                description=desc,
-            )
-            for name, desc in (
-                ("co2_ppm", "Concentración de CO2 en ppm (rango observado en el dataset: 350–2543)."),
-                ("temp_c", "Temperatura en °C (rango observado: 7,8–37,2)."),
-                ("ambient_rh_pct", "Humedad relativa ambiental en % (rango observado: 24,6–89,4)."),
-                ("humidity_grain_pct", "Humedad del grano en % (rango observado: 11,3–17,2)."),
-            )
-        ] + [
-            InputField(
-                name=TARGET_COLUMN, type="int", default=None,
-                description=(
-                    "Etiqueta real por observación (0=sano, 1=insectos, 2=moho_critico). Obligatoria "
-                    "en /train; opcional en /predict (si viene, se devuelve y_true y las métricas)."
+        inputs = (
+            [
+                InputField(
+                    name=GROUP_COLUMN,
+                    type="string",
+                    description=(
+                        "Identificador de la serie monitorizada (silo/lote). Agrupa las "
+                        "observaciones."
+                    ),
                 ),
-            ),
-            InputField(
-                name="target_global", type="int", default=None,
-                description="Clase global de la serie; solo se usa para estratificar la partición en /train.",
-            ),
-        ]
+                InputField(
+                    name=TIMESTAMP_COLUMN,
+                    type="datetime",
+                    description=(
+                        "Marca temporal horaria de la observación. Debe parsear y no tener nulos."
+                    ),
+                ),
+            ]
+            + [
+                InputField(
+                    name=name,
+                    type="float",
+                    description=desc,
+                )
+                for name, desc in (
+                    (
+                        "co2_ppm",
+                        "Concentración de CO2 en ppm (rango observado en el dataset: 350–2543).",
+                    ),
+                    ("temp_c", "Temperatura en °C (rango observado: 7,8–37,2)."),
+                    (
+                        "ambient_rh_pct",
+                        "Humedad relativa ambiental en % (rango observado: 24,6–89,4).",
+                    ),
+                    ("humidity_grain_pct", "Humedad del grano en % (rango observado: 11,3–17,2)."),
+                )
+            ]
+            + [
+                InputField(
+                    name=TARGET_COLUMN,
+                    type="int",
+                    default=None,
+                    description=(
+                        "Etiqueta real por observación (0=sano, 1=insectos, 2=moho_critico). "
+                        "Obligatoria en /train; opcional en /predict (si viene, se devuelve y_true "
+                        "y las métricas)."
+                    ),
+                ),
+                InputField(
+                    name="target_global",
+                    type="int",
+                    default=None,
+                    description=(
+                        "Clase global de la serie; solo se usa para estratificar la partición en "
+                        "/train."
+                    ),
+                ),
+            ]
+        )
         outputs = [
-            OutputField(name="pred_class", type="int", description="Clase predicha de la ventana: 0, 1 o 2"),
-            OutputField(name="pred_label", type="str", description="sano / insectos / moho_critico"),
-            OutputField(name="proba_sano", type="float", description="Probabilidad de la clase sano"),
-            OutputField(name="proba_insectos", type="float", description="Probabilidad de la clase insectos"),
-            OutputField(name="proba_moho_critico", type="float", description="Probabilidad de la clase moho crítico"),
-            OutputField(name="confidence", type="float", description="Probabilidad de la clase predicha"),
-            OutputField(name="window_index", type="int", description="Índice de la ventana dentro de la serie"),
-            OutputField(name="timestamp_end", type="datetime", description="Instante al que se refiere la clase"),
+            OutputField(
+                name="pred_class", type="int", description="Clase predicha de la ventana: 0, 1 o 2"
+            ),
+            OutputField(
+                name="pred_label", type="str", description="sano / insectos / moho_critico"
+            ),
+            OutputField(
+                name="proba_sano", type="float", description="Probabilidad de la clase sano"
+            ),
+            OutputField(
+                name="proba_insectos", type="float", description="Probabilidad de la clase insectos"
+            ),
+            OutputField(
+                name="proba_moho_critico",
+                type="float",
+                description="Probabilidad de la clase moho crítico",
+            ),
+            OutputField(
+                name="confidence", type="float", description="Probabilidad de la clase predicha"
+            ),
+            OutputField(
+                name="window_index",
+                type="int",
+                description="Índice de la ventana dentro de la serie",
+            ),
+            OutputField(
+                name="timestamp_end",
+                type="datetime",
+                description="Instante al que se refiere la clase",
+            ),
         ]
         base = StatsResponse(
             model_name=MODEL_ID,
             version=VERSION,
             description=(
                 "Clasificador secuencial recurrente (GRU) que asigna a cada ventana de 48 horas de "
-                "una serie de cereal almacenado uno de tres estados: sano, insectos o moho crítico. "
-                "Entradas: CO2, temperatura, humedad ambiental y humedad del grano, muestreadas cada "
-                "hora. La unidad de decisión es la ventana temporal, no la observación aislada ni la "
-                "serie completa. El entregable se titula 'Ensemble learning' por continuidad "
-                "administrativa, pero la solución validada compara LSTM y GRU y sirve solo la "
-                "ganadora (GRU) — ver inbox/a09/manifest.yaml."
+                "una serie de cereal almacenado uno de tres estados: sano, insectos o moho "
+                "crítico. Entradas: CO2, temperatura, humedad ambiental y humedad del grano, "
+                "muestreadas cada hora. La unidad de decisión es la ventana temporal, no la "
+                "observación aislada ni la serie completa. El entregable se titula 'Ensemble "
+                "learning' por continuidad administrativa, pero la solución validada compara LSTM "
+                "y GRU y sirve solo la ganadora (GRU) — ver inbox/a09/manifest.yaml."
             ),
             task_type=TASK_TYPE,
             framework=FRAMEWORK,
@@ -513,7 +606,8 @@ class Ml9CerealsInfestationSequenceClassifierPlugin(ModelPluginPort):
             },
             runtime_stats=RuntimeStats(
                 total_predictions=self._predict_count,
-                avg_latency_ms=None,  # a single call scores many windows; per-window latency is not comparable
+                # a single call scores many windows; per-window latency is not comparable
+                avg_latency_ms=None,
             ),
         )
         if mlflow_run_id:

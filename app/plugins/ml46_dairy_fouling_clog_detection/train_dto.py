@@ -40,5 +40,7 @@ class TrainResponse(BaseModel):
     ttu_mae_min: float
     upload_warning: str | None = Field(
         default=None,
-        description="Informativo si los artefactos se guardaron en local pero falló el upload a S3/MLflow",
+        description=(
+            "Informativo si los artefactos se guardaron en local pero falló el upload a S3/MLflow"
+        ),
     )

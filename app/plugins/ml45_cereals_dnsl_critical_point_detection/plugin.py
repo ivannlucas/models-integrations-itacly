@@ -1,6 +1,8 @@
+"""Plugin ml45: detección de puntos críticos (DNSL neuro-fuzzy) en secaderos de cereal."""
 from __future__ import annotations
 
 import logging
+import math
 import os
 import shutil
 import tempfile
@@ -100,8 +102,8 @@ def _validate_saved_artifact(path: Path, loader) -> None:
     torch.save/joblib.dump/np.save have no return value to check, so a process killed or a
     disk filled mid-write can silently leave a 0-byte or truncated file on disk — this is
     what previously let a fine-tuned model reach MLflow (and the platform's model listing)
-    as a 0-byte artifact with no visible error. Same pattern as ml43_cereals_dnsl_anomaly_fault_detection's
-    plugin.py::_validate_saved_artifact.
+    as a 0-byte artifact with no visible error. Same pattern as
+    ml43_cereals_dnsl_anomaly_fault_detection's plugin.py::_validate_saved_artifact.
     """
     if not path.exists() or path.stat().st_size == 0:
         raise ValueError(
@@ -117,7 +119,9 @@ def _validate_saved_artifact(path: Path, loader) -> None:
         ) from exc
 
 
-class Ml45CerealsDnslCriticalPointDetectionPlugin(ModelPluginPort):
+class Ml45CerealsDnslCriticalPointDetectionPlugin(  # pylint: disable=too-many-instance-attributes
+    ModelPluginPort
+):
     """Deep Neuro-Fuzzy (LSTM+attention || fuzzy TSK rules) grain-dryer fault detector.
 
     Predicts per-window (240 consecutive readings) binary anomaly, then classifies into
@@ -175,12 +179,14 @@ class Ml45CerealsDnslCriticalPointDetectionPlugin(ModelPluginPort):
             "model_cfg": model_cfg,
             "scaler_x": scaler_x,
             "scaler_num": scaler_num,
-            "xai_background": xai_background if xai_background is not None else self._xai_background,
+            "xai_background": (
+                xai_background if xai_background is not None else self._xai_background
+            ),
             "threshold": threshold,
             "temp_dir": temp_dir,
         }
 
-    def predict_inline(
+    def predict_inline(  # pylint: disable=too-many-locals
         self,
         *,
         data_path: str | None = None,
@@ -204,12 +210,14 @@ class Ml45CerealsDnslCriticalPointDetectionPlugin(ModelPluginPort):
             t0 = time.perf_counter()
             if data_path:
                 with local_file_path(data_path) as local_path:
-                    sequences, stats, stats_cols, ts_windows, entity_ids, _ = build_windows_from_csv(
+                    sequences, stats, stats_cols, ts_windows, _, _ = build_windows_from_csv(
                         local_path, ctx["scaler_x"], ctx["scaler_num"], require_target=False,
                     )
             else:
                 sensor_arrays = {col: features[col] for col in SENSOR_COLUMNS}
-                sequences, stats, stats_cols, ts_windows, entity_ids, _ = build_windows_from_sensor_arrays(
+                (
+                    sequences, stats, stats_cols, ts_windows, _, _
+                ) = build_windows_from_sensor_arrays(
                     sensor_arrays,
                     features["timestamp"],
                     features.get("cycle_id"),
@@ -274,12 +282,16 @@ class Ml45CerealsDnslCriticalPointDetectionPlugin(ModelPluginPort):
                 ctx["model_cfg"],
             )
             self._record((time.perf_counter() - t0) * 1000)
-            return PredictBatchResponse(model_id=MODEL_ID, predictions=predictions, output_path=None)
+            return PredictBatchResponse(
+                model_id=MODEL_ID, predictions=predictions, output_path=None
+            )
         finally:
             if mlflow_ctx and mlflow_ctx["temp_dir"]:
                 shutil.rmtree(mlflow_ctx["temp_dir"], ignore_errors=True)
 
-    def train(self, *, data_path: str, mlflow_run_id: str) -> TrainResponse:
+    def train(  # pylint: disable=too-many-locals,too-many-branches,too-many-statements
+        self, *, data_path: str, mlflow_run_id: str
+    ) -> TrainResponse:
         """Train a fresh model from a labeled CSV and upload it to MLflow.
 
         Does not replace the served checkpoint — pass the returned mlflow_run_id back to
@@ -299,9 +311,9 @@ class Ml45CerealsDnslCriticalPointDetectionPlugin(ModelPluginPort):
         fine-tuned the served checkpoint's weights for a fixed 30 epochs with no
         threshold recalibration — a simplification invented for this service; the real
         repo has no "fine-tune" concept at all, only scripts/train.py's full
-        from-scratch pipeline (confirmed near byte-identical to ml43_cereals_dnsl_anomaly_fault_detection's own
-        trainer.py/metrics.py). This version reproduces the real repo's
-        split-by-cycle-id, DNFLoss, Adam+CosineAnnealingLR, warmup +
+        from-scratch pipeline (confirmed near byte-identical to
+        ml43_cereals_dnsl_anomaly_fault_detection's own trainer.py/metrics.py). This version
+        reproduces the real repo's split-by-cycle-id, DNFLoss, Adam+CosineAnnealingLR, warmup +
         early-stopping-on-a-composite-monitor-score, and 101-point threshold search, so
         results trained via this service are comparable to results trained locally on
         the same data.
@@ -313,7 +325,9 @@ class Ml45CerealsDnslCriticalPointDetectionPlugin(ModelPluginPort):
         df.columns = df.columns.str.lower()
 
         if TARGET_COLUMN not in df.columns:
-            raise ValueError(f"CSV falta columna objetivo '{TARGET_COLUMN}'. Requerida para entrenamiento.")
+            raise ValueError(
+                f"CSV falta columna objetivo '{TARGET_COLUMN}'. Requerida para entrenamiento."
+            )
 
         # Split RAW rows by whole cycle_id (never by row/window count) — see
         # _vendor/preprocess.py::split_train_val_test_by_id. A window is a sliding
@@ -351,9 +365,15 @@ class Ml45CerealsDnslCriticalPointDetectionPlugin(ModelPluginPort):
         n_feat = x_train_raw.shape[-1]
 
         scaler_x = StandardScaler()
-        x_train = scaler_x.fit_transform(x_train_raw.reshape(-1, n_feat)).reshape(x_train_raw.shape).astype(np.float32)
-        x_val = scaler_x.transform(x_val_raw.reshape(-1, n_feat)).reshape(x_val_raw.shape).astype(np.float32)
-        x_test = scaler_x.transform(x_test_raw.reshape(-1, n_feat)).reshape(x_test_raw.shape).astype(np.float32)
+        x_train = scaler_x.fit_transform(
+            x_train_raw.reshape(-1, n_feat)
+        ).reshape(x_train_raw.shape).astype(np.float32)
+        x_val = scaler_x.transform(
+            x_val_raw.reshape(-1, n_feat)
+        ).reshape(x_val_raw.shape).astype(np.float32)
+        x_test = scaler_x.transform(
+            x_test_raw.reshape(-1, n_feat)
+        ).reshape(x_test_raw.shape).astype(np.float32)
 
         scaler_num = StandardScaler()
         s_train = scaler_num.fit_transform(stats_train_df.values).astype(np.float32)
@@ -365,7 +385,9 @@ class Ml45CerealsDnslCriticalPointDetectionPlugin(ModelPluginPort):
 
         pos_weight = compute_class_weights(y_train)
         criterion = DNFLoss(anomaly_pos_weight=pos_weight, **DNF_LOSS_KWARGS)
-        optimizer = torch.optim.Adam(model.parameters(), lr=TRAIN_LR, weight_decay=TRAIN_WEIGHT_DECAY)
+        optimizer = torch.optim.Adam(
+            model.parameters(), lr=TRAIN_LR, weight_decay=TRAIN_WEIGHT_DECAY
+        )
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
             optimizer, T_max=TRAIN_SCHEDULER_T_MAX, eta_min=TRAIN_SCHEDULER_ETA_MIN,
         )
@@ -379,7 +401,9 @@ class Ml45CerealsDnslCriticalPointDetectionPlugin(ModelPluginPort):
 
         def _forward_step(x_batch, s_batch, y_batch):
             out = model(x_batch, s_batch)
-            anomaly_score = torch.nan_to_num(out["anomaly_score"], nan=0.0, posinf=20.0, neginf=-20.0)
+            anomaly_score = torch.nan_to_num(
+                out["anomaly_score"], nan=0.0, posinf=20.0, neginf=-20.0
+            )
             rule_activations = out["rule_activations"]
             loss, _ = criterion(
                 anomaly_score=anomaly_score,
@@ -458,7 +482,9 @@ class Ml45CerealsDnslCriticalPointDetectionPlugin(ModelPluginPort):
                 else:
                     epochs_without_improve += 1
                 if epochs_without_improve >= TRAIN_PATIENCE:
-                    logger.info("Early stopping en epoch %d (patience=%d).", epoch + 1, TRAIN_PATIENCE)
+                    logger.info(
+                        "Early stopping en epoch %d (patience=%d).", epoch + 1, TRAIN_PATIENCE
+                    )
                     break
 
         if best_state is None:
@@ -474,7 +500,10 @@ class Ml45CerealsDnslCriticalPointDetectionPlugin(ModelPluginPort):
             y_true=y_val_arr, prob_anomaly=val_probs, n_points=TRAIN_THRESHOLD_SEARCH_POINTS,
         )
         calibrated_threshold = float(threshold_metrics["best_threshold"])
-        logger.info("Calibrated decision_threshold=%.4f (val F1-optimal, 101-point grid)", calibrated_threshold)
+        logger.info(
+            "Calibrated decision_threshold=%.4f (val F1-optimal, 101-point grid)",
+            calibrated_threshold,
+        )
         # download_user_model_from_mlflow() reads the per-run threshold from exactly
         # this key (model_cfg["training_kwargs"]["threshold"]) — this is the ONLY place
         # that value is set; without it, every retrain's checkpoint kept propagating
@@ -495,10 +524,15 @@ class Ml45CerealsDnslCriticalPointDetectionPlugin(ModelPluginPort):
         test_f1 = float(f1_score(y_test_arr, test_preds, zero_division=0))
         test_precision = float(precision_score(y_test_arr, test_preds, zero_division=0))
         test_recall = float(recall_score(y_test_arr, test_preds, zero_division=0))
-        test_f1_macro = float(f1_score(y_test_arr, test_preds, labels=[0, 1], average="macro", zero_division=0))
-        test_recall_macro = float(recall_score(y_test_arr, test_preds, labels=[0, 1], average="macro", zero_division=0))
+        test_f1_macro = float(
+            f1_score(y_test_arr, test_preds, labels=[0, 1], average="macro", zero_division=0)
+        )
+        test_recall_macro = float(
+            recall_score(y_test_arr, test_preds, labels=[0, 1], average="macro", zero_division=0)
+        )
         test_auc = (
-            float(roc_auc_score(y_test_arr, test_probs)) if len(np.unique(y_test_arr)) > 1 else float("nan")
+            float(roc_auc_score(y_test_arr, test_probs))
+            if len(np.unique(y_test_arr)) > 1 else float("nan")
         )
 
         logger.info(
@@ -513,14 +547,18 @@ class Ml45CerealsDnslCriticalPointDetectionPlugin(ModelPluginPort):
         try:
             checkpoint = {"model_state_dict": best_state, "model_cfg": model_cfg}
             torch.save(checkpoint, temp_dir / MODEL_FILENAME)
-            _validate_saved_artifact(temp_dir / MODEL_FILENAME, lambda p: torch.load(p, weights_only=False))
+            _validate_saved_artifact(
+                temp_dir / MODEL_FILENAME, lambda p: torch.load(p, weights_only=False)
+            )
 
             # download_user_model_from_mlflow() requires the scaler (and, if present, the XAI
             # background) alongside the model checkpoint in the same MLflow artifact path —
             # previously only the checkpoint was uploaded, so a predict call that DID pass a
             # freshly-trained mlflow_run_id would still fail (joblib.load on a scaler.pkl that
             # was never uploaded).
-            joblib.dump({"scaler_x": scaler_x, "scaler_num": scaler_num}, temp_dir / SCALER_FILENAME)
+            joblib.dump(
+                {"scaler_x": scaler_x, "scaler_num": scaler_num}, temp_dir / SCALER_FILENAME
+            )
             _validate_saved_artifact(temp_dir / SCALER_FILENAME, joblib.load)
 
             if self._xai_background is not None:
@@ -528,12 +566,13 @@ class Ml45CerealsDnslCriticalPointDetectionPlugin(ModelPluginPort):
                 _validate_saved_artifact(temp_dir / XAI_BACKGROUND_FILENAME, np.load)
 
             try:
-                # Key names unified with ml43_cereals_dnsl_anomaly_fault_detection and with both real training
-                # repos' own results.json (modelo 43-45 audit, metrics unification) — these
-                # ARE the final display names now, so stats() no longer needs a separate
-                # legacy-key alias map: it just copies these straight through. Also fixes the
-                # "Price fluctuation classifier" card bug (ws-models.js's customEvalHtml
-                # duck-types on bare accuracy+f1 keys, which TrainResponse used to expose).
+                # Key names unified with ml43_cereals_dnsl_anomaly_fault_detection and with both
+                # real training repos' own results.json (modelo 43-45 audit, metrics
+                # unification) — these ARE the final display names now, so stats() no longer
+                # needs a separate legacy-key alias map: it just copies these straight through.
+                # Also fixes the "Price fluctuation classifier" card bug (ws-models.js's
+                # customEvalHtml duck-types on bare accuracy+f1 keys, which TrainResponse used
+                # to expose).
                 loggable_metrics = {
                     "accuracy": test_accuracy,
                     "fallo_auc": test_auc,
@@ -557,8 +596,12 @@ class Ml45CerealsDnslCriticalPointDetectionPlugin(ModelPluginPort):
                 )
                 logger.info("Training complete. MLflow run_id=%s", new_run_id)
             except Exception as exc:  # pylint: disable=broad-exception-caught
-                logger.error("MLflow artifact upload failed (model trained but not persisted): %s", exc)
-                raise ModelPersistenceError(f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}") from exc
+                logger.error(
+                    "MLflow artifact upload failed (model trained but not persisted): %s", exc
+                )
+                raise ModelPersistenceError(
+                    f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}"
+                ) from exc
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
 
@@ -569,7 +612,7 @@ class Ml45CerealsDnslCriticalPointDetectionPlugin(ModelPluginPort):
         return TrainResponse(
             detail="Entrenamiento completado",
             accuracy=round(test_accuracy, 4),
-            fallo_auc=round(test_auc, 4) if test_auc == test_auc else test_auc,
+            fallo_auc=round(test_auc, 4) if not math.isnan(test_auc) else test_auc,
             fallo_precision=round(test_precision, 4),
             fallo_recall=round(test_recall, 4),
             macro_f1=round(test_f1_macro, 4),
@@ -592,20 +635,72 @@ class Ml45CerealsDnslCriticalPointDetectionPlugin(ModelPluginPort):
             InputField(name=col, type="float", description=f"Sensor {col} time-series (per row)")
             for col in SENSOR_COLUMNS
         ] + [
-            InputField(name="timestamp", type="datetime", description="Marca temporal de la lectura"),
-            InputField(name="cycle_id", type="string", description="Identificador del ciclo/entidad de secado"),
+            InputField(
+                name="timestamp",
+                type="datetime",
+                description="Marca temporal de la lectura",
+            ),
+            InputField(
+                name="cycle_id",
+                type="string",
+                description="Identificador del ciclo/entidad de secado",
+            ),
         ]
         outputs = [
-            OutputField(name="predicted_anomaly_label", type="string", description="'Fallo' o 'No Fallo'"),
-            OutputField(name="anomaly_probability", type="float", description="Probabilidad de anomalía fusionada (fuzzy + LSTM), [0, 1]"),
-            OutputField(name="decision_threshold", type="float", description="Umbral de decisión utilizado"),
-            OutputField(name="window_index", type="int", description="Índice de ventana temporal (1..N)"),
-            OutputField(name="cycle_id", type="string", description="Identificador del ciclo asociado a la ventana (cuando el CSV lo incluye)"),
-            OutputField(name="timestamp_init", type="string", description="Timestamp de la primera lectura de la ventana"),
-            OutputField(name="timestamp_end", type="string", description="Timestamp de la última lectura de la ventana"),
-            OutputField(name="Estado interpretativo", type="string", description="Normal | Vigilancia | Criticidad detectada"),
-            OutputField(name="Evidencia", type="string", description="Motivo textual del estado interpretativo (PCC más relevante detectado)"),
-            OutputField(name="Recomendacion", type="string", description="Acción recomendada para el estado interpretativo de la ventana"),
+            OutputField(
+                name="predicted_anomaly_label",
+                type="string",
+                description="'Fallo' o 'No Fallo'",
+            ),
+            OutputField(
+                name="anomaly_probability",
+                type="float",
+                description="Probabilidad de anomalía fusionada (fuzzy + LSTM), [0, 1]",
+            ),
+            OutputField(
+                name="decision_threshold",
+                type="float",
+                description="Umbral de decisión utilizado",
+            ),
+            OutputField(
+                name="window_index",
+                type="int",
+                description="Índice de ventana temporal (1..N)",
+            ),
+            OutputField(
+                name="cycle_id",
+                type="string",
+                description=(
+                    "Identificador del ciclo asociado a la ventana (cuando el CSV lo incluye)"
+                ),
+            ),
+            OutputField(
+                name="timestamp_init",
+                type="string",
+                description="Timestamp de la primera lectura de la ventana",
+            ),
+            OutputField(
+                name="timestamp_end",
+                type="string",
+                description="Timestamp de la última lectura de la ventana",
+            ),
+            OutputField(
+                name="Estado interpretativo",
+                type="string",
+                description="Normal | Vigilancia | Criticidad detectada",
+            ),
+            OutputField(
+                name="Evidencia",
+                type="string",
+                description=(
+                    "Motivo textual del estado interpretativo (PCC más relevante detectado)"
+                ),
+            ),
+            OutputField(
+                name="Recomendacion",
+                type="string",
+                description="Acción recomendada para el estado interpretativo de la ventana",
+            ),
         ]
 
         # Base/fixed-model reference metrics — replaced below, key by key, with the real

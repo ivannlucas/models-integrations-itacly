@@ -12,8 +12,14 @@ from app.plugins.ml46_dairy_fouling_clog_detection._vendor.artifact_validation i
     validate_feature_artifacts,
     validate_policy_artifact,
 )
-from app.plugins.ml46_dairy_fouling_clog_detection._vendor.common import FeatureArtifacts, TrainConfig
-from app.plugins.ml46_dairy_fouling_clog_detection._vendor.model_arch import PredictiveTCN, validate_checkpoint_compatibility
+from app.plugins.ml46_dairy_fouling_clog_detection._vendor.common import (
+    FeatureArtifacts,
+    TrainConfig,
+)
+from app.plugins.ml46_dairy_fouling_clog_detection._vendor.model_arch import (
+    PredictiveTCN,
+    validate_checkpoint_compatibility,
+)
 from app.plugins.ml46_dairy_fouling_clog_detection.constants import (
     ARTIFACT_FOLDER_NAME,
     FEATURE_ARTIFACTS_FILENAME,
@@ -100,7 +106,9 @@ def load_artifacts() -> tuple[PredictiveTCN, TrainConfig, FeatureArtifacts, dict
     policy = load_policy_thresholds()
     manifest = load_manifest()
 
-    validate_feature_artifacts(feature_artifacts, SCENARIO, feature_artifacts.no_clock_feature_names)
+    validate_feature_artifacts(
+        feature_artifacts, SCENARIO, feature_artifacts.no_clock_feature_names
+    )
     validate_policy_artifact(policy, SCENARIO)
 
     model = build_model(train_cfg, feature_artifacts)

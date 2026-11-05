@@ -8,6 +8,8 @@ import pytest
 
 pytest.importorskip("torch")
 
+# Imported after importorskip on purpose: the plugin needs torch.
+# pylint: disable=wrong-import-position
 from app.plugins.ml23_lactic_market_price_forecast import mlflow_utils  # noqa: E402
 from app.plugins.ml23_lactic_market_price_forecast import plugin as plugin_mod  # noqa: E402
 from app.plugins.ml23_lactic_market_price_forecast.constants import (  # noqa: E402
@@ -16,10 +18,12 @@ from app.plugins.ml23_lactic_market_price_forecast.constants import (  # noqa: E
     MODEL_FILENAME,
     SCALER_FILENAME,
 )
+# pylint: enable=wrong-import-position
 
 
-@pytest.fixture
-def train_csv(tmp_path):
+@pytest.fixture(name="train_csv")
+def fixture_train_csv(tmp_path):
+    """Write a 60-month, 2-series ml23 training CSV and return its path."""
     rng = np.random.default_rng(0)
     rows = []
     for producto, canal in (("LECHE ENTERA", "HIPER"), ("LECHE DESNATADA", "SUPER")):
@@ -34,25 +38,41 @@ def train_csv(tmp_path):
 
 @pytest.fixture
 def fast(monkeypatch):
+    """Shrink training to 2 epochs and 1 seed."""
     monkeypatch.setattr(plugin_mod, "TRAIN_EPOCHS", 2)
     monkeypatch.setattr(plugin_mod, "TRAIN_N_SEEDS", 1)
 
 
 def test_declares_its_base_folder():
-    assert plugin_mod.Ml23LacticMarketPriceForecastPlugin.BASE_ARTIFACT_FOLDER == ARTIFACT_FOLDER_NAME
+    """The plugin declares its artifact folder as BASE_ARTIFACT_FOLDER."""
+    assert (
+        plugin_mod.Ml23LacticMarketPriceForecastPlugin.BASE_ARTIFACT_FOLDER == ARTIFACT_FOLDER_NAME
+    )
 
 
-def test_train_without_run_publishes_the_new_base(train_csv, fast, isolated_base_store):
-    resp = plugin_mod.Ml23LacticMarketPriceForecastPlugin().train(data_path=train_csv, mlflow_run_id="")
-    assert resp.base_version.version == "v1" and resp.upload_warning is None
+@pytest.mark.usefixtures("fast")
+def test_train_without_run_publishes_the_new_base(train_csv, isolated_base_store):
+    """/train without an MLflow run publishes v1 with the GRU model, scaler and manifest."""
+    resp = plugin_mod.Ml23LacticMarketPriceForecastPlugin().train(
+        data_path=train_csv, mlflow_run_id=""
+    )
+    base_version = resp.base_version
+    assert base_version.version == "v1"  # pylint: disable=no-member  # pydantic field
+    assert resp.upload_warning is None
     v1 = isolated_base_store / ARTIFACT_FOLDER_NAME / "versions" / "v1"
     assert (v1 / MODEL_FILENAME).exists() and (v1 / SCALER_FILENAME).exists()
     assert json.loads((v1 / MANIFEST_FILENAME).read_text())["selected_model"] == "GRU"
 
 
-def test_train_with_run_and_mlflow_failure_is_a_warning(train_csv, fast, monkeypatch):
+@pytest.mark.usefixtures("fast")
+def test_train_with_run_and_mlflow_failure_is_a_warning(train_csv, monkeypatch):
+    """An MLflow upload failure becomes upload_warning; v1 is still published with the run id."""
     tracker = MagicMock(upload_artifacts=MagicMock(side_effect=ConnectionError("mlflow caído")))
     monkeypatch.setattr(mlflow_utils, "BaseMLflowTracker", MagicMock(return_value=tracker))
-    resp = plugin_mod.Ml23LacticMarketPriceForecastPlugin().train(data_path=train_csv, mlflow_run_id="run-1")
-    assert "mlflow caído" in resp.upload_warning
-    assert resp.base_version.version == "v1" and resp.base_version.mlflow_run_id == "run-1"
+    resp = plugin_mod.Ml23LacticMarketPriceForecastPlugin().train(
+        data_path=train_csv, mlflow_run_id="run-1"
+    )
+    assert "mlflow caído" in resp.upload_warning  # pylint: disable=unsupported-membership-test
+    base_version = resp.base_version
+    assert base_version.version == "v1"  # pylint: disable=no-member  # pydantic field
+    assert base_version.mlflow_run_id == "run-1"  # pylint: disable=no-member  # pydantic field

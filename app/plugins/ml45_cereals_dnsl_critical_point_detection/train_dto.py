@@ -1,9 +1,12 @@
+"""Contrato de /train de ml45 (petición y respuesta con métricas del split de test)."""
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.application.dto.train_dto import MlflowRunId
 
 
 class TrainRequest(BaseModel):
+    """Training request: labelled CSV and the MLflow run that receives the model."""
+
     model_config = ConfigDict(protected_namespaces=())
     data_path: str = Field(
         ...,
@@ -16,6 +19,8 @@ class TrainRequest(BaseModel):
 
 
 class TrainResponse(BaseModel):
+    """Training result: TEST-split metrics, calibrated threshold, split sizes and MLflow run."""
+
     model_config = ConfigDict(protected_namespaces=())
     detail: str
     accuracy: float

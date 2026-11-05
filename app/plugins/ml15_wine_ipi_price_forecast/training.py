@@ -50,7 +50,10 @@ logger = logging.getLogger(__name__)
 
 
 def add_origin_date(df: pd.DataFrame) -> pd.DataFrame:
-    """Port of trainer.py::_add_origin_date: origin_date, else date, else year+month (month start)."""
+    """Port of trainer.py::_add_origin_date.
+
+    Uses origin_date, else date, else year+month (month start).
+    """
     out = df.copy()
     if "origin_date" in out.columns:
         out["origin_date"] = pd.to_datetime(out["origin_date"], errors="coerce")
@@ -64,12 +67,15 @@ def add_origin_date(df: pd.DataFrame) -> pd.DataFrame:
                 f"ordenar el histórico; faltan: {missing}"
             )
         out["origin_date"] = pd.to_datetime(
-            out["year"].astype(int).astype(str) + "-" + out["month"].astype(int).astype(str).str.zfill(2) + "-01",
+            out["year"].astype(int).astype(str) + "-"
+            + out["month"].astype(int).astype(str).str.zfill(2) + "-01",
             errors="coerce",
         )
     invalid = int(out["origin_date"].isna().sum())
     if invalid:
-        raise ValueError(f"El CSV de entrenamiento tiene {invalid} fila(s) con fecha de origen inválida.")
+        raise ValueError(
+            f"El CSV de entrenamiento tiene {invalid} fila(s) con fecha de origen inválida."
+        )
     out["origin_date"] = out["origin_date"].dt.to_period("M").dt.to_timestamp()
     return out.sort_values("origin_date", kind="mergesort").reset_index(drop=True)
 
@@ -86,7 +92,9 @@ def split_dates(last_origin: pd.Timestamp) -> dict[str, pd.Timestamp]:
     }
 
 
-def regression_metrics(y_true: np.ndarray, y_pred: np.ndarray, y_anchor: np.ndarray) -> dict[str, float | None]:
+def regression_metrics(
+    y_true: np.ndarray, y_pred: np.ndarray, y_anchor: np.ndarray
+) -> dict[str, float | None]:
     """Port of get_stats.py::_regression_metrics (None where the original yields NaN)."""
     rmse = float(np.sqrt(mean_squared_error(y_true, y_pred)))
     mae = float(mean_absolute_error(y_true, y_pred))
@@ -97,7 +105,10 @@ def regression_metrics(y_true: np.ndarray, y_pred: np.ndarray, y_anchor: np.ndar
     r2 = float(r2_score(y_true, y_pred)) if len(y_true) > 1 else float("nan")
     real_delta, pred_delta = y_true - y_anchor, y_pred - y_anchor
     valid = np.isfinite(real_delta) & np.isfinite(pred_delta)
-    mda = float(np.mean(np.sign(real_delta[valid]) == np.sign(pred_delta[valid]))) if valid.any() else float("nan")
+    mda = (
+        float(np.mean(np.sign(real_delta[valid]) == np.sign(pred_delta[valid])))
+        if valid.any() else float("nan")
+    )
     return {
         "rmse": rmse,
         "mae": mae,
@@ -117,10 +128,15 @@ def _reduction_pct(model_value: float | None, baseline_value: float | None) -> f
 
 def _feature_matrix(df: pd.DataFrame) -> pd.DataFrame:
     """Port of trainer.py/predictor.py::_build_feature_matrix."""
-    return df[FEATURE_COLUMNS].apply(pd.to_numeric, errors="coerce").replace([np.inf, -np.inf], np.nan).fillna(0.0)
+    return (
+        df[FEATURE_COLUMNS]
+        .apply(pd.to_numeric, errors="coerce")
+        .replace([np.inf, -np.inf], np.nan)
+        .fillna(0.0)
+    )
 
 
-def train_model(df: pd.DataFrame, *, alpha: float = ALPHA) -> dict:
+def train_model(df: pd.DataFrame, *, alpha: float = ALPHA) -> dict:  # pylint: disable=too-many-locals
     """Fit the deployed Pipeline on the train split and evaluate it on the test split.
 
     Raises ValueError for a CSV without the required columns, or too short to leave training
@@ -142,10 +158,13 @@ def train_model(df: pd.DataFrame, *, alpha: float = ALPHA) -> dict:
     train = train[train["target_date"] <= dates["train_end"]]
     if len(train) < 2:
         raise ValueError(
-            f"Histórico insuficiente: quedan {len(train)} fila(s) de entrenamiento. El procedimiento "
+            f"Histórico insuficiente: quedan {len(train)} fila(s) de entrenamiento. "
+            "El procedimiento "
             f"original reserva los últimos {TEST_MONTHS} meses de origen para test y los "
-            f"{VALIDATION_MONTHS} anteriores para validación, y solo entrena con filas cuyo objetivo "
-            f"(origen + {HORIZON} meses) cae antes de la validación (hasta {dates['train_end'].date()})."
+            f"{VALIDATION_MONTHS} anteriores para validación, y solo entrena con filas "
+            "cuyo objetivo "
+            f"(origen + {HORIZON} meses) cae antes de la validación "
+            f"(hasta {dates['train_end'].date()})."
         )
 
     model = Pipeline([("scaler", StandardScaler()), ("model", Ridge(alpha=float(alpha)))])
@@ -165,7 +184,9 @@ def train_model(df: pd.DataFrame, *, alpha: float = ALPHA) -> dict:
     result = {
         "model": model,
         "metrics": {k: metrics[k] for k in ("rmse", "mae", "mape_pct", "r2", "mda_pct")},
-        "baseline_persistence": {k: baseline[k] for k in ("rmse", "mae", "mape_pct", "r2", "mda_pct")},
+        "baseline_persistence": {
+            k: baseline[k] for k in ("rmse", "mae", "mape_pct", "r2", "mda_pct")
+        },
         "rmse_reduction_pct": _reduction_pct(metrics["rmse"], baseline["rmse"]),
         "mape_reduction_pct": _reduction_pct(metrics["mape_pct"], baseline["mape_pct"]),
         "n_train": int(len(train)),

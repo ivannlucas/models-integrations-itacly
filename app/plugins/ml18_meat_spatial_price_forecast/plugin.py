@@ -113,7 +113,8 @@ class Ml18MeatSpatialPriceForecastPlugin(ModelPluginPort):
                 shutil.rmtree(user_tmp, ignore_errors=True)
         self._record_prediction()
         logger.info(
-            "predict_inline done — %d predicciones, count=%d", len(predictions), self._predict_count,
+            "predict_inline done — %d predicciones, count=%d",
+            len(predictions), self._predict_count,
         )
         return PredictInlineResponse(
             model_id=MODEL_ID, predictions=predictions, n_predictions=len(predictions),
@@ -136,7 +137,8 @@ class Ml18MeatSpatialPriceForecastPlugin(ModelPluginPort):
             "predict_batch done — %d predicciones, count=%d", len(predictions), self._predict_count,
         )
         return PredictBatchResponse(
-            model_id=MODEL_ID, predictions=predictions, n_predictions=len(predictions), output_path=None,
+            model_id=MODEL_ID, predictions=predictions, n_predictions=len(predictions),
+            output_path=None,
         )
 
     # ── train ─────────────────────────────────────────────────────────────────
@@ -164,7 +166,8 @@ class Ml18MeatSpatialPriceForecastPlugin(ModelPluginPort):
                 artifact_tmp, artifact_folder=ARTIFACT_FOLDER_NAME, data_path=data_path,
                 metrics=result.metrics, mlflow_run_id=mlflow_run_id,
                 upload_to_mlflow=lambda: upload_artifacts_to_mlflow(
-                    artifact_tmp, mlflow_run_id, metrics=result.metrics, params=params, history=history),
+                    artifact_tmp, mlflow_run_id, metrics=result.metrics, params=params,
+                    history=history),
             )
         finally:
             shutil.rmtree(artifact_tmp, ignore_errors=True)

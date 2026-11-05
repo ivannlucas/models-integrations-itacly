@@ -28,6 +28,7 @@ class DynamicMLP(nn.Module):
     (state_dict keys ``net.*``) loads without remapping.
     """
 
+    # pylint: disable-next=too-many-arguments,too-many-positional-arguments
     def __init__(
         self,
         input_size: int,

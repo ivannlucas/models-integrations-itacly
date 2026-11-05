@@ -1,8 +1,9 @@
 """Generic train use case for model plugins."""
 import inspect
-from typing import Any
-from app.domain.ports.model_plugin_port import ModelPluginPort
 import logging
+from typing import Any
+
+from app.domain.ports.model_plugin_port import ModelPluginPort
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +22,7 @@ def build_train_kwargs(plugin: Any, request: Any) -> dict[str, Any]:
     return kwargs
 
 
-class TrainModelUseCase:
+class TrainModelUseCase:  # pylint: disable=too-few-public-methods
     """Generic train use case."""
 
     def __init__(self, plugin: ModelPluginPort) -> None:
@@ -31,5 +32,9 @@ class TrainModelUseCase:
     def execute(self, request: Any) -> dict:
         """Executes the training process."""
         kwargs = build_train_kwargs(self._plugin, request)
-        logger.info("Executing training, data_path=%s, mlflow_run_id=%s", kwargs["data_path"], kwargs["mlflow_run_id"])
+        logger.info(
+            "Executing training, data_path=%s, mlflow_run_id=%s",
+            kwargs["data_path"],
+            kwargs["mlflow_run_id"],
+        )
         return self._plugin.train(**kwargs)

@@ -253,7 +253,12 @@ class Ml26WineSulfiteGruPsoForecastPlugin(ModelPluginPort):
                     "gradient_clip",
                 )
             }
-            | {"optimizer": "AdamW", "loss": "SmoothL1Loss", "mode": "train_sequence_with_config", "seed": TRAINING_SEED}
+            | {
+                "optimizer": "AdamW",
+                "loss": "SmoothL1Loss",
+                "mode": "train_sequence_with_config",
+                "seed": TRAINING_SEED,
+            }
         )
 
         def _on_epoch(epoch: int, train_loss: float, val_rmse: float) -> None:

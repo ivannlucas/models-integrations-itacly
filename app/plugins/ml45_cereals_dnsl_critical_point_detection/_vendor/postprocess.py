@@ -23,7 +23,7 @@ def _json_safe(value: Any) -> Any:
     return value
 
 
-def decode_predictions(
+def decode_predictions(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     pred_classes: np.ndarray,
     anomaly_scores: np.ndarray,
     threshold: float = 0.5,
@@ -37,7 +37,8 @@ def decode_predictions(
         pred_classes: Array binario predicho (0/1) [N].
         anomaly_scores: Array de probabilidades de anomalía [N].
         threshold: Umbral para clasificación binaria de anomalía.
-        timestamp_index: Lista de tuplas con timestamps de inicio y fin de cada ventana de predicción.
+        timestamp_index: Lista de tuplas con timestamps de inicio y fin de cada ventana de
+            predicción.
         window_index: Lista de índices de las ventanas de predicción.
         cycle_id: Lista de IDs de los ciclos asociados a cada ventana.
     Returns:

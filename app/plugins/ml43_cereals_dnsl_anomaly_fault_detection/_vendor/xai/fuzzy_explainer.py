@@ -2,10 +2,11 @@
 Módulo de explicabilidad fuzzy: análisis de reglas, antecedentes y firmas fuzzy.
 """
 
+from collections import Counter, defaultdict
+from typing import Any, Dict, List, Optional
+
 import numpy as np
 import torch
-from typing import Any, Dict, List, Optional
-from collections import Counter, defaultdict
 
 from .utils import (
     safe_float,
@@ -30,7 +31,7 @@ def _compute_rule_effects(
     }
 
 
-def _build_rule_antecedents(
+def _build_rule_antecedents(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
     feature_names: List[str],
     stats: Optional[List[str]],
     alpha_probs: np.ndarray,
@@ -86,7 +87,7 @@ def _build_rule_antecedents(
     return ants[:max_antecedents_per_rule]
 
 
-class FuzzyExplainer:
+class FuzzyExplainer:  # pylint: disable=too-few-public-methods
     """Generador de explicaciones fuzzy."""
 
     def __init__(
@@ -101,7 +102,7 @@ class FuzzyExplainer:
         self.mf_semantics = mf_semantics
         self.stats_creation = list(stats_creation) if stats_creation else None
 
-    def explain_sample(
+    def explain_sample(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals,too-many-branches,too-many-statements
         self,
         x_window: np.ndarray,
         s_stats: np.ndarray,
@@ -189,7 +190,8 @@ class FuzzyExplainer:
         # Construcción de reglas explicativas
         def _build_rule_record(rule_idx: int) -> Dict[str, Any]:
             ants = _build_rule_antecedents(
-                feature_names=self.feature_names or [f"feature_{i}" for i in range(alpha_probs.shape[1])],
+                feature_names=self.feature_names
+                or [f"feature_{i}" for i in range(alpha_probs.shape[1])],
                 stats=self.stats_creation,
                 alpha_probs=alpha_probs,
                 membership=membership,
@@ -232,14 +234,26 @@ class FuzzyExplainer:
                 weighted_var_counter[feat_base] += w_ant
                 weighted_stat_counter[feat_stat] += w_ant
 
-        support_mass = float(np.sum(np.abs([r["contribution"] for r in top_rules_support]))) if top_rules_support else 0.0
-        oppose_mass = float(np.sum(np.abs([r["contribution"] for r in top_rules_oppose]))) if top_rules_oppose else 0.0
+        support_mass = (
+            float(np.sum(np.abs([r["contribution"] for r in top_rules_support])))
+            if top_rules_support
+            else 0.0
+        )
+        oppose_mass = (
+            float(np.sum(np.abs([r["contribution"] for r in top_rules_oppose])))
+            if top_rules_oppose
+            else 0.0
+        )
         total_mass = support_mass + oppose_mass
         support_ratio = float(support_mass / total_mass) if total_mass > 0 else 0.0
 
         case_signature = {
-            "dominant_variables": sorted(weighted_var_counter.items(), key=lambda x: x[1], reverse=True)[:8],
-            "dominant_stats": sorted(weighted_stat_counter.items(), key=lambda x: x[1], reverse=True)[:8],
+            "dominant_variables": sorted(
+                weighted_var_counter.items(), key=lambda x: x[1], reverse=True
+            )[:8],
+            "dominant_stats": sorted(
+                weighted_stat_counter.items(), key=lambda x: x[1], reverse=True
+            )[:8],
             "most_frequent_variables": var_counter.most_common(8),
             "most_frequent_stats": stat_counter.most_common(8),
             "most_frequent_mfs": mf_counter.most_common(8),

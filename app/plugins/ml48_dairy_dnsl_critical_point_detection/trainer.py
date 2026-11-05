@@ -8,8 +8,9 @@ test metrics exactly (inbox/a47/manifest.yaml), plus the SHAP background ml48 ne
 * ``train_full`` = ``main.py train``: src/data_processing/preprocess.py (split by Cycle_ID,
   digital twin, noise augmentation, feature engineering, scaler) + src/training/trainer.py
   (Physics-Guided Loss with the lambda curriculum, early stopping on validation loss).
-* ``fine_tune`` = ``main.py fine_tune`` (the /train default): src/fine_tuning/fine_tuner.py (frozen CNN backbone,
-  only the 4 classification heads recalibrated with CrossEntropy, LR = learning_rate / 10).
+* ``fine_tune`` = ``main.py fine_tune`` (the /train default): src/fine_tuning/fine_tuner.py
+  (frozen CNN backbone, only the 4 classification heads recalibrated with CrossEntropy,
+  LR = learning_rate / 10).
 
 Plugin adaptations, all deliberate:
 
@@ -41,12 +42,12 @@ import joblib
 import numpy as np
 import pandas as pd
 import torch
-import torch.nn as nn
-import torch.optim as optim
+from torch import nn
+from torch import optim
+from torch.utils.data import DataLoader, TensorDataset
 from sklearn.metrics import precision_recall_fscore_support
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
-from torch.utils.data import DataLoader, TensorDataset
 
 from app.plugins.ml48_dairy_dnsl_critical_point_detection.constants import (
     APPLY_DIGITAL_TWIN,
@@ -171,7 +172,9 @@ def build_tensors(df_feat: pd.DataFrame, cycle_ids, feature_cols: list[str], sca
     Cycles go in ascending Cycle_ID order, as in the original (feature_engineering's groupby
     sorts df_final, and fine_tuner groups by Cycle_ID), so the DataLoader sees the same batches.
     """
-    groups = {cid: g for cid, g in df_feat.groupby("Cycle_ID", sort=False)}
+    # dict(groupby) is NOT equivalent: GroupBy has a .keys attribute, so dict() treats it
+    # as a mapping.
+    groups = {cid: g for cid, g in df_feat.groupby("Cycle_ID", sort=False)}  # pylint: disable=unnecessary-comprehension
     x_list, y_list = [], []
     for cid in np.sort(np.asarray(cycle_ids)):
         group = groups[cid]
@@ -232,7 +235,9 @@ def _device() -> torch.device:
 
 def _loader(x, y, batch_size: int, shuffle: bool) -> DataLoader:
     generator = torch.Generator().manual_seed(RANDOM_STATE) if shuffle else None
-    return DataLoader(TensorDataset(x, y), batch_size=batch_size, shuffle=shuffle, generator=generator)
+    return DataLoader(
+        TensorDataset(x, y), batch_size=batch_size, shuffle=shuffle, generator=generator
+    )
 
 
 def _ce_sum(criterion, preds, labels):
@@ -271,12 +276,19 @@ def _augment_train_cycles(df: pd.DataFrame, train_ids: np.ndarray):
     noisy["Cycle_ID"] = noisy["Cycle_ID"].map(id_map)
     for column in SENSOR_COLUMNS:
         std_dev = noisy[column].std()
-        noisy[column] += np.random.normal(0, std_dev * TRAIN_HYPERPARAMS["noise_level"], size=len(noisy))
-    return pd.concat([df, noisy], ignore_index=True), np.concatenate([train_ids, list(id_map.values())])
+        noisy[column] += np.random.normal(
+            0, std_dev * TRAIN_HYPERPARAMS["noise_level"], size=len(noisy)
+        )
+    return (
+        pd.concat([df, noisy], ignore_index=True),
+        np.concatenate([train_ids, list(id_map.values())]),
+    )
 
 
-def train_full(csv_path: str, apply_twin: bool = APPLY_DIGITAL_TWIN) -> TrainingResult:
-    """Retrain the DNSL CNN from scratch (main.py train), with the original Optuna hyperparameters."""
+def train_full(  # pylint: disable=too-many-locals
+        csv_path: str, apply_twin: bool = APPLY_DIGITAL_TWIN) -> TrainingResult:
+    """Retrain the DNSL CNN from scratch (main.py train), with the original Optuna
+    hyperparameters."""
     hp = TRAIN_HYPERPARAMS
     _seed_everything()
     start = time.time()
@@ -298,17 +310,23 @@ def train_full(csv_path: str, apply_twin: bool = APPLY_DIGITAL_TWIN) -> Training
     train_loader = _loader(x_train, y_train, hp["batch_size"], shuffle=True)
     val_loader = _loader(x_val, y_val, hp["batch_size"], shuffle=False)
 
-    model = CNN_Pasteurizer(n_sensors=len(cols), n_classes=N_CLASSES, dropout_prob=hp["dropout_rate"]).to(device)
+    model = CNN_Pasteurizer(
+        n_sensors=len(cols), n_classes=N_CLASSES, dropout_prob=hp["dropout_rate"]
+    ).to(device)
     optimizer = optim.Adam(model.parameters(), lr=hp["learning_rate"])
     criterion = PhysicsGuidedLoss(feature_cols=cols, scaler=scaler, lambda_phys=1.0).to(device)
 
-    best_val_loss, best_weights, counter, epoch = float("inf"), copy.deepcopy(model.state_dict()), 0, 0
+    best_val_loss, best_weights, counter, epoch = (
+        float("inf"), copy.deepcopy(model.state_dict()), 0, 0
+    )
     for epoch in range(hp["epochs"]):
         # Curriculum: data only, then a linear ramp of the physics weight, then max_lambda.
         if epoch < hp["warmup_epochs"]:
             criterion.lambda_phys = 0.0
         elif epoch < hp["warmup_epochs"] + hp["ramp_up_epochs"]:
-            criterion.lambda_phys = (epoch - hp["warmup_epochs"]) / hp["ramp_up_epochs"] * hp["max_lambda"]
+            criterion.lambda_phys = (
+                (epoch - hp["warmup_epochs"]) / hp["ramp_up_epochs"] * hp["max_lambda"]
+            )
         else:
             criterion.lambda_phys = hp["max_lambda"]
 
@@ -341,12 +359,14 @@ def train_full(csv_path: str, apply_twin: bool = APPLY_DIGITAL_TWIN) -> Training
     })
     logger.info("ml48 full training done: %s", metrics)
     background, background_ids = _shap_background(x_test, test_ids)
-    return TrainingResult(model.cpu(), scaler, cols, ts1_mean_train, metrics, background, background_ids)
+    return TrainingResult(
+        model.cpu(), scaler, cols, ts1_mean_train, metrics, background, background_ids
+    )
 
 
 # ── mode="fine_tune" ──────────────────────────────────────────────────────────
 
-def fine_tune(
+def fine_tune(  # pylint: disable=too-many-locals
     csv_path: str, *, base_model: nn.Module, scaler: Any, feature_cols: list[str],
     ts1_mean_train: float = 0.0,
 ) -> TrainingResult:
@@ -382,7 +402,9 @@ def fine_tune(
     optimizer = optim.Adam([p for p in model.parameters() if p.requires_grad], lr=lr)
     criterion = nn.CrossEntropyLoss()
 
-    best_val_loss, best_weights, counter, epoch = float("inf"), copy.deepcopy(model.state_dict()), 0, 0
+    best_val_loss, best_weights, counter, epoch = (
+        float("inf"), copy.deepcopy(model.state_dict()), 0, 0
+    )
     for epoch in range(hp["epochs"]):
         model.train()
         for inputs, labels in train_loader:
@@ -412,7 +434,9 @@ def fine_tune(
     })
     logger.info("ml48 fine-tuning done: %s", metrics)
     background, background_ids = _shap_background(x_test, test_ids)
-    return TrainingResult(model.cpu(), scaler, feature_cols, ts1_mean_train, metrics, background, background_ids)
+    return TrainingResult(
+        model.cpu(), scaler, feature_cols, ts1_mean_train, metrics, background, background_ids
+    )
 
 
 # ── Artifacts ─────────────────────────────────────────────────────────────────
@@ -427,7 +451,10 @@ def save_training_artifacts(artifact_dir: Path, result: TrainingResult) -> None:
     np.save(artifact_dir / SHAP_BACKGROUND_FILENAME, result.shap_background)
     (artifact_dir / SHAP_BACKGROUND_META_FILENAME).write_text(
         json.dumps({"cycle_ids": result.shap_background_cycle_ids,
-                    "source": f"first {len(result.shap_background_cycle_ids)} test cycles of the retraining CSV, scaled"}),
+                    "source": (
+                        f"first {len(result.shap_background_cycle_ids)} test cycles of the "
+                        "retraining CSV, scaled"
+                    )}),
         encoding="utf-8",
     )
     logger.info("Training artifacts saved to %s", artifact_dir)

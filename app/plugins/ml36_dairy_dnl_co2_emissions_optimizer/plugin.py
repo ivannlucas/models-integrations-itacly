@@ -131,7 +131,9 @@ class Ml36DairyDnlCo2EmissionsOptimizerPlugin(ModelPluginPort):
         if not mlflow_run_id:
             return (self._model, self._scaler_X, self._scaler_Y), None
         logger.info("Using user model from MLflow run_id=%s", mlflow_run_id)
-        model, scaler_x, scaler_y, _config, temp_dir = download_user_model_from_mlflow(mlflow_run_id)
+        model, scaler_x, scaler_y, _config, temp_dir = download_user_model_from_mlflow(
+            mlflow_run_id
+        )
         return (model, scaler_x, scaler_y), temp_dir
 
     # ── predict_inline ────────────────────────────────────────────────────────
@@ -172,11 +174,14 @@ class Ml36DairyDnlCo2EmissionsOptimizerPlugin(ModelPluginPort):
             CO2_emissions_pred=round(float(y_real[CO2_IDX]), 4),
         )
 
+    # pylint: disable-next=too-many-locals
     def _run_optimize(self, features: dict, bundle: tuple) -> PredictOptimizeResponse:
         """Static / adaptive / hybrid decision for one context row (deterministic per seed)."""
         decision_mode = str(features.get("decision_mode") or DEFAULT_DECISION_MODE).lower()
         if decision_mode not in DECISION_MODES:
-            raise ValueError(f"decision_mode debe ser uno de {DECISION_MODES}, recibido: {decision_mode!r}")
+            raise ValueError(
+                f"decision_mode debe ser uno de {DECISION_MODES}, recibido: {decision_mode!r}"
+            )
         seed = int(features.get("seed", DEFAULT_ROW_SEED))
         context = {c: float(features[c]) for c in CONTEXT_COLS}
 
@@ -204,8 +209,11 @@ class Ml36DairyDnlCo2EmissionsOptimizerPlugin(ModelPluginPort):
         feasible = opt_t_out >= T_OUT_MIN
         if not feasible:
             logger.warning(
-                "optimize — recomendación con T_out=%.2f °C < %.1f °C (devuelta sin rechazo) para %s",
-                opt_t_out, T_OUT_MIN, context,
+                "optimize — recomendación con T_out=%.2f °C < %.1f °C (devuelta sin rechazo) "
+                "para %s",
+                opt_t_out,
+                T_OUT_MIN,
+                context,
             )
 
         current_co2 = current_t_out = saving_vs_current = None
@@ -266,7 +274,9 @@ class Ml36DairyDnlCo2EmissionsOptimizerPlugin(ModelPluginPort):
                 "predict_batch done — %d rows, model_key=%s, mlflow=%s",
                 len(predictions), model_key or "(estimate)", bool(mlflow_run_id),
             )
-            return PredictBatchResponse(model_id=MODEL_ID, predictions=predictions, output_path=None)
+            return PredictBatchResponse(
+                model_id=MODEL_ID, predictions=predictions, output_path=None
+            )
         finally:
             if user_temp_dir:
                 shutil.rmtree(user_temp_dir, ignore_errors=True)
@@ -366,12 +376,17 @@ class Ml36DairyDnlCo2EmissionsOptimizerPlugin(ModelPluginPort):
             tracker.upload_artifacts(mlflow_tmp, artifact_path="model")
         except Exception as exc:  # pylint: disable=broad-exception-caught
             logger.error("MLflow artifact upload failed: %s", exc)
-            raise ModelPersistenceError(f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}") from exc
+            raise ModelPersistenceError(
+                f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}"
+            ) from exc
         finally:
             shutil.rmtree(mlflow_tmp, ignore_errors=True)
 
         return TrainResponse(
-            detail="Reentrenamiento completado (procedimiento train del equipo de IA); métricas sobre el split de test",
+            detail=(
+                "Reentrenamiento completado (procedimiento train del equipo de IA); métricas "
+                "sobre el split de test"
+            ),
             mae_t_out=round(flat["mae_t_out"], 4),
             mse_t_out=round(flat["mse_t_out"], 6),
             r2_t_out=round(flat["r2_t_out"], 4),
@@ -405,50 +420,107 @@ class Ml36DairyDnlCo2EmissionsOptimizerPlugin(ModelPluginPort):
             task_type="regression_prescriptive",
             framework=FRAMEWORK,
             inputs=[
-                InputField(name="F_milk", type="float",
-                           description="Caudal volumétrico de leche (L/h) [inline y optimize]"),
-                InputField(name="T_in", type="float",
-                           description="Temperatura de entrada de la leche (°C) [inline y optimize]"),
-                InputField(name="Fat_perc", type="float",
-                           description="% de grasa del lote [inline y optimize]"),
-                InputField(name="Viscosity", type="float",
-                           description="Viscosidad dinámica de la leche (cP) [inline y optimize]"),
-                InputField(name="t_ciclo", type="float",
-                           description="Tiempo desde el inicio del ciclo (min) [inline y optimize]"),
-                InputField(name="T_serv", type="float",
-                           description="Temperatura del líquido de calentamiento (°C) "
-                                       "[inline; en optimize opcional = operación actual]"),
-                InputField(name="Delta_P", type="float",
-                           description="Presión de impulsión de las bombas (bar) "
-                                       "[inline; en optimize opcional = operación actual]"),
-                InputField(name="Regeneration_perc", type="float",
-                           description="Eficiencia de regeneración térmica (%) "
-                                       "[inline; en optimize opcional = operación actual]"),
-                InputField(name="decision_mode", type="str",
-                           description="static | adaptive | hybrid (por defecto) [optimize]"),
-                InputField(name="seed", type="int",
-                           description="Semilla del GA adaptativo [optimize, opcional]"),
+                InputField(
+                    name="F_milk",
+                    type="float",
+                    description="Caudal volumétrico de leche (L/h) [inline y optimize]",
+                ),
+                InputField(
+                    name="T_in",
+                    type="float",
+                    description="Temperatura de entrada de la leche (°C) [inline y optimize]",
+                ),
+                InputField(
+                    name="Fat_perc",
+                    type="float",
+                    description="% de grasa del lote [inline y optimize]",
+                ),
+                InputField(
+                    name="Viscosity",
+                    type="float",
+                    description="Viscosidad dinámica de la leche (cP) [inline y optimize]",
+                ),
+                InputField(
+                    name="t_ciclo",
+                    type="float",
+                    description="Tiempo desde el inicio del ciclo (min) [inline y optimize]",
+                ),
+                InputField(
+                    name="T_serv",
+                    type="float",
+                    description="Temperatura del líquido de calentamiento (°C) "
+                    "[inline; en optimize opcional = operación actual]",
+                ),
+                InputField(
+                    name="Delta_P",
+                    type="float",
+                    description="Presión de impulsión de las bombas (bar) "
+                    "[inline; en optimize opcional = operación actual]",
+                ),
+                InputField(
+                    name="Regeneration_perc",
+                    type="float",
+                    description="Eficiencia de regeneración térmica (%) "
+                    "[inline; en optimize opcional = operación actual]",
+                ),
+                InputField(
+                    name="decision_mode",
+                    type="str",
+                    description="static | adaptive | hybrid (por defecto) [optimize]",
+                ),
+                InputField(
+                    name="seed",
+                    type="int",
+                    description="Semilla del GA adaptativo [optimize, opcional]",
+                ),
             ],
             outputs=[
-                OutputField(name="T_out_pred", type="float",
-                            description="Temperatura de salida predicha (°C) [modo inline]"),
-                OutputField(name="CO2_emissions_pred", type="float",
-                            description="Emisiones de CO2 predichas (kg) [modo inline]"),
-                OutputField(name="recommended_T_serv", type="float",
-                            description="Setpoint óptimo de T_serv (°C) [modo optimize]"),
-                OutputField(name="recommended_Delta_P", type="float",
-                            description="Setpoint óptimo de Delta_P [modo optimize]"),
-                OutputField(name="recommended_Regeneration_perc", type="float",
-                            description="Setpoint óptimo de regeneración (%) [modo optimize]"),
-                OutputField(name="recommended_CO2_pred", type="float",
-                            description="CO2 predicho con la recomendación (kg) [modo optimize]"),
-                OutputField(name="recommended_T_out_pred", type="float",
-                            description="T_out predicha con la recomendación (°C) [modo optimize]"),
-                OutputField(name="co2_saving_vs_policy", type="float",
-                            description="Ahorro de CO2 frente a la política global (kg) [modo optimize]"),
-                OutputField(name="co2_saving_vs_current", type="float",
-                            description="Ahorro de CO2 frente a la operación actual (kg), si se aporta "
-                                        "[modo optimize]"),
+                OutputField(
+                    name="T_out_pred",
+                    type="float",
+                    description="Temperatura de salida predicha (°C) [modo inline]",
+                ),
+                OutputField(
+                    name="CO2_emissions_pred",
+                    type="float",
+                    description="Emisiones de CO2 predichas (kg) [modo inline]",
+                ),
+                OutputField(
+                    name="recommended_T_serv",
+                    type="float",
+                    description="Setpoint óptimo de T_serv (°C) [modo optimize]",
+                ),
+                OutputField(
+                    name="recommended_Delta_P",
+                    type="float",
+                    description="Setpoint óptimo de Delta_P [modo optimize]",
+                ),
+                OutputField(
+                    name="recommended_Regeneration_perc",
+                    type="float",
+                    description="Setpoint óptimo de regeneración (%) [modo optimize]",
+                ),
+                OutputField(
+                    name="recommended_CO2_pred",
+                    type="float",
+                    description="CO2 predicho con la recomendación (kg) [modo optimize]",
+                ),
+                OutputField(
+                    name="recommended_T_out_pred",
+                    type="float",
+                    description="T_out predicha con la recomendación (°C) [modo optimize]",
+                ),
+                OutputField(
+                    name="co2_saving_vs_policy",
+                    type="float",
+                    description="Ahorro de CO2 frente a la política global (kg) [modo optimize]",
+                ),
+                OutputField(
+                    name="co2_saving_vs_current",
+                    type="float",
+                    description="Ahorro de CO2 frente a la operación actual (kg), si se aporta "
+                    "[modo optimize]",
+                ),
             ],
             metrics={
                 # MLP surrogate — test hold-out (final_test_metrics.json entregado)
@@ -466,7 +538,7 @@ class Ml36DairyDnlCo2EmissionsOptimizerPlugin(ModelPluginPort):
                 "ga_mejora_co2_pct": 21.68,
                 "ga_config": f"pop={GA_POP_SIZE}, gen={GA_N_GEN}, cxpb={GA_CXPB}, mutpb={GA_MUTPB}",
                 "aviso": "Métricas calculadas sobre datos sintéticos (simulador físico de "
-                         "intercambiador de placas); validación con datos reales de planta pendiente.",
+                "intercambiador de placas); validación con datos reales de planta pendiente.",
             },
             runtime_stats=RuntimeStats(
                 total_predictions=self._predict_count,

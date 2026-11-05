@@ -70,13 +70,17 @@ METRICS_REPORTED = {
     "target_animales": {
         "modelo": "XGBoost",
         "umbral": 0.48,
-        "validacion": {"Accuracy": 0.72, "Precision": 0.65, "Recall": 1.0, "F1": 0.788, "AUC": 0.833},
+        "validacion": {
+            "Accuracy": 0.72, "Precision": 0.65, "Recall": 1.0, "F1": 0.788, "AUC": 0.833,
+        },
         "test": {"Accuracy": 0.833, "Precision": 0.833, "Recall": 0.833, "F1": 0.833, "AUC": 0.917},
     },
     "target_insumos": {
         "modelo": "LogReg",
         "umbral": 0.30,
-        "validacion": {"Accuracy": 0.36, "Precision": 0.304, "Recall": 1.0, "F1": 0.467, "AUC": 0.917},
+        "validacion": {
+            "Accuracy": 0.36, "Precision": 0.304, "Recall": 1.0, "F1": 0.467, "AUC": 0.917,
+        },
         "test": {"Accuracy": 0.667, "Precision": 0.429, "Recall": 1.0, "F1": 0.6, "AUC": 0.741},
     },
     "memoria_discrepancy_warning": (

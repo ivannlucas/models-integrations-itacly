@@ -12,10 +12,10 @@ from __future__ import annotations
 
 import logging
 import os
+import shutil
 import tempfile
 
 import torch
-import shutil
 
 from app.domain.services.mlflow_tracker import BaseMLflowTracker, require_user_model
 from app.plugins.ml2_fungal_cnn_disease_detection.constants import IMAGE_SIZE, MODEL_FILENAME

@@ -37,7 +37,9 @@ class TrainResponse(BaseModel):
     n_val: int = Field(..., description="Filas de validación (early stopping)")
     n_test: int = Field(..., description="Filas de test (métricas)")
     epochs_executed: int = Field(..., description="Épocas ejecutadas (con early stopping)")
-    best_val_loss: float = Field(..., description="Mejor pérdida MSE de validación (escala normalizada)")
+    best_val_loss: float = Field(
+        ..., description="Mejor pérdida MSE de validación (escala normalizada)"
+    )
     training_time_s: float = Field(..., description="Duración del entrenamiento (s)")
     upload_warning: str | None = Field(
         default=None, description="Aviso si el modelo reentrenado no se ha guardado en MLflow"

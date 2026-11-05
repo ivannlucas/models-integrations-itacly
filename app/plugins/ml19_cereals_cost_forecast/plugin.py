@@ -138,7 +138,9 @@ class Ml19CerealsCostForecastPlugin(ModelPluginPort):
         date_str = features.get("date") if features else None
         bundle, user_tmp = self._resolve_bundle(mlflow_run_id)
         try:
-            row, date_label = inference.get_row_from_dataset(bundle["dataset"], bundle["features"], date_str)
+            row, date_label = inference.get_row_from_dataset(
+                bundle["dataset"], bundle["features"], date_str
+            )
             result = inference.predict_next_month(row, bundle)
         finally:
             if user_tmp:
@@ -189,7 +191,9 @@ class Ml19CerealsCostForecastPlugin(ModelPluginPort):
 
     @staticmethod
     def _predict_batch_rows(df: pd.DataFrame, bundle: dict) -> list[BatchPrediction]:
-        """One BatchPrediction per CSV row; a bad month is a per-row error, never the whole batch."""
+        """One BatchPrediction per CSV row; a bad month is a per-row error, never the whole
+        batch.
+        """
 
         predictions: list[BatchPrediction] = []
         for raw_date in df["date"]:
@@ -202,7 +206,9 @@ class Ml19CerealsCostForecastPlugin(ModelPluginPort):
             try:
                 if date_str is None:
                     raise DataContractError("La columna 'date' tiene una celda vacía en esta fila.")
-                row, date_label = inference.get_row_from_dataset(bundle["dataset"], bundle["features"], date_str)
+                row, date_label = inference.get_row_from_dataset(
+                    bundle["dataset"], bundle["features"], date_str
+                )
                 result = inference.predict_next_month(row, bundle)
                 predictions.append(
                     BatchPrediction(
@@ -220,6 +226,7 @@ class Ml19CerealsCostForecastPlugin(ModelPluginPort):
 
     # ── train (official pipeline; every /train publishes the new base) ───────
 
+    # pylint: disable-next=too-many-locals
     def train(self, *, data_path: str, mlflow_run_id: str = "") -> TrainResponse:
         """Retrain with the AI team's official pipeline on an updated dataset_v7_fe.csv.
 
@@ -275,7 +282,8 @@ class Ml19CerealsCostForecastPlugin(ModelPluginPort):
         return TrainResponse(
             detail=(
                 "Reentrenamiento completado (pipeline oficial: selección STRICT, walk-forward y "
-                f"modelos finales sobre todos los datos). Modelo base {persisted.base_version['version']}."
+                "modelos finales sobre todos los datos). Modelo base "
+                f"{persisted.base_version['version']}."
             ),
             horizons=horizons,
             n_features=len(result.features),

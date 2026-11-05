@@ -10,10 +10,10 @@ from __future__ import annotations
 
 import logging
 import os
+import shutil
 import tempfile
 
 import joblib
-import shutil
 
 from app.domain.services.mlflow_tracker import BaseMLflowTracker, require_user_model
 from app.plugins.ml17_meat_market_price_analysis.constants import MODEL_FILENAME

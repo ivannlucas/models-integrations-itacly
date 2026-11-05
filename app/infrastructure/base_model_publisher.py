@@ -1,8 +1,8 @@
 """Persist a retrained bundle as the model's new base version.
 
 Used by the train() of the models that declare BASE_ARTIFACT_FOLDER (ml13, 14, 15, 16, 17, 18,
-19, 21, 23, 24): every successful /train becomes the base served without mlflow_run_id. The bundle is
-also uploaded to the caller's MLflow run when one is given — traceability only: if that upload
+19, 21, 23, 24): every successful /train becomes the base served without mlflow_run_id. The bundle
+is also uploaded to the caller's MLflow run when one is given — traceability only: if that upload
 fails the base is still published and the response carries upload_warning. If publishing fails,
 ModelPersistenceError (→ 502) and the base does not change (see ArtifactStore.publish_version).
 """
@@ -36,7 +36,10 @@ def _store_for(artifact_folder: str) -> ArtifactStore:
 
 
 def _json_safe(metrics: dict) -> dict[str, Any]:
-    """Keep scalar metrics (numpy scalars included); NaN/inf become None so version.json is valid JSON."""
+    """Keep scalar metrics (numpy scalars included).
+
+    NaN/inf become None so version.json is valid JSON.
+    """
     safe: dict[str, Any] = {}
     dropped: list[str] = []
     for key, value in metrics.items():
@@ -53,7 +56,7 @@ def _json_safe(metrics: dict) -> dict[str, Any]:
     return safe
 
 
-def persist_retrained_bundle(
+def persist_retrained_bundle(  # pylint: disable=too-many-arguments
     bundle_dir: str | Path,
     *,
     artifact_folder: str,

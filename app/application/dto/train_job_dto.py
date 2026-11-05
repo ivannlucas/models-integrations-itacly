@@ -21,22 +21,28 @@ class TrainJobResponse(BaseModel):
     status: Literal["queued", "running", "succeeded", "failed"]
     submitted_at: datetime
     updated_at: datetime
-    result: dict | None = Field(default=None, description="TrainResponse del plugin, solo si succeeded")
+    result: dict | None = Field(
+        default=None, description="TrainResponse del plugin, solo si succeeded"
+    )
     error: str | None = Field(default=None, description="Mensaje de error, solo si failed")
     error_type: str | None = Field(
         default=None,
         description=(
-            "Clase del error (ValueError, FileNotFoundError, TrainingNotSupportedError, TrainJobLost, "
-            "TrainJobTimeout…)"
+            "Clase del error (ValueError, FileNotFoundError, TrainingNotSupportedError, "
+            "TrainJobLost, TrainJobTimeout…)"
         ),
     )
     http_status: int | None = Field(
         default=None,
-        description="Código que habría devuelto POST /train síncrono (400, 413, 501, 502, 500…), solo si failed",
+        description=(
+            "Código que habría devuelto POST /train síncrono (400, 413, 501, 502, 500…), solo si "
+            "failed"
+        ),
     )
 
     @classmethod
     def from_record(cls, record: TrainJobRecord) -> "TrainJobResponse":
+        """Build the API response from a stored train job record."""
         return cls(
             job_id=record.job_id,
             model_id=record.model_id,

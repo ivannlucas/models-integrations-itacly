@@ -13,7 +13,7 @@ import logging
 
 import numpy as np
 import torch
-import torch.optim as optim
+from torch import optim
 from torch.utils.data import DataLoader, TensorDataset
 
 from app.plugins.ml41_meat_curing_machinery_acoustic_anomaly.audio_mae import AudioMAE
@@ -22,7 +22,8 @@ from app.plugins.ml41_meat_curing_machinery_acoustic_anomaly.constants import TR
 logger = logging.getLogger(__name__)
 
 
-class CosineWarmupScheduler(optim.lr_scheduler._LRScheduler):
+# _LRScheduler kept as base class to mirror the original trainer exactly.
+class CosineWarmupScheduler(optim.lr_scheduler._LRScheduler):  # pylint: disable=protected-access
     """Linear warmup followed by cosine annealing — standard for ViT/MAE."""
 
     def __init__(self, optimizer, warmup_epochs: int, max_epochs: int,
@@ -36,13 +37,20 @@ class CosineWarmupScheduler(optim.lr_scheduler._LRScheduler):
         if self.last_epoch < self.warmup_epochs:
             factor = (self.last_epoch + 1) / self.warmup_epochs
             return [base_lr * factor for base_lr in self.base_lrs]
-        progress = (self.last_epoch - self.warmup_epochs) / max(1, self.max_epochs - self.warmup_epochs)
+        progress = (self.last_epoch - self.warmup_epochs) / max(
+            1, self.max_epochs - self.warmup_epochs
+        )
         cosine = 0.5 * (1.0 + np.cos(np.pi * progress))
         return [self.min_lr + (base_lr - self.min_lr) * cosine for base_lr in self.base_lrs]
 
 
-def _train_one_epoch(  # pylint: disable=too-many-arguments,too-many-positional-arguments  # as train_one_epoch
-    model: AudioMAE, loader: DataLoader, optimizer, device, mask_ratio: float,
+# Same signature as train_one_epoch.
+def _train_one_epoch(  # pylint: disable=too-many-arguments,too-many-positional-arguments
+    model: AudioMAE,
+    loader: DataLoader,
+    optimizer,
+    device,
+    mask_ratio: float,
     scaler=None,
 ) -> float:
     """trainer.py::train_one_epoch: on CUDA the original trains under bf16 autocast with a
@@ -76,12 +84,15 @@ def _validate(model: AudioMAE, loader: DataLoader, device, mask_ratio: float) ->
     with torch.no_grad():
         for (imgs,) in loader:
             imgs = imgs.to(device)
-            with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=device.type == "cuda"):
+            with torch.autocast(
+                device_type="cuda", dtype=torch.bfloat16, enabled=device.type == "cuda"
+            ):
                 loss, _, _ = model(imgs, mask_ratio=mask_ratio)
             total_loss += loss.item()
     return total_loss / max(len(loader), 1)
 
 
+# pylint: disable-next=too-many-locals
 def fine_tune(
     model: AudioMAE,
     train_data: np.ndarray,
@@ -129,7 +140,9 @@ def fine_tune(
     history: dict = {"train_loss": [], "val_loss": []}
 
     for epoch in range(1, epochs + 1):
-        train_loss = _train_one_epoch(model, train_loader, optimizer, device, hyperparams["mask_ratio"], scaler)
+        train_loss = _train_one_epoch(
+            model, train_loader, optimizer, device, hyperparams["mask_ratio"], scaler
+        )
         val_loss = _validate(model, val_loader, device, hyperparams["mask_ratio"])
         scheduler.step()
         history["train_loss"].append(train_loss)
@@ -141,7 +154,7 @@ def fine_tune(
             best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
         else:
             no_improve += 1
-            if patience > 0 and no_improve >= patience:
+            if no_improve >= patience > 0:
                 logger.info("Early stopping at epoch %d (val_loss=%.4f)", epoch, val_loss)
                 break
 
@@ -155,12 +168,13 @@ def fine_tune(
 def compute_threshold_audit_fnr(
     normal_scores: np.ndarray, abnormal_scores: np.ndarray, max_fnr: float = 0.10,
 ) -> float:
-    """Ported from inbox/a41/codigo/src/predict/postprocess.py:compute_threshold(method='audit_fnr').
+    """Ported from inbox/a41/codigo/src/predict/postprocess.py:
+    compute_threshold(method='audit_fnr').
 
     Highest threshold that still guarantees TPR >= 1 - max_fnr (FNR <= max_fnr) — the
     project's success criterion (manifest.yaml metrics_reported.fnr_objetivo_negocio).
     """
-    from sklearn.metrics import roc_curve
+    from sklearn.metrics import roc_curve  # pylint: disable=import-outside-toplevel
 
     y_true = np.concatenate([np.zeros(len(normal_scores)), np.ones(len(abnormal_scores))])
     scores = np.concatenate([normal_scores, abnormal_scores])
@@ -171,11 +185,16 @@ def compute_threshold_audit_fnr(
     return float(thresholds[valid[0]])
 
 
+# pylint: disable-next=too-many-locals
 def evaluate_against_abnormal(
-    normal_maha: np.ndarray, abnormal_maha: np.ndarray, normal_mse: np.ndarray, abnormal_mse: np.ndarray,
+    normal_maha: np.ndarray,
+    abnormal_maha: np.ndarray,
+    normal_mse: np.ndarray,
+    abnormal_mse: np.ndarray,
 ) -> dict:
     """Compute auc_mse, auc_maha, threshold, fnr, fpr, recall — only called when abnormal
     audio was provided for a combination (see train_dto.py docstring)."""
+    # pylint: disable-next=import-outside-toplevel
     from sklearn.metrics import confusion_matrix, roc_auc_score
 
     y_true = np.concatenate([np.zeros(len(normal_maha)), np.ones(len(abnormal_maha))])

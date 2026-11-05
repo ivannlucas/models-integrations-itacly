@@ -3,10 +3,11 @@ from __future__ import annotations
 
 import logging
 import os
+import shutil
+import tempfile
 
 import joblib
 import torch
-import shutil
 
 from app.domain.services.mlflow_tracker import BaseMLflowTracker, require_user_model
 from app.plugins.ml35_dairy_ann_cleaning_cost.constants import (
@@ -27,7 +28,6 @@ def download_user_model_from_mlflow(run_id: str):
     Returns (model, scaler_X, scaler_y, temp_dir).
     Caller MUST shutil.rmtree(temp_dir) after inference — use try/finally.
     """
-    import tempfile
     tmp = tempfile.mkdtemp(prefix="mlflow_ml35_")
     try:
         local_path = BaseMLflowTracker(run_id).download_artifacts(tmp, artifact_path="model")
@@ -45,11 +45,11 @@ def download_user_model_from_mlflow(run_id: str):
         )
         model.eval()
 
-        scaler_X = joblib.load(os.path.join(local_path, SCALER_X_FILENAME))
+        scaler_x = joblib.load(os.path.join(local_path, SCALER_X_FILENAME))
         scaler_y = joblib.load(os.path.join(local_path, SCALER_Y_FILENAME))
 
         logger.info("Downloaded user model from MLflow run_id=%s", run_id)
-        return model, scaler_X, scaler_y, tmp
+        return model, scaler_x, scaler_y, tmp
     except BaseException:
         shutil.rmtree(tmp, ignore_errors=True)
         raise

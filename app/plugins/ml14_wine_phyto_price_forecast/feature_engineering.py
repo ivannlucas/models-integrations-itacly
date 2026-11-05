@@ -55,7 +55,8 @@ def _validate_weekly_dates(df: pd.DataFrame) -> pd.DataFrame:
     invalid_dates = int(result[DATE_COL].isna().sum())
     if invalid_dates:
         raise InsufficientDataError(
-            f"La columna de fecha contiene {invalid_dates} valores no parseables (formato esperado YYYY-MM-DD)."
+            f"La columna de fecha contiene {invalid_dates} valores no parseables "
+            "(formato esperado YYYY-MM-DD)."
         )
 
     duplicated = result[DATE_COL].duplicated(keep=False)
@@ -68,7 +69,8 @@ def _validate_weekly_dates(df: pd.DataFrame) -> pd.DataFrame:
     if invalid_weekdays.any():
         examples = result.loc[invalid_weekdays, DATE_COL].dt.strftime("%Y-%m-%d").head(5).tolist()
         raise InsufficientDataError(
-            f"La frecuencia temporal requerida es semanal W-SUN (domingo); fechas no alineadas: {examples}."
+            "La frecuencia temporal requerida es semanal W-SUN (domingo); "
+            f"fechas no alineadas: {examples}."
         )
 
     if len(result) > 1:

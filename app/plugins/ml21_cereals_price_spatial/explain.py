@@ -12,7 +12,9 @@ import numpy as np
 import pandas as pd
 
 
-def extract_feature_importance(model: Any, feature_names: list[str]) -> list[dict[str, float]]:
+def extract_feature_importance(  # pylint: disable=too-many-branches
+    model: Any, feature_names: list[str]
+) -> list[dict[str, float]]:
     """Pull per-feature importance out of a fitted estimator (tree, linear, or ensemble)."""
     importances: np.ndarray | None = None
 
@@ -65,7 +67,7 @@ def feature_to_human(feature: str) -> str:
     return pretty
 
 
-def top_causal_drivers(
+def top_causal_drivers(  # pylint: disable=too-many-locals
     row_features: pd.DataFrame,
     feature_mean: pd.Series,
     feature_std: pd.Series,

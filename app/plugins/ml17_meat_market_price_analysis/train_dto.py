@@ -33,14 +33,19 @@ class TrainResponse(BaseModel):
     model_config = ConfigDict(protected_namespaces=())
     detail: str
     mae: float = Field(..., description="MAE one-step in-sample tras el reentrenamiento (€/100kg)")
-    rmse: float = Field(..., description="RMSE one-step in-sample tras el reentrenamiento (€/100kg)")
+    rmse: float = Field(
+        ..., description="RMSE one-step in-sample tras el reentrenamiento (€/100kg)"
+    )
     mase: float | None = Field(
         default=None, description="MASE respecto a la escala de la propia serie de entrenamiento"
     )
     r2_train: float | None = Field(default=None, description="R² in-sample tras el reentrenamiento")
     directional_accuracy: float | None = Field(
         default=None,
-        description="Exactitud direccional in-sample sobre llamadas no planas (puede ser null si no hay ninguna)",
+        description=(
+            "Exactitud direccional in-sample sobre llamadas no planas (puede ser null si no hay "
+            "ninguna)"
+        ),
     )
     n_samples: int = Field(..., description="Número de pares (t, t+1) usados para el ajuste")
     upload_warning: str | None = Field(

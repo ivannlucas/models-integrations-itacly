@@ -106,7 +106,9 @@ class Ml40MeatRefrigerationAerationFaultDiagnosisPlugin(ModelPluginPort):
 
     # ── shared inference core ─────────────────────────────────────────────────
 
-    def _diagnose(self, df: pd.DataFrame, system: str | None, bundle_override: tuple[str, dict] | None) -> tuple[pd.DataFrame, str]:
+    def _diagnose(
+        self, df: pd.DataFrame, system: str | None, bundle_override: tuple[str, dict] | None
+    ) -> tuple[pd.DataFrame, str]:
         """Run the full pipeline (features → RF → rules → vote → collapse) on a frame.
 
         Returns (per-run diagnosis frame, system).
@@ -122,8 +124,12 @@ class Ml40MeatRefrigerationAerationFaultDiagnosisPlugin(ModelPluginPort):
         else:
             bundle = self._bundles[system]
 
-        y_ml, y_probs = postprocessing.run_inference(bundle["model"], bundle["scaler"], engineered, system)
-        y_ns = postprocessing.apply_neurosymbolic_rules(engineered, y_ml, system, bundle["thresholds"])
+        y_ml, y_probs = postprocessing.run_inference(
+            bundle["model"], bundle["scaler"], engineered, system
+        )
+        y_ns = postprocessing.apply_neurosymbolic_rules(
+            engineered, y_ml, system, bundle["thresholds"]
+        )
         y_final = postprocessing.apply_run_voting(engineered, y_ns)
 
         result = engineered.copy()
@@ -239,7 +245,9 @@ class Ml40MeatRefrigerationAerationFaultDiagnosisPlugin(ModelPluginPort):
 
     # ── train (retraining with the original procedure) ───────────────────────
 
-    def train(self, *, data_path: str, mlflow_run_id: str, system: str | None = None) -> TrainResponse:
+    def train(  # pylint: disable=too-many-locals
+        self, *, data_path: str, mlflow_run_id: str, system: str | None = None
+    ) -> TrainResponse:
         """Retrain one subsystem's RandomForest from a labeled raw CSV.
 
         Follows the AI team's original trainers exactly (hyperparams, split, weights,
@@ -256,7 +264,9 @@ class Ml40MeatRefrigerationAerationFaultDiagnosisPlugin(ModelPluginPort):
         required = CYCLE_COLUMNS + [TARGET_COLUMN] + RAW_INPUT_COLUMNS[system]
         missing = [c for c in required if c not in raw_df.columns]
         if missing:
-            raise ValueError(f"CSV de entrenamiento ({system}) — faltan columnas requeridas: {missing}")
+            raise ValueError(
+                f"CSV de entrenamiento ({system}) — faltan columnas requeridas: {missing}"
+            )
 
         preprocessing.validate_history(raw_df, system)
         engineered = preprocessing.apply_feature_engineering(
@@ -274,34 +284,42 @@ class Ml40MeatRefrigerationAerationFaultDiagnosisPlugin(ModelPluginPort):
 
         upload_warning = None
         if not mlflow_run_id:
-            raise ModelPersistenceError("Sin run de MLflow: el modelo reentrenado no se ha guardado.")
-        else:
-            tracker = BaseMLflowTracker(mlflow_run_id)
+            raise ModelPersistenceError(
+                "Sin run de MLflow: el modelo reentrenado no se ha guardado."
+            )
+        tracker = BaseMLflowTracker(mlflow_run_id)
+        try:
+            tracker.log_params({"system": system, **MODEL_PARAMS[system]})
+            tracker.log_metrics({**metrics, "n_samples": result["n_samples"]})
+            mlflow_tmp = tempfile.mkdtemp(prefix="ml40_mlflow_")
             try:
-                tracker.log_params({"system": system, **MODEL_PARAMS[system]})
-                tracker.log_metrics({**metrics, "n_samples": result["n_samples"]})
-                mlflow_tmp = tempfile.mkdtemp(prefix="ml40_mlflow_")
-                try:
-                    joblib.dump(result["model"], f"{mlflow_tmp}/{MODEL_FILENAMES[system]}")
-                    if result["scaler"] is not None:
-                        joblib.dump(result["scaler"], f"{mlflow_tmp}/{SCALER_FILENAMES[system]}")
-                    with open(f"{mlflow_tmp}/{STATS_FILENAMES[system]}", "w", encoding="utf-8") as fh:
-                        yaml.dump(result["stats"], fh)
-                    with open(f"{mlflow_tmp}/{THRESHOLDS_FILENAMES[system]}", "w", encoding="utf-8") as fh:
-                        yaml.dump(thresholds, fh)  # rules thresholds travel with the bundle
-                    tracker.upload_artifacts(mlflow_tmp, artifact_path="model")
-                finally:
-                    shutil.rmtree(mlflow_tmp, ignore_errors=True)
-            except Exception as exc:  # pylint: disable=broad-exception-caught
-                logger.error("MLflow artifact upload failed: %s", exc)
-                raise ModelPersistenceError(f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}") from exc
+                joblib.dump(result["model"], f"{mlflow_tmp}/{MODEL_FILENAMES[system]}")
+                if result["scaler"] is not None:
+                    joblib.dump(result["scaler"], f"{mlflow_tmp}/{SCALER_FILENAMES[system]}")
+                stats_path = f"{mlflow_tmp}/{STATS_FILENAMES[system]}"
+                with open(stats_path, "w", encoding="utf-8") as fh:
+                    yaml.dump(result["stats"], fh)
+                thresholds_path = f"{mlflow_tmp}/{THRESHOLDS_FILENAMES[system]}"
+                with open(thresholds_path, "w", encoding="utf-8") as fh:
+                    yaml.dump(thresholds, fh)  # rules thresholds travel with the bundle
+                tracker.upload_artifacts(mlflow_tmp, artifact_path="model")
+            finally:
+                shutil.rmtree(mlflow_tmp, ignore_errors=True)
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            logger.error("MLflow artifact upload failed: %s", exc)
+            raise ModelPersistenceError(
+                f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}"
+            ) from exc
 
         logger.info(
             "ml40 train() done — system=%s n_samples=%d f1_macro=%.4f mlflow=%s",
             system, result["n_samples"], metrics["f1_macro"], bool(mlflow_run_id),
         )
         return TrainResponse(
-            detail=f"Reentrenamiento completado para el sistema {system} con el procedimiento original.",
+            detail=(
+                f"Reentrenamiento completado para el sistema {system} "
+                "con el procedimiento original."
+            ),
             system=system,
             n_samples=result["n_samples"],
             n_runs_train=result["n_runs_train"],
@@ -323,8 +341,10 @@ class Ml40MeatRefrigerationAerationFaultDiagnosisPlugin(ModelPluginPort):
                 type="str",
                 description="Subsistema: refrigeracion o aireado (autodetectable por columnas).",
             ),
-            InputField(name="run_id", type="int", description="Identificador de ciclo (ambos sistemas)."),
-            InputField(name="time_min", type="int", description="Minuto dentro del ciclo (ambos sistemas)."),
+            InputField(name="run_id", type="int",
+                       description="Identificador de ciclo (ambos sistemas)."),
+            InputField(name="time_min", type="int",
+                       description="Minuto dentro del ciclo (ambos sistemas)."),
         ]
         for system in ("refrigeracion", "aireado"):
             inputs += [
@@ -341,8 +361,10 @@ class Ml40MeatRefrigerationAerationFaultDiagnosisPlugin(ModelPluginPort):
             OutputField(name="prediction", type="int",
                         description="Clase de fallo final (RF + reglas físicas + voto por ciclo)"),
             OutputField(name="prediction_name", type="str",
-                        description="Nombre de la clase (refrigeracion: 13 clases; aireado: 4 clases)"),
-            OutputField(name="confidence", type="float", description="Confianza media del ciclo (0-1)"),
+                        description=("Nombre de la clase (refrigeracion: 13 clases; "
+                                     "aireado: 4 clases)")),
+            OutputField(name="confidence", type="float",
+                        description="Confianza media del ciclo (0-1)"),
             OutputField(name="model_health", type="str",
                         description="ESTABLE/DEGRADADO según confianza media vs. 75% (stateless)"),
         ]

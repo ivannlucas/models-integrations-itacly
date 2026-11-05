@@ -9,7 +9,7 @@ import pandas as pd
 from app.plugins.ml28_meat_neuroevolutionary_raw_materials_prediction._vendor.features import (
     build_platform_features,
 )
-from app.plugins.ml28_meat_neuroevolutionary_raw_materials_prediction._vendor.input_validation import (
+from app.plugins.ml28_meat_neuroevolutionary_raw_materials_prediction._vendor.input_validation import (  # pylint: disable=line-too-long
     validate_input_dataframe,
 )
 from app.plugins.ml28_meat_neuroevolutionary_raw_materials_prediction._vendor.optimizer import (
@@ -46,7 +46,9 @@ def run_recommendation_pipeline(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
     feature_frame = build_platform_features(df, config=platform_config)
     trigger_frame = run_purchase_trigger(feature_frame, config=platform_config)
     optimized_frame = run_quantity_optimizer(trigger_frame, config=platform_config)
-    simulation_frame, summary_metrics = run_policy_simulation(optimized_frame, config=platform_config)
+    simulation_frame, summary_metrics = run_policy_simulation(
+        optimized_frame, config=platform_config
+    )
 
     recommendations_frame = _ensure_explainability_columns(simulation_frame)
     recommendations_frame = recommendations_frame.copy()

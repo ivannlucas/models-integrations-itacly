@@ -1,12 +1,17 @@
 # scripts/review_code.py
 # Purpose: Analyze the quality of a code file and return the analysis as text.
+"""Review code quality of files with a generative AI model and print a report."""
 
 import argparse
 import sys
 
-from files import get_files_to_process, read_file_content, ALLOWED_EXTENSIONS, load_agent_instructions
-from ia import setup_generative_model, process_file_with_ia, MAX_TOTAL_TOKENS
-from ui import log_message, Colors, STATUS_COLORS
+from files import (  # pylint: disable=import-error  # sibling script module
+    get_files_to_process, read_file_content, ALLOWED_EXTENSIONS, load_agent_instructions,
+)
+from ia import (  # pylint: disable=import-error  # sibling script module
+    setup_generative_model, process_file_with_ia, MAX_TOTAL_TOKENS,
+)
+from ui import log_message, Colors, STATUS_COLORS  # pylint: disable=import-error  # sibling script module
 
 # --- AGENT INSTRUCTIONS ---
 AGENT_INSTRUCTIONS = {
@@ -16,7 +21,9 @@ AGENT_INSTRUCTIONS = {
 }
 
 
-def quality_report(all_results, max_tokens_reached) -> None:
+def quality_report(  # pylint: disable=too-many-locals,too-many-branches
+        all_results, max_tokens_reached) -> None:
+    """Print the per-file review results and exit with the overall quality verdict."""
     # --- FINAL REPORT ---
     log_message("CODE QUALITY REPORT", "HEADER")
     total_score = 0
@@ -39,9 +46,12 @@ def quality_report(all_results, max_tokens_reached) -> None:
                 color = STATUS_COLORS.get(status, STATUS_COLORS["DEFAULT"])
 
                 print(
-                    f"  {color}{Colors.BOLD}{category.replace('_', ' ').title()}:{Colors.ENDC} {color}[{status}]{Colors.ENDC} {observation}")
+                    f"  {color}{Colors.BOLD}{category.replace('_', ' ').title()}:{Colors.ENDC} "
+                    f"{color}[{status}]{Colors.ENDC} {observation}")
             else:
-                print(f"  {Colors.BOLD}{category.replace('_', ' ').title()}:{Colors.ENDC} {details}")
+                print(
+                    f"  {Colors.BOLD}{category.replace('_', ' ').title()}:{Colors.ENDC} {details}"
+                )
 
         if suggestions:
             print(f"\n{Colors.CYAN}--- Improvement Suggestions ---{Colors.ENDC}")
@@ -65,7 +75,10 @@ def quality_report(all_results, max_tokens_reached) -> None:
             log_message(f"{score_message} LOW QUALITY.", "ERROR")
             sys.exit(1)
         elif max_tokens_reached:
-            log_message(f"{score_message} ACCEPTABLE QUALITY, but not all files could be reviewed.", "ERROR")
+            log_message(
+                f"{score_message} ACCEPTABLE QUALITY, but not all files could be reviewed.",
+                "ERROR",
+            )
             sys.exit(1)
         else:
             log_message(f"{score_message} ACCEPTABLE QUALITY.", "SUCCESS")
@@ -74,13 +87,15 @@ def quality_report(all_results, max_tokens_reached) -> None:
 
 
 # --- MAIN FUNCTION ---
-def main():
+def main():  # pylint: disable=too-many-locals
+    """Parse CLI args, review every selected file with the AI and print the report."""
     parser = argparse.ArgumentParser(
         description="Analyzes code quality using a generative AI model.",
         formatter_class=argparse.RawTextHelpFormatter
     )
     parser.add_argument("path", nargs='?', default=None, type=str,
-                        help="Path to the file/directory. If omitted, analyzes modified files in Git.")
+                        help=("Path to the file/directory. If omitted, analyzes modified "
+                              "files in Git."))
     args = parser.parse_args()
 
     log_message("STARTING AI CODE REVIEWER", "HEADER")
@@ -110,7 +125,8 @@ def main():
             break
 
         log_message(
-            f"Analyzing file: {Colors.UNDERLINE}{filepath}{Colors.ENDC}. File {file_number_processed} from {len(files_to_process)}",
+            f"Analyzing file: {Colors.UNDERLINE}{filepath}{Colors.ENDC}. "
+            f"File {file_number_processed} from {len(files_to_process)}",
             "INFO")
         file_number_processed += 1
         language = ALLOWED_EXTENSIONS.get(filepath.suffix)
@@ -128,12 +144,16 @@ def main():
             log_message(f"Skipping {filepath}: Could not read file content.", "WARNING")
             continue
 
-        result, tokens_call, consumption_call = process_file_with_ia(model, agent_instructions, code_content,
-                                                                     str(filepath))
+        result, tokens_call, consumption_call = process_file_with_ia(
+            model, agent_instructions, code_content, str(filepath)
+        )
         total_tokens_used += tokens_call
         consumption_total += consumption_call
-        log_message(f"Tokens consumed: {tokens_call} | Total: {total_tokens_used} --> {round(consumption_total, 4)} $",
-                    "INFO")
+        log_message(
+            f"Tokens consumed: {tokens_call} | Total: {total_tokens_used} "
+            f"--> {round(consumption_total, 4)} $",
+            "INFO",
+        )
 
         all_results.append(result)
 

@@ -30,14 +30,19 @@ def _annotated_scale(w: int, h: int) -> tuple[float, float]:
     return 1.0, 1.0
 
 
-def render_annotated_image(image_pil, detections: list[dict[str, Any]]) -> str:
+def render_annotated_image(  # pylint: disable=too-many-locals
+    image_pil, detections: list[dict[str, Any]]
+) -> str:
     """Draw detection bounding boxes on *image_pil* and return it as base64 JPEG."""
     img = image_pil.convert("RGB")
 
     w, h = img.size
     scale_w, scale_h = _annotated_scale(w, h)
     if (scale_w, scale_h) != (1.0, 1.0):
-        img = img.resize((int(w * scale_w), int(h * scale_h)), Image.LANCZOS)
+        img = img.resize(
+            (int(w * scale_w), int(h * scale_h)),
+            Image.LANCZOS,  # pylint: disable=no-member  # exists in the installed Pillow
+        )
 
     draw = ImageDraw.Draw(img)
     for d in detections:

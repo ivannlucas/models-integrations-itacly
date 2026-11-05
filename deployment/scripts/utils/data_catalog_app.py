@@ -1,8 +1,9 @@
+"""Streamlit app to browse the unified data catalog (master_catalog.json)."""
 import json
 import os
 
 import pandas as pd
-import streamlit as st
+import streamlit as st  # pylint: disable=import-error  # optional tooling dependency
 
 # Constante para el nombre del archivo
 CATALOG_FILE = "master_catalog.json"
@@ -16,7 +17,7 @@ def load_catalog(filename):
     try:
         with open(filename, 'r', encoding='utf-8') as f:
             return json.load(f)
-    except Exception as e:
+    except Exception as e:  # pylint: disable=broad-exception-caught  # shown in the UI, returns None
         st.error(f"Error al cargar {filename}: {e}")
         return None
 
@@ -111,15 +112,21 @@ if schema_lineage:
     df = pd.DataFrame(schema_lineage)
 
     # Reordenar columnas para mejor legibilidad
-    cols_order = ['column', 'inferred_type', 'description', 'transformation_logic', 'source_columns']
+    cols_order = [
+        'column', 'inferred_type', 'description', 'transformation_logic', 'source_columns'
+    ]
     # Filtrar solo las columnas que existen
     df = df[[col for col in cols_order if col in df.columns]]
     df.rename(columns={'column': 'Column', 'inferred_type': 'Type', 'description': 'Description',
-                       'transformation_logic': 'Transformation', 'source_columns': 'Source columns'},
+                       'transformation_logic': 'Transformation',
+                       'source_columns': 'Source columns'},
               inplace=True)
     st.dataframe(df, use_container_width=True)
 else:
-    st.info("No hay linaje de columnas disponible para esta entidad (probablemente es una fuente raíz).")
+    st.info(
+        "No hay linaje de columnas disponible para esta entidad "
+        "(probablemente es una fuente raíz)."
+    )
 
 # Opcional: Mostrar el JSON crudo
 with st.expander("Ver JSON crudo de la entidad"):

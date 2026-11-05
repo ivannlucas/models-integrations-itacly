@@ -1,3 +1,4 @@
+"""Constants for the ml41 acoustic anomaly detection plugin (AudioMAE, MIMII)."""
 MODEL_ID = "ml41-meat-curing-machinery-acoustic-anomaly"
 VERSION = "1.0.0"
 ARTIFACT_FOLDER_NAME = "ml41_meat_curing_machinery_acoustic_anomaly"
@@ -9,7 +10,8 @@ MACHINES = ("fan", "pump", "slider", "valve")
 MACHINE_IDS = ("id_00", "id_02", "id_04", "id_06")
 SNRS = ("-6_dB", "0_dB", "6_dB")
 
-# Checkpoint layout: models/artifacts/vit_tiny_{machine}/{machine}/{machine_id}/{snr}/{best.pth,maha_stats.npz}
+# Checkpoint layout:
+#   models/artifacts/vit_tiny_{machine}/{machine}/{machine_id}/{snr}/{best.pth,maha_stats.npz}
 # NOTE: config_vit_tiny_{machine}.yaml (delivered by the AI team) declares
 # paths.artifacts = models/artifacts/vit_tiny_hpo_{machine}, which does NOT match the
 # folder actually delivered (models/artifacts/vit_tiny_{machine}, no "_hpo_"). We use the
@@ -63,10 +65,34 @@ TRAINING_COMMON = {
 TRAINING_SPLIT_RATIO = 0.8
 TRAINING_SPLIT_SEED = 42
 TRAINING_HYPERPARAMS_BY_MACHINE: dict[str, dict] = {
-    "fan":    {"warmup_epochs": 7,  "weight_decay": 0.0004723501245203774, "mask_ratio": 0.5574479341391712, "lr": 0.0004502789161109957, "batch_size": 32},
-    "pump":   {"warmup_epochs": 9,  "weight_decay": 0.02356540010076827,   "mask_ratio": 0.7277871776757026, "lr": 0.0003962419971237532, "batch_size": 32},
-    "slider": {"warmup_epochs": 11, "weight_decay": 0.000904102556502169,  "mask_ratio": 0.5934777228914295, "lr": 7.567742603471887e-05, "batch_size": 64},
-    "valve":  {"warmup_epochs": 4,  "weight_decay": 0.0013619127359149519, "mask_ratio": 0.5544394608434632, "lr": 0.0002560271293015735, "batch_size": 32},
+    "fan": {
+        "warmup_epochs": 7,
+        "weight_decay": 0.0004723501245203774,
+        "mask_ratio": 0.5574479341391712,
+        "lr": 0.0004502789161109957,
+        "batch_size": 32,
+    },
+    "pump": {
+        "warmup_epochs": 9,
+        "weight_decay": 0.02356540010076827,
+        "mask_ratio": 0.7277871776757026,
+        "lr": 0.0003962419971237532,
+        "batch_size": 32,
+    },
+    "slider": {
+        "warmup_epochs": 11,
+        "weight_decay": 0.000904102556502169,
+        "mask_ratio": 0.5934777228914295,
+        "lr": 7.567742603471887e-05,
+        "batch_size": 64,
+    },
+    "valve": {
+        "warmup_epochs": 4,
+        "weight_decay": 0.0013619127359149519,
+        "mask_ratio": 0.5544394608434632,
+        "lr": 0.0002560271293015735,
+        "batch_size": 32,
+    },
 }
 
 # How many (machine, machine_id, snr) checkpoints to keep resident in memory at once.
@@ -84,8 +110,11 @@ METRICS_REPORTED = {
     "fnr_objetivo_negocio": 0.10,
     "auc_maha_range_por_maquina": {
         # ViT-Tiny, reports/table_auc_por_caso.csv (vit_tiny_* rows). The previous values
-        # (fan 0.68-0.97, pump/slider 0.58-0.99, valve 0.45-0.61) were the memoria's MAE-Base ranges.
-        "fan": [0.59, 0.99], "pump": [0.60, 0.99],
-        "slider": [0.62, 0.98], "valve": [0.46, 0.60],
+        # (fan 0.68-0.97, pump/slider 0.58-0.99, valve 0.45-0.61) were the memoria's
+        # MAE-Base ranges.
+        "fan": [0.59, 0.99],
+        "pump": [0.60, 0.99],
+        "slider": [0.62, 0.98],
+        "valve": [0.46, 0.60],
     },
 }

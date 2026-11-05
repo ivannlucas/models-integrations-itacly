@@ -25,7 +25,10 @@ from app.plugins.ml9_cereals_infestation_sequence_classifier._vendor.preprocess 
     build_sliding_windows,
     validate_and_normalize_input_frame,
 )
-from app.plugins.ml9_cereals_infestation_sequence_classifier.constants import RAW_FIXED_COLUMNS, TARGET_COLUMN
+from app.plugins.ml9_cereals_infestation_sequence_classifier.constants import (
+    RAW_FIXED_COLUMNS,
+    TARGET_COLUMN,
+)
 from app.plugins.ml9_cereals_infestation_sequence_classifier.model_loader import RUNTIME_CFG
 
 
@@ -40,7 +43,7 @@ def resolve_runtime_config(bundle: dict) -> dict[str, Any]:
 
 
 def missing_required_columns(raw_df: pd.DataFrame) -> list[str]:
-    """Return the mandatory input columns absent from *raw_df* (empty list if the contract holds)."""
+    """Return the mandatory input columns absent from *raw_df* (empty if the contract holds)."""
     return [col for col in RAW_FIXED_COLUMNS if col not in raw_df.columns]
 
 
@@ -62,7 +65,9 @@ def build_windows(
     target_col = runtime_cfg["data"].get("target_column", TARGET_COLUMN)
     has_target = target_col in df.columns if require_target is None else bool(require_target)
 
-    seq_df, feature_columns = build_sequence_feature_frame(df, runtime_cfg, require_target=has_target)
+    seq_df, feature_columns = build_sequence_feature_frame(
+        df, runtime_cfg, require_target=has_target
+    )
     _, feature_columns = align_feature_columns(
         seq_df.loc[:, feature_columns],
         bundle.get("feature_columns"),

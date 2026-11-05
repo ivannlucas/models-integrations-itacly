@@ -9,6 +9,7 @@ repo this runtime serves).
 from __future__ import annotations
 
 import logging
+import math
 import pickle
 import shutil
 import tempfile
@@ -30,9 +31,16 @@ from app.domain.services.exceptions import (
 )
 from app.domain.services.mlflow_tracker import BaseMLflowTracker
 from app.infrastructure.artifact_store import local_file_path
-from app.plugins.ml43_cereals_dnsl_anomaly_fault_detection import model_loader, postprocessing, preprocessing
+from app.plugins.ml43_cereals_dnsl_anomaly_fault_detection import (
+    model_loader,
+    postprocessing,
+    preprocessing,
+)
 from app.plugins.ml43_cereals_dnsl_anomaly_fault_detection._vendor.dnf_loss import DNFLoss
-from app.plugins.ml43_cereals_dnsl_anomaly_fault_detection._vendor.preprocess import split_train_val_test_by_id, stats_windows
+from app.plugins.ml43_cereals_dnsl_anomaly_fault_detection._vendor.preprocess import (
+    split_train_val_test_by_id,
+    stats_windows,
+)
 from app.plugins.ml43_cereals_dnsl_anomaly_fault_detection._vendor.train_metrics import (
     alpha_entropy_mean,
     compute_class_weights,
@@ -83,6 +91,12 @@ from app.plugins.ml43_cereals_dnsl_anomaly_fault_detection.train_dto import Trai
 logger = logging.getLogger(__name__)
 
 
+def _load_pickle_file(path: Path):
+    """Unpickle *path* (used to check that a just-saved pickle artifact is readable)."""
+    with open(path, "rb") as fh:
+        return pickle.load(fh)
+
+
 def _validate_saved_artifact(path: Path, loader) -> None:
     """Raise ValueError if a just-saved training artifact is missing, empty, or unreadable.
 
@@ -109,7 +123,7 @@ def _validate_saved_artifact(path: Path, loader) -> None:
         ) from exc
 
 
-class Ml43CerealsDnslAnomalyFaultDetectionPlugin(ModelPluginPort):
+class Ml43CerealsDnslAnomalyFaultDetectionPlugin(ModelPluginPort):  # pylint: disable=too-many-instance-attributes
     """Deep Neuro-Fuzzy (BiLSTM + fuzzy rules) anomaly detector for cereal ovens."""
 
     def __init__(self) -> None:
@@ -189,7 +203,7 @@ class Ml43CerealsDnslAnomalyFaultDetectionPlugin(ModelPluginPort):
         threshold: float | None = None,
         mlflow_run_id: str = "",
     ) -> PredictBatchResponse:
-        """Not supported — ml43-cereals-dnsl-anomaly-fault-detection requires a real 180-row sensor window.
+        """Not supported — ml43-cereals-dnsl-anomaly-fault-detection needs a real 180-row window.
 
         There is no meaningful single-snapshot prediction for this model (a
         synthetic repeated-snapshot window used to exist here but was removed:
@@ -201,13 +215,13 @@ class Ml43CerealsDnslAnomalyFaultDetectionPlugin(ModelPluginPort):
         """
         _ = features, model_key, threshold, mlflow_run_id
         raise InsufficientSensorWindowError(
-            "ml43-cereals-dnsl-anomaly-fault-detection no soporta predicción inline (una sola lectura). "
-            "Usa el modo batch con un CSV de al menos 180 registros consecutivos."
+            "ml43-cereals-dnsl-anomaly-fault-detection no soporta predicción inline (una sola "
+            "lectura). Usa el modo batch con un CSV de al menos 180 registros consecutivos."
         )
 
     # ── predict_batch ─────────────────────────────────────────────────────────
 
-    def predict_batch(self, *, data_path: str, mlflow_run_id: str = "") -> PredictBatchResponse:
+    def predict_batch(self, *, data_path: str, mlflow_run_id: str = "") -> PredictBatchResponse:  # pylint: disable=too-many-locals
         """Score every valid 180-row window in a raw sensor CSV (one or more cycles)."""
         mlflow_ctx = self._load_model_for_predict(mlflow_run_id)
         ctx = mlflow_ctx or self._served_ctx()
@@ -222,12 +236,19 @@ class Ml43CerealsDnslAnomalyFaultDetectionPlugin(ModelPluginPort):
                 logger.warning("predict_batch — no valid windows found in %s", data_path)
                 self._record((time.perf_counter() - t0) * 1000)
                 return PredictBatchResponse(
-                    model_id=MODEL_ID, predictions=[], output_path=None,
+                    model_id=MODEL_ID,
+                    predictions=[],
+                    output_path=None,
                     warning=(
-                        f"No se encontró ninguna ventana válida de {SEQ_LENGTH} registros consecutivos. "
-                        + ("El CSV no tiene columna 'cycle_id': se trató como un único ciclo continuo — "
-                           "si contiene varios ciclos reales, añade 'cycle_id' para separarlos. "
-                           if not has_cycle_id_column else "")
+                        f"No se encontró ninguna ventana válida de {SEQ_LENGTH} registros "
+                        f"consecutivos. "
+                        + (
+                            "El CSV no tiene columna 'cycle_id': se trató como un único ciclo "
+                            "continuo — si contiene varios ciclos reales, añade 'cycle_id' para "
+                            "separarlos. "
+                            if not has_cycle_id_column
+                            else ""
+                        )
                         + f"Se requieren al menos {SEQ_LENGTH} filas por ciclo."
                     ),
                 )
@@ -245,17 +266,20 @@ class Ml43CerealsDnslAnomalyFaultDetectionPlugin(ModelPluginPort):
             latency_ms = (time.perf_counter() - t0) * 1000
             self._record(latency_ms)
             logger.info(
-                "predict_batch done — %d windows, %d failures (threshold=%.2f), latency_ms=%.1f count=%d",
+                "predict_batch done — %d windows, %d failures (threshold=%.2f), latency_ms=%.1f "
+                "count=%d",
                 len(predictions),
                 sum(1 for p in predictions if p["predicted_anomaly_label"] == "Fallo"),
-                ctx["threshold"], latency_ms, self._predict_count,
+                ctx["threshold"],
+                latency_ms,
+                self._predict_count,
             )
             warning = None
             if not has_cycle_id_column:
                 warning = (
                     "El CSV no tiene columna 'cycle_id': todas las filas se trataron como un único "
-                    "ciclo continuo. Si el archivo realmente contiene varios ciclos del horno, añade "
-                    "'cycle_id' para que las ventanas no mezclen datos de ciclos distintos."
+                    "ciclo continuo. Si el archivo realmente contiene varios ciclos del horno, "
+                    "añade 'cycle_id' para que las ventanas no mezclen datos de ciclos distintos."
                 )
             return PredictBatchResponse(
                 model_id=MODEL_ID, predictions=predictions, output_path=None, warning=warning,
@@ -266,7 +290,7 @@ class Ml43CerealsDnslAnomalyFaultDetectionPlugin(ModelPluginPort):
 
     # ── train ─────────────────────────────────────────────────────────────────
 
-    def train(self, *, data_path: str, mlflow_run_id: str) -> TrainResponse:
+    def train(self, *, data_path: str, mlflow_run_id: str) -> TrainResponse:  # pylint: disable=too-many-locals,too-many-branches,too-many-statements
         """Train a fresh model from a labeled CSV and upload it to MLflow.
 
         Does not replace the served checkpoint — pass the returned MLflow
@@ -285,15 +309,19 @@ class Ml43CerealsDnslAnomalyFaultDetectionPlugin(ModelPluginPort):
         so results trained via this service are comparable to results trained
         locally on the same data.
         """
-        from sklearn.preprocessing import StandardScaler
+        from sklearn.preprocessing import StandardScaler  # pylint: disable=import-outside-toplevel
 
-        logger.info("Starting ml43-cereals-dnsl-anomaly-fault-detection training from %s", data_path)
+        logger.info(
+            "Starting ml43-cereals-dnsl-anomaly-fault-detection training from %s", data_path
+        )
         with local_file_path(data_path) as local_path:
             df = pd.read_csv(local_path)
         df.columns = df.columns.str.lower()
 
         if TARGET_COLUMN not in df.columns:
-            raise ValueError(f"CSV falta columna objetivo '{TARGET_COLUMN}'. Requerida para entrenamiento.")
+            raise ValueError(
+                f"CSV falta columna objetivo '{TARGET_COLUMN}'. Requerida para entrenamiento."
+            )
 
         # Split RAW rows by whole cycle_id (never by row/window count) — see
         # _vendor/preprocess.py::split_train_val_test_by_id. A window is a sliding
@@ -325,13 +353,31 @@ class Ml43CerealsDnslAnomalyFaultDetectionPlugin(ModelPluginPort):
         n_feat = x_train_raw.shape[-1]
 
         scaler_x = StandardScaler()
-        x_train = scaler_x.fit_transform(x_train_raw.reshape(-1, n_feat)).reshape(x_train_raw.shape).astype(np.float32)
-        x_val = scaler_x.transform(x_val_raw.reshape(-1, n_feat)).reshape(x_val_raw.shape).astype(np.float32)
-        x_test = scaler_x.transform(x_test_raw.reshape(-1, n_feat)).reshape(x_test_raw.shape).astype(np.float32)
+        x_train = (
+            scaler_x.fit_transform(x_train_raw.reshape(-1, n_feat))
+            .reshape(x_train_raw.shape)
+            .astype(np.float32)
+        )
+        x_val = (
+            scaler_x.transform(x_val_raw.reshape(-1, n_feat))
+            .reshape(x_val_raw.shape)
+            .astype(np.float32)
+        )
+        x_test = (
+            scaler_x.transform(x_test_raw.reshape(-1, n_feat))
+            .reshape(x_test_raw.shape)
+            .astype(np.float32)
+        )
 
-        df_stats_train = stats_windows(x_train_raw, feature_names=SENSOR_COLUMNS, stats_creation=STATS_CREATION)
-        df_stats_val = stats_windows(x_val_raw, feature_names=SENSOR_COLUMNS, stats_creation=STATS_CREATION)
-        df_stats_test = stats_windows(x_test_raw, feature_names=SENSOR_COLUMNS, stats_creation=STATS_CREATION)
+        df_stats_train = stats_windows(
+            x_train_raw, feature_names=SENSOR_COLUMNS, stats_creation=STATS_CREATION
+        )
+        df_stats_val = stats_windows(
+            x_val_raw, feature_names=SENSOR_COLUMNS, stats_creation=STATS_CREATION
+        )
+        df_stats_test = stats_windows(
+            x_test_raw, feature_names=SENSOR_COLUMNS, stats_creation=STATS_CREATION
+        )
         scaler_num = StandardScaler()
         s_train = scaler_num.fit_transform(df_stats_train.values).astype(np.float32)
         s_val = scaler_num.transform(df_stats_val.values).astype(np.float32)
@@ -342,7 +388,9 @@ class Ml43CerealsDnslAnomalyFaultDetectionPlugin(ModelPluginPort):
 
         pos_weight = compute_class_weights(y_train)
         criterion = DNFLoss(anomaly_pos_weight=pos_weight, **DNF_LOSS_KWARGS)
-        optimizer = torch.optim.Adam(model.parameters(), lr=TRAIN_LR, weight_decay=TRAIN_WEIGHT_DECAY)
+        optimizer = torch.optim.Adam(
+            model.parameters(), lr=TRAIN_LR, weight_decay=TRAIN_WEIGHT_DECAY
+        )
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
             optimizer, T_max=TRAIN_SCHEDULER_T_MAX, eta_min=TRAIN_SCHEDULER_ETA_MIN,
         )
@@ -356,7 +404,9 @@ class Ml43CerealsDnslAnomalyFaultDetectionPlugin(ModelPluginPort):
 
         def _forward_step(x_batch, s_batch, y_batch):
             out = model(x_batch, s_batch)
-            anomaly_score = torch.nan_to_num(out["anomaly_score"], nan=0.0, posinf=20.0, neginf=-20.0)
+            anomaly_score = torch.nan_to_num(
+                out["anomaly_score"], nan=0.0, posinf=20.0, neginf=-20.0
+            )
             rule_activations = out["rule_activations"]
             loss, _ = criterion(
                 anomaly_score=anomaly_score,
@@ -433,7 +483,9 @@ class Ml43CerealsDnslAnomalyFaultDetectionPlugin(ModelPluginPort):
                 else:
                     epochs_without_improve += 1
                 if epochs_without_improve >= TRAIN_PATIENCE:
-                    logger.info("Early stopping en epoch %d (patience=%d).", epoch + 1, TRAIN_PATIENCE)
+                    logger.info(
+                        "Early stopping en epoch %d (patience=%d).", epoch + 1, TRAIN_PATIENCE
+                    )
                     break
 
         if best_state is None:
@@ -449,7 +501,10 @@ class Ml43CerealsDnslAnomalyFaultDetectionPlugin(ModelPluginPort):
             y_true=y_val_arr, prob_anomaly=val_probs, n_points=TRAIN_THRESHOLD_SEARCH_POINTS,
         )
         calibrated_threshold = float(threshold_metrics["best_threshold"])
-        logger.info("Calibrated decision_threshold=%.4f (val F1-optimal, 101-point grid)", calibrated_threshold)
+        logger.info(
+            "Calibrated decision_threshold=%.4f (val F1-optimal, 101-point grid)",
+            calibrated_threshold,
+        )
 
         # Final test evaluation — the ONLY time the test split is used, on the
         # checkpoint and threshold already selected above (never used to choose either).
@@ -465,8 +520,12 @@ class Ml43CerealsDnslAnomalyFaultDetectionPlugin(ModelPluginPort):
         # BOTH classes (Normal=0, Fallo=1), computed on the same held-out test predictions
         # above. labels=[0, 1] is explicit so a class absent from a (small) test fold still
         # counts as 0 for that class instead of silently being dropped from the average.
-        test_f1_macro = float(f1_score(y_test_arr, test_preds, labels=[0, 1], average="macro", zero_division=0))
-        test_recall_macro = float(recall_score(y_test_arr, test_preds, labels=[0, 1], average="macro", zero_division=0))
+        test_f1_macro = float(
+            f1_score(y_test_arr, test_preds, labels=[0, 1], average="macro", zero_division=0)
+        )
+        test_recall_macro = float(
+            recall_score(y_test_arr, test_preds, labels=[0, 1], average="macro", zero_division=0)
+        )
 
         # accuracy/auc/precision/recall (binary, "Fallo" positive class) — modelo 43-44
         # audit, Fase 5 follow-up: stats(mlflow_run_id=...) has always reported these
@@ -478,7 +537,9 @@ class Ml43CerealsDnslAnomalyFaultDetectionPlugin(ModelPluginPort):
         test_precision = float(precision_score(y_test_arr, test_preds, zero_division=0))
         test_recall = float(recall_score(y_test_arr, test_preds, zero_division=0))
         test_auc = (
-            float(roc_auc_score(y_test_arr, test_probs)) if len(np.unique(y_test_arr)) > 1 else float("nan")
+            float(roc_auc_score(y_test_arr, test_probs))
+            if len(np.unique(y_test_arr)) > 1
+            else float("nan")
         )
 
         logger.info(
@@ -500,7 +561,7 @@ class Ml43CerealsDnslAnomalyFaultDetectionPlugin(ModelPluginPort):
             with open(temp_dir / SCALER_FILENAME, "wb") as f:
                 pickle.dump({"scaler_x": scaler_x, "scaler_num": scaler_num}, f)
             _validate_saved_artifact(
-                temp_dir / SCALER_FILENAME, lambda p: pickle.load(open(p, "rb"))
+                temp_dir / SCALER_FILENAME, _load_pickle_file
             )
 
             if self._xai_background is not None:
@@ -514,7 +575,7 @@ class Ml43CerealsDnslAnomalyFaultDetectionPlugin(ModelPluginPort):
                 # needs a separate legacy-key alias map: it just copies these straight through.
                 loggable_metrics = {
                     "accuracy": round(test_accuracy, 4),
-                    "fallo_auc": round(test_auc, 4) if test_auc == test_auc else test_auc,
+                    "fallo_auc": round(test_auc, 4) if not math.isnan(test_auc) else test_auc,
                     "fallo_precision": round(test_precision, 4),
                     "fallo_recall": round(test_recall, 4),
                     "macro_f1": round(test_f1_macro, 4),
@@ -536,8 +597,12 @@ class Ml43CerealsDnslAnomalyFaultDetectionPlugin(ModelPluginPort):
                 )
                 logger.info("Training complete. MLflow run_id=%s", new_run_id)
             except Exception as exc:  # pylint: disable=broad-exception-caught
-                logger.error("MLflow artifact upload failed (model trained but not persisted): %s", exc)
-                raise ModelPersistenceError(f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}") from exc
+                logger.error(
+                    "MLflow artifact upload failed (model trained but not persisted): %s", exc
+                )
+                raise ModelPersistenceError(
+                    f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}"
+                ) from exc
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
 
@@ -548,7 +613,7 @@ class Ml43CerealsDnslAnomalyFaultDetectionPlugin(ModelPluginPort):
         return TrainResponse(
             detail="Entrenamiento completado",
             accuracy=round(test_accuracy, 4),
-            fallo_auc=round(test_auc, 4) if test_auc == test_auc else test_auc,
+            fallo_auc=round(test_auc, 4) if not math.isnan(test_auc) else test_auc,
             fallo_precision=round(test_precision, 4),
             fallo_recall=round(test_recall, 4),
             macro_f1=round(test_f1_macro, 4),
@@ -587,21 +652,66 @@ class Ml43CerealsDnslAnomalyFaultDetectionPlugin(ModelPluginPort):
                 ("velocidad_ventilador", "Velocidad del ventilador (RPM)"),
             ]
         ] + [
-            InputField(name="timestamp", type="datetime", description="Marca temporal de la medida"),
-            InputField(name="cycle_id", type="string", description="Identificador del ciclo de horneado"),
+            InputField(
+                name="timestamp", type="datetime", description="Marca temporal de la medida"
+            ),
+            InputField(
+                name="cycle_id", type="string", description="Identificador del ciclo de horneado"
+            ),
         ]
         outputs = [
-            OutputField(name="predicted_anomaly_label", type="string", description="'Fallo' o 'No Fallo'"),
-            OutputField(name="anomaly_probability", type="float", description="Probabilidad de anomalía [0, 1]"),
-            OutputField(name="decision_threshold", type="float", description="Umbral de decisión utilizado"),
-            OutputField(name="cycle_id", type="string", description="Identificador del ciclo asociado a la ventana"),
-            OutputField(name="window_index", type="int", description="Índice de ventana temporal (1..N)"),
-            OutputField(name="timestamp_init", type="string", description="Timestamp de la primera lectura de la ventana"),
-            OutputField(name="timestamp_end", type="string", description="Timestamp de la última lectura de la ventana"),
-            OutputField(name="Estado del sistema", type="string", description="Estado interpretativo global de la ventana (Normal / Normal con señales / Alerta no confirmada / Anomalía confirmada)"),
-            OutputField(name="Subsistemas con alteraciones", type="string", description="Subsistemas del horno identificados con comportamiento alterado"),
-            OutputField(name="Variables con alteraciones", type="string", description="Variables/sensores concretos que motivan el estado interpretativo"),
-            OutputField(name="Acciones correctivas recomendadas", type="string", description="Acciones sugeridas para corregir la alteración detectada"),
+            OutputField(
+                name="predicted_anomaly_label", type="string", description="'Fallo' o 'No Fallo'"
+            ),
+            OutputField(
+                name="anomaly_probability",
+                type="float",
+                description="Probabilidad de anomalía [0, 1]",
+            ),
+            OutputField(
+                name="decision_threshold", type="float", description="Umbral de decisión utilizado"
+            ),
+            OutputField(
+                name="cycle_id",
+                type="string",
+                description="Identificador del ciclo asociado a la ventana",
+            ),
+            OutputField(
+                name="window_index", type="int", description="Índice de ventana temporal (1..N)"
+            ),
+            OutputField(
+                name="timestamp_init",
+                type="string",
+                description="Timestamp de la primera lectura de la ventana",
+            ),
+            OutputField(
+                name="timestamp_end",
+                type="string",
+                description="Timestamp de la última lectura de la ventana",
+            ),
+            OutputField(
+                name="Estado del sistema",
+                type="string",
+                description=(
+                    "Estado interpretativo global de la ventana (Normal / Normal con señales / "
+                    "Alerta no confirmada / Anomalía confirmada)"
+                ),
+            ),
+            OutputField(
+                name="Subsistemas con alteraciones",
+                type="string",
+                description="Subsistemas del horno identificados con comportamiento alterado",
+            ),
+            OutputField(
+                name="Variables con alteraciones",
+                type="string",
+                description="Variables/sensores concretos que motivan el estado interpretativo",
+            ),
+            OutputField(
+                name="Acciones correctivas recomendadas",
+                type="string",
+                description="Acciones sugeridas para corregir la alteración detectada",
+            ),
         ]
 
         base = StatsResponse(

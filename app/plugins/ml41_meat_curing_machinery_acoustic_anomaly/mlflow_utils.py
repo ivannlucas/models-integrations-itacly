@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 import os
 import shutil
+import tempfile
 
 from app.domain.services.mlflow_tracker import BaseMLflowTracker, require_user_model
 from app.plugins.ml41_meat_curing_machinery_acoustic_anomaly.constants import (
@@ -17,14 +18,18 @@ from app.plugins.ml41_meat_curing_machinery_acoustic_anomaly.constants import (
     MAHA_STATS_FILENAME,
 )
 from app.plugins.ml41_meat_curing_machinery_acoustic_anomaly.inference import load_mahalanobis_stats
-from app.plugins.ml41_meat_curing_machinery_acoustic_anomaly.model_loader import build_model, _safe_device
+from app.plugins.ml41_meat_curing_machinery_acoustic_anomaly.model_loader import (
+    build_model,
+    _safe_device,
+)
 from app.plugins.ml41_meat_curing_machinery_acoustic_anomaly.thresholds import checkpoint_threshold
 
 logger = logging.getLogger(__name__)
 
 
 @require_user_model
-def download_user_model_from_mlflow(run_id: str):
+# pylint: disable-next=too-many-locals
+def download_user_model_from_mlflow(run_id: str):  # pylint: disable=too-many-locals
     """Download every fine-tuned combination logged under this MLflow run.
 
     Returns (combinations, temp_dir) where combinations is a dict keyed by
@@ -32,9 +37,7 @@ def download_user_model_from_mlflow(run_id: str):
     norm_std, maha_mean, maha_inv_cov, maha_pca, device}, or None if nothing could be
     downloaded. Caller MUST shutil.rmtree(temp_dir) after inference (try/finally).
     """
-    import tempfile
-
-    import torch
+    import torch  # pylint: disable=import-outside-toplevel  # heavy lib, loaded lazily
 
     tmp = tempfile.mkdtemp(prefix="mlflow_ml41_")
     try:

@@ -18,7 +18,11 @@ import torch
 
 from app.application.dto.stats_dto import InputField, OutputField, RuntimeStats, StatsResponse
 from app.domain.ports.model_plugin_port import ModelPluginPort
-from app.domain.services.exceptions import InvalidImageError, ModelNotLoadedError, ModelPersistenceError
+from app.domain.services.exceptions import (
+    InvalidImageError,
+    ModelNotLoadedError,
+    ModelPersistenceError,
+)
 from app.domain.services.mlflow_tracker import BaseMLflowTracker
 from app.infrastructure.archive import safe_extract_zip
 from app.plugins.ml2_fungal_cnn_disease_detection.constants import (
@@ -137,6 +141,7 @@ class Ml2FungalCnnDiseaseDetectionPlugin(ModelPluginPort):
             if user_temp_dir:
                 shutil.rmtree(user_temp_dir, ignore_errors=True)
 
+    # pylint: disable-next=too-many-locals
     def predict_batch(self, *, data_path: str, mlflow_run_id: str = "") -> PredictBatchResponse:
         """Classify every image inside a ZIP (local path or ``s3://`` URI)."""
         if mlflow_run_id:
@@ -168,7 +173,9 @@ class Ml2FungalCnnDiseaseDetectionPlugin(ModelPluginPort):
                     model.eval()
                     for image_path in image_paths:
                         try:
-                            tensor, image = image_path_to_tensor_and_image(image_path, image_size=image_size)
+                            tensor, image = image_path_to_tensor_and_image(
+                                image_path, image_size=image_size
+                            )
                             tensor = tensor.to(device)
                             with torch.no_grad():
                                 logits, feature_map = model(tensor, return_features=True)
@@ -185,8 +192,11 @@ class Ml2FungalCnnDiseaseDetectionPlugin(ModelPluginPort):
                             predictions.append(result)
                         except InvalidImageError as exc:
                             predictions.append({"filename": image_path.name, "error": str(exc)})
-                        except Exception as exc:
-                            logger.warning("Unexpected error processing %s: %s", image_path.name, exc)
+                        except Exception as exc:  # pylint: disable=broad-exception-caught
+                            # per-image error capture: one bad image never fails the batch
+                            logger.warning(
+                                "Unexpected error processing %s: %s", image_path.name, exc
+                            )
                             predictions.append({"filename": image_path.name, "error": str(exc)})
             finally:
                 if tmp_zip and os.path.exists(tmp_zip):
@@ -209,8 +219,8 @@ class Ml2FungalCnnDiseaseDetectionPlugin(ModelPluginPort):
     @staticmethod
     def _download_zip_from_s3(s3_uri: str) -> str:
         """Download a ZIP from an ``s3://bucket/key`` URI to a temp file and return its path."""
-        import boto3
-        from botocore.client import Config as BotoConfig
+        import boto3  # pylint: disable=import-outside-toplevel  # optional, loaded lazily
+        from botocore.client import Config as BotoConfig  # pylint: disable=import-outside-toplevel
 
         without_prefix = s3_uri[5:]
         bucket, _, s3_key = without_prefix.partition("/")
@@ -247,14 +257,14 @@ class Ml2FungalCnnDiseaseDetectionPlugin(ModelPluginPort):
         from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score
         from torch import nn
         from torch.utils.data import DataLoader, Dataset
-        # pylint: enable=import-outside-toplevel
 
-        from app.plugins.ml2_fungal_cnn_disease_detection.model_loader import (  # pylint: disable=import-outside-toplevel
+        from app.plugins.ml2_fungal_cnn_disease_detection.model_loader import (
             _safe_device,
         )
-        from app.plugins.ml2_fungal_cnn_disease_detection.preprocessing import (  # pylint: disable=import-outside-toplevel
+        from app.plugins.ml2_fungal_cnn_disease_detection.preprocessing import (
             build_eval_transform,
         )
+        # pylint: enable=import-outside-toplevel
 
         tracker = BaseMLflowTracker(mlflow_run_id)
         tracker.log_params({
@@ -459,7 +469,9 @@ class Ml2FungalCnnDiseaseDetectionPlugin(ModelPluginPort):
                 tracker.upload_artifacts(mlflow_tmp, artifact_path="model")
             except Exception as exc:  # pragma: no cover - network/MLflow failure path
                 logger.error("MLflow artifact upload failed: %s", exc)
-                raise ModelPersistenceError(f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}") from exc
+                raise ModelPersistenceError(
+                    f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}"
+                ) from exc
 
             logger.info(
                 "train() done — accuracy=%.4f f1=%.4f epochs_run=%d classes=%s",

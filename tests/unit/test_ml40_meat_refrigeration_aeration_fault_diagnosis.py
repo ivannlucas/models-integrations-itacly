@@ -24,6 +24,7 @@ INLINE_PAYLOAD = {"mode": "inline", "rows": [_AIREADO_ROW] * 100}
 
 
 def test_health(client):
+    """/health reports status ok, the model id and loaded=True."""
     body = client.get(f"{PREFIX}/health").json()
     assert body["status"] == "ok"
     assert body["model"] == MODEL_ID
@@ -31,11 +32,13 @@ def test_health(client):
 
 
 def test_stats(client):
+    """/stats reports the model id as model_name."""
     body = client.get(f"{PREFIX}/stats").json()
     assert body["model_name"] == MODEL_ID
 
 
 def test_predict_inline(client):
+    """Inline /predict returns the diagnosis, its confidence and the model health."""
     resp = client.post(f"{PREFIX}/predict", json=INLINE_PAYLOAD)
     assert resp.status_code == 200
     body = resp.json()
@@ -73,7 +76,10 @@ def test_predict_inline_unknown_system_maps_to_422(client, fake_plugins):
 
 
 def test_predict_batch(client):
-    resp = client.post(f"{PREFIX}/predict", json={"mode": "batch", "data_path": "/tmp/refrigeracion.csv"})
+    """Batch /predict returns one prediction per run, the system and the model health."""
+    resp = client.post(
+        f"{PREFIX}/predict", json={"mode": "batch", "data_path": "/tmp/refrigeracion.csv"}
+    )
     assert resp.status_code == 200
     body = resp.json()
     assert body["model_id"] == MODEL_ID
@@ -84,6 +90,7 @@ def test_predict_batch(client):
 
 
 def test_predict_batch_accepts_system(client):
+    """Batch /predict accepts an explicit valid system."""
     resp = client.post(
         f"{PREFIX}/predict",
         json={"mode": "batch", "data_path": "/tmp/aireado.csv", "system": "aireado"},
@@ -92,6 +99,7 @@ def test_predict_batch_accepts_system(client):
 
 
 def test_predict_batch_rejects_invalid_system(client):
+    """Batch /predict with an unknown system answers 422."""
     resp = client.post(
         f"{PREFIX}/predict",
         json={"mode": "batch", "data_path": "/tmp/aireado.csv", "system": "otro"},
@@ -100,11 +108,13 @@ def test_predict_batch_rejects_invalid_system(client):
 
 
 def test_train_rejects_invalid_system(client):
+    """/train with an unknown system answers 422."""
     resp = client.post(f"{PREFIX}/train", json={"data_path": "/tmp/aireado.csv", "system": "otro"})
     assert resp.status_code == 422
 
 
 def test_train(client):
+    """/train returns 200 with the system, the training run count and f1_macro."""
     resp = client.post(
         f"{PREFIX}/train",
         json={"data_path": "/tmp/dataset_aireado.csv", "mlflow_run_id": "test-run-id"},
@@ -117,5 +127,6 @@ def test_train(client):
 
 
 def test_train_requires_mlflow_run_id(client):
+    """/train without mlflow_run_id answers 422."""
     resp = client.post(f"{PREFIX}/train", json={"data_path": "/tmp/dataset_aireado.csv"})
     assert resp.status_code == 422

@@ -31,7 +31,7 @@ def _compute_class_weights(y_train: np.ndarray) -> torch.Tensor:
     return torch.tensor([n_neg / max(n_pos, 1.0)], dtype=torch.float32)
 
 
-def fine_tune(
+def fine_tune(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
     model: ParallelDeepNeuroFuzzyModel,
     model_cfg: dict,
     sequences_scaled: np.ndarray,
@@ -71,14 +71,14 @@ def fine_tune(
         weight_decay=float(train_cfg.get("weight_decay", 0.0)),
     )
 
-    X = torch.tensor(sequences_scaled, dtype=torch.float32)
-    S = torch.tensor(stats_scaled, dtype=torch.float32)
+    x_seq = torch.tensor(sequences_scaled, dtype=torch.float32)
+    s_seq = torch.tensor(stats_scaled, dtype=torch.float32)
     y = torch.tensor(y_anom, dtype=torch.float32)
 
     grad_clip = train_cfg.get("grad_clip")
     for _ in range(epochs):
         optimizer.zero_grad()
-        out = fine_model(X, S)
+        out = fine_model(x_seq, s_seq)
         loss, _ = criterion(
             anomaly_score=out["anomaly_score"],
             logit_anomaly_dl=out["logit_anomaly_dl"],
@@ -102,11 +102,13 @@ def fine_tune(
         and eval_y_labels is not None
     )
     eval_y_anom = (np.asarray(eval_y_labels) > 0).astype(np.int64) if has_eval_split else y_anom
-    X_eval = torch.tensor(eval_sequences_scaled, dtype=torch.float32) if has_eval_split else X
-    S_eval = torch.tensor(eval_stats_scaled, dtype=torch.float32) if has_eval_split else S
+    x_eval = (
+        torch.tensor(eval_sequences_scaled, dtype=torch.float32) if has_eval_split else x_seq
+    )
+    s_eval = torch.tensor(eval_stats_scaled, dtype=torch.float32) if has_eval_split else s_seq
 
     with torch.no_grad():
-        out = fine_model(X_eval, S_eval)
+        out = fine_model(x_eval, s_eval)
         probs = torch.sigmoid(out["anomaly_score"].view(-1)).numpy()
 
     preds = (probs >= threshold).astype(int)
@@ -115,9 +117,16 @@ def fine_tune(
         "f1": float(f1_score(eval_y_anom, preds, zero_division=0)),
         "precision": float(precision_score(eval_y_anom, preds, zero_division=0)),
         "recall": float(recall_score(eval_y_anom, preds, zero_division=0)),
-        "f1_macro": float(f1_score(eval_y_anom, preds, labels=[0, 1], average="macro", zero_division=0)),
-        "recall_macro": float(recall_score(eval_y_anom, preds, labels=[0, 1], average="macro", zero_division=0)),
-        "auc": float(roc_auc_score(eval_y_anom, probs)) if len(np.unique(eval_y_anom)) > 1 else float("nan"),
+        "f1_macro": float(
+            f1_score(eval_y_anom, preds, labels=[0, 1], average="macro", zero_division=0)
+        ),
+        "recall_macro": float(
+            recall_score(eval_y_anom, preds, labels=[0, 1], average="macro", zero_division=0)
+        ),
+        "auc": (
+            float(roc_auc_score(eval_y_anom, probs))
+            if len(np.unique(eval_y_anom)) > 1 else float("nan")
+        ),
         "n_windows": int(len(y_anom)),
         "n_eval_windows": int(len(eval_y_anom)),
         "n_epochs": int(epochs),

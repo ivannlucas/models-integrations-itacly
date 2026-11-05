@@ -65,7 +65,9 @@ def check_data_contract(
         series = pd.to_numeric(df[col], errors="coerce").dropna()
         if series.empty:
             continue
-        z = ((series - preprocessor.numeric_means[col]) / preprocessor.numeric_stds[col]).abs().median()
+        z = (
+            (series - preprocessor.numeric_means[col]) / preprocessor.numeric_stds[col]
+        ).abs().median()
         if z > CONTRACT_SCALE_ERROR_Z:
             scale_cols.append(col)
         elif z > CONTRACT_SCALE_WARNING_Z:
@@ -91,5 +93,7 @@ def enforce_data_contract(df: pd.DataFrame, preprocessor, present_columns, logge
         detail = ("El CSV no sigue el formato del modelo. " + " ".join(errors)
                   + " Revisa la estructura esperada del CSV.")
         logger.error("ml30 data contract rejected input: %s", detail)
-        raise DataContractError(detail if len(detail) <= _MAX_DETAIL_LEN else detail[:_MAX_DETAIL_LEN - 1] + "…")
+        raise DataContractError(
+            detail if len(detail) <= _MAX_DETAIL_LEN else detail[:_MAX_DETAIL_LEN - 1] + "…"
+        )
     return warnings

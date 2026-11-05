@@ -13,7 +13,8 @@ from app.plugins.ml26_wine_sulfite_gru_pso_forecast.model_loader import LoadedMo
 logger = logging.getLogger(__name__)
 
 
-@require_user_model   # None or an artifact load error, with run_id → UserModelUnavailableError (422)
+# None or an artifact load error, with run_id → UserModelUnavailableError (422)
+@require_user_model
 def download_user_model_from_mlflow(run_id: str) -> tuple[LoadedModel, str] | None:
     """Download a user fine-tuned model (model_state.pt + bundle_meta.json) from MLflow.
 

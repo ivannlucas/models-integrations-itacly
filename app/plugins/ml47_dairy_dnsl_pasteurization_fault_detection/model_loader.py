@@ -1,3 +1,4 @@
+"""Arquitectura 1D-CNN del DNSL (ml47), pérdida física y carga de artefactos."""
 import logging
 import sys
 import types
@@ -5,7 +6,7 @@ from pathlib import Path
 
 import joblib
 import torch
-import torch.nn as nn
+from torch import nn
 
 from app.infrastructure.artifact_store import ArtifactStore
 from app.plugins.ml47_dairy_dnsl_pasteurization_fault_detection.constants import (
@@ -45,7 +46,9 @@ sys.modules["src.training.model"] = types.ModuleType("src.training.model")
 _store = ArtifactStore(ARTIFACT_FOLDER_NAME)
 
 
-class CNN_Pasteurizer(nn.Module):
+class CNN_Pasteurizer(nn.Module):  # pylint: disable=invalid-name  # delivered name, unpickled
+    """1D-CNN del equipo de IA: backbone convolucional y 4 cabezas (una por componente)."""
+
     def __init__(self, n_sensors: int, n_classes: int = 3, dropout_prob: float = 0.5):
         super().__init__()
         self.features = nn.Sequential(
@@ -66,16 +69,21 @@ class CNN_Pasteurizer(nn.Module):
         self.head_acumulador = nn.Linear(256, n_classes)
 
     def forward(self, x):
+        """Devuelve los logits de las 4 cabezas (fouling, válvula, bomba, acumulador)."""
         x = self.features(x)
         x = x.squeeze(-1)
         x = self.dropout_final(x)
-        return self.head_fouling(x), self.head_valvula(x), self.head_bomba(x), self.head_acumulador(x)
+        return (
+            self.head_fouling(x), self.head_valvula(x), self.head_bomba(x), self.head_acumulador(x)
+        )
 
 
 sys.modules["src.training.model"].CNN_Pasteurizer = CNN_Pasteurizer
 
 
-class PhysicsGuidedLoss(nn.Module):
+class PhysicsGuidedLoss(nn.Module):  # pylint: disable=too-many-instance-attributes
+    """CrossEntropy de las 4 cabezas + penalización física (bomba y enfriador) ponderada."""
+
     def __init__(self, feature_cols: list[str], scaler, lambda_phys: float = 1.0):
         super().__init__()
         self.feature_cols = feature_cols
@@ -96,24 +104,25 @@ class PhysicsGuidedLoss(nn.Module):
             self.idx_ts2 = feature_cols.index("TS2")
         self.ce_loss = nn.CrossEntropyLoss()
 
-    def forward(self, preds, targets, inputs_tensor):
+    def forward(self, preds, targets, inputs_tensor):  # pylint: disable=too-many-locals
+        """Devuelve (pérdida total, supervisada, física bomba, física enfriador)."""
         inputs_mean = inputs_tensor.mean(dim=2)
-        X_real = inputs_mean * self.scales + self.means
-        P_in_bar = X_real[:, self.idx_ps1]
-        Q_lmin = X_real[:, self.idx_fs1]
-        Power_W = X_real[:, self.idx_eps1]
-        T_in = X_real[:, self.idx_ts1]
-        T_out = X_real[:, self.idx_ts2]
-        P_hyd_est = P_in_bar * Q_lmin * 1.6666
-        efficiency = P_hyd_est / (torch.abs(Power_W) + 1.0)
+        x_real = inputs_mean * self.scales + self.means
+        p_in_bar = x_real[:, self.idx_ps1]
+        q_lmin = x_real[:, self.idx_fs1]
+        power_w = x_real[:, self.idx_eps1]
+        t_in = x_real[:, self.idx_ts1]
+        t_out = x_real[:, self.idx_ts2]
+        p_hyd_est = p_in_bar * q_lmin * 1.6666
+        efficiency = p_hyd_est / (torch.abs(power_w) + 1.0)
         prob_sano_bomba = torch.softmax(preds[2], dim=1)[:, 0]
         violation_pump = torch.relu(0.75 - efficiency) ** 2
         loss_physics_pump = torch.mean(violation_pump * prob_sano_bomba) * 100.0
-        m_dot = Q_lmin * 0.017
-        delta_T = T_out - T_in
-        Heat_Transfer_kW = m_dot * 3.9 * delta_T
-        Q_expected = m_dot * 3.9 * 2.0
-        thermal_efficiency = Heat_Transfer_kW / (Q_expected + 0.1)
+        m_dot = q_lmin * 0.017
+        delta_t = t_out - t_in
+        heat_transfer_kw = m_dot * 3.9 * delta_t
+        q_expected = m_dot * 3.9 * 2.0
+        thermal_efficiency = heat_transfer_kw / (q_expected + 0.1)
         prob_sano_cooler = torch.softmax(preds[0], dim=1)[:, 0]
         violation_cooler = torch.relu(0.80 - thermal_efficiency) ** 2
         loss_physics_cooler = torch.mean(violation_cooler * prob_sano_cooler) * 100.0
@@ -124,10 +133,14 @@ class PhysicsGuidedLoss(nn.Module):
             + self.ce_loss(preds[3], targets[:, 3])
         )
         total_loss = supervised_loss + self.lambda_phys * (loss_physics_pump + loss_physics_cooler)
-        return total_loss, supervised_loss.item(), loss_physics_pump.item(), loss_physics_cooler.item()
+        return (
+            total_loss, supervised_loss.item(), loss_physics_pump.item(),
+            loss_physics_cooler.item(),
+        )
 
 
 def load_artifacts_from_dir(artifact_dir: Path):
+    """Carga (modelo, scaler, columnas de features, media TS1 de train) desde *artifact_dir*."""
     scaler = joblib.load(artifact_dir / SCALER_FILENAME)
     feature_cols = joblib.load(artifact_dir / FEATURE_COLUMNS_FILENAME)
     ts1_mean_train = joblib.load(artifact_dir / TS1_MEAN_FILENAME)
@@ -144,4 +157,5 @@ def load_artifacts_from_dir(artifact_dir: Path):
 
 
 def load_artifacts():
+    """Carga los artefactos base desde la carpeta local del store."""
     return load_artifacts_from_dir(_store.local_dir)

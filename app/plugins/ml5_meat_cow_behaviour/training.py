@@ -146,7 +146,9 @@ def split_clips(data: dict, seed: int = TRAIN_SEED) -> dict[str, set[int]]:
         val_clips, test_clips = train_test_split(
             temp_clips, test_size=(1 - val_ratio_adj), random_state=seed
         )
-    except ValueError as exc:  # sklearn: "With n_samples=1, test_size=... the resulting train set will be empty"
+    except (
+        ValueError
+    ) as exc:  # sklearn: "With n_samples=1, test_size=... the resulting train set will be empty"
         raise ValueError(
             f"El ZIP trae {len(clip_names)} clip(s)/vídeo(s) distintos y el split 70/15/15 se hace "
             "por clip: hacen falta al menos 4 (con menos, el 30 % reservado no se puede repartir "
@@ -229,10 +231,10 @@ class ClipClassificationDataset(Dataset):
             img_path = os.path.join(
                 self.raw_frames_dir, clip_info["clip_name"], detection["image_file"]
             )
-            img = cv2.imread(img_path)
+            img = cv2.imread(img_path)  # pylint: disable=no-member
             if img is None:
                 continue
-            img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+            img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)  # pylint: disable=no-member
             img_h, img_w = img.shape[:2]
             x, y, w, h = (int(v) for v in detection["bbox"])
             if w <= 0 or h <= 0:
@@ -241,7 +243,7 @@ class ClipClassificationDataset(Dataset):
             x2, y2 = min(img_w, x + w), min(img_h, y + h)
             if x2 <= x or y2 <= y:
                 continue
-            roi = cv2.resize(img[y:y2, x:x2], (CROP_SIZE, CROP_SIZE))
+            roi = cv2.resize(img[y:y2, x:x2], (CROP_SIZE, CROP_SIZE))  # pylint: disable=no-member
             frames.append(roi)
 
         if len(frames) < self.clip_length:

@@ -1,27 +1,34 @@
 # scripts/data_catalog_generation.py
 # Purpose: Automate data catalog creation from code files.
+"""Generate data catalog JSON entries for code files with a generative AI model."""
 
 import argparse
 import json
 import sys
 from pathlib import Path
 
-from files import load_agent_instructions, get_files_to_process, determine_root_path, save_output_file, \
-    read_file_content, ALLOWED_EXTENSIONS
-from ia import setup_generative_model, process_file_with_ia, MAX_TOTAL_TOKENS
-from ui import log_message
+from files import (  # pylint: disable=import-error  # sibling script module
+    load_agent_instructions, get_files_to_process, determine_root_path, save_output_file,
+    read_file_content, ALLOWED_EXTENSIONS,
+)
+from ia import (  # pylint: disable=import-error  # sibling script module
+    setup_generative_model, process_file_with_ia, MAX_TOTAL_TOKENS,
+)
+from ui import log_message  # pylint: disable=import-error  # sibling script module
 
 PROMPT_FILENAME = "data_catalog_generation.txt"
 
 
-def main():
+def main():  # pylint: disable=too-many-locals,too-many-statements
+    """Parse CLI args and write a data catalog JSON for every selected file."""
     parser = argparse.ArgumentParser(
         description="Generates data catalog entries for a file or directory.",
         formatter_class=argparse.RawTextHelpFormatter
     )
     # Argumentos
     parser.add_argument("path", nargs='?', default=None, type=str,
-                        help="Path to the file/directory. If omitted, analyzes modified files in Git.")
+                        help=("Path to the file/directory. If omitted, analyzes modified "
+                              "files in Git."))
     parser.add_argument("--output-dir", type=str, default="docs/catalog",
                         help="Directory to save the generated JSON files.")
 
@@ -59,7 +66,11 @@ def main():
             log_message(f"Token limit reached ({MAX_TOTAL_TOKENS}). Stopping.", "WARNING")
             break
 
-        log_message(f"Processing file: {filepath}. File {file_number_processed} from {len(files_to_process)}", "INFO")
+        log_message(
+            f"Processing file: {filepath}. "
+            f"File {file_number_processed} from {len(files_to_process)}",
+            "INFO",
+        )
         file_number_processed += 1
         language = ALLOWED_EXTENSIONS.get(filepath.suffix)
         if not language:
@@ -73,15 +84,22 @@ def main():
 
         # Llamada a la función de procesamiento unificada
         # Esperamos una respuesta JSON (is_json_output=True por defecto)
-        result, tokens_call, consumption_call = process_file_with_ia(model, agent_instructions, code_content,
-                                                                     str(filepath))
+        result, tokens_call, consumption_call = process_file_with_ia(
+            model, agent_instructions, code_content, str(filepath)
+        )
         total_tokens_used += tokens_call
         consumption_total += consumption_call
-        log_message(f"Tokens consumed: {tokens_call} | Total: {total_tokens_used} --> {round(consumption_total, 4)} $",
-                    "INFO")
+        log_message(
+            f"Tokens consumed: {tokens_call} | Total: {total_tokens_used} "
+            f"--> {round(consumption_total, 4)} $",
+            "INFO",
+        )
 
         if not result or not isinstance(result, dict):
-            log_message(f"Skipping file {filepath} due to processing error or invalid format.", "WARNING")
+            log_message(
+                f"Skipping file {filepath} due to processing error or invalid format.",
+                "WARNING",
+            )
             continue
 
         # Usamos resolve() para asegurar que relative_to funcione

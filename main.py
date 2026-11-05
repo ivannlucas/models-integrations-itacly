@@ -29,21 +29,25 @@ _active_entries = [e for e in REGISTRY if not _model_filter or e.model_id == _mo
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(fastapi_app: FastAPI):
     """Manage the application lifespan: load models on startup, clean up on shutdown."""
     logger.info("Starting up — loading %d model(s)...", len(_active_entries))
-    app.state.containers = {}
-    app.state.load_errors = {}
+    fastapi_app.state.containers = {}
+    fastapi_app.state.load_errors = {}
     for entry in _active_entries:
         try:
             container = ModelContainer(plugin=entry.plugin_class(), model_id=entry.model_id)
             container.init()
-            app.state.containers[entry.model_id] = container
+            fastapi_app.state.containers[entry.model_id] = container
             logger.info("Model '%s' loaded successfully.", entry.model_id)
-        except Exception as exc:
+        except Exception as exc:  # pylint: disable=broad-exception-caught  # a failing model must not block the rest
             logger.exception("Failed to load model '%s' — it will be unavailable.", entry.model_id)
-            app.state.load_errors[entry.model_id] = str(exc)
-    logger.info("Startup complete. %d/%d models ready.", len(app.state.containers), len(_active_entries))
+            fastapi_app.state.load_errors[entry.model_id] = str(exc)
+    logger.info(
+        "Startup complete. %d/%d models ready.",
+        len(fastapi_app.state.containers),
+        len(_active_entries),
+    )
     yield
     logger.info("Shutting down.")
 

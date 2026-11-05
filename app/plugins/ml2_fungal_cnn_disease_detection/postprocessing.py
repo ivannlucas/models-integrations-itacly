@@ -16,6 +16,7 @@ JPEG_QUALITY = 70
 HEATMAP_ALPHA = 0.4
 
 
+# pylint: disable-next=too-many-locals
 def compute_and_encode_cam(
     feature_map: torch.Tensor,
     classifier_weight: torch.Tensor,
@@ -41,15 +42,20 @@ def compute_and_encode_cam(
     w, h = img.size
     if max(w, h) > MAX_HEATMAP_SIZE:
         scale = MAX_HEATMAP_SIZE / max(w, h)
+        # pylint: disable-next=no-member  # Image.LANCZOS exists (Pillow alias); inference FP
         img = img.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
         w, h = img.size
 
+    # pylint: disable=no-member  # cv2 is a C extension; pylint cannot see its members
     cam_resized = cv2.resize(cam, (w, h))
     heatmap = cv2.applyColorMap(np.uint8(255 * cam_resized), cv2.COLORMAP_JET)
     heatmap = cv2.cvtColor(heatmap, cv2.COLOR_BGR2RGB)
+    # pylint: enable=no-member
 
     img_arr = np.array(img).astype(np.float32)
-    overlay = (heatmap.astype(np.float32) * HEATMAP_ALPHA + img_arr * (1 - HEATMAP_ALPHA)).astype(np.uint8)
+    overlay = (heatmap.astype(np.float32) * HEATMAP_ALPHA + img_arr * (1 - HEATMAP_ALPHA)).astype(
+        np.uint8
+    )
 
     buf = io.BytesIO()
     Image.fromarray(overlay).save(buf, format="JPEG", quality=JPEG_QUALITY)

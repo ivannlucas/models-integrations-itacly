@@ -58,9 +58,9 @@ def test_decode_known_log1p_value():
 def test_molecular_so2_known_value():
     """Verify result against a manually computed reference value."""
     free = np.array([20.0])
-    pH = 3.2
-    expected = 20.0 / (1.0 + 10.0 ** (pH - PKA_SO2))
-    assert compute_molecular_so2(free, pH)[0] == pytest.approx(expected)
+    ph = 3.2
+    expected = 20.0 / (1.0 + 10.0 ** (ph - PKA_SO2))
+    assert compute_molecular_so2(free, ph)[0] == pytest.approx(expected)
 
 
 def test_molecular_so2_is_less_than_free_at_typical_wine_ph():

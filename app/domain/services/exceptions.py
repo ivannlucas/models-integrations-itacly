@@ -18,7 +18,10 @@ class UnsupportedProductError(ValueError):
 
 
 class InsufficientRowsError(ValueError):
-    """Raised when not enough rows survive dropna() after lag feature construction (meat forecast)."""
+    """Raised when not enough rows survive dropna() after lag feature construction.
+
+    Used by the meat price forecast.
+    """
 
 
 class InvalidImageError(ValueError):
@@ -46,7 +49,10 @@ class InsufficientTelemetryHistoryError(ValueError):
 
 
 class InsufficientCycleHistoryError(ValueError):
-    """Raised when a cycle (run_id) has fewer minutes of history than the lag features need (ml40)."""
+    """Raised when a cycle (run_id) has fewer minutes of history than the lag features need.
+
+    Used by ml40.
+    """
 
 
 class UnknownDiagnosisSystemError(ValueError):
@@ -66,7 +72,9 @@ class ThermalSafetyViolationError(ValueError):
 
 
 class InsufficientSequenceHistoryError(ValueError):
-    """Raised when no sample_id supplies the 48 consecutive hourly observations a window needs (ml9).
+    """Raised when no sample_id supplies the 48 consecutive hourly observations a window needs.
+
+    Used by ml9.
 
     The delivered pipeline runs with pad_short_sequences=false, so a series shorter than
     window_size produces no window at all and the model would silently return zero predictions.
@@ -147,17 +155,28 @@ class BaseReloadError(RuntimeError):
 
 
 class TrainJobBusyError(Exception):
-    """Raised when an async training is requested while another one of the same model is still running (409)."""
+    """Raised when an async training is requested while another one of the same model runs.
+
+    Maps to 409.
+    """
 
 
 class TrainJobRunNotFoundError(ValueError):
-    """Raised when the MLflow run used as job_id does not exist (client error, 400 — retrying won't help)."""
+    """Raised when the MLflow run used as job_id does not exist.
+
+    Client error (400): retrying won't help.
+    """
 
 
 class TrainJobStoreUnavailableError(Exception):
-    """Raised when the async training state store (MLflow) cannot be reached or fails (503, retryable)."""
+    """Raised when the async training state store (MLflow) cannot be reached or fails.
+
+    Maps to 503 (retryable).
+    """
 
 
 class TrainJobResultUnreadableError(Exception):
-    """Raised when a succeeded async job's result.json cannot be read back from MLflow (500, not 503:
-    MLflow answers, but the artifact is missing or not a JSON file)."""
+    """Raised when a succeeded async job's result.json cannot be read back from MLflow.
+
+    Maps to 500, not 503: MLflow answers, but the artifact is missing or not a JSON file.
+    """

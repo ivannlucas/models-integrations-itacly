@@ -20,6 +20,7 @@ NUMERIC_COLUMNS = [
 
 def build_platform_features(df: pd.DataFrame, config: dict[str, Any] | None = None) -> pd.DataFrame:
     """Return a typed feature frame for the official CU28 platform."""
+    _ = config
 
     feature_frame = df.copy()
     feature_frame["date"] = pd.to_datetime(feature_frame["date"], errors="coerce")
@@ -46,6 +47,8 @@ def build_platform_features(df: pd.DataFrame, config: dict[str, Any] | None = No
     )
     feature_frame["replenishment_gap_tons"] = np.maximum(
         0.0,
-        feature_frame["safety_stock_tons"] + feature_frame["expected_requirement_tons"] - feature_frame["current_inventory_tons"],
+        feature_frame["safety_stock_tons"]
+        + feature_frame["expected_requirement_tons"]
+        - feature_frame["current_inventory_tons"],
     )
     return feature_frame

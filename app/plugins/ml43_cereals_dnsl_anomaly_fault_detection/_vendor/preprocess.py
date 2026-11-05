@@ -6,10 +6,11 @@ and adapted to remove the project-specific logger import.
 
 from typing import Any, Optional, Sequence
 
+import logging
+
 import numpy as np
 import pandas as pd
 import torch
-import logging
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +55,7 @@ def _failure_rate(
     return float(anomaly_mask.mean() * 100.0)
 
 
-def split_train_val_test_by_id(
+def split_train_val_test_by_id(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals,too-many-branches,too-many-statements
     df: pd.DataFrame,
     id_col: str,
     target_column: str,
@@ -76,9 +77,9 @@ def split_train_val_test_by_id(
             f"La columna objetivo '{target_column}' no existe en el DataFrame."
         )
 
-    if not (0 < val_size < 1):
+    if not 0 < val_size < 1:
         raise ValueError("val_size debe estar entre 0 y 1 (exclusivo).")
-    if not (0 < test_size < 1):
+    if not 0 < test_size < 1:
         raise ValueError("test_size debe estar entre 0 y 1 (exclusivo).")
     if val_size + test_size >= 1:
         raise ValueError("La suma de val_size y test_size debe ser menor que 1.")
@@ -177,7 +178,7 @@ def split_train_val_test_by_id(
     return split_data, unique_ids
 
 
-def create_sequences(
+def create_sequences(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals,too-many-branches
     df: pd.DataFrame,
     feature_cols: list[str],
     seq_length: int = 180,
@@ -211,7 +212,7 @@ def create_sequences(
     solapamiento_beta = float(solapamiento_beta)
     step = max(1, int(seq_length * (1 - solapamiento_beta)))
 
-    X_seq: list[np.ndarray] = []
+    x_seq: list[np.ndarray] = []
     y_seq: list = []
     cycle_ids: list = []
     window_timestamps: list = []
@@ -227,11 +228,11 @@ def create_sequences(
         for gid, g in grouped:
             if len(g) < seq_length:
                 continue
-            X_vals = g[feature_cols].to_numpy(dtype=np.float32)
+            x_vals = g[feature_cols].to_numpy(dtype=np.float32)
             y_vals = g[target_column].to_numpy() if target_column else None
             ts_vals = g[timestamp_column].to_numpy() if has_ts else None
             for i in range(0, len(g) - seq_length + 1, step):
-                X_seq.append(X_vals[i:i + seq_length])
+                x_seq.append(x_vals[i:i + seq_length])
                 cycle_ids.append(str(gid))
                 if ts_vals is not None:
                     window_timestamps.append((ts_vals[i], ts_vals[i + seq_length - 1]))
@@ -246,18 +247,18 @@ def create_sequences(
                 [],
                 [] if has_ts else None,
             )
-        X_vals = df[feature_cols].to_numpy(dtype=np.float32)
+        x_vals = df[feature_cols].to_numpy(dtype=np.float32)
         y_vals = df[target_column].to_numpy() if target_column else None
         ts_vals = df[timestamp_column].to_numpy() if has_ts else None
         for i in range(0, len(df) - seq_length + 1, step):
-            X_seq.append(X_vals[i:i + seq_length])
+            x_seq.append(x_vals[i:i + seq_length])
             cycle_ids.append(None)
             if ts_vals is not None:
                 window_timestamps.append((ts_vals[i], ts_vals[i + seq_length - 1]))
             if y_vals is not None:
                 y_seq.append(_window_label(y_vals[i:i + seq_length]))
 
-    if not X_seq:
+    if not x_seq:
         n_feat = len(feature_cols)
         return (
             np.empty((0, seq_length, n_feat), dtype=np.float32),
@@ -266,9 +267,9 @@ def create_sequences(
             [] if has_ts else None,
         )
 
-    X_arr = np.asarray(X_seq, dtype=np.float32)
+    x_arr = np.asarray(x_seq, dtype=np.float32)
     y_arr = np.asarray(y_seq, dtype=np.int64) if y_seq else None
-    return X_arr, y_arr, cycle_ids, (window_timestamps if has_ts else None)
+    return x_arr, y_arr, cycle_ids, (window_timestamps if has_ts else None)
 
 
 def stats_windows(

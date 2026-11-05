@@ -82,7 +82,7 @@ def _build_models(
     input_shape: tuple, num_classes: int, learning_rates: dict, arch_params: dict,
 ) -> list:
     """Port of train.build_models — same layers, names, losses and metrics."""
-    from tensorflow.keras.layers import (
+    from tensorflow.keras.layers import (  # pylint: disable=import-error
         GRU,
         LSTM,
         BatchNormalization,
@@ -93,8 +93,8 @@ def _build_models(
         GlobalAveragePooling1D,
         Input,
     )
-    from tensorflow.keras.models import Model
-    from tensorflow.keras.optimizers import Adam
+    from tensorflow.keras.models import Model  # pylint: disable=import-error
+    from tensorflow.keras.optimizers import Adam  # pylint: disable=import-error
 
     def compilar(modelo, lr):
         modelo.compile(
@@ -206,7 +206,10 @@ def run_retraining(raw_df: pd.DataFrame, model_paths: dict[str, str]) -> dict[st
 
     # TensorFlow is imported lazily so the plugin modules stay light for unit tests.
     import tensorflow as tf  # noqa: F401
-    from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint
+    from tensorflow.keras.callbacks import (  # pylint: disable=import-error
+        EarlyStopping,
+        ModelCheckpoint,
+    )
 
     input_shape = (WINDOW_SIZE, len(MODEL_FEATURES))
     num_classes = len(le.classes_)

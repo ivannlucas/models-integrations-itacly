@@ -235,17 +235,20 @@ class Ml3WineDiseasePestForecastPlugin(ModelPluginPort):
 
             upload_warning = None
             if not mlflow_run_id:
-                raise ModelPersistenceError("Sin run de MLflow: el modelo reentrenado no se ha guardado.")
-            else:
-                tracker = BaseMLflowTracker(mlflow_run_id)
-                try:
-                    tracker.log_params({"window_size": WINDOW_SIZE, "epochs": EPOCHS,
-                                        "batch_size": BATCH_SIZE, "seed": TRAIN_RANDOM_SEED})
-                    tracker.log_metrics(metrics)
-                    tracker.upload_artifacts(train_tmp, artifact_path="model")
-                except Exception as exc:  # pylint: disable=broad-exception-caught
-                    logger.error("MLflow artifact upload failed: %s", exc)
-                    raise ModelPersistenceError(f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}") from exc
+                raise ModelPersistenceError(
+                    "Sin run de MLflow: el modelo reentrenado no se ha guardado."
+                )
+            tracker = BaseMLflowTracker(mlflow_run_id)
+            try:
+                tracker.log_params({"window_size": WINDOW_SIZE, "epochs": EPOCHS,
+                                    "batch_size": BATCH_SIZE, "seed": TRAIN_RANDOM_SEED})
+                tracker.log_metrics(metrics)
+                tracker.upload_artifacts(train_tmp, artifact_path="model")
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                logger.error("MLflow artifact upload failed: %s", exc)
+                raise ModelPersistenceError(
+                    f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}"
+                ) from exc
         finally:
             shutil.rmtree(train_tmp, ignore_errors=True)
 
@@ -369,7 +372,9 @@ class Ml3WineDiseasePestForecastPlugin(ModelPluginPort):
                 # blind rename — REPORTED_METRICS's regression.rmse slot is genuinely
                 # root-mean-squared-error, a different unit from the mse train() logs.
                 if isinstance(base.metrics.get("classification"), dict):
-                    for key in ("accuracy", "precision_macro", "recall_macro", "f1_macro", "f1_weighted"):
+                    for key in (
+                        "accuracy", "precision_macro", "recall_macro", "f1_macro", "f1_weighted"
+                    ):
                         value = mlflow_metrics.get(key)
                         if isinstance(value, (int, float)):
                             base.metrics["classification"][key] = value

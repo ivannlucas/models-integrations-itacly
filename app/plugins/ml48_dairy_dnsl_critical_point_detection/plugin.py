@@ -1,3 +1,4 @@
+"""Plugin ml48: detección de puntos críticos de control en el DNSL (1D-CNN + pérdida física)."""
 from __future__ import annotations
 
 import logging
@@ -14,7 +15,7 @@ from app.application.dto.stats_dto import InputField, OutputField, RuntimeStats,
 from app.domain.ports.model_plugin_port import ModelPluginPort
 from app.domain.services.exceptions import ModelNotLoadedError, ModelPersistenceError
 from app.domain.services.mlflow_tracker import BaseMLflowTracker
-from app.infrastructure.artifact_store import ARTIFACTS_ROOT, local_file_path
+from app.infrastructure.artifact_store import ARTIFACTS_ROOT, ArtifactStore, local_file_path
 from app.plugins.ml48_dairy_dnsl_critical_point_detection import xai
 from app.plugins.ml48_dairy_dnsl_critical_point_detection.constants import (
     APPLY_DIGITAL_TWIN,
@@ -60,7 +61,10 @@ logger = logging.getLogger(__name__)
 _ARTIFACT_DIR = ARTIFACTS_ROOT / ARTIFACT_FOLDER_NAME
 
 
-class Ml48DairyDnslCriticalPointDetectionPlugin(ModelPluginPort):
+class Ml48DairyDnslCriticalPointDetectionPlugin(  # pylint: disable=too-many-instance-attributes
+        ModelPluginPort):
+    """Plugin de inferencia, XAI y reentrenamiento del modelo ml48."""
+
     def __init__(self) -> None:
         self._model = None
         self._scaler = None
@@ -74,8 +78,6 @@ class Ml48DairyDnslCriticalPointDetectionPlugin(ModelPluginPort):
     def load(self) -> None:
         bucket = os.environ.get("STORAGE_BUCKET")
         if bucket:
-            from app.infrastructure.artifact_store import ArtifactStore
-
             ArtifactStore(ARTIFACT_FOLDER_NAME).download_all_if_needed()
 
         self._device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -99,11 +101,16 @@ class Ml48DairyDnslCriticalPointDetectionPlugin(ModelPluginPort):
         self._last_predict_at = datetime.now(tz=timezone.utc).isoformat()
 
     def _context(self, mlflow_run_id: str) -> dict:
-        """Contexto de inferencia: modelo estándar o modelo del usuario (MLflow). temp_dir != None => limpiar."""
+        """Contexto de inferencia: modelo estándar o modelo del usuario (MLflow).
+
+        temp_dir != None => limpiar.
+        """
         if mlflow_run_id:
             logger.info("Using user-trained model from MLflow run_id=%s", mlflow_run_id)
             # Never falls back to the base model: a run without a loadable model raises (422).
-            model, scaler, feature_cols, ts1_mean_train, shap_bg, temp_dir = download_user_model_from_mlflow(
+            (
+                model, scaler, feature_cols, ts1_mean_train, shap_bg, temp_dir,
+            ) = download_user_model_from_mlflow(
                 mlflow_run_id,
             )
             return {
@@ -113,14 +120,15 @@ class Ml48DairyDnslCriticalPointDetectionPlugin(ModelPluginPort):
         self._require_loaded()
         return {
             "model": self._model, "scaler": self._scaler, "feature_cols": self._feature_columns,
-            "ts1_mean_train": self._ts1_mean_train, "shap_background": self._shap_background, "temp_dir": None,
+            "ts1_mean_train": self._ts1_mean_train, "shap_background": self._shap_background,
+            "temp_dir": None,
         }
 
     @staticmethod
     def _digital_twin(flag: bool | None) -> bool:
         return APPLY_DIGITAL_TWIN if flag is None else flag
 
-    def predict_inline(
+    def predict_inline(  # pylint: disable=too-many-locals
         self,
         *,
         data_path: str | None = None,
@@ -137,11 +145,14 @@ class Ml48DairyDnslCriticalPointDetectionPlugin(ModelPluginPort):
 
             if data_path:
                 with local_file_path(data_path) as local_path:
-                    x_df, cycle_ids = build_dataframe_from_csv(local_path, ctx["ts1_mean_train"], use_dt)
+                    x_df, cycle_ids = build_dataframe_from_csv(
+                        local_path, ctx["ts1_mean_train"], use_dt
+                    )
                 if cycle_ids is not None and cycle_ids.nunique() > 1:
                     first = cycle_ids.unique()[0]
                     logger.warning(
-                        "predict_inline received a CSV with %d distinct Cycle_ID values; only Cycle_ID=%s "
+                        "predict_inline received a CSV with %d distinct Cycle_ID values; "
+                        "only Cycle_ID=%s "
                         "is used. Use predict_batch to get a prediction per cycle.",
                         cycle_ids.nunique(), first,
                     )
@@ -157,18 +168,22 @@ class Ml48DairyDnslCriticalPointDetectionPlugin(ModelPluginPort):
             else:
                 sensor_data = {col: features[col] for col in SENSOR_COLUMNS}
                 x_df = build_dataframe_from_sensors(
-                    sensor_data, features.get("Time_Segundos"), cycle_id, ctx["ts1_mean_train"], use_dt,
+                    sensor_data, features.get("Time_Segundos"), cycle_id,
+                    ctx["ts1_mean_train"], use_dt,
                 )
                 label = f"Cycle_ID={cycle_id}"
 
-            resultados = run_inference(ctx["model"], ctx["scaler"], ctx["feature_cols"], x_df, self._device, label=label)
+            resultados = run_inference(
+                ctx["model"], ctx["scaler"], ctx["feature_cols"], x_df, self._device, label=label
+            )
             if resultados is None:
                 raise ValueError("Feature columns mismatch during inference")
 
             xai_result, xai_error = None, None
             if features.get("include_xai", True):
                 xai_result, xai_error = xai.explain_cycle(
-                    ctx["model"], resultados["input_tensor"], resultados["predicciones"], resultados["confianzas"],
+                    ctx["model"], resultados["input_tensor"], resultados["predicciones"],
+                    resultados["confianzas"],
                     ctx["feature_cols"], cycle_id=cycle_id,
                     include_shap=bool(features.get("include_shap", False)),
                     shap_background=ctx["shap_background"],
@@ -176,13 +191,14 @@ class Ml48DairyDnslCriticalPointDetectionPlugin(ModelPluginPort):
                 )
             self._record()
             return PredictInlineResponse(
-                **format_inline_response(MODEL_ID, resultados), xai_result=xai_result, xai_error=xai_error,
+                **format_inline_response(MODEL_ID, resultados),
+                xai_result=xai_result, xai_error=xai_error,
             )
         finally:
             if ctx["temp_dir"]:
                 shutil.rmtree(ctx["temp_dir"], ignore_errors=True)
 
-    def predict_batch(
+    def predict_batch(  # pylint: disable=too-many-arguments,too-many-locals
         self,
         *,
         data_path: str,
@@ -196,7 +212,9 @@ class Ml48DairyDnslCriticalPointDetectionPlugin(ModelPluginPort):
         try:
             use_dt = self._digital_twin(apply_digital_twin)
             with local_file_path(data_path) as local_path:
-                x_df, cycle_ids = build_dataframe_from_csv(local_path, ctx["ts1_mean_train"], use_dt)
+                x_df, cycle_ids = build_dataframe_from_csv(
+                    local_path, ctx["ts1_mean_train"], use_dt
+                )
 
             if cycle_ids is not None and cycle_ids.nunique() > 1:
                 groups = [(cid, x_df[cycle_ids == cid].drop(columns=["Cycle_ID"], errors="ignore"))
@@ -211,17 +229,22 @@ class Ml48DairyDnslCriticalPointDetectionPlugin(ModelPluginPort):
                 if cycle_df.empty:
                     continue
                 label = f"Cycle_ID={cid}" if cid is not None else "single-cycle"
-                result = run_inference(ctx["model"], ctx["scaler"], ctx["feature_cols"], cycle_df, self._device, label=label)
+                result = run_inference(
+                    ctx["model"], ctx["scaler"], ctx["feature_cols"], cycle_df, self._device,
+                    label=label,
+                )
                 if not result:
                     continue
                 row = format_batch_row(result, cid)
-                # XAI por ciclo (contrato de 43/44): xai_result / xai_error en cada fila. Un fallo de XAI de un ciclo
-                # se queda en su fila y no afecta a la prediccion ni a la XAI del resto del lote.
+                # XAI por ciclo (contrato de 43/44): xai_result / xai_error en cada fila.
+                # Un fallo de XAI de un ciclo se queda en su fila y no afecta a la prediccion
+                # ni a la XAI del resto del lote.
                 xai_result, xai_error = None, None
                 if include_xai:
                     with_shap = shap_budget > 0
                     xai_result, xai_error = xai.explain_cycle(
-                        ctx["model"], result["input_tensor"], result["predicciones"], result["confianzas"],
+                        ctx["model"], result["input_tensor"], result["predicciones"],
+                        result["confianzas"],
                         ctx["feature_cols"], cycle_id=cid, include_shap=with_shap,
                         shap_background=ctx["shap_background"],
                     )
@@ -232,19 +255,26 @@ class Ml48DairyDnslCriticalPointDetectionPlugin(ModelPluginPort):
                 predictions.append(row)
 
             self._record()
-            return PredictBatchResponse(model_id=MODEL_ID, predictions=predictions, output_path=None)
+            return PredictBatchResponse(
+                model_id=MODEL_ID, predictions=predictions, output_path=None
+            )
         finally:
             if ctx["temp_dir"]:
                 shutil.rmtree(ctx["temp_dir"], ignore_errors=True)
 
-    def train(self, *, data_path: str, mlflow_run_id: str, mode: str = "fine_tune") -> TrainResponse:
+    def train(
+        self, *, data_path: str, mlflow_run_id: str, mode: str = "fine_tune"
+    ) -> TrainResponse:
         """Retrain with one of the AI team's two procedures (see trainer.py), like ml47.
 
         fine_tune (default — the platform sends a few hundred plant cycles at most) recalibrates a
-        copy of the served model; full trains a new CNN from scratch. Either way the result, with its
-        own SHAP background, lives only in its MLflow run — the served model is never touched.
+        copy of the served model; full trains a new CNN from scratch. Either way the result,
+        with its own SHAP background, lives only in its MLflow run — the served model is never
+        touched.
         """
-        logger.info("ml48 train mode=%s data_path=%s mlflow_run_id=%s", mode, data_path, mlflow_run_id)
+        logger.info(
+            "ml48 train mode=%s data_path=%s mlflow_run_id=%s", mode, data_path, mlflow_run_id
+        )
         with local_file_path(data_path) as local_path:
             if mode == "full":
                 result = train_full(local_path)
@@ -261,11 +291,14 @@ class Ml48DairyDnslCriticalPointDetectionPlugin(ModelPluginPort):
             save_training_artifacts(temp_dir, result)
             try:
                 new_run_id = upload_artifacts_to_mlflow(
-                    str(temp_dir), mlflow_run_id=mlflow_run_id, metrics={**metrics, "mode_full": float(mode == "full")},
+                    str(temp_dir), mlflow_run_id=mlflow_run_id,
+                    metrics={**metrics, "mode_full": float(mode == "full")},
                 )
             except Exception as exc:  # pylint: disable=broad-exception-caught
                 logger.error("MLflow artifact upload failed: %s", exc)
-                raise ModelPersistenceError(f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}") from exc
+                raise ModelPersistenceError(
+                    f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}"
+                ) from exc
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
 
@@ -273,7 +306,8 @@ class Ml48DairyDnslCriticalPointDetectionPlugin(ModelPluginPort):
         detail = (
             "Reentrenamiento completo desde cero (procedimiento train del equipo de IA)."
             if mode == "full" else
-            "Calibración a planta de las 4 cabezas del modelo servido (procedimiento fine_tune del equipo de IA)."
+            "Calibración a planta de las 4 cabezas del modelo servido "
+            "(procedimiento fine_tune del equipo de IA)."
         )
         return TrainResponse(
             detail=detail,
@@ -293,27 +327,38 @@ class Ml48DairyDnslCriticalPointDetectionPlugin(ModelPluginPort):
         )
 
     def stats(self, mlflow_run_id: str = "") -> StatsResponse:
-        inputs = [InputField(name=col, type="float", description=f"Sensor {col} time-series") for col in SENSOR_COLUMNS]
-        outputs = [OutputField(name=c, type="int", description="0=SANO, 1=WARNING, 2=CRÍTICO") for c in COMPONENT_NAMES]
+        inputs = [
+            InputField(name=col, type="float", description=f"Sensor {col} time-series")
+            for col in SENSOR_COLUMNS
+        ]
+        outputs = [
+            OutputField(name=c, type="int", description="0=SANO, 1=WARNING, 2=CRÍTICO")
+            for c in COMPONENT_NAMES
+        ]
         outputs += [OutputField(name=f"Confianza_{c}", type="float", description="Confidence 0-1")
                     for c in ["Fouling", "Valvula", "Bomba", "Acumulador"]]
         outputs.append(OutputField(
             name="xai_result", type="object",
             description=(
-                "XAI del ciclo (contrato de modelo-43): Estado_del_sistema, Bloques_principales, Variables_clave, "
-                "Acciones_sugeridas / Mensaje_operativo y Detalle_componentes (ventana crítica Grad-CAM, riesgo, acción)."
+                "XAI del ciclo (contrato de modelo-43): Estado_del_sistema, Bloques_principales, "
+                "Variables_clave, "
+                "Acciones_sugeridas / Mensaje_operativo y Detalle_componentes "
+                "(ventana crítica Grad-CAM, riesgo, acción)."
             ),
         ))
         outputs.append(OutputField(
-            name="xai_error", type="string", description="Motivo si la XAI de este ciclo falló; null si fue correcta.",
+            name="xai_error", type="string",
+            description="Motivo si la XAI de este ciclo falló; null si fue correcta.",
         ))
 
         base = StatsResponse(
             model_name=MODEL_ID,
             version=VERSION,
             description=(
-                "XAI para detección de puntos críticos de control sobre el DNSL (1D-CNN + Physics-Informed Loss) "
-                f"de 4 componentes de pasteurizado ({', '.join(HEAD_NAMES)}): Grad-CAM temporal, SHAP opcional, "
+                "XAI para detección de puntos críticos de control sobre el DNSL "
+                "(1D-CNN + Physics-Informed Loss) "
+                f"de 4 componentes de pasteurizado ({', '.join(HEAD_NAMES)}): "
+                "Grad-CAM temporal, SHAP opcional, "
                 "CCP y recomendaciones prescriptivas."
             ),
             task_type="multi_label_classification_xai",
@@ -326,7 +371,9 @@ class Ml48DairyDnslCriticalPointDetectionPlugin(ModelPluginPort):
         if mlflow_run_id:
             try:
                 tracker = BaseMLflowTracker(mlflow_run_id)
-                base.metrics["mlflow"] = {"params": tracker.get_params(), "metrics": tracker.get_metrics()}
-            except Exception as exc:
+                base.metrics["mlflow"] = {
+                    "params": tracker.get_params(), "metrics": tracker.get_metrics()
+                }
+            except Exception as exc:  # pylint: disable=broad-exception-caught  # stats are best-effort
                 logger.warning("MLflow stats fetch failed for run_id=%s: %s", mlflow_run_id, exc)
         return base

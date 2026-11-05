@@ -14,6 +14,8 @@ from app.application.dto.train_dto import MlflowRunId
 
 
 class TrainRequest(BaseModel):
+    """Petición de reentrenamiento del clasificador de ml10."""
+
     model_config = ConfigDict(protected_namespaces=())
     data_path: str = Field(
         ...,

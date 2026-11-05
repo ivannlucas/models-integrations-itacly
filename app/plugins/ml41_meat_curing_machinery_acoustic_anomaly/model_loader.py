@@ -44,12 +44,13 @@ def _safe_device() -> torch.device:
     try:
         torch.nn.Conv2d(1, 1, 1).cuda()(torch.zeros(1, 1, 4, 4).cuda())
         return torch.device("cuda")
-    except Exception:
+    except Exception:  # pylint: disable=broad-exception-caught  # any CUDA failure -> CPU
         logger.warning("CUDA detected but not functional — falling back to CPU.")
         return torch.device("cpu")
 
 
 def is_supported_combination(machine: str, machine_id: str, snr: str) -> bool:
+    """True if (machine, machine_id, snr) is one of the trained combinations."""
     return machine in MACHINES and machine_id in MACHINE_IDS and snr in SNRS
 
 
@@ -87,7 +88,10 @@ def build_model(machine: str, device: torch.device) -> AudioMAE:
 
 
 @dataclass
+# pylint: disable-next=too-many-instance-attributes
 class LoadedCombination:
+    """A loaded checkpoint plus its normalisation, Mahalanobis stats and threshold."""
+
     model: AudioMAE
     norm_mean: float
     norm_std: float
@@ -98,7 +102,9 @@ class LoadedCombination:
     threshold: float | None = None
 
 
-def load_checkpoint(machine: str, machine_id: str, snr: str, device: torch.device) -> LoadedCombination:
+def load_checkpoint(
+    machine: str, machine_id: str, snr: str, device: torch.device
+) -> LoadedCombination:
     """Load one (machine, machine_id, snr) checkpoint + Mahalanobis stats from disk."""
     _require_supported(machine, machine_id, snr)
     combo_dir = combination_dir(machine, machine_id, snr)
@@ -131,7 +137,10 @@ class CheckpointCache:
         self._maxsize = maxsize
         self._cache: "OrderedDict[tuple, LoadedCombination]" = OrderedDict()
 
-    def get(self, machine: str, machine_id: str, snr: str, device: torch.device) -> LoadedCombination:
+    def get(
+        self, machine: str, machine_id: str, snr: str, device: torch.device
+    ) -> LoadedCombination:
+        """Return the cached combination (loading it on a miss), evicting the LRU entry."""
         key = (machine, machine_id, snr)
         if key in self._cache:
             self._cache.move_to_end(key)
@@ -145,6 +154,7 @@ class CheckpointCache:
         return loaded
 
     def clear(self) -> None:
+        """Drop every cached combination."""
         self._cache.clear()
 
 

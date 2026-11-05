@@ -140,7 +140,7 @@ class ParameterExtractor:
             "spring_rain_mm": spring_rain_mm,
         }
 
-    def compute_harvest_fraction(
+    def compute_harvest_fraction(  # pylint: disable=too-many-locals
         self, pcm: PriceCostManager, max_fraction: float = 0.95
     ) -> Dict[str, float]:
         """Estimate per-crop fraction of generated straw the farmer removes.
@@ -177,7 +177,7 @@ class ParameterExtractor:
 
         return fractions
 
-    def get_baseline_metrics(
+    def get_baseline_metrics(  # pylint: disable=too-many-locals
         self,
         year: int,
         params: Dict,
@@ -191,6 +191,7 @@ class ParameterExtractor:
         with *climate_factor* applied to yields (baseline and optimizer share the
         same climate assumption).
         """
+        _ = year
         if harvest_fraction is None:
             harvest_fraction = self.compute_harvest_fraction(pcm)
 
@@ -254,7 +255,7 @@ def filter_dominated(points: List[dict]) -> List[dict]:
     return [p for i, p in enumerate(points) if not is_dominated[i]]
 
 
-def find_knee_point(front: List[dict]) -> Optional[dict]:
+def find_knee_point(front: List[dict]) -> Optional[dict]:  # pylint: disable=too-many-locals
     """Find the knee (elbow) point of the Pareto front (max distance to the line
     connecting the two extremes in normalized benefit-residue space)."""
     if len(front) < 2:

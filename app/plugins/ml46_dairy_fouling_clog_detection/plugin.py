@@ -31,10 +31,24 @@ from app.infrastructure.artifact_store import local_file_path
 from app.plugins.ml46_dairy_fouling_clog_detection import model_loader
 from app.plugins.ml46_dairy_fouling_clog_detection import preprocessing
 from app.plugins.ml46_dairy_fouling_clog_detection import postprocessing
-from app.plugins.ml46_dairy_fouling_clog_detection._vendor.data import align_future_labels, derive_maintenance_from_telemetry, load_telemetry
-from app.plugins.ml46_dairy_fouling_clog_detection._vendor.datasets import collate_window_batch
-from app.plugins.ml46_dairy_fouling_clog_detection._vendor.evaluation import predict_loader, window_metrics_from_preds
-from app.plugins.ml46_dairy_fouling_clog_detection._vendor.features import build_feature_matrix, engineer_row_features
+from app.plugins.ml46_dairy_fouling_clog_detection._vendor.data import (
+    align_future_labels,
+    derive_maintenance_from_telemetry,
+    load_telemetry,
+)
+from app.plugins.ml46_dairy_fouling_clog_detection._vendor.datasets import (
+    WindowDataset,
+    collate_window_batch,
+    make_sequences,
+)
+from app.plugins.ml46_dairy_fouling_clog_detection._vendor.evaluation import (
+    predict_loader,
+    window_metrics_from_preds,
+)
+from app.plugins.ml46_dairy_fouling_clog_detection._vendor.features import (
+    build_feature_matrix,
+    engineer_row_features,
+)
 from app.plugins.ml46_dairy_fouling_clog_detection._vendor.training_loop import train_one_epoch
 from app.plugins.ml46_dairy_fouling_clog_detection._vendor.utils_common import set_seed
 from app.plugins.ml46_dairy_fouling_clog_detection.constants import (
@@ -51,9 +65,14 @@ from app.plugins.ml46_dairy_fouling_clog_detection.constants import (
     TRAIN_HARD_REQUIRED_COLUMNS,
     VERSION,
 )
-from app.plugins.ml46_dairy_fouling_clog_detection.mlflow_utils import download_user_model_from_mlflow
+from app.plugins.ml46_dairy_fouling_clog_detection.mlflow_utils import (
+    download_user_model_from_mlflow,
+)
 from app.plugins.ml46_dairy_fouling_clog_detection.model_loader import _store, build_model
-from app.plugins.ml46_dairy_fouling_clog_detection.predict_dto import PredictBatchResponse, PredictInlineResponse
+from app.plugins.ml46_dairy_fouling_clog_detection.predict_dto import (
+    PredictBatchResponse,
+    PredictInlineResponse,
+)
 from app.plugins.ml46_dairy_fouling_clog_detection.train_dto import TrainResponse
 
 logger = logging.getLogger(__name__)
@@ -81,7 +100,9 @@ def _serialize_records(df: pd.DataFrame) -> list[dict[str, Any]]:
 
 
 def _safe_metric(value: Any) -> float | None:
-    """Return None for NaN/inf metrics (e.g. AUC/AP undefined with a single class), float otherwise."""
+    """Return None for NaN/inf metrics (e.g. AUC/AP undefined with a single class), float
+    otherwise.
+    """
     try:
         fv = float(value)
     except (TypeError, ValueError):
@@ -94,7 +115,11 @@ def _raw_xai_columns() -> list[str]:
     from (see dairy_fouling_clog/features.py + common.py in that repo). Excludes the
     clock-source columns (batch_elapsed_min, time_since_last_*) — the served no_clock model
     was trained without them, so they aren't part of what's being explained."""
-    return [c for c in RAW_FIXED_COLUMNS if c not in ("timestamp", "asset_id")] + RAW_RECOMMENDED_COLUMNS + RAW_OPTIONAL_COLUMNS
+    return (
+        [c for c in RAW_FIXED_COLUMNS if c not in ("timestamp", "asset_id")]
+        + RAW_RECOMMENDED_COLUMNS
+        + RAW_OPTIONAL_COLUMNS
+    )
 
 
 def _attach_xai_feature_values(explained: pd.DataFrame, raw_df: pd.DataFrame) -> pd.DataFrame:
@@ -111,9 +136,13 @@ def _attach_xai_feature_values(explained: pd.DataFrame, raw_df: pd.DataFrame) ->
     lookup = raw_df[["asset_id", "timestamp"] + cols].copy()
     lookup["asset_id"] = lookup["asset_id"].astype(str)
     lookup["timestamp"] = pd.to_datetime(lookup["timestamp"], utc=True, errors="coerce")
-    lookup = lookup.dropna(subset=["timestamp"]).drop_duplicates(subset=["asset_id", "timestamp"], keep="last")
+    lookup = lookup.dropna(subset=["timestamp"]).drop_duplicates(
+        subset=["asset_id", "timestamp"], keep="last"
+    )
 
-    merged = explained[["asset_id", "timestamp"]].merge(lookup, on=["asset_id", "timestamp"], how="left")
+    merged = explained[["asset_id", "timestamp"]].merge(
+        lookup, on=["asset_id", "timestamp"], how="left"
+    )
 
     def _row_values(row: pd.Series) -> dict[str, Any] | None:
         xai: dict[str, Any] = {}
@@ -142,9 +171,15 @@ class Ml46DairyFoulingClogDetectionPlugin(ModelPluginPort):
         self._last_predict_at: str | None = None
 
     def load(self) -> None:
-        """Load the no_clock TCN checkpoint plus its feature artifacts, alert policy and manifest."""
-        self._model, self._train_cfg, self._feature_artifacts, self._policy, self._manifest = model_loader.load_artifacts()
-        logger.info("Ml46DairyFoulingClogDetectionPlugin loaded: %s (scenario=%s)", MODEL_ID, SCENARIO)
+        """Load the no_clock TCN checkpoint plus its feature artifacts, alert policy and
+        manifest.
+        """
+        self._model, self._train_cfg, self._feature_artifacts, self._policy, self._manifest = (
+            model_loader.load_artifacts()
+        )
+        logger.info(
+            "Ml46DairyFoulingClogDetectionPlugin loaded: %s (scenario=%s)", MODEL_ID, SCENARIO
+        )
 
     def is_loaded(self) -> bool:
         """Return True once the model bundle is loaded."""
@@ -173,15 +208,22 @@ class Ml46DairyFoulingClogDetectionPlugin(ModelPluginPort):
             return self._model, self._train_cfg, self._feature_artifacts, self._policy, None
         return download_user_model_from_mlflow(mlflow_run_id)
 
+    # pylint: disable-next=too-many-locals
     def predict_batch(self, *, data_path: str, mlflow_run_id: str = "") -> PredictBatchResponse:
         """Score every valid 120-min window in a raw telemetry CSV (one or more assets)."""
         if mlflow_run_id:
-            logger.info("predict_batch — using user fine-tuned model from MLflow run_id=%s", mlflow_run_id)
-        model, train_cfg, feature_artifacts, policy, user_temp_dir = self._resolve_model(mlflow_run_id)
+            logger.info(
+                "predict_batch — using user fine-tuned model from MLflow run_id=%s", mlflow_run_id
+            )
+        model, train_cfg, feature_artifacts, policy, user_temp_dir = self._resolve_model(
+            mlflow_run_id
+        )
         try:
             with local_file_path(data_path) as local_path:
                 raw_df = pd.read_csv(local_path)
-            sequences, feature_indices, asset_ids = preprocessing.prepare_sequences(raw_df, train_cfg, feature_artifacts)
+            sequences, feature_indices, asset_ids = preprocessing.prepare_sequences(
+                raw_df, train_cfg, feature_artifacts
+            )
             pred_df = postprocessing.run_inference(
                 model, sequences, feature_indices, asset_ids, train_cfg,
                 batch_size=256, stride=train_cfg.stride,
@@ -189,7 +231,9 @@ class Ml46DairyFoulingClogDetectionPlugin(ModelPluginPort):
             if len(pred_df) == 0:
                 logger.warning("predict_batch — no valid production windows found in %s", data_path)
                 self._record_prediction()
-                return PredictBatchResponse(model_id=MODEL_ID, predictions=[], alerts=[], output_path=None)
+                return PredictBatchResponse(
+                    model_id=MODEL_ID, predictions=[], alerts=[], output_path=None
+                )
 
             explained, alerts = postprocessing.explain_and_alert(
                 pred_df, policy, feature_artifacts.predicate_thresholds, train_cfg,
@@ -210,6 +254,7 @@ class Ml46DairyFoulingClogDetectionPlugin(ModelPluginPort):
 
     # ── predict_inline ────────────────────────────────────────────────────────
 
+    # pylint: disable-next=too-many-locals
     def predict_inline(
         self,
         *,
@@ -220,8 +265,12 @@ class Ml46DairyFoulingClogDetectionPlugin(ModelPluginPort):
     ) -> PredictInlineResponse:
         """Score the most recent 120-min window from a submitted telemetry history."""
         if mlflow_run_id:
-            logger.info("predict_inline — using user fine-tuned model from MLflow run_id=%s", mlflow_run_id)
-        model, train_cfg, feature_artifacts, policy, user_temp_dir = self._resolve_model(mlflow_run_id)
+            logger.info(
+                "predict_inline — using user fine-tuned model from MLflow run_id=%s", mlflow_run_id
+            )
+        model, train_cfg, feature_artifacts, policy, user_temp_dir = self._resolve_model(
+            mlflow_run_id
+        )
         try:
             rows: list[dict] = features["rows"]
             if len(rows) < train_cfg.seq_len:
@@ -231,8 +280,12 @@ class Ml46DairyFoulingClogDetectionPlugin(ModelPluginPort):
                 )
 
             raw_df = preprocessing.build_raw_dataframe(rows)
-            sequences, feature_indices, _ = preprocessing.prepare_sequences(raw_df, train_cfg, feature_artifacts)
-            sequence_id, end_idx = preprocessing.last_window_only(sequences, feature_indices, seq_len=train_cfg.seq_len)
+            sequences, feature_indices, _ = preprocessing.prepare_sequences(
+                raw_df, train_cfg, feature_artifacts
+            )
+            sequence_id, end_idx = preprocessing.last_window_only(
+                sequences, feature_indices, seq_len=train_cfg.seq_len
+            )
             if end_idx == -1:
                 raise InsufficientTelemetryHistoryError(
                     "No hay ninguna ventana válida de 120 minutos en producción (sin mantenimiento "
@@ -254,7 +307,11 @@ class Ml46DairyFoulingClogDetectionPlugin(ModelPluginPort):
             self._record_prediction()
             logger.info(
                 "predict_inline done — asset=%s stage=%s status=%s alert=%s count=%d",
-                row["asset_id"], row["pred_stage_name"], row["operator_status"], is_alert, self._predict_count,
+                row["asset_id"],
+                row["pred_stage_name"],
+                row["operator_status"],
+                is_alert,
+                self._predict_count,
             )
             return PredictInlineResponse(
                 model_id=MODEL_ID,
@@ -293,7 +350,8 @@ class Ml46DairyFoulingClogDetectionPlugin(ModelPluginPort):
 
     # ── train (fine-tuning) ──────────────────────────────────────────────────
 
-    def train(self, *, data_path: str, mlflow_run_id: str) -> TrainResponse:  # pylint: disable=too-many-locals
+    # pylint: disable-next=too-many-statements,too-many-locals
+    def train(self, *, data_path: str, mlflow_run_id: str) -> TrainResponse:
         """Fine-tune the served no_clock checkpoint on the caller's own labeled CSV.
 
         Reuses the loaded feature_artifacts (medians/IQR/baselines/class-weights) as-is — it
@@ -319,11 +377,11 @@ class Ml46DairyFoulingClogDetectionPlugin(ModelPluginPort):
             telemetry_df, self._feature_artifacts, [], self._train_cfg,
         )
 
-        from app.plugins.ml46_dairy_fouling_clog_detection._vendor.datasets import make_sequences, WindowDataset
-
         sequences = make_sequences(telemetry_df, self._train_cfg, full_feature_names)
         feature_to_idx = {name: i for i, name in enumerate(full_feature_names)}
-        feature_indices = [feature_to_idx[name] for name in self._feature_artifacts.no_clock_feature_names]
+        feature_indices = [
+            feature_to_idx[name] for name in self._feature_artifacts.no_clock_feature_names
+        ]
         asset_ids = sorted(telemetry_df["asset_id"].astype(str).unique().tolist())
 
         dataset = WindowDataset(sequences, asset_ids, feature_indices, self._train_cfg)
@@ -335,18 +393,38 @@ class Ml46DairyFoulingClogDetectionPlugin(ModelPluginPort):
             )
 
         set_seed(self._train_cfg.seed)
-        train_loader = DataLoader(dataset, batch_size=self._train_cfg.batch_size, shuffle=True, num_workers=0, collate_fn=collate_window_batch)
-        eval_loader = DataLoader(dataset, batch_size=self._train_cfg.batch_size, shuffle=False, num_workers=0, collate_fn=collate_window_batch)
+        train_loader = DataLoader(
+            dataset,
+            batch_size=self._train_cfg.batch_size,
+            shuffle=True,
+            num_workers=0,
+            collate_fn=collate_window_batch,
+        )
+        eval_loader = DataLoader(
+            dataset,
+            batch_size=self._train_cfg.batch_size,
+            shuffle=False,
+            num_workers=0,
+            collate_fn=collate_window_batch,
+        )
 
         # Clone weights into a new instance — self._model stays usable for concurrent predicts.
         fine_model = build_model(self._train_cfg, self._feature_artifacts)
         fine_model.load_state_dict(self._model.state_dict())
 
-        stage_weights = torch.tensor(self._feature_artifacts.stage_class_weights, dtype=torch.float32)
+        stage_weights = torch.tensor(
+            self._feature_artifacts.stage_class_weights, dtype=torch.float32
+        )
         foul_pos_weight = torch.tensor(self._feature_artifacts.foul_pos_weight, dtype=torch.float32)
-        actionable_foul_pos_weight = torch.tensor(self._feature_artifacts.actionable_foul_pos_weight, dtype=torch.float32)
+        actionable_foul_pos_weight = torch.tensor(
+            self._feature_artifacts.actionable_foul_pos_weight, dtype=torch.float32
+        )
         clog_pos_weight = torch.tensor(self._feature_artifacts.clog_pos_weight, dtype=torch.float32)
-        optimizer = Adam(fine_model.parameters(), lr=self._train_cfg.lr, weight_decay=self._train_cfg.weight_decay)
+        optimizer = Adam(
+            fine_model.parameters(),
+            lr=self._train_cfg.lr,
+            weight_decay=self._train_cfg.weight_decay,
+        )
 
         if mlflow_run_id:
             tracker: BaseMLflowTracker | None = BaseMLflowTracker(mlflow_run_id)
@@ -362,9 +440,15 @@ class Ml46DairyFoulingClogDetectionPlugin(ModelPluginPort):
                 fine_model, train_loader, optimizer, self._train_cfg,
                 stage_weights, foul_pos_weight, actionable_foul_pos_weight, clog_pos_weight,
             )
-            logger.info("ml46 fine-tune epoch=%d train_loss=%.4f", epoch, stats.get("train_loss", float("nan")))
+            logger.info(
+                "ml46 fine-tune epoch=%d train_loss=%.4f",
+                epoch,
+                stats.get("train_loss", float("nan")),
+            )
             if tracker:
-                tracker.log_metrics({"train_loss": stats.get("train_loss", float("nan"))}, step=epoch)
+                tracker.log_metrics(
+                    {"train_loss": stats.get("train_loss", float("nan"))}, step=epoch
+                )
 
         fine_model.eval()
         pred_df = predict_loader(fine_model, eval_loader, sequences, self._train_cfg)
@@ -374,24 +458,40 @@ class Ml46DairyFoulingClogDetectionPlugin(ModelPluginPort):
         # mlflow_run_id); the served base model and its local artifacts are never replaced.
         upload_warning = None
         if not tracker:
-            raise ModelPersistenceError("Sin run de MLflow: el modelo reentrenado no se ha guardado.")
+            raise ModelPersistenceError(
+                "Sin run de MLflow: el modelo reentrenado no se ha guardado."
+            )
         if tracker:
             try:
                 tracker.log_metrics({k: v for k, v in metrics.items() if math.isfinite(v)})
                 mlflow_tmp = tempfile.mkdtemp(prefix="ml46_mlflow_")
                 torch.save(fine_model.state_dict(), f"{mlflow_tmp}/{MODEL_FILENAME}")
-                shutil.copy2(_store.path(FEATURE_ARTIFACTS_FILENAME), f"{mlflow_tmp}/{FEATURE_ARTIFACTS_FILENAME}")
-                shutil.copy2(_store.path(TRAINING_CONFIG_FILENAME), f"{mlflow_tmp}/{TRAINING_CONFIG_FILENAME}")
-                shutil.copy2(_store.path(POLICY_THRESHOLDS_FILENAME), f"{mlflow_tmp}/{POLICY_THRESHOLDS_FILENAME}")
+                shutil.copy2(
+                    _store.path(FEATURE_ARTIFACTS_FILENAME),
+                    f"{mlflow_tmp}/{FEATURE_ARTIFACTS_FILENAME}",
+                )
+                shutil.copy2(
+                    _store.path(TRAINING_CONFIG_FILENAME),
+                    f"{mlflow_tmp}/{TRAINING_CONFIG_FILENAME}",
+                )
+                shutil.copy2(
+                    _store.path(POLICY_THRESHOLDS_FILENAME),
+                    f"{mlflow_tmp}/{POLICY_THRESHOLDS_FILENAME}",
+                )
                 tracker.upload_artifacts(mlflow_tmp, artifact_path="model")
                 shutil.rmtree(mlflow_tmp, ignore_errors=True)
             except Exception as exc:  # pylint: disable=broad-exception-caught
                 logger.error("MLflow artifact upload failed: %s", exc)
-                raise ModelPersistenceError(f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}") from exc
+                raise ModelPersistenceError(
+                    f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}"
+                ) from exc
 
         logger.info(
             "ml46 train() done — n_windows=%d epochs=%d stage_acc=%.4f mlflow=%s",
-            len(dataset), self._train_cfg.epochs, metrics.get("stage_accuracy", float("nan")), bool(mlflow_run_id),
+            len(dataset),
+            self._train_cfg.epochs,
+            metrics.get("stage_accuracy", float("nan")),
+            bool(mlflow_run_id),
         )
         return TrainResponse(
             detail="Fine-tuning completado sobre el checkpoint no_clock servido.",
@@ -431,35 +531,94 @@ class Ml46DairyFoulingClogDetectionPlugin(ModelPluginPort):
 
     def stats(self, mlflow_run_id: str = "") -> StatsResponse:
         """Return model metadata, the input/output contract, and real test-split metrics."""
-        inputs = [
-            InputField(name=name, type="float" if name not in ("timestamp", "asset_id") else "string",
-                       description=f"Columna obligatoria del contrato mínimo común (ventana de {SEQ_LEN} min).")
-            for name in RAW_FIXED_COLUMNS
-        ] + [
-            InputField(name=name, type="string" if name in ("phase",) else "int",
-                       description="Recomendado — mejora la delimitación de producción/CIP/mantenimiento.")
-            for name in RAW_RECOMMENDED_COLUMNS
-        ] + [
-            InputField(name=name, type="string", default=None, description="Opcional — contexto adicional del activo/producto.")
-            for name in RAW_OPTIONAL_COLUMNS
-        ]
+        inputs = (
+            [
+                InputField(
+                    name=name,
+                    type="float" if name not in ("timestamp", "asset_id") else "string",
+                    description=(
+                        f"Columna obligatoria del contrato mínimo común (ventana de {SEQ_LEN} "
+                        "min)."
+                    ),
+                )
+                for name in RAW_FIXED_COLUMNS
+            ]
+            + [
+                InputField(
+                    name=name,
+                    type="string" if name in ("phase",) else "int",
+                    description=(
+                        "Recomendado — mejora la delimitación de producción/CIP/mantenimiento."
+                    ),
+                )
+                for name in RAW_RECOMMENDED_COLUMNS
+            ]
+            + [
+                InputField(
+                    name=name,
+                    type="string",
+                    default=None,
+                    description="Opcional — contexto adicional del activo/producto.",
+                )
+                for name in RAW_OPTIONAL_COLUMNS
+            ]
+        )
         outputs = [
-            OutputField(name="pred_severity", type="float", description="Severidad física de ensuciamiento (Rf_m2K_W)"),
-            OutputField(name="pred_stage_name", type="str", description="Estado: stable / incipient / advanced"),
-            OutputField(name="p_foul_h", type="float", description="Probabilidad de inicio de ensuciamiento en 30 min"),
-            OutputField(name="p_actionable_foul_h", type="float", description="Probabilidad de ensuciamiento no planificado en 120 min"),
-            OutputField(name="p_clog_h", type="float", description="Probabilidad de inicio de obstrucción en 15 min"),
-            OutputField(name="pred_tte_foul_min", type="float", description="Minutos estimados hasta inicio de ensuciamiento (cap 240)"),
-            OutputField(name="pred_tte_clog_min", type="float", description="Minutos estimados hasta inicio de obstrucción (cap 120)"),
-            OutputField(name="pred_ttu_min", type="float", description="Minutos estimados hasta próxima intervención no planificada (cap 360)"),
-            OutputField(name="operator_status", type="str", description="Normal / Watch fouling / Fouling accionable / Obstrucción probable"),
+            OutputField(
+                name="pred_severity",
+                type="float",
+                description="Severidad física de ensuciamiento (Rf_m2K_W)",
+            ),
+            OutputField(
+                name="pred_stage_name",
+                type="str",
+                description="Estado: stable / incipient / advanced",
+            ),
+            OutputField(
+                name="p_foul_h",
+                type="float",
+                description="Probabilidad de inicio de ensuciamiento en 30 min",
+            ),
+            OutputField(
+                name="p_actionable_foul_h",
+                type="float",
+                description="Probabilidad de ensuciamiento no planificado en 120 min",
+            ),
+            OutputField(
+                name="p_clog_h",
+                type="float",
+                description="Probabilidad de inicio de obstrucción en 15 min",
+            ),
+            OutputField(
+                name="pred_tte_foul_min",
+                type="float",
+                description="Minutos estimados hasta inicio de ensuciamiento (cap 240)",
+            ),
+            OutputField(
+                name="pred_tte_clog_min",
+                type="float",
+                description="Minutos estimados hasta inicio de obstrucción (cap 120)",
+            ),
+            OutputField(
+                name="pred_ttu_min",
+                type="float",
+                description="Minutos estimados hasta próxima intervención no planificada (cap 360)",
+            ),
+            OutputField(
+                name="operator_status",
+                type="str",
+                description="Normal / Watch fouling / Fouling accionable / Obstrucción probable",
+            ),
         ]
-        avg_latency = None  # no per-call latency tracked at window granularity (batch scores many windows per call)
+        # no per-call latency tracked at window granularity (batch scores many windows per call)
+        avg_latency = None
         telemetry_fp = self._dataset_fingerprint()
         test_metrics = self._test_window_metrics()
         n_total_assets = telemetry_fp.get("n_assets")
         n_rows = telemetry_fp.get("rows")
-        n_train_assets = len(getattr(self._feature_artifacts, "created_from_train_assets", None) or [])
+        n_train_assets = len(
+            getattr(self._feature_artifacts, "created_from_train_assets", None) or []
+        )
         base = StatsResponse(
             model_name=MODEL_ID,
             version=VERSION,
@@ -467,7 +626,8 @@ class Ml46DairyFoulingClogDetectionPlugin(ModelPluginPort):
                 "TCN causal multitarea (escenario no_clock) que detecta ensuciamiento e "
                 "incrustación/obstrucción en intercambiadores de calor de placas lácteos a partir "
                 "de ventanas de 120 minutos de telemetría de proceso. Dataset de entrenamiento "
-                f"100% sintético ({n_total_assets if n_total_assets is not None else 'N/D'} activos, "
+                f"100% sintético ({n_total_assets if n_total_assets is not None else 'N/D'} "
+                "activos, "
                 f"{n_rows if n_rows is not None else 'N/D'} filas) — ver manifest known_issues."
             ),
             task_type="timeseries_multitask",

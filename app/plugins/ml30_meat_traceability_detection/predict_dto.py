@@ -22,7 +22,9 @@ class PredictBatchResponse(BaseModel):
     output_path: str | None = None
     warnings: list[str] = Field(
         default_factory=list,
-        description="Avisos no bloqueantes del contrato de datos (valores desconocidos o atípicos).",
+        description=(
+            "Avisos no bloqueantes del contrato de datos (valores desconocidos o atípicos)."
+        ),
     )
 
 

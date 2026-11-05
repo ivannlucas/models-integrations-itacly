@@ -5,7 +5,8 @@ PREFIX = "/models/ml2-fungal-cnn-disease-detection"
 
 # Minimal valid base64 PNG (1×1 pixel, red) — does not go through real inference
 _TINY_PNG_B64 = (
-    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwADhQGAWjR9awAAAABJRU5ErkJggg=="
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQ"
+    "DwADhQGAWjR9awAAAABJRU5ErkJggg=="
 )
 
 INLINE_PAYLOAD = {
@@ -17,6 +18,7 @@ _CLASSES = {"black_rot", "downy_mildew", "healthy", "powdery_mildew", "trunk_dis
 
 
 def test_health(client):
+    """/health reports status ok, the model id and loaded=True."""
     body = client.get(f"{PREFIX}/health").json()
     assert body["status"] == "ok"
     assert body["model"] == "ml2-fungal-cnn-disease-detection"
@@ -24,11 +26,13 @@ def test_health(client):
 
 
 def test_stats(client):
+    """/stats reports the model id as model_name."""
     body = client.get(f"{PREFIX}/stats").json()
     assert body["model_name"] == "ml2-fungal-cnn-disease-detection"
 
 
 def test_predict_inline(client):
+    """Inline /predict returns a known class, a confidence in [0, 1] and every class probability."""
     resp = client.post(f"{PREFIX}/predict", json=INLINE_PAYLOAD)
     assert resp.status_code == 200
     body = resp.json()
@@ -39,11 +43,13 @@ def test_predict_inline(client):
 
 
 def test_predict_inline_missing_field(client):
+    """Inline /predict without image_base64 answers 422."""
     resp = client.post(f"{PREFIX}/predict", json={"mode": "inline"})
     assert resp.status_code == 422
 
 
 def test_predict_batch(client):
+    """Batch /predict returns 200 with a list of predictions."""
     resp = client.post(
         f"{PREFIX}/predict",
         json={"mode": "batch", "data_path": "/tmp/leaves.zip"},
@@ -55,6 +61,7 @@ def test_predict_batch(client):
 
 
 def test_predict_inline_invalid_image_maps_to_422(client, fake_plugins):
+    """InvalidImageError raised by the plugin maps to HTTP 422 with its message."""
     fake_plugins["ml2-fungal-cnn-disease-detection"].raise_on_inline = InvalidImageError(
         "imagen no decodificable"
     )

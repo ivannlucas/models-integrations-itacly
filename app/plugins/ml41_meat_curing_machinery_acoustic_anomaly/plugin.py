@@ -61,7 +61,9 @@ from app.plugins.ml41_meat_curing_machinery_acoustic_anomaly.model_loader import
     ensure_artifacts_downloaded,
     _safe_device,
 )
-from app.plugins.ml41_meat_curing_machinery_acoustic_anomaly.postprocessing import build_inline_result
+from app.plugins.ml41_meat_curing_machinery_acoustic_anomaly.postprocessing import (
+    build_inline_result,
+)
 from app.plugins.ml41_meat_curing_machinery_acoustic_anomaly.predict_dto import (
     PredictBatchResponse,
     PredictInlineResponse,
@@ -84,6 +86,7 @@ logger = logging.getLogger(__name__)
 
 
 class Ml41MeatCuringMachineryAcousticAnomalyPlugin(ModelPluginPort):
+    """Acoustic anomaly detection on curing machinery (AudioMAE + Mahalanobis score)."""
 
     def __init__(self) -> None:
         self._device: torch.device | None = None
@@ -141,7 +144,9 @@ class Ml41MeatCuringMachineryAcousticAnomalyPlugin(ModelPluginPort):
                 "and abnormal reference audio, or supply an explicit inline threshold."
             )
         if not np.isfinite(value) or value < 0:
-            raise UnsupportedMachineConfigurationError("The decision threshold must be finite and non-negative.")
+            raise UnsupportedMachineConfigurationError(
+                "The decision threshold must be finite and non-negative."
+            )
         return float(value)
 
     def _score_spectrogram(self, loaded, spec_raw: np.ndarray) -> tuple[float, float]:
@@ -205,6 +210,7 @@ class Ml41MeatCuringMachineryAcousticAnomalyPlugin(ModelPluginPort):
 
     # ── predict_batch ────────────────────────────────────────────────────────
 
+    # pylint: disable-next=too-many-locals
     def predict_batch(
         self, *, data_path: str, mlflow_run_id: str = "", threshold: float | None = None,
     ) -> PredictBatchResponse:
@@ -215,7 +221,9 @@ class Ml41MeatCuringMachineryAcousticAnomalyPlugin(ModelPluginPort):
 
                 manifest_path = next(Path(tmp_dir).rglob("manifest.csv"), None)
                 if manifest_path is None:
-                    raise ValueError("El ZIP debe contener un manifest.csv (filename,machine,machine_id,snr)")
+                    raise ValueError(
+                        "El ZIP debe contener un manifest.csv (filename,machine,machine_id,snr)"
+                    )
 
                 with open(manifest_path, newline="", encoding="utf-8") as f:
                     rows = list(csv.DictReader(f))
@@ -228,7 +236,9 @@ class Ml41MeatCuringMachineryAcousticAnomalyPlugin(ModelPluginPort):
                         wav_path = manifest_path.parent / filename
                         if not wav_path.exists():
                             raise InvalidAudioError(f"Referenced WAV not found in ZIP: {filename}")
-                        loaded, temp_dir = self._resolve_combination(machine, machine_id, snr, mlflow_run_id)
+                        loaded, temp_dir = self._resolve_combination(
+                            machine, machine_id, snr, mlflow_run_id
+                        )
                         threshold_used = self._prediction_threshold(loaded, threshold)
                         spec_raw = wav_to_logmel(str(wav_path))
                         mse_score, maha = self._score_spectrogram(loaded, spec_raw)
@@ -238,7 +248,7 @@ class Ml41MeatCuringMachineryAcousticAnomalyPlugin(ModelPluginPort):
                         )
                         result["filename"] = filename
                         predictions.append(result)
-                    except Exception as exc:
+                    except Exception as exc:  # pylint: disable=broad-exception-caught  # per-row error
                         logger.warning("Error processing %s: %s", filename, exc)
                         predictions.append({"filename": filename, "error": str(exc)})
                     finally:
@@ -250,6 +260,7 @@ class Ml41MeatCuringMachineryAcousticAnomalyPlugin(ModelPluginPort):
 
     # ── train ────────────────────────────────────────────────────────────────
 
+    # pylint: disable-next=too-many-locals
     def train(self, *, data_path: str, mlflow_run_id: str) -> TrainResponse:
         """Retrain every (machine, machine_id, snr) combination
         found under data_path's {snr}_{machine}/{machine_id}/{normal,abnormal}/*.wav layout.
@@ -289,13 +300,16 @@ class Ml41MeatCuringMachineryAcousticAnomalyPlugin(ModelPluginPort):
                     per_combination.append(metrics)
 
                 if not tracker:
-                    raise ModelPersistenceError("Sin run de MLflow: el modelo reentrenado no se ha guardado.")
-                else:
-                    try:
-                        tracker.upload_artifacts(str(staging_dir), artifact_path="model")
-                    except Exception as exc:  # pylint: disable=broad-exception-caught
-                        logger.error("MLflow artifact upload failed: %s", exc)
-                        raise ModelPersistenceError(f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}") from exc
+                    raise ModelPersistenceError(
+                        "Sin run de MLflow: el modelo reentrenado no se ha guardado."
+                    )
+                try:
+                    tracker.upload_artifacts(str(staging_dir), artifact_path="model")
+                except Exception as exc:  # pylint: disable=broad-exception-caught
+                    logger.error("MLflow artifact upload failed: %s", exc)
+                    raise ModelPersistenceError(
+                        f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}"
+                    ) from exc
             finally:
                 shutil.rmtree(extract_dir, ignore_errors=True)
                 shutil.rmtree(staging_dir, ignore_errors=True)
@@ -325,6 +339,7 @@ class Ml41MeatCuringMachineryAcousticAnomalyPlugin(ModelPluginPort):
                     found.append((matched_machine, machine_id_dir.name, snr_part, machine_id_dir))
         return found
 
+    # pylint: disable-next=too-many-arguments,too-many-positional-arguments,too-many-locals
     def _train_one_combination(  # pylint: disable=too-many-statements  # mirrors run_training
         self, machine: str, machine_id: str, snr: str, combo_root: Path,
         tracker: BaseMLflowTracker | None, staging_dir: Path,
@@ -340,13 +355,15 @@ class Ml41MeatCuringMachineryAcousticAnomalyPlugin(ModelPluginPort):
 
         # preprocess.py::process_machine_id: RandomState(split_seed=42) permutation, first
         # int(0.8 * n) clips to train, the rest to val.
-        idx = np.random.RandomState(TRAINING_SPLIT_SEED).permutation(len(specs))  # pylint: disable=no-member  # legacy RandomState, as the original
+        # pylint: disable-next=no-member  # legacy RandomState, as the original
+        idx = np.random.RandomState(TRAINING_SPLIT_SEED).permutation(len(specs))
         cut = int(TRAINING_SPLIT_RATIO * len(specs))
         train_raw, val_raw = specs[idx[:cut]], specs[idx[cut:]]
         if len(val_raw) == 0 or len(train_raw) < hyperparams["batch_size"]:
             raise ValueError(
-                f"{machine}/{machine_id}/{snr}: {len(specs)} clips normales no bastan. El split 80/20 "
-                f"deja {len(train_raw)} de entrenamiento y {len(val_raw)} de validación, y el original "
+                f"{machine}/{machine_id}/{snr}: {len(specs)} clips normales no bastan. "
+                f"El split 80/20 deja {len(train_raw)} de entrenamiento y {len(val_raw)} de "
+                "validación, y el original "
                 f"descarta el último lote incompleto (drop_last): hacen falta al menos "
                 f"{hyperparams['batch_size']} clips de entrenamiento y 1 de validación."
             )
@@ -366,7 +383,9 @@ class Ml41MeatCuringMachineryAcousticAnomalyPlugin(ModelPluginPort):
         val_data = normalize_logmel(val_raw, norm_mean, norm_std)
 
         if tracker:
-            tracker.log_params({f"{machine}_{machine_id}_{snr}_{k}": v for k, v in hyperparams.items()})
+            tracker.log_params(
+                {f"{machine}_{machine_id}_{snr}_{k}": v for k, v in hyperparams.items()}
+            )
 
         best_val_loss, _history = fine_tune(model, train_data, val_data, device, hyperparams)
 
@@ -380,10 +399,11 @@ class Ml41MeatCuringMachineryAcousticAnomalyPlugin(ModelPluginPort):
         pca_components_n = ARCHITECTURE_BY_MACHINE[machine]["pca_components"]
         maha_mean, maha_inv_cov, maha_pca = fit_mahalanobis(embeddings, n_pca=pca_components_n)
 
-        metrics_kwargs = dict(
-            machine=machine, machine_id=machine_id, snr=snr,
-            best_val_loss=round(best_val_loss, 6), n_train=len(train_data), n_val=len(val_data),
-        )
+        metrics_kwargs = {
+            "machine": machine, "machine_id": machine_id, "snr": snr,
+            "best_val_loss": round(best_val_loss, 6), "n_train": len(train_data),
+            "n_val": len(val_data),
+        }
 
         abnormal_dir = combo_root / "abnormal"
         if abnormal_dir.is_dir() and any(abnormal_dir.glob("*.wav")):
@@ -395,13 +415,15 @@ class Ml41MeatCuringMachineryAcousticAnomalyPlugin(ModelPluginPort):
             for i in range(len(val_data)):
                 spec = torch.from_numpy(val_data[i:i + 1]).float()
                 mse, maha = run_inference_single(model, spec, device), mahalanobis_score(
-                    get_cls_embedding_single(model, spec, device), maha_mean, maha_inv_cov, maha_pca)
+                    get_cls_embedding_single(model, spec, device), maha_mean, maha_inv_cov, maha_pca
+                )
                 normal_mse.append(mse)
                 normal_maha.append(maha)
             for i in range(len(abn_specs_norm)):
                 spec = torch.from_numpy(abn_specs_norm[i:i + 1]).float()
                 mse, maha = run_inference_single(model, spec, device), mahalanobis_score(
-                    get_cls_embedding_single(model, spec, device), maha_mean, maha_inv_cov, maha_pca)
+                    get_cls_embedding_single(model, spec, device), maha_mean, maha_inv_cov, maha_pca
+                )
                 abnormal_mse.append(mse)
                 abnormal_maha.append(maha)
 
@@ -412,7 +434,9 @@ class Ml41MeatCuringMachineryAcousticAnomalyPlugin(ModelPluginPort):
             metrics_kwargs.update(eval_metrics)
             metrics_kwargs["n_abnormal_samples"] = len(abnormal_wavs)
             if tracker:
-                tracker.log_metrics({f"{machine}_{machine_id}_{snr}_{k}": v for k, v in eval_metrics.items()})
+                tracker.log_metrics(
+                    {f"{machine}_{machine_id}_{snr}_{k}": v for k, v in eval_metrics.items()}
+                )
 
         if tracker:
             tracker.log_metrics({f"{machine}_{machine_id}_{snr}_best_val_loss": best_val_loss})
@@ -454,17 +478,37 @@ class Ml41MeatCuringMachineryAcousticAnomalyPlugin(ModelPluginPort):
             task_type="anomaly_detection_audio",
             framework="pytorch",
             inputs=[
-                InputField(name="audio_base64", type="file", format=["wav"],
-                           description="Grabación WAV de la máquina (base64 inline, ZIP+manifest.csv en batch)"),
+                InputField(
+                    name="audio_base64",
+                    type="file",
+                    format=["wav"],
+                    description=(
+                        "Grabación WAV de la máquina (base64 inline, ZIP+manifest.csv en batch)"
+                    ),
+                ),
                 InputField(name="machine", type="str", description="fan | pump | slider | valve"),
-                InputField(name="machine_id", type="str", description="id_00 | id_02 | id_04 | id_06"),
+                InputField(
+                    name="machine_id", type="str", description="id_00 | id_02 | id_04 | id_06"
+                ),
                 InputField(name="snr", type="str", description="-6_dB | 0_dB | 6_dB"),
             ],
             outputs=[
-                OutputField(name="mse_score", type="float", description="Error de reconstrucción (informativo, no determinista)"),
-                OutputField(name="maha_score", type="float", description="Distancia de Mahalanobis (señal de decisión, determinista)"),
+                OutputField(
+                    name="mse_score",
+                    type="float",
+                    description="Error de reconstrucción (informativo, no determinista)",
+                ),
+                OutputField(
+                    name="maha_score",
+                    type="float",
+                    description="Distancia de Mahalanobis (señal de decisión, determinista)",
+                ),
                 OutputField(name="predicted_label", type="int", description="0=normal, 1=anómalo"),
-                OutputField(name="threshold_used", type="float", description="Umbral aplicado para esta combinación"),
+                OutputField(
+                    name="threshold_used",
+                    type="float",
+                    description="Umbral aplicado para esta combinación",
+                ),
             ],
             metrics=dict(METRICS_REPORTED),
             runtime_stats=RuntimeStats(total_predictions=self._predict_count, avg_latency_ms=None),

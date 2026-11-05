@@ -3,13 +3,17 @@ from __future__ import annotations
 
 import logging
 import os
+import shutil
+import tempfile
 from dataclasses import fields
 
 import torch
-import shutil
 
 from app.domain.services.mlflow_tracker import BaseMLflowTracker, require_user_model
-from app.plugins.ml46_dairy_fouling_clog_detection._vendor.common import FeatureArtifacts, TrainConfig
+from app.plugins.ml46_dairy_fouling_clog_detection._vendor.common import (
+    FeatureArtifacts,
+    TrainConfig,
+)
 from app.plugins.ml46_dairy_fouling_clog_detection.constants import (
     FEATURE_ARTIFACTS_FILENAME,
     MODEL_FILENAME,
@@ -28,7 +32,6 @@ def download_user_model_from_mlflow(run_id: str):
     Returns (model, train_cfg, feature_artifacts, policy, temp_dir).
     Caller MUST shutil.rmtree(temp_dir) after inference — use try/finally.
     """
-    import tempfile
     tmp = tempfile.mkdtemp(prefix="mlflow_ml46_")
     try:
         local_path = BaseMLflowTracker(run_id).download_artifacts(tmp, artifact_path="model")
@@ -48,7 +51,9 @@ def download_user_model_from_mlflow(run_id: str):
         policy = _load_json(os.path.join(local_path, POLICY_THRESHOLDS_FILENAME))
 
         model = build_model(train_cfg, feature_artifacts)
-        state = torch.load(os.path.join(local_path, MODEL_FILENAME), map_location="cpu", weights_only=True)
+        state = torch.load(
+            os.path.join(local_path, MODEL_FILENAME), map_location="cpu", weights_only=True
+        )
         model.load_state_dict(state)
         model.eval()
 

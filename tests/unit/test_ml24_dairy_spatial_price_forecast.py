@@ -20,6 +20,7 @@ MODEL_ID = "ml24-dairy-spatial-price-forecast"
 
 
 def test_health(client):
+    """The health endpoint reports the model as loaded."""
     body = client.get(f"{PREFIX}/health").json()
     assert body["status"] == "ok"
     assert body["model"] == MODEL_ID
@@ -27,10 +28,12 @@ def test_health(client):
 
 
 def test_stats(client):
+    """The stats endpoint returns the model name."""
     assert client.get(f"{PREFIX}/stats").json()["model_name"] == MODEL_ID
 
 
 def test_predict_inline_default(client):
+    """A default inline prediction returns one row per official horizon plus data freshness."""
     resp = client.post(f"{PREFIX}/predict", json={"mode": "inline"})
     assert resp.status_code == 200
     body = resp.json()
@@ -41,6 +44,7 @@ def test_predict_inline_default(client):
 
 
 def test_predict_inline_with_filters(client):
+    """ccaa/horizons/as_of_period filters restrict the predictions."""
     payload = {"mode": "inline", "ccaa": ["CYL"], "horizons": [3], "as_of_period": "2019-12"}
     resp = client.post(f"{PREFIX}/predict", json=payload)
     assert resp.status_code == 200
@@ -53,6 +57,7 @@ def test_predict_inline_with_filters(client):
     {"mode": "inline", "as_of_period": "201912"},
 ])
 def test_predict_inline_invalid_payload_rejected(client, payload):
+    """Non-official horizons and malformed as_of_period are rejected with 422."""
     assert client.post(f"{PREFIX}/predict", json=payload).status_code == 422
 
 
@@ -62,6 +67,7 @@ def test_predict_inline_invalid_payload_rejected(client, payload):
     SeriesContractError("faltan los productos requeridos"),
 ])
 def test_predict_inline_domain_errors_map_to_422(client, fake_plugins, exc):
+    """The plugin's domain errors map to 422 with their message."""
     fake_plugins[MODEL_ID].raise_on_inline = exc
     resp = client.post(f"{PREFIX}/predict", json={"mode": "inline"})
     assert resp.status_code == 422
@@ -69,6 +75,7 @@ def test_predict_inline_domain_errors_map_to_422(client, fake_plugins, exc):
 
 
 def test_predict_batch(client):
+    """Batch prediction returns one prediction per row."""
     resp = client.post(f"{PREFIX}/predict", json={"mode": "batch", "data_path": "/tmp/series.csv"})
     assert resp.status_code == 200
     body = resp.json()
@@ -77,13 +84,19 @@ def test_predict_batch(client):
 
 
 def test_predict_batch_contract_error_maps_to_422(client, fake_plugins):
-    fake_plugins[MODEL_ID].raise_on_batch = SeriesContractError("faltan columnas obligatorias ['es_reconstruido']")
+    """SeriesContractError in batch mode maps to 422."""
+    fake_plugins[MODEL_ID].raise_on_batch = SeriesContractError(
+        "faltan columnas obligatorias ['es_reconstruido']"
+    )
     resp = client.post(f"{PREFIX}/predict", json={"mode": "batch", "data_path": "/tmp/series.csv"})
     assert resp.status_code == 422
 
 
 def test_train_returns_200_with_metrics(client):
-    resp = client.post(f"{PREFIX}/train", json={"data_path": "/tmp/series.csv", "mlflow_run_id": "test-run-id"})
+    """The train endpoint returns per-horizon train/validation/test metrics."""
+    resp = client.post(
+        f"{PREFIX}/train", json={"data_path": "/tmp/series.csv", "mlflow_run_id": "test-run-id"}
+    )
     assert resp.status_code == 200
     body = resp.json()
     assert {"h1", "h3", "h6", "task_type", "training_time_s", "mlflow_run_id"} <= body.keys()
@@ -97,7 +110,10 @@ def test_train_without_mlflow_run_id_is_accepted(client):
 
 
 def test_train_rejects_mismatched_years_type(client):
-    resp = client.post(f"{PREFIX}/train", json={"data_path": "/tmp/series.csv", "test_year": "dos mil"})
+    """A non-integer test_year is rejected with 422."""
+    resp = client.post(
+        f"{PREFIX}/train", json={"data_path": "/tmp/series.csv", "test_year": "dos mil"}
+    )
     assert resp.status_code == 422
 
 
@@ -109,30 +125,35 @@ def _series(months: int, ccaa=("CASTILLA Y LEON", "GALICIA")) -> pd.DataFrame:
     for name in ccaa:
         for period in periods:
             for product in preprocessing.MODEL_PRODUCTS:
-                rows.append({"anio": period.year, "mes": period.month, "ccaa": name, "producto": product,
-                             "metrica": preprocessing.TARGET_METRIC, "valor": 0.7, "es_reconstruido": False})
+                rows.append({"anio": period.year, "mes": period.month, "ccaa": name,
+                             "producto": product, "metrica": preprocessing.TARGET_METRIC,
+                             "valor": 0.7, "es_reconstruido": False})
     rows.append({"anio": 2018, "mes": 1, "ccaa": ccaa[0], "producto": "BATIDOS DE LECHE",
                  "metrica": preprocessing.TARGET_METRIC, "valor": 1.0, "es_reconstruido": False})
     return pd.DataFrame(rows)
 
 
 def test_validate_series_keeps_only_model_products():
+    """validate_series keeps only the model's products."""
     out = preprocessing.validate_series(_series(14))
     assert set(out["producto"]) == set(preprocessing.MODEL_PRODUCTS)
 
 
 def test_validate_series_requires_es_reconstruido():
+    """validate_series requires the es_reconstruido column."""
     with pytest.raises(SeriesContractError, match="es_reconstruido"):
         preprocessing.validate_series(_series(14).drop(columns=["es_reconstruido"]))
 
 
 def test_validate_series_requires_context_products():
+    """validate_series requires the context products (LECHE ENTERA)."""
     df = _series(14)
     with pytest.raises(SeriesContractError, match="LECHE ENTERA"):
         preprocessing.validate_series(df[df["producto"] != "LECHE ENTERA"])
 
 
 def test_read_series_csv_filters_and_validates(tmp_path):
+    """read_series_csv filters out non-model products and validates."""
     path = tmp_path / "series.csv"
     _series(14).to_csv(path, index=False)
     out = preprocessing.read_series_csv(str(path))
@@ -141,6 +162,7 @@ def test_read_series_csv_filters_and_validates(tmp_path):
 
 
 def test_truncate_series_is_inclusive():
+    """truncate_series keeps periods up to and including as_of; too early raises."""
     out = preprocessing.truncate_series(_series(14), "2018-06")
     assert out[["anio", "mes"]].drop_duplicates().shape[0] == 6
     with pytest.raises(SeriesContractError):
@@ -153,16 +175,19 @@ def test_truncate_series_is_inclusive():
     (["GALICIA"], ["GALICIA"]),
 ])
 def test_resolve_ccaa(requested, expected):
+    """resolve_ccaa maps codes and names to canonical CCAA names."""
     assert preprocessing.resolve_ccaa(requested) == expected
 
 
 @pytest.mark.parametrize("bad", [["ESP"], ["T.ESPANA"], ["XXX"]])
 def test_resolve_ccaa_rejects_unknown_and_spain(bad):
+    """resolve_ccaa rejects unknown CCAA and Spain as a whole."""
     with pytest.raises(UnknownCcaaError):
         preprocessing.resolve_ccaa(bad)
 
 
 def test_insufficient_history_detects_short_or_broken_series():
+    """CCAA without 13 consecutive valid months are flagged."""
     panel = pd.DataFrame({
         "ccaa": ["A"] * 13 + ["B"] * 12,
         "period_dt": list(pd.date_range("2019-01-01", periods=13, freq="MS"))

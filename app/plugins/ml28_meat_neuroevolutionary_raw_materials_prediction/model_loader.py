@@ -25,7 +25,9 @@ def load_platform_config() -> dict:
     return {
         "platform": {
             "rounding_decimals": ROUNDING_DECIMALS,
-            "heuristics": {"purchase_trigger_gap_sigmoid_scale": PURCHASE_TRIGGER_GAP_SIGMOID_SCALE},
+            "heuristics": {
+                "purchase_trigger_gap_sigmoid_scale": PURCHASE_TRIGGER_GAP_SIGMOID_SCALE
+            },
             "simulation": {"baseline_safety_stock_factor": BASELINE_SAFETY_STOCK_FACTOR},
             "guardrails": {"max_stockout_increase_pct": MAX_STOCKOUT_INCREASE_PCT},
         },

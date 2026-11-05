@@ -3,10 +3,20 @@ from __future__ import annotations
 
 import pandas as pd
 
-from app.plugins.ml46_dairy_fouling_clog_detection._vendor.common import TrainConfig, FeatureArtifacts
+from app.plugins.ml46_dairy_fouling_clog_detection._vendor.common import (
+    TrainConfig,
+    FeatureArtifacts,
+)
 from app.plugins.ml46_dairy_fouling_clog_detection._vendor.data import load_telemetry
-from app.plugins.ml46_dairy_fouling_clog_detection._vendor.datasets import AssetSequence, WindowDataset, make_sequences
-from app.plugins.ml46_dairy_fouling_clog_detection._vendor.features import build_feature_matrix, engineer_row_features
+from app.plugins.ml46_dairy_fouling_clog_detection._vendor.datasets import (
+    AssetSequence,
+    WindowDataset,
+    make_sequences,
+)
+from app.plugins.ml46_dairy_fouling_clog_detection._vendor.features import (
+    build_feature_matrix,
+    engineer_row_features,
+)
 from app.plugins.ml46_dairy_fouling_clog_detection.constants import RAW_FIXED_COLUMNS, SEQ_LEN
 
 
@@ -40,7 +50,9 @@ def prepare_sequences(
     validate_raw_columns(raw_df)
     telemetry_df = load_telemetry(raw_df, train_cfg, require_targets=False)
     telemetry_df = engineer_row_features(telemetry_df)
-    telemetry_df, full_feature_names, _ = build_feature_matrix(telemetry_df, feature_artifacts, [], train_cfg)
+    telemetry_df, full_feature_names, _ = build_feature_matrix(
+        telemetry_df, feature_artifacts, [], train_cfg
+    )
     sequences = make_sequences(telemetry_df, train_cfg, full_feature_names)
 
     feature_to_idx = {name: i for i, name in enumerate(full_feature_names)}
@@ -65,17 +77,22 @@ def last_window_only(
     feature_indices: list[int],
     seq_len: int = SEQ_LEN,
 ) -> tuple[str, int]:
-    """Return the (sequence_id, end_idx) of the single most recent valid window across all sequences.
+    """Return the (sequence_id, end_idx) of the single most recent valid window across all
+    sequences.
 
     Used by predict_inline, which always scores the latest point in the submitted history.
     """
+    _ = feature_indices
     best: tuple[str, int, pd.Timestamp] | None = None
     for sequence_id, seq in sequences.items():
         meta = seq.meta
-        valid_end = (meta["phase"] == "production") & (meta["maintenance_active"].fillna(0).astype(int) == 0)
+        valid_end = (meta["phase"] == "production") & (
+            meta["maintenance_active"].fillna(0).astype(int) == 0
+        )
         for end_idx in range(len(seq.timestamps) - 1, seq_len - 2, -1):
             if bool(valid_end.iloc[end_idx]):
                 ts = pd.Timestamp(meta["timestamp"].iloc[end_idx])
+                # pylint: disable-next=unsubscriptable-object  # best is not None here
                 if best is None or ts > best[2]:
                     best = (sequence_id, end_idx, ts)
                 break

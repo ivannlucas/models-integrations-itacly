@@ -1,0 +1,18 @@
+# Configuración de pylint del repo. Se corrige el código, no se relajan reglas: aquí solo se
+# excluye lo que no es nuestro y se resuelven falsos positivos de pylint.
+[MAIN]
+# inbox/: código original entregado por los equipos de IA (se conserva tal cual).
+# outputs/: fichas e informes generados.
+ignore-paths=^inbox/.*$,
+             ^outputs/.*$,
+             ^artifacts/.*$,
+             ^runs/.*$,
+             ^\.venv/.*$
+# OpenCV es una extensión C: sin esto pylint no ve cv2.resize, cv2.imread...
+extension-pkg-allow-list=cv2
+jobs=0
+
+[MESSAGES CONTROL]
+# Cada plugin es independiente por diseño (1 modelo = 1 plugin autocontenido): el código
+# repetido entre plugins hermanos es intencionado.
+disable=duplicate-code

@@ -1,4 +1,7 @@
-"""Static configuration for the ml43-cereals-dnsl-anomaly-fault-detection (cereal oven anomaly detector) plugin."""
+"""Static configuration for the ml43-cereals-dnsl-anomaly-fault-detection plugin.
+
+Cereal oven anomaly detector.
+"""
 
 MODEL_ID = "ml43-cereals-dnsl-anomaly-fault-detection"
 ARTIFACT_FOLDER_NAME = "ml43_cereals_dnsl_anomaly_fault_detection"
@@ -52,6 +55,7 @@ TRAIN_THRESHOLD_SEARCH_POINTS = 101
 # AST-expression evaluator (config.yaml's formula is fixed for this deployment, not
 # user-configurable) — used to select the best checkpoint during training.
 def monitor_score(val_out: dict) -> float:
+    """Composite validation score used to pick the best training checkpoint."""
     return (
         0.65 * val_out["anomaly_f1"]
         + 0.25 * val_out["fuzzy_f1"]

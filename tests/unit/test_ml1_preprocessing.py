@@ -62,6 +62,7 @@ def test_resolve_image_path_for_batch_finds_root_photo_even_with_images_subfolde
 
 
 def test_resolve_image_path_for_batch_still_finds_nested_photo(tmp_path):
+    """A photo only present in a nested images/ folder is still found."""
     images_subdir = tmp_path / "images"
     images_subdir.mkdir()
     (images_subdir / "leaf.jpg").write_bytes(b"not-decoded")

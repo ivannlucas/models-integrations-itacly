@@ -24,10 +24,12 @@ def _import(name):
         return importlib.import_module(name)
     except ImportError as exc:  # heavy deps (tensorflow, torch...) may be missing locally
         pytest.skip(f"{name} not importable here: {exc}")
+        return None  # unreachable: pytest.skip raises
 
 
 @pytest.mark.parametrize("package,class_name", PLUGINS)
 def test_loader_store_shares_the_publisher_key(package, class_name):
+    """The plugin loader store and the publisher store share the active-version key."""
     base = f"app.plugins.{package}"
     constants = _import(f"{base}.constants")
     loader = _import(f"{base}.model_loader")

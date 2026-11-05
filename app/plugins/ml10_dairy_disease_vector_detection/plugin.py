@@ -1,4 +1,7 @@
-"""Plugin Ml10DairyDiseaseVectorDetection: Detección y clasificación de vectores en imágenes de ganado lechero."""
+"""Plugin Ml10DairyDiseaseVectorDetection.
+
+Detección y clasificación de vectores en imágenes de ganado lechero.
+"""
 from __future__ import annotations
 
 import csv
@@ -22,11 +25,18 @@ from torchvision import datasets, models, transforms
 from app.application.dto.stats_dto import InputField, OutputField, RuntimeStats, StatsResponse
 from app.application.dto.train_dto import TrainResponse
 from app.domain.ports.model_plugin_port import ModelPluginPort
-from app.domain.services.exceptions import InvalidImageError, ModelNotLoadedError, ModelPersistenceError
+from app.domain.services.exceptions import (
+    InvalidImageError,
+    ModelNotLoadedError,
+    ModelPersistenceError,
+)
 from app.domain.services.mlflow_tracker import BaseMLflowTracker
 from app.infrastructure.archive import safe_extract_zip
 from app.infrastructure.artifact_store import ArtifactStore
-from app.plugins.ml10_dairy_disease_vector_detection.model_loader import load_detector_and_classifier, safe_device
+from app.plugins.ml10_dairy_disease_vector_detection.model_loader import (
+    load_detector_and_classifier,
+    safe_device,
+)
 from app.plugins.ml10_dairy_disease_vector_detection.postprocessing import (
     build_heatmap_crops,
     build_inline_result,
@@ -52,7 +62,9 @@ from app.plugins.ml10_dairy_disease_vector_detection.constants import (
     MODEL_ID,
     VERSION,
 )
-from app.plugins.ml10_dairy_disease_vector_detection.mlflow_utils import download_user_classifier_from_mlflow
+from app.plugins.ml10_dairy_disease_vector_detection.mlflow_utils import (
+    download_user_classifier_from_mlflow,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -152,7 +164,7 @@ def _cls_train_epoch(model, loader, optimizer, criterion, device):
     return total_loss / max(total, 1), correct / max(total, 1)
 
 
-def _cls_test_metrics(model, loader, class_names, device) -> dict:
+def _cls_test_metrics(model, loader, class_names, device) -> dict:  # pylint: disable=too-many-locals
     """Accuracy and per-class precision/recall/F1 on the test split, with the formulas of the
     delivered src/predict/predictor.py (classification_metrics.json)."""
     model.eval()
@@ -212,8 +224,13 @@ class Ml10DairyDiseaseVectorDetectionPlugin(ModelPluginPort):
 
     def load(self) -> None:
         """Carga los modelos desde artifacts/ y los prepara para inferencia."""
-        self._detector, self._classifier, self._class_names = load_detector_and_classifier(self._device)
-        logger.info("Plugin Ml10DairyDiseaseVectorDetection listo en device=%s, clases=%s", self._device, self._class_names)
+        self._detector, self._classifier, self._class_names = load_detector_and_classifier(
+            self._device
+        )
+        logger.info(
+            "Plugin Ml10DairyDiseaseVectorDetection listo en device=%s, clases=%s",
+            self._device, self._class_names,
+        )
 
     def is_loaded(self) -> bool:
         """Devuelve True si el detector y el clasificador están cargados."""
@@ -221,7 +238,7 @@ class Ml10DairyDiseaseVectorDetectionPlugin(ModelPluginPort):
 
     # ── predict_inline ────────────────────────────────────────────────────────
 
-    def predict_inline(
+    def predict_inline(  # pylint: disable=too-many-locals
         self,
         *,
         features: dict,
@@ -236,7 +253,9 @@ class Ml10DairyDiseaseVectorDetectionPlugin(ModelPluginPort):
         user_temp_dir = None
 
         if mlflow_run_id:
-            logger.info(" [INLINE] Loading user-trained classifier from MLflow run_id=%s", mlflow_run_id)
+            logger.info(
+                " [INLINE] Loading user-trained classifier from MLflow run_id=%s", mlflow_run_id
+            )
             loaded = download_user_classifier_from_mlflow(mlflow_run_id)
             if loaded:
                 logger.info(" [INLINE] MLflow classifier loaded successfully")
@@ -246,7 +265,9 @@ class Ml10DairyDiseaseVectorDetectionPlugin(ModelPluginPort):
             img_path = features["image_path"]
             ext = os.path.splitext(img_path)[1].lower()
             if ext not in SUPPORTED_EXTENSIONS:
-                raise InvalidImageError(f"Extensión no soportada: {ext}. Usa {SUPPORTED_EXTENSIONS}")
+                raise InvalidImageError(
+                    f"Extensión no soportada: {ext}. Usa {SUPPORTED_EXTENSIONS}"
+                )
             image_pil = image_path_to_pil(img_path)
         elif features.get("image_base64"):
             image_pil = image_base64_to_pil(features["image_base64"])
@@ -284,15 +305,22 @@ class Ml10DairyDiseaseVectorDetectionPlugin(ModelPluginPort):
 
     # ── predict_batch ─────────────────────────────────────────────────────────
 
-    def predict_batch(self, *, data_path: str, mlflow_run_id: str = "") -> PredictBatchResponse:
-        """Ejecuta inferencia en batch sobre un CSV/ZIP/directorio de imágenes y devuelve las predicciones."""
+    def predict_batch(  # pylint: disable=too-many-locals,too-many-branches,too-many-statements
+        self, *, data_path: str, mlflow_run_id: str = ""
+    ) -> PredictBatchResponse:
+        """Ejecuta inferencia en batch sobre un CSV/ZIP/directorio de imágenes.
+
+        Devuelve las predicciones.
+        """
         self._assert_loaded()
         user_clf = None
         user_cls_names = None
         user_temp_dir = None
 
         if mlflow_run_id:
-            logger.info(" [BATCH] Loading user-trained classifier from MLflow run_id=%s", mlflow_run_id)
+            logger.info(
+                " [BATCH] Loading user-trained classifier from MLflow run_id=%s", mlflow_run_id
+            )
             loaded = download_user_classifier_from_mlflow(mlflow_run_id)
             if loaded:
                 logger.info(" [BATCH] MLflow classifier loaded successfully")
@@ -301,8 +329,8 @@ class Ml10DairyDiseaseVectorDetectionPlugin(ModelPluginPort):
         _tmp_zip: str | None = None
         local_data_path = data_path
         if data_path.startswith("s3://"):
-            import boto3
-            from botocore.client import Config as BotoConfig
+            import boto3  # pylint: disable=import-outside-toplevel
+            from botocore.client import Config as BotoConfig  # pylint: disable=import-outside-toplevel
             without_prefix = data_path[5:]
             bucket, _, s3_key = without_prefix.partition("/")
             s3 = boto3.client(
@@ -332,13 +360,21 @@ class Ml10DairyDiseaseVectorDetectionPlugin(ModelPluginPort):
                 temp_dir = tempfile.mkdtemp(prefix="ml10_dairy_disease_vector_detection_batch_")
                 safe_extract_zip(local_data_path, temp_dir)
                 entries = list(Path(temp_dir).iterdir())
-                image_dir = entries[0] if len(entries) == 1 and entries[0].is_dir() else Path(temp_dir)
-                image_files = sorted(f for f in image_dir.rglob("*") if f.suffix.lower() in SUPPORTED_EXTENSIONS)
+                image_dir = (
+                    entries[0] if len(entries) == 1 and entries[0].is_dir() else Path(temp_dir)
+                )
+                image_files = sorted(
+                    f for f in image_dir.rglob("*") if f.suffix.lower() in SUPPORTED_EXTENSIONS
+                )
             else:
                 image_dir = Path(local_data_path)
                 if not image_dir.is_dir():
-                    raise ValueError(f"data_path debe ser CSV, ZIP o directorio, recibido: {local_data_path}")
-                image_files = sorted(f for f in image_dir.rglob("*") if f.suffix.lower() in SUPPORTED_EXTENSIONS)
+                    raise ValueError(
+                        f"data_path debe ser CSV, ZIP o directorio, recibido: {local_data_path}"
+                    )
+                image_files = sorted(
+                    f for f in image_dir.rglob("*") if f.suffix.lower() in SUPPORTED_EXTENSIONS
+                )
 
             temps = [d for d in (temp_dir, user_temp_dir) if d]
 
@@ -350,7 +386,10 @@ class Ml10DairyDiseaseVectorDetectionPlugin(ModelPluginPort):
             for img_path in image_files:
                 try:
                     image_pil = image_path_to_pil(str(img_path))
-                    detections = self._run_pipeline(image_pil, DEFAULT_DET_CONF, DEFAULT_CLS_CONF, classifier=user_clf, class_names=user_cls_names)
+                    detections = self._run_pipeline(
+                        image_pil, DEFAULT_DET_CONF, DEFAULT_CLS_CONF,
+                        classifier=user_clf, class_names=user_cls_names,
+                    )
                     row = build_inline_result(self.MODEL_ID, detections)
                     row.pop("model_id", None)
                     row["annotated_image"] = render_annotated_image(image_pil, detections)
@@ -360,11 +399,15 @@ class Ml10DairyDiseaseVectorDetectionPlugin(ModelPluginPort):
                     # row would only bloat the batch response. Without it the panel falls back to
                     # a full-scene Grad-CAM request that carries no image_base64 at all.
                     if not predictions:
-                        row["heatmap_crops"] = build_heatmap_crops(image_pil, detections, max_crops=5)
+                        row["heatmap_crops"] = build_heatmap_crops(
+                            image_pil, detections, max_crops=5
+                        )
                     predictions.append({"filename": img_path.name, **row})
-                except Exception as exc:
+                except Exception as exc:  # pylint: disable=broad-exception-caught  # per-image error row
                     logger.warning("Error procesando %s: %s", img_path.name, exc)
-                    predictions.append({"filename": img_path.name, "status": "error", "error_message": str(exc)})
+                    predictions.append(
+                        {"filename": img_path.name, "status": "error", "error_message": str(exc)}
+                    )
         finally:
             for d in temps:
                 shutil.rmtree(d, ignore_errors=True)
@@ -384,7 +427,10 @@ class Ml10DairyDiseaseVectorDetectionPlugin(ModelPluginPort):
         base = StatsResponse(
             model_name=self.MODEL_ID,
             version=self.VERSION,
-            description="Detección y clasificación de vectores (mosca, mosquito, garrapata) en imágenes de ganado lechero.",
+            description=(
+                "Detección y clasificación de vectores (mosca, mosquito, garrapata) "
+                "en imágenes de ganado lechero."
+            ),
             task_type="object-detection+classification",
             framework=self.FRAMEWORK,
             inputs=[
@@ -392,15 +438,33 @@ class Ml10DairyDiseaseVectorDetectionPlugin(ModelPluginPort):
                     name="image",
                     type="file",
                     format=["jpg", "jpeg", "png", "bmp", "tif"],
-                    description="Imagen de ganado lechero (base64 para inline, CSV/ZIP/directorio para batch)",
+                    description=(
+                        "Imagen de ganado lechero "
+                        "(base64 para inline, CSV/ZIP/directorio para batch)"
+                    ),
                 ),
             ],
             outputs=[
-                OutputField(name="prediction", type="str", description="Especie dominante detectada (fly | mos | tick | no_vectors)"),
-                OutputField(name="confidence", type="float", description="Confianza de clasificación de la detección dominante [0, 1]"),
-                OutputField(name="vectors_count", type="int", description="Número total de vectores detectados y clasificados"),
-                OutputField(name="detections", type="list", description="Lista de detecciones con species, det_conf, cls_conf, bbox"),
-                OutputField(name="species_summary", type="dict", description="Resumen de cantidad por especie"),
+                OutputField(
+                    name="prediction", type="str",
+                    description="Especie dominante detectada (fly | mos | tick | no_vectors)",
+                ),
+                OutputField(
+                    name="confidence", type="float",
+                    description="Confianza de clasificación de la detección dominante [0, 1]",
+                ),
+                OutputField(
+                    name="vectors_count", type="int",
+                    description="Número total de vectores detectados y clasificados",
+                ),
+                OutputField(
+                    name="detections", type="list",
+                    description="Lista de detecciones con species, det_conf, cls_conf, bbox",
+                ),
+                OutputField(
+                    name="species_summary", type="dict",
+                    description="Resumen de cantidad por especie",
+                ),
             ],
             metrics={},
             runtime_stats=RuntimeStats(
@@ -416,12 +480,12 @@ class Ml10DairyDiseaseVectorDetectionPlugin(ModelPluginPort):
                     "metrics": tracker.get_metrics(),
                 }
                 logger.info("Stats enriched with MLflow data for run_id=%s", mlflow_run_id)
-            except Exception as exc:
+            except Exception as exc:  # pylint: disable=broad-exception-caught  # stats stay usable
                 logger.warning("Could not fetch MLflow stats for run_id=%s: %s", mlflow_run_id, exc)
         return base
 
     # ── private helpers ───────────────────────────────────────────────────────
-    def _run_pipeline(
+    def _run_pipeline(  # pylint: disable=too-many-locals
         self, image_pil, det_conf_thresh: float, cls_conf_thresh: float,
         classifier=None, class_names=None,
     ) -> list[dict]:
@@ -480,7 +544,9 @@ class Ml10DairyDiseaseVectorDetectionPlugin(ModelPluginPort):
                     paths.append(Path(ip))
         return paths
 
-    def train(self, *, data_path: str, mlflow_run_id: str) -> TrainResponse:
+    def train(  # pylint: disable=too-many-locals,too-many-branches,too-many-statements
+        self, *, data_path: str, mlflow_run_id: str
+    ) -> TrainResponse:
         """Train the MobileNetV3 classifier from a ZIP.
 
         Accepted ZIP structures:
@@ -493,8 +559,8 @@ class Ml10DairyDiseaseVectorDetectionPlugin(ModelPluginPort):
         _tmp_zip: str | None = None
         local_data_path = data_path
         if data_path.startswith("s3://"):
-            import boto3
-            from botocore.client import Config as BotoConfig
+            import boto3  # pylint: disable=import-outside-toplevel
+            from botocore.client import Config as BotoConfig  # pylint: disable=import-outside-toplevel
             without_prefix = data_path[5:]
             bucket, _, s3_key = without_prefix.partition("/")
             s3 = boto3.client(
@@ -544,7 +610,10 @@ class Ml10DairyDiseaseVectorDetectionPlugin(ModelPluginPort):
             has_test = test_dir.is_dir() and any(p.is_file() for p in test_dir.rglob("*"))
             test_ds = datasets.ImageFolder(str(test_dir), eval_tfm) if has_test else None
             if test_ds is not None and test_ds.classes != class_names:
-                raise ValueError(f"Las clases de test {test_ds.classes} no coinciden con las de train {class_names}.")
+                raise ValueError(
+                    f"Las clases de test {test_ds.classes} no coinciden con las de train "
+                    f"{class_names}."
+                )
             logger.info("Dataset: %d train, %d val, %s test, clases=%s", len(train_ds), len(val_ds),
                         len(test_ds) if test_ds is not None else 0, class_names)
             torch.manual_seed(TRAIN_SEED)  # set_seed(42) of the delivered run_training
@@ -592,7 +661,9 @@ class Ml10DairyDiseaseVectorDetectionPlugin(ModelPluginPort):
 
             t0 = time.perf_counter()
             for epoch in range(100):
-                tr_loss, tr_acc = _cls_train_epoch(model, train_loader, optimizer, criterion, self._device)
+                tr_loss, tr_acc = _cls_train_epoch(
+                    model, train_loader, optimizer, criterion, self._device
+                )
                 val_loss, val_acc = _cls_validate(model, val_loader, criterion, self._device)
                 scheduler.step()
                 val_accs.append(val_acc)
@@ -631,12 +702,16 @@ class Ml10DairyDiseaseVectorDetectionPlugin(ModelPluginPort):
             try:
                 # Save to a temporary dir for MLflow upload (matching artifact_path="classifier")
                 torch.save(model.state_dict(), os.path.join(mlflow_tmp, CLASSIFIER_FILENAME))
-                with open(os.path.join(mlflow_tmp, CLASS_NAMES_FILENAME), "w") as fh:
+                with open(
+                    os.path.join(mlflow_tmp, CLASS_NAMES_FILENAME), "w", encoding="utf-8"
+                ) as fh:
                     json.dump(class_names, fh)
                 tracker.upload_artifacts(mlflow_tmp, artifact_path="classifier")
             except Exception as exc:
                 logger.error("MLflow artifact upload failed: %s", exc)
-                raise ModelPersistenceError(f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}") from exc
+                raise ModelPersistenceError(
+                    f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}"
+                ) from exc
             finally:
                 shutil.rmtree(mlflow_tmp, ignore_errors=True)
 

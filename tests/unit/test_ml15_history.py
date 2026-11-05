@@ -34,6 +34,7 @@ def _make_financial_df() -> pd.DataFrame:
 
 
 def test_reindex_financial_to_base_2020_sets_2020_mean_to_100():
+    """After reindexing, every financial index averages 100 over 2020."""
     df = _make_financial_df()
     out = history.reindex_financial_to_base_2020(df)
     year_2020 = out["date"].dt.year == 2020
@@ -42,12 +43,14 @@ def test_reindex_financial_to_base_2020_sets_2020_mean_to_100():
 
 
 def test_reindex_financial_to_base_2020_missing_column_raises():
+    """A missing raw financial column raises ValueError naming it."""
     df = _make_financial_df().drop(columns=["copper_avg"])
     with pytest.raises(ValueError, match="copper_avg"):
         history.reindex_financial_to_base_2020(df)
 
 
 def test_reindex_financial_to_base_2020_no_2020_data_raises():
+    """Without any 2020 data the base-2020 reindex raises ValueError."""
     df = _make_financial_df()
     df = df[df["date"].dt.year != 2020]
     with pytest.raises(ValueError, match="2020"):
@@ -55,6 +58,7 @@ def test_reindex_financial_to_base_2020_no_2020_data_raises():
 
 
 def test_derive_feature_rows_produces_all_feature_columns_in_input_order():
+    """Derived rows contain every feature column and keep the input date order."""
     prices_df = _make_prices_df()
     financial_df = history.reindex_financial_to_base_2020(_make_financial_df())
 
@@ -62,11 +66,13 @@ def test_derive_feature_rows_produces_all_feature_columns_in_input_order():
     origin_dates = [pd.Timestamp("2025-06-01"), pd.Timestamp("2025-01-01")]
     out = history.derive_feature_rows(origin_dates, prices_df, financial_df)
 
-    assert list(out["date"]) == origin_dates  # input order preserved, not re-sorted
+    # input order preserved, not re-sorted
+    assert list(out["date"]) == origin_dates  # pylint: disable=unsubscriptable-object
     assert set(FEATURE_COLUMNS).issubset(set(out.columns))
 
 
 def test_derive_feature_rows_autoregressive_lags_match_source_series():
+    """Current value and lags are read from the right months of the source series."""
     prices_df = _make_prices_df()
     financial_df = history.reindex_financial_to_base_2020(_make_financial_df())
 
@@ -79,6 +85,7 @@ def test_derive_feature_rows_autoregressive_lags_match_source_series():
 
 
 def test_derive_feature_rows_missing_lag_history_raises_value_error():
+    """A lag before the start of the series raises ValueError naming the lag."""
     prices_df = _make_prices_df()  # only starts 2024-01
     financial_df = history.reindex_financial_to_base_2020(_make_financial_df())
 
@@ -89,6 +96,7 @@ def test_derive_feature_rows_missing_lag_history_raises_value_error():
 
 
 def test_merge_user_points_into_prices_overrides_existing_date():
+    """A user point on an existing month overrides the bundled value."""
     prices_df = _make_prices_df()
     merged = history.merge_user_points_into_prices(
         prices_df, [{"date": pd.Timestamp("2025-06-01"), "value": 999.0}],
@@ -109,31 +117,39 @@ def test_merge_user_points_into_prices_extends_beyond_bundled_range():
 
 
 def test_find_simple_ipi_column_priority_order():
-    assert history.find_simple_ipi_column(["date", "spain", "ipi_national_current"]) == "ipi_national_current"
+    """ipi_national_current is preferred over spain; otherwise None."""
+    columns = ["date", "spain", "ipi_national_current"]
+    assert history.find_simple_ipi_column(columns) == "ipi_national_current"
     assert history.find_simple_ipi_column(["date", "spain"]) == "spain"
     assert history.find_simple_ipi_column(["date", "foo"]) is None
 
 
 def test_is_simple_history_frame_true_for_ipi_history_shape():
+    """A date/year/month/IPI frame is recognised as simple history."""
     columns = ["date", "year", "month", "ipi_national_current"]
     assert history.is_simple_history_frame(columns, FEATURE_COLUMNS) is True
 
 
 def test_is_simple_history_frame_false_for_full_feature_panel():
+    """A full feature panel is not treated as simple history."""
     columns = ["date"] + list(FEATURE_COLUMNS)
     assert history.is_simple_history_frame(columns, FEATURE_COLUMNS) is False
 
 
 def test_is_simple_history_frame_false_without_a_value_column():
+    """A frame without an IPI value column is not simple history."""
     assert history.is_simple_history_frame(["date", "year", "month"], FEATURE_COLUMNS) is False
 
 
 def test_resolve_row_date_prefers_origin_date_then_date_then_year_month():
-    assert history.resolve_row_date({"origin_date": "2025-03-15", "date": "2025-01-01"}) == pd.Timestamp("2025-03-01")
+    """Row dates resolve from origin_date, then date, then year/month, to month start."""
+    row = {"origin_date": "2025-03-15", "date": "2025-01-01"}
+    assert history.resolve_row_date(row) == pd.Timestamp("2025-03-01")
     assert history.resolve_row_date({"date": "2025-01-15"}) == pd.Timestamp("2025-01-01")
     assert history.resolve_row_date({"year": 2025, "month": 4}) == pd.Timestamp("2025-04-01")
 
 
 def test_resolve_row_date_raises_when_unresolvable():
+    """A row without any date information raises ValueError."""
     with pytest.raises(ValueError):
         history.resolve_row_date({"foo": "bar"})

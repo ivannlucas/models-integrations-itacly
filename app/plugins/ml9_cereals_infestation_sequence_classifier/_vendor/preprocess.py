@@ -30,12 +30,16 @@ REQUIRED_MIN_COLUMNS = {
 }
 
 
-def validate_and_normalize_input_frame(
+def validate_and_normalize_input_frame(  # pylint: disable=too-many-locals
     df_input: pd.DataFrame,
     cfg: dict[str, Any],
     *,
     require_target: bool,
 ) -> pd.DataFrame:
+    """Check required columns/nulls, parse timestamps and coerce sensor/target columns.
+
+    Raises ValueError (Spanish message) on any contract violation; returns a normalised copy.
+    """
     group_col = cfg["data"]["group_column"]
     ts_col = cfg["data"]["timestamp_column"]
     sensor_columns = list(cfg["data"]["sensor_columns"])
@@ -98,7 +102,10 @@ def _hours_to_periods(hours: int, step_minutes: int) -> tuple[int, float]:
     return periods, actual_hours
 
 
-def build_features(df: pd.DataFrame, cfg: dict[str, Any]) -> tuple[pd.DataFrame, list[str]]:
+def build_features(  # pylint: disable=too-many-locals
+    df: pd.DataFrame, cfg: dict[str, Any]
+) -> tuple[pd.DataFrame, list[str]]:
+    """Per-series engineered features (diffs, slopes, rolling stats, interactions, calendar)."""
     group_col = cfg["data"]["group_column"]
     ts_col = cfg["data"]["timestamp_column"]
     sensors = list(cfg["data"]["sensor_columns"])
@@ -168,11 +175,15 @@ def build_sequence_feature_frame(
     if isinstance(feature_cfg, list) and feature_cfg:
         missing = [col for col in feature_cfg if col not in features.columns]
         if missing:
-            raise ValueError(f'Las features pedidas en sequence.feature_columns no existen: {missing}')
+            raise ValueError(
+                f'Las features pedidas en sequence.feature_columns no existen: {missing}'
+            )
         features = features.loc[:, feature_cfg].copy()
         feature_columns = list(feature_cfg)
 
-    cols = [group_col, ts_col] + ([target_col] if require_target and target_col in df_norm.columns else [])
+    cols = [group_col, ts_col] + (
+        [target_col] if require_target and target_col in df_norm.columns else []
+    )
     seq_df = pd.concat(
         [
             df_norm[cols].reset_index(drop=True),
@@ -183,7 +194,7 @@ def build_sequence_feature_frame(
     return seq_df, feature_columns
 
 
-def split_sample_ids_stratified(
+def split_sample_ids_stratified(  # pylint: disable=too-many-locals
     df: pd.DataFrame,
     cfg: dict[str, Any],
     *,
@@ -200,11 +211,15 @@ def split_sample_ids_stratified(
     train_cfg = cfg.get('training', {})
     seq_cfg = cfg.get('sequence', {})
 
-    holdout_frac = float(holdout_frac if holdout_frac is not None else train_cfg.get('holdout_frac', 0.2))
+    holdout_frac = float(
+        holdout_frac if holdout_frac is not None else train_cfg.get('holdout_frac', 0.2)
+    )
     validation_frac = float(
         validation_frac if validation_frac is not None else seq_cfg.get('validation_frac', 0.15)
     )
-    random_state = int(random_state if random_state is not None else train_cfg.get('random_state', 42))
+    random_state = int(
+        random_state if random_state is not None else train_cfg.get('random_state', 42)
+    )
 
     sample_meta = (
         df.groupby(group_col, sort=False)[split_target_col]
@@ -221,7 +236,10 @@ def split_sample_ids_stratified(
     for _, cls_df in sample_meta.groupby('sample_target', sort=True):
         ids = cls_df[group_col].to_numpy().copy()
         if len(ids) < 3:
-            raise ValueError('Cada clase necesita al menos 3 sample_id para crear train/validation/test sin fuga.')
+            raise ValueError(
+                'Cada clase necesita al menos 3 sample_id para crear train/validation/test sin '
+                'fuga.'
+            )
         rng.shuffle(ids)
 
         n_test = max(1, int(round(len(ids) * holdout_frac)))
@@ -242,7 +260,7 @@ def split_sample_ids_stratified(
     }
 
 
-def build_sliding_windows(
+def build_sliding_windows(  # pylint: disable=too-many-locals,too-many-branches,too-many-statements
     df_seq: pd.DataFrame,
     cfg: dict[str, Any],
     *,
@@ -285,7 +303,11 @@ def build_sliding_windows(
     for sample_id, group_df in df_work.groupby(group_col, sort=False):
         group_df = group_df.sort_values(ts_col).reset_index(drop=True)
         features = group_df.loc[:, feature_columns].to_numpy(dtype=np.float32)
-        labels = group_df[target_col].to_numpy(dtype=int) if require_target and target_col in group_df.columns else None
+        labels = (
+            group_df[target_col].to_numpy(dtype=int)
+            if require_target and target_col in group_df.columns
+            else None
+        )
         timestamps = pd.to_datetime(group_df[ts_col], errors='coerce').reset_index(drop=True)
 
         if len(group_df) < window_size:
@@ -353,19 +375,23 @@ def build_sliding_windows(
             )
 
     if x_windows:
-        X_seq = np.stack(x_windows, axis=0).astype(np.float32)
-        y_seq = np.asarray(y_windows, dtype=np.int64) if require_target else np.asarray([], dtype=np.int64)
+        x_seq = np.stack(x_windows, axis=0).astype(np.float32)
+        y_seq = (
+            np.asarray(y_windows, dtype=np.int64)
+            if require_target
+            else np.asarray([], dtype=np.int64)
+        )
         group_seq = np.asarray(group_windows)
         timestamps_seq = np.asarray(timestamp_windows, dtype='datetime64[ns]')
     else:
-        X_seq = np.zeros((0, window_size, len(feature_columns)), dtype=np.float32)
+        x_seq = np.zeros((0, window_size, len(feature_columns)), dtype=np.float32)
         y_seq = np.zeros((0,), dtype=np.int64)
         group_seq = np.asarray([], dtype=object)
         timestamps_seq = np.asarray([], dtype='datetime64[ns]')
 
     window_meta = pd.DataFrame(metadata_rows)
     return {
-        'X_seq': X_seq,
+        'X_seq': x_seq,
         'y_seq': y_seq,
         'group_seq': group_seq,
         'timestamps_seq': timestamps_seq,

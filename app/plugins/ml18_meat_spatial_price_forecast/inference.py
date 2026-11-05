@@ -8,10 +8,13 @@ from __future__ import annotations
 import numpy as np
 
 from app.plugins.ml18_meat_spatial_price_forecast.constants import FEATURE_COLUMNS
-from app.plugins.ml18_meat_spatial_price_forecast.preprocessing import build_modeling_panel, build_sequences
+from app.plugins.ml18_meat_spatial_price_forecast.preprocessing import (
+    build_modeling_panel,
+    build_sequences,
+)
 
 
-def run_inference(bundle: dict, rows: list[dict]) -> list[dict]:
+def run_inference(bundle: dict, rows: list[dict]) -> list[dict]:  # pylint: disable=too-many-locals
     """Derive the modeling panel from raw rows and predict next-month price per group.
 
     Returns a list of {"CCAA", "Producto", "Fecha", "predicted_price", "xai_feature_values"} —
@@ -42,7 +45,9 @@ def run_inference(bundle: dict, rows: list[dict]) -> list[dict]:
             "Producto": e["producto"],
             "Fecha": str(e["target_date"].date()),
             "predicted_price": round(float(pred), 6),
-            "xai_feature_values": {col: float(v) for col, v in zip(FEATURE_COLUMNS, e["window"][-1])},
+            "xai_feature_values": {
+                col: float(v) for col, v in zip(FEATURE_COLUMNS, e["window"][-1])
+            },
             "xai_feature_window": e["window"].astype(float).tolist(),
         }
         for e, pred in zip(entries, y_pred)

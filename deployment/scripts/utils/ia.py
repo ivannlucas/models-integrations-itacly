@@ -1,14 +1,15 @@
 # utils/ia.py
 # Description: Shared module for interacting with the Google Gemini API.
+"""Google Gemini helpers shared by the deployment scripts."""
 
 import json
 import os
 import re
 from typing import Dict, Any, Optional
 
-import google.generativeai as genai
+import google.generativeai as genai  # pylint: disable=import-error,no-name-in-module  # optional tooling dependency
 
-from ui import log_message
+from ui import log_message  # pylint: disable=import-error  # sibling script module
 
 
 # --- CONFIGURATION ---
@@ -26,11 +27,12 @@ def get_env_int(key: str, default: int) -> int:
         return default
 
 
-MAX_TOTAL_TOKENS = get_env_int("MAX_TOTAL_TOKENS",
-                               75000)  # Safety limit to avoid excessive consumption on large executions
-MAX_REQUEST_TOKENS = get_env_int("MAX_REQUEST_TOKENS",
-                                 8192)  # Safety limit to avoid excessive consumption on single executions
-MODEL_TEMPERATURE = 0.2  # Controls the randomness of an AI model's output from deterministic (0) to creative (1)
+# Safety limit to avoid excessive consumption on large executions
+MAX_TOTAL_TOKENS = get_env_int("MAX_TOTAL_TOKENS", 75000)
+# Safety limit to avoid excessive consumption on single executions
+MAX_REQUEST_TOKENS = get_env_int("MAX_REQUEST_TOKENS", 8192)
+# Controls the randomness of an AI model's output from deterministic (0) to creative (1)
+MODEL_TEMPERATURE = 0.2
 MODEL_VERSION = os.getenv("GEMINI_MODEL", 'gemini-2.5-flash-lite')
 
 # Precios en USD por 1,000,000 (1 millón) de tokens
@@ -72,13 +74,16 @@ def setup_generative_model() -> Optional[genai.GenerativeModel]:
         model = genai.GenerativeModel(MODEL_VERSION)
         # log_message(f"Model {model_version} initialized successfully.", "SUCCESS")
         return model
-    except Exception as e:
+    except Exception as e:  # pylint: disable=broad-exception-caught  # None signals no model
         log_message(f"Failed to configure the generative model: {e}", "ERROR")
         return None
 
 
 def calculate_consumption_price(consumes, model):
-    model_prices = MODEL_PRICING_PER_MILLION_TOKENS.get(model, {"input": 2.5, "output": 20.0, "cache": 0.5})
+    """Return the USD cost of a call from its token counts and the model's price table."""
+    model_prices = MODEL_PRICING_PER_MILLION_TOKENS.get(
+        model, {"input": 2.5, "output": 20.0, "cache": 0.5}
+    )
     input_price = consumes.get("prompt") * model_prices["input"] / 1000000
     output_price = consumes.get("candidates") * model_prices["output"] / 1000000
     cache_price = consumes.get("cached_content") * model_prices["cache"] / 1000000
@@ -137,21 +142,25 @@ def invoke_model(model: genai.GenerativeModel, prompt: str, is_json_output: bool
         The full generation response object, or None if an error occurs.
     """
     try:
-        generation_config = {"temperature": MODEL_TEMPERATURE, "max_output_tokens": MAX_REQUEST_TOKENS}
+        generation_config = {
+            "temperature": MODEL_TEMPERATURE, "max_output_tokens": MAX_REQUEST_TOKENS
+        }
         if is_json_output:
             # This tells the model to ensure its output is valid JSON.
             generation_config["response_mime_type"] = "application/json"
 
         response = model.generate_content(prompt, generation_config=generation_config)
         return response
-    except Exception as e:
+    except Exception as e:  # pylint: disable=broad-exception-caught  # None signals failed call
         log_message(f"Error during API call to Gemini: {e}", "ERROR")
         return None
 
 
-def process_file_with_ia(model: Any, agent_instructions: str, code_content: str,
-                         filepath: str, language: str = "python",
-                         is_json_output: bool = True) -> tuple[Optional[Dict[str, Any] | str], int, float]:
+def process_file_with_ia(  # pylint: disable=too-many-arguments,too-many-positional-arguments
+        model: Any, agent_instructions: str, code_content: str,
+        filepath: str, language: str = "python",
+        is_json_output: bool = True,
+) -> tuple[Optional[Dict[str, Any] | str], int, float]:
     """
     Función central para procesar un archivo con la IA.
 
@@ -171,7 +180,9 @@ def process_file_with_ia(model: Any, agent_instructions: str, code_content: str,
         Un diccionario (si es JSON) o un string (si es texto), o None si falla.
     """
     # Nomenclatura unificada para el prompt
-    full_prompt = f"{agent_instructions}\n\n**Code to process:**\n```{language}\n{code_content}\n```"
+    full_prompt = (
+        f"{agent_instructions}\n\n**Code to process:**\n```{language}\n{code_content}\n```"
+    )
 
     response = invoke_model(model, full_prompt, is_json_output=is_json_output)
     if not response or not response.text:
@@ -184,7 +195,9 @@ def process_file_with_ia(model: Any, agent_instructions: str, code_content: str,
         "prompt": response.usage_metadata.prompt_token_count,
         "candidates": response.usage_metadata.candidates_token_count,
         "cached_content": response.usage_metadata.cached_content_token_count,
-    } if response.usage_metadata else {"total": 0, "prompt": 0, "candidates": 0, "cached_content": 0}
+    } if response.usage_metadata else {
+        "total": 0, "prompt": 0, "candidates": 0, "cached_content": 0
+    }
 
     consumption = calculate_consumption_price(tokens_used, response.model_version)
 

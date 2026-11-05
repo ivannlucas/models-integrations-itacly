@@ -5,10 +5,11 @@ Faster R-CNN DETECTOR remains out of scope (bbox-annotation-only ZIP contract mi
 documented in inbox/a05/manifest.yaml training.reason, unrelated to the 4 training-code
 bugs fixed this cycle). The response reuses app.application.dto.train_dto.TrainResponse
 directly — train() already builds and returns that exact class (detail + metrics dict +
-mlflow_run_id + upload_warning), same pattern as ml10_dairy_disease_vector_detection. ``mlflow_run_id`` is
-required on purpose — every retrain must be persisted to a specific MLflow run (never
-silently discarded, never overwrites the fixed S3 artifact).
+mlflow_run_id + upload_warning), same pattern as ml10_dairy_disease_vector_detection.
+``mlflow_run_id`` is required on purpose — every retrain must be persisted to a specific
+MLflow run (never silently discarded, never overwrites the fixed S3 artifact).
 """
+
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.application.dto.train_dto import MlflowRunId

@@ -6,7 +6,7 @@ comparison-only architectures, not selected by RMSE on the reported test split.
 from __future__ import annotations
 
 import torch
-import torch.nn as nn
+from torch import nn
 
 
 class GRUModel(nn.Module):

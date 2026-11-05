@@ -14,7 +14,9 @@ from app.plugins.ml1_wine_pest_disease_detection.constants import (
 )
 
 
-def run_inference(bundle: dict, img_rgb: np.ndarray, sensors_aligned: np.ndarray) -> dict:
+def run_inference(  # pylint: disable=too-many-locals
+    bundle: dict, img_rgb: np.ndarray, sensors_aligned: np.ndarray
+) -> dict:
     """Deep Ensemble soft-voting over the 3 backbones (image -> class, tabular -> risk).
 
     img_rgb: HxWx3 float32 in [0, 1] (already YOLO-cropped and resized — see preprocessing.py).
@@ -28,7 +30,9 @@ def run_inference(bundle: dict, img_rgb: np.ndarray, sensors_aligned: np.ndarray
     ensemble = bundle["ensemble"]
 
     for model in ensemble.values():
-        preds = model.predict({"input_image": img_batch, "input_tabular": sensors_aligned}, verbose=0)
+        preds = model.predict(
+            {"input_image": img_batch, "input_tabular": sensors_aligned}, verbose=0
+        )
         if sum_probs_clase is None:
             sum_probs_clase = preds[0]
             sum_preds_riesgo = preds[1]

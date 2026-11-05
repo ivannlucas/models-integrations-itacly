@@ -31,7 +31,7 @@ REQUIRED_COLUMNS = (*SENSOR_COLS, "Etiqueta", "Indice_Riesgo_Cientifico")
 
 
 @dataclass
-class TabularTrainResult:
+class TabularTrainResult:  # pylint: disable=too-many-instance-attributes  # plain result record
     """Everything train() needs to build TrainResponse and upload to MLflow."""
 
     rf_clase: RandomForestClassifier
@@ -44,7 +44,7 @@ class TabularTrainResult:
     n_test: int
 
 
-def train_tabular_experts(df: pd.DataFrame) -> TabularTrainResult:
+def train_tabular_experts(df: pd.DataFrame) -> TabularTrainResult:  # pylint: disable=too-many-locals
     """Validate the input CSV and fit fresh RandomForest classifier/regressor instances.
 
     Never mutates any already-loaded model — always builds brand-new sklearn estimators, so a
@@ -93,7 +93,9 @@ def train_tabular_experts(df: pd.DataFrame) -> TabularTrainResult:
         rf_riesgo=rf_riesgo,
         accuracy=float(accuracy_score(y_clase_test, pred_clase_test)),
         f1_macro=float(f1_score(y_clase_test, pred_clase_test, average="macro", zero_division=0)),
-        f1_weighted=float(f1_score(y_clase_test, pred_clase_test, average="weighted", zero_division=0)),
+        f1_weighted=float(
+            f1_score(y_clase_test, pred_clase_test, average="weighted", zero_division=0)
+        ),
         mae_riesgo=float(mean_absolute_error(y_riesgo_test, pred_riesgo_test)),
         n_train=len(x_train),
         n_test=len(x_test),

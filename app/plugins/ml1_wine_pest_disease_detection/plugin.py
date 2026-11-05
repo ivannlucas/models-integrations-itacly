@@ -34,7 +34,12 @@ from app.domain.services.exceptions import (
 )
 from app.infrastructure.archive import safe_extract_zip
 from app.infrastructure.artifact_store import local_file_path
-from app.plugins.ml1_wine_pest_disease_detection import inference, model_loader, preprocessing, training
+from app.plugins.ml1_wine_pest_disease_detection import (
+    inference,
+    model_loader,
+    preprocessing,
+    training,
+)
 from app.plugins.ml1_wine_pest_disease_detection.constants import (
     FRAMEWORK,
     IGNORED_GAS_COLS,
@@ -58,7 +63,10 @@ logger = logging.getLogger(__name__)
 
 
 class Ml1WinePestDiseaseDetectionPlugin(ModelPluginPort):
-    """YOLOv8 + 3-backbone Deep Ensemble + RandomForest fallback for vineyard pest/disease diagnosis."""
+    """YOLOv8 + 3-backbone Deep Ensemble + RandomForest fallback.
+
+    Vineyard pest/disease diagnosis.
+    """
 
     def __init__(self) -> None:
         """Initialize an unloaded plugin with empty runtime counters."""
@@ -111,7 +119,9 @@ class Ml1WinePestDiseaseDetectionPlugin(ModelPluginPort):
         bundle = self._require_loaded()
         rf_override, user_tmp = self._resolve_rf_riesgo(mlflow_run_id)
         try:
-            sensors_aligned = preprocessing.validate_and_align_sensors(features.get("sensors") or {})
+            sensors_aligned = preprocessing.validate_and_align_sensors(
+                features.get("sensors") or {}
+            )
             image_base64 = features.get("image_base64")
 
             if image_base64:
@@ -137,7 +147,9 @@ class Ml1WinePestDiseaseDetectionPlugin(ModelPluginPort):
 
     # ── predict_batch ─────────────────────────────────────────────────────────
 
-    def predict_batch(self, *, data_path: str, mlflow_run_id: str = "") -> PredictBatchResponse:
+    def predict_batch(  # pylint: disable=too-many-locals
+        self, *, data_path: str, mlflow_run_id: str = ""
+    ) -> PredictBatchResponse:
         """Diagnose every row of a ZIP's CSV (Path_Imagen + 9 sensor columns).
 
         A row's image missing/unreadable/undetectable falls back to the tabular-only path for
@@ -160,7 +172,9 @@ class Ml1WinePestDiseaseDetectionPlugin(ModelPluginPort):
                 raise DataContractError("El ZIP no contiene ningún CSV de entrada.")
             df = pd.read_csv(csv_candidates[0])
             if "Path_Imagen" not in df.columns:
-                raise DataContractError("El CSV debe traer una columna 'Path_Imagen' (N/A si no hay foto).")
+                raise DataContractError(
+                    "El CSV debe traer una columna 'Path_Imagen' (N/A si no hay foto)."
+                )
 
             nested_images = root / "images"
             search_dirs = [nested_images, root] if nested_images.is_dir() else [root]
@@ -172,7 +186,11 @@ class Ml1WinePestDiseaseDetectionPlugin(ModelPluginPort):
                 try:
                     # Like predictor.py:317, only the sensor columns are read — any other column
                     # (an ID, the label, a cached path...) is ignored, not a contract error.
-                    sensors = {col: row[col] for col in (*SENSOR_COLS, *IGNORED_GAS_COLS) if col in row.index}
+                    sensors = {
+                        col: row[col]
+                        for col in (*SENSOR_COLS, *IGNORED_GAS_COLS)
+                        if col in row.index
+                    }
                     sensors_aligned = preprocessing.validate_and_align_sensors(sensors)
                     image_path = preprocessing.resolve_image_path_for_batch(raw_name, search_dirs)
 
@@ -186,7 +204,9 @@ class Ml1WinePestDiseaseDetectionPlugin(ModelPluginPort):
                         result = inference.run_inference_tabular_only(
                             {**bundle, **rf_override}, sensors_aligned,
                         )
-                    predictions.append(BatchPrediction(id=int(idx), nombre_imagen=nombre_imagen, **result))
+                    predictions.append(
+                        BatchPrediction(id=int(idx), nombre_imagen=nombre_imagen, **result)
+                    )
                 except (DataContractError, InvalidImageError) as exc:
                     predictions.append(
                         BatchPrediction(
@@ -249,12 +269,16 @@ class Ml1WinePestDiseaseDetectionPlugin(ModelPluginPort):
             shutil.rmtree(mlflow_tmp, ignore_errors=True)
 
         logger.info(
-            "ml1 train() done — accuracy=%.4f f1_macro=%.4f f1_weighted=%.4f mae_riesgo=%.4f n_train=%d n_test=%d",
+            "ml1 train() done — accuracy=%.4f f1_macro=%.4f f1_weighted=%.4f mae_riesgo=%.4f "
+            "n_train=%d n_test=%d",
             result.accuracy, result.f1_macro, result.f1_weighted, result.mae_riesgo,
             result.n_train, result.n_test,
         )
         return TrainResponse(
-            detail="Expertos RandomForest (clasificación + riesgo) reentrenados desde cero con el procedimiento del equipo de IA",
+            detail=(
+                "Expertos RandomForest (clasificación + riesgo) reentrenados desde cero con el "
+                "procedimiento del equipo de IA"
+            ),
             accuracy=round(result.accuracy, 4),
             f1_macro=round(result.f1_macro, 4),
             f1_weighted=round(result.f1_weighted, 4),
@@ -276,15 +300,21 @@ class Ml1WinePestDiseaseDetectionPlugin(ModelPluginPort):
 
         inputs = [
             InputField(name="image_base64", type="str | null",
-                       description="Imagen de hoja/racimo en base64, opcional (sin ella: modo de contingencia tabular)."),
+                       description=("Imagen de hoja/racimo en base64, opcional (sin ella: "
+                                    "modo de contingencia tabular).")),
             InputField(name="sensors", type="dict[str, float]",
-                       description="9 sensores IIoT de los últimos 5 días (producción, exclude_gases=true)."),
+                       description=("9 sensores IIoT de los últimos 5 días "
+                                    "(producción, exclude_gases=true).")),
         ]
         outputs = [
-            OutputField(name="enfermedad", type="str", description="Una de 15 clases, o IMAGEN_NO_DISPONIBLE sin foto."),
-            OutputField(name="confianza", type="float", description="Probabilidad softmax [0,1]; 0.0 sin imagen."),
-            OutputField(name="riesgo", type="float", description="Índice de riesgo epidemiológico [0,1]."),
-            OutputField(name="metodo", type="str", description="HIBRIDO_ENSAMBLE | RIESGO_TABULAR_EXPERT."),
+            OutputField(name="enfermedad", type="str",
+                        description="Una de 15 clases, o IMAGEN_NO_DISPONIBLE sin foto."),
+            OutputField(name="confianza", type="float",
+                        description="Probabilidad softmax [0,1]; 0.0 sin imagen."),
+            OutputField(name="riesgo", type="float",
+                        description="Índice de riesgo epidemiológico [0,1]."),
+            OutputField(name="metodo", type="str",
+                        description="HIBRIDO_ENSAMBLE | RIESGO_TABULAR_EXPERT."),
         ]
         return StatsResponse(
             model_name=MODEL_ID,
@@ -309,7 +339,7 @@ def _read_image_bgr(path: Path):
     """cv2.imread wrapper raising InvalidImageError instead of silently returning None."""
     import cv2  # pylint: disable=import-outside-toplevel
 
-    img_bgr = cv2.imread(str(path))
+    img_bgr = cv2.imread(str(path))  # pylint: disable=no-member  # cv2 C-extension members
     if img_bgr is None:
         raise InvalidImageError(f"No se pudo leer la imagen en: {path}")
     return img_bgr

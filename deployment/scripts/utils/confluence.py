@@ -1,13 +1,14 @@
 # confluence.py
 # Handles all interactions with the Confluence API.
+"""Confluence API helpers to publish the generated documentation."""
 
 import os
 from typing import Optional, List
 
-import markdown2
-from atlassian import Confluence
+import markdown2  # pylint: disable=import-error  # optional tooling dependency
+from atlassian import Confluence  # pylint: disable=import-error  # optional tooling dependency
 
-from ui import log_message  # Assuming ui.py is in the same project path
+from ui import log_message  # pylint: disable=import-error  # sibling ui.py in the same path
 
 # --- Configuration from Environment Variables ---
 # Load credentials securely from the environment.
@@ -35,7 +36,7 @@ def get_confluence_client() -> Optional[Confluence]:
         confluence.get_all_spaces(limit=1)
         log_message("Successfully connected to Confluence.", "SUCCESS")
         return confluence
-    except Exception as e:
+    except Exception as e:  # pylint: disable=broad-exception-caught  # None signals no client
         log_message(f"Failed to initialize or connect with Confluence client: {e}", "ERROR")
         return None
 
@@ -49,8 +50,11 @@ def ensure_page_hierarchy_exists(client: Confluence, space_key: str, hierarchy: 
     current_parent_id = base_parent_id
 
     for page_title in hierarchy:
-        log_message(f"Checking for parent page '{page_title}' under parent ID '{current_parent_id or 'space root'}'...",
-                    "INFO")
+        log_message(
+            f"Checking for parent page '{page_title}' under parent ID "
+            f"'{current_parent_id or 'space root'}'...",
+            "INFO",
+        )
 
         query = f'space = "{space_key}" AND title = "{page_title}"'
         if current_parent_id:
@@ -74,8 +78,11 @@ def ensure_page_hierarchy_exists(client: Confluence, space_key: str, hierarchy: 
                     representation='storage'
                 )
                 current_parent_id = new_page['id']
-                log_message(f"Successfully created page '{page_title}' with ID {current_parent_id}.", "SUCCESS")
-            except Exception as e:
+                log_message(
+                    f"Successfully created page '{page_title}' with ID {current_parent_id}.",
+                    "SUCCESS",
+                )
+            except Exception as e:  # pylint: disable=broad-exception-caught  # None aborts hierarchy
                 log_message(f"Failed to create page '{page_title}': {e}", "ERROR")
                 return None
 
@@ -89,7 +96,9 @@ def create_or_update_confluence_page(client: Confluence, space_key: str, title: 
     Converts Markdown body to Confluence Storage Format (XHTML).
     """
     try:
-        html_body = markdown2.markdown(body, extras=["fenced-code-blocks", "tables", "cuddled-lists"])
+        html_body = markdown2.markdown(
+            body, extras=["fenced-code-blocks", "tables", "cuddled-lists"]
+        )
 
         query = f'space = "{space_key}" AND title = "{title}"'
         if parent_id:

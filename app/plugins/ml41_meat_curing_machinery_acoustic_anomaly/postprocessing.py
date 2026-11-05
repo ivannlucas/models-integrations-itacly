@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 
+# pylint: disable-next=too-many-arguments
 def build_inline_result(
     *, model_id: str, machine: str, machine_id: str, snr: str,
     mse_score: float, maha_score: float, threshold: float,
 ) -> dict:
+    """Build the predict_inline response dict; label is 1 when maha_score >= threshold."""
     return {
         "model_id": model_id,
         "machine": machine,

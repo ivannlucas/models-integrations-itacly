@@ -61,6 +61,7 @@ def _ml28_batch_with_numpy_leak(_plugin, *, data_path):
 
 
 def test_execute_batch_normalizes_numpy_types_for_ml45():
+    """execute() turns ml45's numpy scalars into plain int/float and the result JSON-encodes."""
     plugin = FakePlugin(
         model_id="ml45-cereals-dnsl-critical-point-detection",
         inline_factory=lambda *a, **k: None,
@@ -69,13 +70,15 @@ def test_execute_batch_normalizes_numpy_types_for_ml45():
     result = PredictModelUseCase(plugin).execute(Ml45BatchRequest(data_path="s3://bucket/file.csv"))
 
     row = result.predictions[0]
-    assert type(row["cycle_id"]) is int
-    assert type(row["anomaly_probability"]) is float
+    # Exact type on purpose: np.float64 subclasses float, so isinstance would hide the leak.
+    assert type(row["cycle_id"]) is int  # pylint: disable=unidiomatic-typecheck
+    assert type(row["anomaly_probability"]) is float  # pylint: disable=unidiomatic-typecheck
     # The real bug only ever surfaced here — at JSON-encoding time.
     json.dumps(result.model_dump(mode="json"))
 
 
 def test_execute_batch_normalizes_numpy_types_for_ml28():
+    """execute() turns ml28's numpy scalars (rows and summary) into int/float and JSON-encodes."""
     plugin = FakePlugin(
         model_id="ml28-meat-neuroevolutionary-raw-materials-prediction",
         inline_factory=lambda *a, **k: None,
@@ -84,7 +87,8 @@ def test_execute_batch_normalizes_numpy_types_for_ml28():
     result = PredictModelUseCase(plugin).execute(Ml28BatchRequest(data_path="s3://bucket/file.csv"))
 
     row = result.predictions[0]
-    assert type(row["purchase_trigger_flag"]) is int
-    assert type(row["order_quantity_tons"]) is float
-    assert type(result.summary["row_count"]) is int
+    # Exact type on purpose: np.float64 subclasses float, so isinstance would hide the leak.
+    assert type(row["purchase_trigger_flag"]) is int  # pylint: disable=unidiomatic-typecheck
+    assert type(row["order_quantity_tons"]) is float  # pylint: disable=unidiomatic-typecheck
+    assert type(result.summary["row_count"]) is int  # pylint: disable=unidiomatic-typecheck
     json.dumps(result.model_dump(mode="json"))

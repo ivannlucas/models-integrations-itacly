@@ -1,3 +1,4 @@
+"""DTOs de entrenamiento de ml48."""
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -6,6 +7,8 @@ from app.application.dto.train_dto import MlflowRunId
 
 
 class TrainRequest(BaseModel):
+    """Petición de /train: CSV de ciclos etiquetados, run de MLflow y modo."""
+
     model_config = ConfigDict(protected_namespaces=())
     data_path: str = Field(
         ...,
@@ -20,8 +23,10 @@ class TrainRequest(BaseModel):
     mode: Literal["fine_tune", "full"] = Field(
         default="fine_tune",
         description=(
-            "fine_tune (por defecto): calibra las 4 cabezas del modelo servido con datos de planta, "
-            "backbone CNN congelado (fine_tuner.py del equipo de IA; bastan unos cientos de ciclos). "
+            "fine_tune (por defecto): calibra las 4 cabezas del modelo servido con datos de "
+            "planta, "
+            "backbone CNN congelado (fine_tuner.py del equipo de IA; bastan unos cientos de "
+            "ciclos). "
             "full: reentrena la CNN desde cero con los hiperparámetros de Optuna (trainer.py; "
             "pensado para miles de ciclos — con pocos ciclos da un modelo peor que el servido). "
             "batch/inline se tratan como fine_tune: la plataforma manda su modo de transporte en "
@@ -38,6 +43,8 @@ class TrainRequest(BaseModel):
 
 
 class TrainResponse(BaseModel):
+    """Resultado de /train: métricas de test y run de MLflow."""
+
     model_config = ConfigDict(protected_namespaces=())
     detail: str
     mode: str

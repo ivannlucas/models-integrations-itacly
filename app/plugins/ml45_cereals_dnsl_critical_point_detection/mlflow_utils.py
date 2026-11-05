@@ -1,13 +1,17 @@
-"""MLflow helper for m45 — download user-trained model from MLflow / upload fine-tuned artifacts."""
+"""MLflow helper for m45.
+
+Downloads the user-trained model from MLflow and uploads fine-tuned artifacts.
+"""
 from __future__ import annotations
 
 import logging
 import os
+import shutil
+import tempfile
 
 import joblib
 import numpy as np
 import torch
-import shutil
 
 from app.domain.services.mlflow_tracker import BaseMLflowTracker, require_user_model
 from app.plugins.ml45_cereals_dnsl_critical_point_detection._vendor.model import (
@@ -17,6 +21,7 @@ from app.plugins.ml45_cereals_dnsl_critical_point_detection.constants import (
     ARTIFACT_FOLDER_NAME,
     DEFAULT_THRESHOLD,
     MODEL_FILENAME,
+    MODEL_ID,
     SCALER_FILENAME,
     XAI_BACKGROUND_FILENAME,
 )
@@ -31,8 +36,6 @@ def download_user_model_from_mlflow(run_id: str):
     Returns (model, model_cfg, scaler_x, scaler_num, xai_background, threshold, temp_dir) or None.
     Caller MUST shutil.rmtree(temp_dir) after inference — use try/finally.
     """
-    import tempfile
-
     tmp = tempfile.mkdtemp(prefix="mlflow_ml45_")
     try:
         local_path = BaseMLflowTracker(run_id).download_artifacts(tmp, artifact_path="model")
@@ -58,7 +61,10 @@ def download_user_model_from_mlflow(run_id: str):
         )
 
         logger.info("Downloaded user model from MLflow run_id=%s", run_id)
-        return model, model_cfg, scalers["scaler_x"], scalers["scaler_num"], xai_background, threshold, tmp
+        return (
+            model, model_cfg, scalers["scaler_x"], scalers["scaler_num"], xai_background,
+            threshold, tmp,
+        )
     except BaseException:
         shutil.rmtree(tmp, ignore_errors=True)
         raise
@@ -70,13 +76,11 @@ def upload_artifacts_to_mlflow(
     metrics: dict | None = None,
 ) -> str:
     """Upload fine-tuned artifacts to MLflow and return the run_id."""
-    from app.plugins.ml45_cereals_dnsl_critical_point_detection.constants import MODEL_ID
-
     if mlflow_run_id:
         tracker = BaseMLflowTracker(mlflow_run_id)
         tracker.connect(mlflow_run_id)
     else:
-        import mlflow
+        import mlflow  # pylint: disable=import-outside-toplevel
 
         mlflow.set_tracking_uri(BaseMLflowTracker.TRACKING_URI)
         mlflow.set_experiment(ARTIFACT_FOLDER_NAME)

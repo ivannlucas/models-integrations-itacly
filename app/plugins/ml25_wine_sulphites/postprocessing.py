@@ -39,7 +39,7 @@ def compute_molecular_so2(free_targets: np.ndarray, ph: float) -> np.ndarray:
     return free_targets / (1.0 + 10.0 ** (ph - PKA_SO2))
 
 
-def apply_operational_constraints(
+def apply_operational_constraints(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     free_targets: np.ndarray,
     pred_bounds: np.ndarray,
     pred_totals: np.ndarray,

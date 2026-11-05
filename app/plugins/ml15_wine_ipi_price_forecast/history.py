@@ -81,7 +81,7 @@ def reindex_financial_to_base_2020(df_financial: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-def _lookup_monthly_values(
+def _lookup_monthly_values(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
     source_df: pd.DataFrame,
     value_column: str,
     lookup_dates: pd.Series,
@@ -125,9 +125,13 @@ def _lookup_monthly_values(
             fallback_date = pd.Timestamp(fallback_row["date"])
             values.loc[idx] = float(fallback_row[value_column])
             if notes is not None:
-                staleness = (requested_date.year - fallback_date.year) * 12 + requested_date.month - fallback_date.month
+                staleness = (
+                    (requested_date.year - fallback_date.year) * 12
+                    + requested_date.month - fallback_date.month
+                )
                 notes.append((int(idx), output_column, (
-                    f"{output_column}: se usa {str(value_column).upper()} {fallback_date.strftime('%Y-%m-%d')} "
+                    f"{output_column}: se usa {str(value_column).upper()} "
+                    f"{fallback_date.strftime('%Y-%m-%d')} "
                     f"como último dato disponible para {requested_date.strftime('%Y-%m-%d')}; "
                     f"desfase={staleness} {'mes' if staleness == 1 else 'meses'}"
                 )))
@@ -287,7 +291,9 @@ def resolve_row_date(row: dict) -> pd.Timestamp:
                 return pd.Timestamp(parsed).to_period("M").to_timestamp()
     if row.get("year") not in (None, "") and row.get("month") not in (None, ""):
         return pd.Timestamp(year=int(row["year"]), month=int(row["month"]), day=1)
-    raise ValueError("No se pudo resolver una fecha para la fila (faltan date/origin_date/year+month).")
+    raise ValueError(
+        "No se pudo resolver una fecha para la fila (faltan date/origin_date/year+month)."
+    )
 
 
 def load_reference_data() -> tuple[pd.DataFrame, pd.DataFrame]:

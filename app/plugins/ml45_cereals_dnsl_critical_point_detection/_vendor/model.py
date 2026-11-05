@@ -8,7 +8,7 @@ from __future__ import annotations
 import logging
 
 import torch
-import torch.nn as nn
+from torch import nn
 import torch.nn.functional as F
 
 logger = logging.getLogger(__name__)
@@ -50,7 +50,7 @@ class FuzzyMembershipLayer(nn.Module):
         return torch.exp(-((x_exp - self.centers) ** 2) / (2 * sigmas ** 2))
 
 
-class FuzzyRuleLayer(nn.Module):
+class FuzzyRuleLayer(nn.Module):  # pylint: disable=too-many-instance-attributes
     """Capa de reglas fuzzy estilo ANFIS (diferenciable).
 
     Args:
@@ -67,7 +67,7 @@ class FuzzyRuleLayer(nn.Module):
         seed: Semilla para reproducibilidad.
     """
 
-    def __init__(
+    def __init__(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         self,
         n_features: int,
         n_mf: int,
@@ -179,7 +179,7 @@ class FuzzyRuleLayer(nn.Module):
         return output_anomaly, rule_activations, alpha_probs, consequents_anom
 
 
-class ParallelDeepNeuroFuzzyModel(nn.Module):
+class ParallelDeepNeuroFuzzyModel(nn.Module):  # pylint: disable=too-many-instance-attributes
     """Modelo híbrido paralelo Deep Learning + Neuro-Fuzzy.
 
     Combina una rama Deep Learning (LSTM + atención temporal) con una rama neuro-difusa
@@ -258,22 +258,26 @@ class ParallelDeepNeuroFuzzyModel(nn.Module):
         logger.info("Arquitectura configurada:")
         logger.info("=" * 30)
         logger.info(
-            f"Rama DL: Input {(model_cfg['sequence_length'], self.n_features)} "
-            f"-> LSTM(hidden={lstm_hidden}, layers={lstm_layers}, bidir={bidirectional}) "
-            f"-> Atención -> Embedding {lstm_cfg['embedding_dim']} "
-            f"-> Head anom 1"
+            "Rama DL: Input %s "
+            "-> LSTM(hidden=%s, layers=%s, bidir=%s) "
+            "-> Atención -> Embedding %s "
+            "-> Head anom 1",
+            (model_cfg['sequence_length'], self.n_features),
+            lstm_hidden, lstm_layers, bidirectional,
+            lstm_cfg['embedding_dim'],
         )
         logger.info(
-            f"Rama Fuzzy: Input {self.n_stats_features} "
-            f"-> Membership ({fuzzy_cfg['n_mf']} por feature) "
-            f"-> Reglas ({fuzzy_cfg['n_rules']}) "
-            f"-> Output anom 1"
+            "Rama Fuzzy: Input %s "
+            "-> Membership (%s por feature) "
+            "-> Reglas (%s) "
+            "-> Output anom 1",
+            self.n_stats_features, fuzzy_cfg['n_mf'], fuzzy_cfg['n_rules'],
         )
         logger.info(
-            f"Mezcla tardía: lambda_anom={self.lambda_anomaly:.3f}"
+            "Mezcla tardía: lambda_anom=%.3f", self.lambda_anomaly
         )
 
-    def forward(
+    def forward(  # pylint: disable=too-many-locals
         self,
         x_window: torch.Tensor,
         s_stats: torch.Tensor,
@@ -292,11 +296,11 @@ class ParallelDeepNeuroFuzzyModel(nn.Module):
                 f"x_window debe ser [B,T,F], recibido: {tuple(x_window.shape)}"
             )
 
-        B, _, F_in = x_window.shape
-        if F_in != self.n_features:
+        _, _, f_in = x_window.shape
+        if f_in != self.n_features:
             raise RuntimeError(
                 f"Última dimensión de x_window inválida: "
-                f"esperado {self.n_features}, recibido {F_in}"
+                f"esperado {self.n_features}, recibido {f_in}"
             )
 
         # Rama Deep Learning (LSTM + atención)

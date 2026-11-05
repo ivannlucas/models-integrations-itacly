@@ -1,13 +1,16 @@
 # scripts/swagger_generation.py
 # Purpose: Generate a swagger.yaml file from a Flask application's source code.
+"""Generate an OpenAPI (swagger.yaml) spec from a Flask source file with a generative AI model."""
 
 import argparse
 import sys
 from pathlib import Path
 
-from files import load_agent_instructions, save_output_file, read_file_content
-from ia import setup_generative_model, process_file_with_ia
-from ui import log_message
+from files import (  # pylint: disable=import-error  # sibling script module
+    load_agent_instructions, save_output_file, read_file_content,
+)
+from ia import setup_generative_model, process_file_with_ia  # pylint: disable=import-error  # sibling script module
+from ui import log_message  # pylint: disable=import-error  # sibling script module
 
 PROMPT_FILENAME = "swagger_generation.txt"
 
@@ -21,7 +24,8 @@ def main():
     )
     # Argumentos
     parser.add_argument("path", type=str, help="Path to the main .py file of the Flask app.")
-    parser.add_argument("--output", type=str, default="swagger.yaml", help="Output path for the swagger.yaml file.")
+    parser.add_argument("--output", type=str, default="swagger.yaml",
+                        help="Output path for the swagger.yaml file.")
     args = parser.parse_args()
 
     log_message("INITIALIZING SWAGGER GENERATOR", "HEADER")
@@ -53,8 +57,9 @@ def main():
 
     # Llamada a la función de procesamiento unificada
     # Le indicamos que NO esperamos un JSON, sino texto plano (YAML)
-    swagger_content, tokens_call, consumption_call = process_file_with_ia(model, agent_instructions, code_content,
-                                                                          str(filepath), is_json_output=False)
+    swagger_content, _, _ = process_file_with_ia(
+        model, agent_instructions, code_content, str(filepath), is_json_output=False
+    )
     # log_message(f"Tokens consumed: {tokens_call}  --> {consumption_call} $", "INFO")
 
     if swagger_content and isinstance(swagger_content, str):
@@ -62,10 +67,13 @@ def main():
 
         # Función de guardado unificada
         save_output_file(output_path, swagger_content)
-        # El log de éxito ahora está en save_output_file, pero podemos añadir uno específico si queremos.
+        # El log de éxito ahora está en save_output_file, pero podemos añadir uno
+        # específico si queremos.
         log_message(f"OpenAPI 3.1.0 specification generated at '{output_path}'", "SUCCESS")
     else:
-        log_message("Swagger generation process failed. No valid content received from IA.", "ERROR")
+        log_message(
+            "Swagger generation process failed. No valid content received from IA.", "ERROR"
+        )
         sys.exit(1)
 
 

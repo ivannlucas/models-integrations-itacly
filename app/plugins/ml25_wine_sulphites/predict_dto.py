@@ -108,7 +108,10 @@ class PredictInlineResponse(BaseModel):
     )
     xai_feature_values: dict[str, float] = Field(
         default_factory=dict,
-        description="Wine analysis input values used for this prediction, echoed back for XAI/explainability display",
+        description=(
+            "Wine analysis input values used for this prediction, echoed back for "
+            "XAI/explainability display"
+        ),
     )
     simulation_trajectory: list[dict[str, float]] = Field(
         default_factory=list,

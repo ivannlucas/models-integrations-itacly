@@ -230,11 +230,28 @@ class Ml14WinePhytoPriceForecastPlugin(ModelPluginPort):
             ),
         ]
         outputs = [
-            OutputField(name="predicted_price", type="float", description="PROTECCION_FITO predicho a horizon_weeks vista (índice base 2020=100)."),
-            OutputField(name="current_price", type="float", description="PROTECCION_FITO de la última fila del histórico aportado."),
-            OutputField(name="drift_baseline", type="float", description="Baseline lineal de drift — referencia frente a la que el GRU compara en el test reportado (ver manifest)."),
+            OutputField(
+                name="predicted_price", type="float",
+                description=(
+                    "PROTECCION_FITO predicho a horizon_weeks vista (índice base 2020=100)."
+                ),
+            ),
+            OutputField(
+                name="current_price", type="float",
+                description="PROTECCION_FITO de la última fila del histórico aportado.",
+            ),
+            OutputField(
+                name="drift_baseline", type="float",
+                description=(
+                    "Baseline lineal de drift — referencia frente a la que el GRU compara en el "
+                    "test reportado (ver manifest)."
+                ),
+            ),
             OutputField(name="horizon_weeks", type="int", description=f"Siempre {HORIZON_WEEKS}."),
-            OutputField(name="prediction_date", type="date", description="last_observed_date + horizon_weeks."),
+            OutputField(
+                name="prediction_date", type="date",
+                description="last_observed_date + horizon_weeks.",
+            ),
         ]
         return StatsResponse(
             model_name=MODEL_ID,

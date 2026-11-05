@@ -4,10 +4,11 @@ from __future__ import annotations
 import json
 import logging
 import os
+import shutil
+import tempfile
 
 import joblib
 import torch
-import shutil
 
 from app.domain.services.mlflow_tracker import BaseMLflowTracker, require_user_model
 from app.plugins.ml34_dairy_pasteurization_energy_ga.constants import (
@@ -32,7 +33,6 @@ def download_user_model_from_mlflow(run_id: str):
     model_config.json, so a retrained model with a different topology
     still loads correctly.
     """
-    import tempfile
     tmp = tempfile.mkdtemp(prefix="mlflow_ml34_")
     try:
         local_path = BaseMLflowTracker(run_id).download_artifacts(tmp, artifact_path="model")

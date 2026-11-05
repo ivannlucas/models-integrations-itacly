@@ -1,5 +1,12 @@
 """Endpoint tests for ``ml21-cereals-price-spatial`` (ESP-CEREAL spatial cereal price)."""
+from unittest.mock import patch
+
+import joblib
+import numpy as np
 import pytest
+
+from app.plugins.ml21_cereals_price_spatial import model_loader
+from app.plugins.ml21_cereals_price_spatial.plugin import Ml21CerealsPriceSpatialPlugin
 
 PREFIX = "/models/ml21-cereals-price-spatial"
 
@@ -13,6 +20,7 @@ INLINE_PAYLOAD = {
 
 
 def test_health(client):
+    """GET /health reports the model as ok and loaded."""
     body = client.get(f"{PREFIX}/health").json()
     assert body["status"] == "ok"
     assert body["model"] == "ml21-cereals-price-spatial"
@@ -20,10 +28,12 @@ def test_health(client):
 
 
 def test_stats(client):
+    """GET /stats returns the model name."""
     assert client.get(f"{PREFIX}/stats").json()["model_name"] == "ml21-cereals-price-spatial"
 
 
 def test_predict_inline(client):
+    """Inline /predict returns H1-H3 predictions for the requested province and cereal."""
     resp = client.post(f"{PREFIX}/predict", json=INLINE_PAYLOAD)
     assert resp.status_code == 200
     body = resp.json()
@@ -37,8 +47,10 @@ def test_predict_inline(client):
 
 
 def test_predict_batch(client):
+    """Batch /predict returns 200 with the model id."""
     resp = client.post(
-        f"{PREFIX}/predict", json={"mode": "batch", "data_path": "/tmp/cereal.csv", "month": "2024-01"}
+        f"{PREFIX}/predict",
+        json={"mode": "batch", "data_path": "/tmp/cereal.csv", "month": "2024-01"},
     )
     assert resp.status_code == 200
     assert resp.json()["model_id"] == "ml21-cereals-price-spatial"
@@ -51,6 +63,7 @@ def test_predict_batch_does_not_require_month(client):
 
 
 def test_train_returns_501(client):
+    """/train with an MLflow run id answers 200 (or 501 if training were disabled)."""
     resp = client.post(
         f"{PREFIX}/train", json={"data_path": "/tmp/x.csv", "mlflow_run_id": "test-run-id"}
     )
@@ -64,6 +77,7 @@ def test_train_without_mlflow_run_id_is_accepted(client):
 
 
 def test_train_returns_metrics(client):
+    """/train returns the per-horizon metric fields."""
     resp = client.post(
         f"{PREFIX}/train", json={"data_path": "/tmp/x.csv", "mlflow_run_id": "test-run-id"}
     )
@@ -81,11 +95,8 @@ def test_stats_fetches_mlflow_metrics_when_run_id_given():
     """Regression: stats(mlflow_run_id=...) accepted the parameter but never used it —
     every retrain's /stats always reported this plugin's own static/served metrics, no
     matter which trained run was asked about, same class of bug found and fixed in
-    ml43_cereals_dnsl_anomaly_fault_detection/ml3_wine_disease_pest_forecast (see plugin.py::stats)."""
-    from unittest.mock import patch
-
-    from app.plugins.ml21_cereals_price_spatial.plugin import Ml21CerealsPriceSpatialPlugin
-
+    ml43_cereals_dnsl_anomaly_fault_detection/ml3_wine_disease_pest_forecast (see plugin.py::stats).
+    """
     plugin = Ml21CerealsPriceSpatialPlugin()
     with patch(
         "app.plugins.ml21_cereals_price_spatial.plugin.BaseMLflowTracker"
@@ -104,10 +115,6 @@ def test_stats_overwrites_legacy_per_horizon_keys_with_the_real_run_values():
     above mocked. The flattening loop only ADDS the real flat keys; it never touches
     the legacy ones (built from self._metadata), so every retrain's /stats kept
     showing the served model's fixed per-horizon numbers under those exact tiles."""
-    from unittest.mock import patch
-
-    from app.plugins.ml21_cereals_price_spatial.plugin import Ml21CerealsPriceSpatialPlugin
-
     plugin = Ml21CerealsPriceSpatialPlugin()
     with patch(
         "app.plugins.ml21_cereals_price_spatial.plugin.BaseMLflowTracker"
@@ -127,22 +134,21 @@ def test_stats_overwrites_legacy_per_horizon_keys_with_the_real_run_values():
 def test_xai_feature_values_are_the_h3_model_input_row():
     """xai_feature_values must be the H3 regressor's real input (one-hot columns included):
     the explainability service feeds them straight to datagia_best_h3_reg."""
-    import joblib
-    import numpy as np
-
-    from app.plugins.ml21_cereals_price_spatial import model_loader
-    from app.plugins.ml21_cereals_price_spatial.plugin import Ml21CerealsPriceSpatialPlugin
-
     local = model_loader._store.local_dir  # pylint: disable=protected-access
     if not (local / "datagia_best_h3_reg.joblib").exists():
         pytest.skip("ml21 artifacts not vendored locally")
     plugin = Ml21CerealsPriceSpatialPlugin()
     plugin.load()
-    resp = plugin.predict_inline(features={
-        "provincia": "Burgos", "cereal_predominante": "trigo", "date": "2024-03", "role": "comprador",
-    })
+    resp = plugin.predict_inline(
+        features={
+            "provincia": "Burgos",
+            "cereal_predominante": "trigo",
+            "date": "2024-03",
+            "role": "comprador",
+        }
+    )
     xai = resp.xai_feature_values
-    assert xai["cereal_predominante_trigo"] == 1.0
+    assert xai["cereal_predominante_trigo"] == 1.0  # pylint: disable=unsubscriptable-object
     model = joblib.load(local / "datagia_best_h3_reg.joblib")
-    row = np.array([[xai.get(f, 0.0) for f in model.feature_names_in_]])
+    row = np.array([[xai.get(f, 0.0) for f in model.feature_names_in_]])  # pylint: disable=no-member
     assert float(model.predict(row)[0]) == pytest.approx(resp.predictions["H3"]["expected_return"])

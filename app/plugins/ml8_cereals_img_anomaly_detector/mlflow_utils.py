@@ -3,13 +3,18 @@ from __future__ import annotations
 
 import logging
 import os
+import shutil
+import tempfile
 
 import torch
-import shutil
 
 from app.domain.services.mlflow_tracker import BaseMLflowTracker, require_user_model
 from app.plugins.ml8_cereals_img_anomaly_detector.constants import (
     MODEL_FILENAME,
+)
+from app.plugins.ml8_cereals_img_anomaly_detector.model_loader import (
+    MultiTaskMobileNetV3Large,
+    _safe_device,
 )
 
 logger = logging.getLogger(__name__)
@@ -22,15 +27,12 @@ def download_user_model_from_mlflow(run_id: str):
     Returns (model_bundle_dict, temp_dir).
     Caller MUST shutil.rmtree(temp_dir) after inference.
     """
-    import tempfile
     tmp = tempfile.mkdtemp(prefix="mlflow_ml8_")
     try:
         local_path = BaseMLflowTracker(run_id).download_artifacts(tmp, artifact_path="model")
         if not local_path:
             shutil.rmtree(tmp, ignore_errors=True)
             return None
-
-        from app.plugins.ml8_cereals_img_anomaly_detector.model_loader import MultiTaskMobileNetV3Large, _safe_device
 
         checkpoint_path = os.path.join(local_path, MODEL_FILENAME)
         checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)

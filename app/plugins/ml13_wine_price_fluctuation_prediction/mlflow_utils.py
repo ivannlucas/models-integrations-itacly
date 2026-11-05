@@ -19,7 +19,8 @@ from app.plugins.ml13_wine_price_fluctuation_prediction.model_loader import load
 logger = logging.getLogger(__name__)
 
 
-@require_user_model   # None or an artifact load error, with run_id → UserModelUnavailableError (422)
+# None or an artifact load error, with run_id → UserModelUnavailableError (422)
+@require_user_model
 def download_user_model_from_mlflow(run_id: str):
     """Download a user-retrained bundle (model, scaler, feature_schema, model_config) from MLflow.
 
@@ -32,7 +33,9 @@ def download_user_model_from_mlflow(run_id: str):
     """
     tmp = tempfile.mkdtemp(prefix="mlflow_ml13_")
     try:
-        local_path = BaseMLflowTracker(run_id).download_artifacts(tmp, artifact_path=MLFLOW_ARTIFACT_PATH)
+        local_path = BaseMLflowTracker(run_id).download_artifacts(
+            tmp, artifact_path=MLFLOW_ARTIFACT_PATH
+        )
         if not local_path:
             shutil.rmtree(tmp, ignore_errors=True)
             return None
@@ -47,7 +50,8 @@ def download_user_model_from_mlflow(run_id: str):
             return None
         bundle = load_bundle_from_paths(*paths)
         logger.info(
-            "Downloaded user model from MLflow run_id=%s (model_type=%s)", run_id, bundle["model_type"],
+            "Downloaded user model from MLflow run_id=%s (model_type=%s)",
+            run_id, bundle["model_type"],
         )
         return bundle, tmp
     except BaseException:   # never leave the temp dir behind

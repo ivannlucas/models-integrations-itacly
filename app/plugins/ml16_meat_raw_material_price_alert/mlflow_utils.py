@@ -57,7 +57,9 @@ def download_user_model_from_mlflow(run_id: str):
             models[target] = joblib.load(model_path)
             scalers[target] = joblib.load(scaler_path)
             bagging_path = os.path.join(local_path, BAGGING_FILENAMES[target])
-            bagging_models[target] = joblib.load(bagging_path) if os.path.exists(bagging_path) else []
+            bagging_models[target] = (
+                joblib.load(bagging_path) if os.path.exists(bagging_path) else []
+            )
 
         logger.info("Downloaded user model from MLflow run_id=%s", run_id)
         return models, scalers, bagging_models, train_config, tmp

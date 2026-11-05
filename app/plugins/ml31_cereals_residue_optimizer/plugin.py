@@ -119,7 +119,7 @@ class Ml31CerealsResidueOptimizerPlugin(ModelPluginPort):
             return fallback
         return reference_year
 
-    def _build_optimizer(
+    def _build_optimizer(  # pylint: disable=too-many-arguments,too-many-locals
         self,
         *,
         reference_year: int,
@@ -199,7 +199,7 @@ class Ml31CerealsResidueOptimizerPlugin(ModelPluginPort):
         self._record()
         return result
 
-    def _solve_scenario(self, features: dict) -> dict:
+    def _solve_scenario(self, features: dict) -> dict:  # pylint: disable=too-many-locals
         """Core LP solve shared by _run_optimize and _compute_sensitivity — returns a
         plain dict of every computed metric, before wrapping into a response model.
         """
@@ -326,15 +326,21 @@ class Ml31CerealsResidueOptimizerPlugin(ModelPluginPort):
                 perturbed_result = self._solve_scenario(perturbed_features)
             except InfeasibleOptimizationError:
                 continue
-            contributions.append({
-                "feature": param,
-                "contribution": round(perturbed_result["residue_reduction_pct"] - baseline_res_red_pct, 4),
-                "value": round(base_value, 4),
-            })
+            contributions.append(
+                {
+                    "feature": param,
+                    "contribution": round(
+                        perturbed_result["residue_reduction_pct"] - baseline_res_red_pct, 4
+                    ),
+                    "value": round(base_value, 4),
+                }
+            )
         contributions.sort(key=lambda c: abs(c["contribution"]), reverse=True)
         return contributions
 
-    def _run_optimize(self, features: dict, *, with_sensitivity: bool = False) -> PredictOptimizeResponse:
+    def _run_optimize(
+        self, features: dict, *, with_sensitivity: bool = False
+    ) -> PredictOptimizeResponse:
         result = self._solve_scenario(features)
         sensitivity = (
             self._compute_sensitivity(features, result["residue_reduction_pct"])
@@ -346,7 +352,7 @@ class Ml31CerealsResidueOptimizerPlugin(ModelPluginPort):
             **result,
         )
 
-    def _run_pareto(self, features: dict) -> PredictParetoResponse:
+    def _run_pareto(self, features: dict) -> PredictParetoResponse:  # pylint: disable=too-many-locals
         reference_year = self._resolve_year(int(features["reference_year"]))
         n_points = int(features["num_points"])
         pct_range = features["benefit_range_pct_of_max"]
@@ -457,7 +463,7 @@ class Ml31CerealsResidueOptimizerPlugin(ModelPluginPort):
                 # Sensitivity (explainability) is only ever surfaced for the first row
                 # of a batch by the platform's XAI panel — computing it for every row
                 # would multiply solve time ~7x for no benefit, so it's skipped past idx 0.
-                result = self._run_optimize(features, with_sensitivity=(idx == 0))
+                result = self._run_optimize(features, with_sensitivity=idx == 0)
                 row_out = {
                     "row": int(idx),
                     "reference_year": result.reference_year,
@@ -529,50 +535,127 @@ class Ml31CerealsResidueOptimizerPlugin(ModelPluginPort):
             task_type="optimization",
             framework=FRAMEWORK,
             inputs=[
-                InputField(name="reference_year", type="int", default=2023,
-                           description="Año de referencia (superficies históricas) [optimize/pareto]"),
-                InputField(name="optimization_mode", type="str", default="minimize_residue",
-                           description="minimize_residue (Modo A) | maximize_benefit (Modo B) [optimize]"),
-                InputField(name="climate_factor", type="float", default=1.0,
-                           description="Multiplicador sobre los rendimientos [optimize/pareto]"),
-                InputField(name="expected_spring_rain_mm", type="float", default=130.0,
-                           description="Lluvia de primavera esperada (mm); <100 activa estrés hídrico"),
-                InputField(name="min_benefit_eur", type="float",
-                           description="Beneficio mínimo exigido (R6, Modo A); null => baseline"),
-                InputField(name="min_benefit_pct_of_baseline", type="float", default=1.0,
-                           description="% del beneficio baseline a preservar [optimize Modo A]"),
-                InputField(name="max_residue_t", type="float",
-                           description="Residuo máximo admisible (R7, Modo B)"),
-                InputField(name="surface_tolerance_pct", type="float", default=25.0,
-                           description="Banda ±% sobre la superficie histórica por cultivo (R4c)"),
-                InputField(name="min_secano_use_pct", type="float", default=95.0,
-                           description="Uso mínimo de secano (R1b)"),
-                InputField(name="min_regadio_use_pct", type="float", default=95.0,
-                           description="Uso mínimo de regadío (R2b)"),
-                InputField(name="num_points", type="int", default=20,
-                           description="Nº de puntos del barrido de beneficio [pareto]"),
-                InputField(name="benefit_range_pct_of_max", type="list",
-                           description="Rango [low, high] como fracción del beneficio máximo [pareto]"),
+                InputField(
+                    name="reference_year",
+                    type="int",
+                    default=2023,
+                    description="Año de referencia (superficies históricas) [optimize/pareto]",
+                ),
+                InputField(
+                    name="optimization_mode",
+                    type="str",
+                    default="minimize_residue",
+                    description="minimize_residue (Modo A) | maximize_benefit (Modo B) [optimize]",
+                ),
+                InputField(
+                    name="climate_factor",
+                    type="float",
+                    default=1.0,
+                    description="Multiplicador sobre los rendimientos [optimize/pareto]",
+                ),
+                InputField(
+                    name="expected_spring_rain_mm",
+                    type="float",
+                    default=130.0,
+                    description="Lluvia de primavera esperada (mm); <100 activa estrés hídrico",
+                ),
+                InputField(
+                    name="min_benefit_eur",
+                    type="float",
+                    description="Beneficio mínimo exigido (R6, Modo A); null => baseline",
+                ),
+                InputField(
+                    name="min_benefit_pct_of_baseline",
+                    type="float",
+                    default=1.0,
+                    description="% del beneficio baseline a preservar [optimize Modo A]",
+                ),
+                InputField(
+                    name="max_residue_t",
+                    type="float",
+                    description="Residuo máximo admisible (R7, Modo B)",
+                ),
+                InputField(
+                    name="surface_tolerance_pct",
+                    type="float",
+                    default=25.0,
+                    description="Banda ±% sobre la superficie histórica por cultivo (R4c)",
+                ),
+                InputField(
+                    name="min_secano_use_pct",
+                    type="float",
+                    default=95.0,
+                    description="Uso mínimo de secano (R1b)",
+                ),
+                InputField(
+                    name="min_regadio_use_pct",
+                    type="float",
+                    default=95.0,
+                    description="Uso mínimo de regadío (R2b)",
+                ),
+                InputField(
+                    name="num_points",
+                    type="int",
+                    default=20,
+                    description="Nº de puntos del barrido de beneficio [pareto]",
+                ),
+                InputField(
+                    name="benefit_range_pct_of_max",
+                    type="list",
+                    description="Rango [low, high] como fracción del beneficio máximo [pareto]",
+                ),
             ],
             outputs=[
-                OutputField(name="crop_allocation", type="dict",
-                            description="Plan óptimo por cultivo: secano_ha/regadio_ha/production_t/residue_t/benefit_eur [optimize]"),
-                OutputField(name="total_residue_t", type="float",
-                            description="Residuo total de la solución óptima (objetivo Modo A) [optimize]"),
-                OutputField(name="total_benefit_eur", type="float",
-                            description="Beneficio total de la solución óptima (objetivo Modo B) [optimize]"),
-                OutputField(name="residue_reduction_pct", type="float",
-                            description="Reducción de residuo vs baseline (positivo=reducción) [optimize]"),
-                OutputField(name="verdict", type="str",
-                            description="PASADO/FALLADO según criterios de éxito [optimize]"),
-                OutputField(name="solver_status", type="str",
-                            description="Estado CBC: OPTIMAL | INFEASIBLE | UNBOUNDED | NOT_SOLVED"),
-                OutputField(name="bounds", type="dict",
-                            description="Extremos de la frontera de Pareto [pareto]"),
-                OutputField(name="pareto_points", type="list",
-                            description="Puntos no dominados de la frontera (en millones) [pareto]"),
-                OutputField(name="knee_point", type="dict",
-                            description="Mejor compromiso residuo/beneficio [pareto]"),
+                OutputField(
+                    name="crop_allocation",
+                    type="dict",
+                    description=(
+                        "Plan óptimo por cultivo: "
+                        "secano_ha/regadio_ha/production_t/residue_t/benefit_eur [optimize]"
+                    ),
+                ),
+                OutputField(
+                    name="total_residue_t",
+                    type="float",
+                    description="Residuo total de la solución óptima (objetivo Modo A) [optimize]",
+                ),
+                OutputField(
+                    name="total_benefit_eur",
+                    type="float",
+                    description=(
+                        "Beneficio total de la solución óptima (objetivo Modo B) [optimize]"
+                    ),
+                ),
+                OutputField(
+                    name="residue_reduction_pct",
+                    type="float",
+                    description="Reducción de residuo vs baseline (positivo=reducción) [optimize]",
+                ),
+                OutputField(
+                    name="verdict",
+                    type="str",
+                    description="PASADO/FALLADO según criterios de éxito [optimize]",
+                ),
+                OutputField(
+                    name="solver_status",
+                    type="str",
+                    description="Estado CBC: OPTIMAL | INFEASIBLE | UNBOUNDED | NOT_SOLVED",
+                ),
+                OutputField(
+                    name="bounds",
+                    type="dict",
+                    description="Extremos de la frontera de Pareto [pareto]",
+                ),
+                OutputField(
+                    name="pareto_points",
+                    type="list",
+                    description="Puntos no dominados de la frontera (en millones) [pareto]",
+                ),
+                OutputField(
+                    name="knee_point",
+                    type="dict",
+                    description="Mejor compromiso residuo/beneficio [pareto]",
+                ),
             ],
             metrics={
                 # Escenario de referencia 2023 (memoria Tabla 12 / optimization_metrics.json).
@@ -583,8 +666,10 @@ class Ml31CerealsResidueOptimizerPlugin(ModelPluginPort):
                 "residuo_por_euro_optimo_t_eur": 0.0132,
                 "solver_status_2023": "OPTIMAL",
                 "solve_time_seconds_2023": 0.0138,
-                "nota_signo": ("residue_reduction_pct es POSITIVO cuando hay reducción; la memoria "
-                               "reporta el mismo dato con signo negativo como 'variación'."),
+                "nota_signo": (
+                    "residue_reduction_pct es POSITIVO cuando hay reducción; la memoria "
+                    "reporta el mismo dato con signo negativo como 'variación'."
+                ),
             },
             runtime_stats=RuntimeStats(
                 total_predictions=self._predict_count,

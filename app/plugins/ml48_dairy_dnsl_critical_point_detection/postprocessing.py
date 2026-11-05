@@ -1,3 +1,4 @@
+"""Inferencia y formateo de respuestas de ml48 (inline y batch)."""
 import numpy as np
 import torch
 
@@ -10,19 +11,24 @@ from app.plugins.ml48_dairy_dnsl_critical_point_detection.preprocessing import p
 
 
 def build_input_tensor(scaler, feature_cols, x_df, label: str = ""):
-    """Escala las 28 features y devuelve (tensor (1, C, 600), n_samples) o None si faltan columnas."""
+    """Escala las 28 features y devuelve (tensor (1, C, 600), n_samples).
+
+    Devuelve None si faltan columnas.
+    """
     try:
         df_to_scale = x_df[feature_cols]
     except KeyError:
         return None
-    X_scaled = scaler.transform(df_to_scale)
-    n_samples = X_scaled.shape[0]
-    X_ready = pad_or_truncate(X_scaled, label=label)
-    tensor = torch.tensor(X_ready, dtype=torch.float32).unsqueeze(0).permute(0, 2, 1)
+    x_scaled = scaler.transform(df_to_scale)
+    n_samples = x_scaled.shape[0]
+    x_ready = pad_or_truncate(x_scaled, label=label)
+    tensor = torch.tensor(x_ready, dtype=torch.float32).unsqueeze(0).permute(0, 2, 1)
     return tensor, n_samples
 
 
-def run_inference(model, scaler, feature_cols, x_df, device, label: str = "") -> dict | None:
+def run_inference(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
+        model, scaler, feature_cols, x_df, device, label: str = "") -> dict | None:
+    """Predice las 4 cabezas de un ciclo: clases, confianzas, n_samples y tensor de entrada."""
     built = build_input_tensor(scaler, feature_cols, x_df, label=label)
     if built is None:
         return None
@@ -44,6 +50,7 @@ def run_inference(model, scaler, feature_cols, x_df, device, label: str = "") ->
 
 
 def format_inline_response(model_id: str, resultados: dict) -> dict:
+    """Respuesta inline: clase y confianza de cada componente."""
     preds = resultados["predicciones"]
     confs = resultados["confianzas"]
     return {
@@ -61,6 +68,7 @@ def format_inline_response(model_id: str, resultados: dict) -> dict:
 
 
 def format_batch_row(resultados: dict, cycle_id) -> dict:
+    """Fila batch de un ciclo: clase, texto y confianza de cada componente."""
     preds = resultados["predicciones"]
     confs = resultados["confianzas"]
     row: dict = {}

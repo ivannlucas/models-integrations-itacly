@@ -17,9 +17,9 @@ import shutil
 import tempfile
 import time
 from datetime import datetime, timezone
+from typing import Any
 
 import torch
-from typing import Any
 from PIL import Image
 from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score, roc_auc_score
 from sklearn.model_selection import train_test_split
@@ -206,7 +206,7 @@ class Ml4LacticCnnThermalEarlyDiseaseDetectionPlugin(ModelPluginPort):
                     feature_map, model.classifier[1].weight,
                     result["predicted_class_index"], source_image,
                 )
-            except Exception as exc:  # heatmap is auxiliary: never fail the prediction for it
+            except Exception as exc:  # pylint: disable=broad-exception-caught  # heatmap is auxiliary: never fail the prediction for it
                 logger.warning("ml4 inline CAM failed: %s", exc)
             self._record()
             return PredictInlineResponse(
@@ -268,7 +268,7 @@ class Ml4LacticCnnThermalEarlyDiseaseDetectionPlugin(ModelPluginPort):
                                 # the source image; healthy ones stay out to keep the payload small.
                                 row["image_base64"] = base64.b64encode(image_bytes).decode("ascii")
                             predictions.append(row)
-                        except Exception as exc:
+                        except Exception as exc:  # pylint: disable=broad-exception-caught  # per-row error capture
                             predictions.append({"filename": fname, "error": str(exc)})
                 finally:
                     if temp_dir:
@@ -456,7 +456,9 @@ class Ml4LacticCnnThermalEarlyDiseaseDetectionPlugin(ModelPluginPort):
                 tracker.upload_artifacts(mlflow_tmp, artifact_path="model")
             except Exception as exc:
                 logger.error("ml4 train(): MLflow artifact upload failed: %s", exc)
-                raise ModelPersistenceError(f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}") from exc
+                raise ModelPersistenceError(
+                    f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}"
+                ) from exc
             finally:
                 shutil.rmtree(mlflow_tmp, ignore_errors=True)
 
@@ -520,6 +522,6 @@ class Ml4LacticCnnThermalEarlyDiseaseDetectionPlugin(ModelPluginPort):
                     "metrics": tracker.get_metrics(),
                 }
                 logger.info("Stats enriched with MLflow data for run_id=%s", mlflow_run_id)
-            except Exception as exc:
+            except Exception as exc:  # pylint: disable=broad-exception-caught  # MLflow stats are best-effort
                 logger.warning("Could not fetch MLflow stats for run_id=%s: %s", mlflow_run_id, exc)
         return base

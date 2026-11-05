@@ -48,7 +48,7 @@ def _member_path(dest_real: str, name: str) -> str:
     return path
 
 
-def safe_extract_zip(zip_path: str, dest_dir: str) -> None:
+def safe_extract_zip(zip_path: str, dest_dir: str) -> None:  # pylint: disable=too-many-locals
     """Extract *zip_path* into *dest_dir* within the size, file-count and ratio limits.
 
     Raises ``ArchiveLimitExceededError`` (→ 413) when a limit is exceeded and ``ValueError``
@@ -67,7 +67,8 @@ def safe_extract_zip(zip_path: str, dest_dir: str) -> None:
         members = [m for m in zf.infolist() if not m.is_dir()]
         if len(members) > max_files:
             raise ArchiveLimitExceededError(
-                f"El ZIP contiene {len(members)} ficheros; el máximo es {max_files} (ARCHIVE_MAX_FILES)."
+                f"El ZIP contiene {len(members)} ficheros; el máximo es {max_files} "
+                "(ARCHIVE_MAX_FILES)."
             )
         declared = sum(m.file_size for m in members)
         if declared > max_total:
@@ -109,4 +110,6 @@ def safe_extract_zip(zip_path: str, dest_dir: str) -> None:
                             "(ARCHIVE_MAX_TOTAL_BYTES)."
                         )
                     dst.write(chunk)
-    logger.info("Extracted %d files (%.1f MiB) from %s", len(members), written_total / 1024 ** 2, zip_path)
+    logger.info(
+        "Extracted %d files (%.1f MiB) from %s", len(members), written_total / 1024 ** 2, zip_path
+    )

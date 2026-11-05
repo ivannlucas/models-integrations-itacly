@@ -12,11 +12,11 @@ from __future__ import annotations
 import json
 import logging
 import os
+import shutil
 import tempfile
 
 import numpy as np
 import torch
-import shutil
 
 from app.domain.services.mlflow_tracker import BaseMLflowTracker, require_user_model
 from app.plugins.ml23_lactic_market_price_forecast.constants import ARTIFACT_FOLDER_NAME
@@ -44,7 +44,8 @@ def download_user_model_from_mlflow(run_id: str):
         scaler_path = os.path.join(local_path, "rnn_scaler.npz")
         if not all(os.path.exists(p) for p in (manifest_path, model_path, scaler_path)):
             logger.warning(
-                "MLflow run_id=%s did not contain a complete GRU bundle under artifact_path='model'",
+                "MLflow run_id=%s did not contain a complete GRU bundle under "
+                "artifact_path='model'",
                 run_id,
             )
             shutil.rmtree(tmp, ignore_errors=True)

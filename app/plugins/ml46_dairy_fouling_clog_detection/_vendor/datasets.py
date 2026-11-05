@@ -10,10 +10,13 @@ import torch
 from torch.utils.data import Dataset
 
 from app.plugins.ml46_dairy_fouling_clog_detection._vendor.common import TrainConfig
-from app.plugins.ml46_dairy_fouling_clog_detection._vendor.utils_common import sequence_group_columns
+from app.plugins.ml46_dairy_fouling_clog_detection._vendor.utils_common import (
+    sequence_group_columns,
+)
 
 
 @dataclass
+# pylint: disable-next=too-many-instance-attributes
 class AssetSequence:
     """One continuous asset+cycle sequence with raw feature matrix and per-step targets."""
 
@@ -35,7 +38,10 @@ class AssetSequence:
     meta: pd.DataFrame
 
 
-def make_sequences(feat_df: pd.DataFrame, cfg: TrainConfig, feature_cols: Sequence[str]) -> Dict[str, AssetSequence]:
+# pylint: disable-next=too-many-locals
+def make_sequences(
+    feat_df: pd.DataFrame, cfg: TrainConfig, feature_cols: Sequence[str]
+) -> Dict[str, AssetSequence]:
     """Group the engineered dataframe into one AssetSequence per asset_id/sequence_id."""
     sequences: Dict[str, AssetSequence] = {}
     foul_col = f"fouling_onset_within_{cfg.fouling_horizon_min}min"
@@ -53,38 +59,106 @@ def make_sequences(feat_df: pd.DataFrame, cfg: TrainConfig, feature_cols: Sequen
         else:
             sequence_id = asset_id
 
-        severity_series = pd.to_numeric(g[cfg.severity_col], errors="coerce") if cfg.severity_col in g.columns else pd.Series(np.zeros(len(g)))
+        severity_series = (
+            pd.to_numeric(g[cfg.severity_col], errors="coerce")
+            if cfg.severity_col in g.columns
+            else pd.Series(np.zeros(len(g)))
+        )
         y_severity = severity_series.fillna(0.0).astype(np.float32).to_numpy()
         if "fouling_stage_physical" not in g.columns:
             g["fouling_stage_physical"] = 0
-        y_stage = pd.to_numeric(g["fouling_stage_physical"], errors="coerce").fillna(0).astype(int).clip(0, 2).to_numpy(dtype=np.int64)
-        y_foul_h = pd.to_numeric(g.get(foul_col, 0), errors="coerce").fillna(0).astype(np.float32).clip(0.0, 1.0).to_numpy()
-        y_actionable_foul_h = pd.to_numeric(g.get(actionable_col, 0), errors="coerce").fillna(0).astype(np.float32).clip(0.0, 1.0).to_numpy()
-        y_clog_h = pd.to_numeric(g.get(clog_col, 0), errors="coerce").fillna(0).astype(np.float32).clip(0.0, 1.0).to_numpy()
-        y_ttf_foul = pd.to_numeric(g.get("time_to_fouling_onset_min", np.nan), errors="coerce").astype(float).to_numpy()
-        y_ttf_clog = pd.to_numeric(g.get("time_to_clog_onset_min", np.nan), errors="coerce").astype(float).to_numpy()
-        y_ttu = pd.to_numeric(g.get("ttm_to_unplanned_event_min", np.nan), errors="coerce").astype(float).to_numpy()
+        y_stage = (
+            pd.to_numeric(g["fouling_stage_physical"], errors="coerce")
+            .fillna(0)
+            .astype(int)
+            .clip(0, 2)
+            .to_numpy(dtype=np.int64)
+        )
+        y_foul_h = (
+            pd.to_numeric(g.get(foul_col, 0), errors="coerce")
+            .fillna(0)
+            .astype(np.float32)
+            .clip(0.0, 1.0)
+            .to_numpy()
+        )
+        y_actionable_foul_h = (
+            pd.to_numeric(g.get(actionable_col, 0), errors="coerce")
+            .fillna(0)
+            .astype(np.float32)
+            .clip(0.0, 1.0)
+            .to_numpy()
+        )
+        y_clog_h = (
+            pd.to_numeric(g.get(clog_col, 0), errors="coerce")
+            .fillna(0)
+            .astype(np.float32)
+            .clip(0.0, 1.0)
+            .to_numpy()
+        )
+        y_ttf_foul = (
+            pd.to_numeric(g.get("time_to_fouling_onset_min", np.nan), errors="coerce")
+            .astype(float)
+            .to_numpy()
+        )
+        y_ttf_clog = (
+            pd.to_numeric(g.get("time_to_clog_onset_min", np.nan), errors="coerce")
+            .astype(float)
+            .to_numpy()
+        )
+        y_ttu = (
+            pd.to_numeric(g.get("ttm_to_unplanned_event_min", np.nan), errors="coerce")
+            .astype(float)
+            .to_numpy()
+        )
 
-        y_ttf_foul = np.where(np.isfinite(y_ttf_foul), np.clip(y_ttf_foul, 0.0, float(cfg.tte_fouling_cap_min)), float(cfg.tte_fouling_cap_min)).astype(np.float32)
-        y_ttf_clog = np.where(np.isfinite(y_ttf_clog), np.clip(y_ttf_clog, 0.0, float(cfg.tte_clog_cap_min)), float(cfg.tte_clog_cap_min)).astype(np.float32)
-        y_ttu = np.where(np.isfinite(y_ttu), np.clip(y_ttu, 0.0, float(cfg.ttu_cap_min)), float(cfg.ttu_cap_min)).astype(np.float32)
+        y_ttf_foul = np.where(
+            np.isfinite(y_ttf_foul),
+            np.clip(y_ttf_foul, 0.0, float(cfg.tte_fouling_cap_min)),
+            float(cfg.tte_fouling_cap_min),
+        ).astype(np.float32)
+        y_ttf_clog = np.where(
+            np.isfinite(y_ttf_clog),
+            np.clip(y_ttf_clog, 0.0, float(cfg.tte_clog_cap_min)),
+            float(cfg.tte_clog_cap_min),
+        ).astype(np.float32)
+        y_ttu = np.where(
+            np.isfinite(y_ttu), np.clip(y_ttu, 0.0, float(cfg.ttu_cap_min)), float(cfg.ttu_cap_min)
+        ).astype(np.float32)
 
         phase_array = g["phase"].astype(str).to_numpy()
         foul_weight = np.ones(len(g), dtype=np.float32)
         near_foul = (y_ttf_foul <= cfg.fouling_horizon_min) & (phase_array == "production")
-        foul_weight[near_foul] = 1.0 + 1.5 * (1.0 - y_ttf_foul[near_foul] / max(cfg.fouling_horizon_min, 1))
+        foul_weight[near_foul] = 1.0 + 1.5 * (
+            1.0 - y_ttf_foul[near_foul] / max(cfg.fouling_horizon_min, 1)
+        )
         foul_weight[y_foul_h == 1.0] = np.maximum(foul_weight[y_foul_h == 1.0], 3.0)
 
         actionable_foul_weight = np.ones(len(g), dtype=np.float32)
-        t_unplanned_foul = pd.to_numeric(g.get("time_to_unplanned_fouling_min", np.nan), errors="coerce").astype(float).to_numpy()
-        t_unplanned_foul = np.where(np.isfinite(t_unplanned_foul), np.clip(t_unplanned_foul, 0.0, float(cfg.unplanned_fouling_horizon_min)), float(cfg.unplanned_fouling_horizon_min))
-        near_actionable = (t_unplanned_foul <= cfg.unplanned_fouling_horizon_min) & (phase_array == "production")
-        actionable_foul_weight[near_actionable] = 1.0 + 1.5 * (1.0 - t_unplanned_foul[near_actionable] / max(cfg.unplanned_fouling_horizon_min, 1))
-        actionable_foul_weight[y_actionable_foul_h == 1.0] = np.maximum(actionable_foul_weight[y_actionable_foul_h == 1.0], 3.0)
+        t_unplanned_foul = (
+            pd.to_numeric(g.get("time_to_unplanned_fouling_min", np.nan), errors="coerce")
+            .astype(float)
+            .to_numpy()
+        )
+        t_unplanned_foul = np.where(
+            np.isfinite(t_unplanned_foul),
+            np.clip(t_unplanned_foul, 0.0, float(cfg.unplanned_fouling_horizon_min)),
+            float(cfg.unplanned_fouling_horizon_min),
+        )
+        near_actionable = (t_unplanned_foul <= cfg.unplanned_fouling_horizon_min) & (
+            phase_array == "production"
+        )
+        actionable_foul_weight[near_actionable] = 1.0 + 1.5 * (
+            1.0 - t_unplanned_foul[near_actionable] / max(cfg.unplanned_fouling_horizon_min, 1)
+        )
+        actionable_foul_weight[y_actionable_foul_h == 1.0] = np.maximum(
+            actionable_foul_weight[y_actionable_foul_h == 1.0], 3.0
+        )
 
         clog_weight = np.ones(len(g), dtype=np.float32)
         near_clog = (y_ttf_clog <= cfg.clog_horizon_min) & (phase_array == "production")
-        clog_weight[near_clog] = 1.0 + 1.5 * (1.0 - y_ttf_clog[near_clog] / max(cfg.clog_horizon_min, 1))
+        clog_weight[near_clog] = 1.0 + 1.5 * (
+            1.0 - y_ttf_clog[near_clog] / max(cfg.clog_horizon_min, 1)
+        )
         clog_weight[y_clog_h == 1.0] = np.maximum(clog_weight[y_clog_h == 1.0], 3.0)
 
         x = g[list(feature_cols)].to_numpy(dtype=np.float32)
@@ -160,13 +234,17 @@ class WindowDataset(Dataset):
         self.asset_ids = list(asset_ids)
         self.feature_indices = np.asarray(list(feature_indices), dtype=np.int64)
         self.cfg = cfg
-        self.sequence_ids = [sid for sid, seq in sequences.items() if seq.asset_id in self.asset_ids]
+        self.sequence_ids = [
+            sid for sid, seq in sequences.items() if seq.asset_id in self.asset_ids
+        ]
         self.index: List[Tuple[str, int]] = []
         step = int(stride) if stride is not None else cfg.stride
         for sequence_id in self.sequence_ids:
             seq = sequences[sequence_id]
             meta = seq.meta
-            valid_end = (meta["phase"] == "production") & (meta["maintenance_active"].fillna(0).astype(int) == 0)
+            valid_end = (meta["phase"] == "production") & (
+                meta["maintenance_active"].fillna(0).astype(int) == 0
+            )
             for end_idx in range(cfg.seq_len - 1, len(seq.timestamps), step):
                 if not bool(valid_end.iloc[end_idx]):
                     continue
@@ -184,16 +262,22 @@ class WindowDataset(Dataset):
         x = seq.x[start_idx:end_idx + 1][:, self.feature_indices]
         return {
             "x": torch.tensor(x, dtype=torch.float32),
-            "y_severity_scaled": torch.tensor(seq.y_severity[end_idx] * self.cfg.severity_scale(), dtype=torch.float32),
+            "y_severity_scaled": torch.tensor(
+                seq.y_severity[end_idx] * self.cfg.severity_scale(), dtype=torch.float32
+            ),
             "y_stage": torch.tensor(seq.y_stage[end_idx], dtype=torch.long),
             "y_foul_h": torch.tensor(seq.y_foul_h[end_idx], dtype=torch.float32),
-            "y_actionable_foul_h": torch.tensor(seq.y_actionable_foul_h[end_idx], dtype=torch.float32),
+            "y_actionable_foul_h": torch.tensor(
+                seq.y_actionable_foul_h[end_idx], dtype=torch.float32
+            ),
             "y_clog_h": torch.tensor(seq.y_clog_h[end_idx], dtype=torch.float32),
             "y_ttf_foul_log": torch.tensor(np.log1p(seq.y_ttf_foul[end_idx]), dtype=torch.float32),
             "y_ttf_clog_log": torch.tensor(np.log1p(seq.y_ttf_clog[end_idx]), dtype=torch.float32),
             "y_ttu_log": torch.tensor(np.log1p(seq.y_ttu[end_idx]), dtype=torch.float32),
             "foul_weight": torch.tensor(seq.foul_weight[end_idx], dtype=torch.float32),
-            "actionable_foul_weight": torch.tensor(seq.actionable_foul_weight[end_idx], dtype=torch.float32),
+            "actionable_foul_weight": torch.tensor(
+                seq.actionable_foul_weight[end_idx], dtype=torch.float32
+            ),
             "clog_weight": torch.tensor(seq.clog_weight[end_idx], dtype=torch.float32),
             "asset_id": seq.asset_id,
             "sequence_id": sequence_id,

@@ -1,8 +1,11 @@
 """Unit tests for ArtifactStore — local_dir property, path resolution, and download."""
+# pylint: disable=protected-access
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 
+import app.infrastructure.artifact_store as store_mod
 from app.infrastructure.artifact_store import ARTIFACTS_ROOT, ArtifactStore, _file_needs_download
 
 
@@ -66,11 +69,6 @@ def test_download_skips_slashless_folder_markers_of_the_s3_proxy(monkeypatch, tm
     """The platform's S3 proxy lists each uploaded folder as a 0-byte key without a trailing slash
     (real ml41 listing below). Downloading it as a file broke every nested path with
     FileExistsError, so ml41 could never load its checkpoints."""
-    from pathlib import Path
-    from unittest.mock import MagicMock
-
-    import app.infrastructure.artifact_store as store_mod
-
     prefix = "artifacts/fixed/ml41/"
     listing = {
         prefix + "vit_tiny_fan": 0,
@@ -84,7 +82,9 @@ def test_download_skips_slashless_folder_markers_of_the_s3_proxy(monkeypatch, tm
     s3.get_paginator.return_value.paginate.return_value = [
         {"Contents": [{"Key": k, "Size": v} for k, v in listing.items()]}
     ]
-    s3.download_file.side_effect = lambda bucket, key, path: Path(path).write_bytes(b"x" * listing[key])
+    s3.download_file.side_effect = (
+        lambda bucket, key, path: Path(path).write_bytes(b"x" * listing[key])
+    )
     monkeypatch.setattr(store_mod, "_build_s3_client", lambda: s3)
     monkeypatch.setenv("STORAGE_BUCKET", "xai")
     store = store_mod.ArtifactStore("ml41")

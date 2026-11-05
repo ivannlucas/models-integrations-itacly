@@ -1,3 +1,4 @@
+"""Image decoding and tensor preprocessing (resize + ImageNet normalisation) for ml8."""
 import base64
 import io
 from pathlib import Path

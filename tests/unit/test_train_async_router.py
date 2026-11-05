@@ -1,4 +1,5 @@
 """HTTP contract of async training: POST /train?wait=false and GET /train/{job_id}."""
+# pylint: disable=protected-access
 from __future__ import annotations
 
 from types import SimpleNamespace
@@ -8,15 +9,27 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from pydantic import BaseModel
 
-from app.application.use_cases.train_job_use_cases import GetTrainJobUseCase, SubmitTrainJobUseCase
+from app.application.use_cases.train_job_use_cases import (
+    GetTrainJobUseCase,
+    SubmitTrainJobUseCase,
+)
 from app.application.use_cases.train_model_use_case import TrainModelUseCase
 from app.domain.services.exceptions import (
     TrainJobResultUnreadableError,
     TrainJobRunNotFoundError,
     TrainJobStoreUnavailableError,
 )
+from app.infrastructure.http.dependencies.container import ModelContainer
 from app.infrastructure.http.router_factory import make_model_router
-from tests.unit.train_job_fakes import TRAIN_ERRORS, EchoTrainPlugin, InlineExecutor, InMemoryJobStore, RaisingTrainPlugin
+from app.infrastructure.train_jobs.mlflow_job_store import MLflowTrainJobStore
+from app.infrastructure.train_jobs.process_executor import ProcessTrainExecutor
+from tests.unit.train_job_fakes import (
+    TRAIN_ERRORS,
+    EchoTrainPlugin,
+    InlineExecutor,
+    InMemoryJobStore,
+    RaisingTrainPlugin,
+)
 
 MODEL_ID = "fake-model"
 BASE = f"/models/{MODEL_ID}"
@@ -43,7 +56,9 @@ class _MissingRunStore(InMemoryJobStore):
 
 class _UnreadableResultStore(InMemoryJobStore):
     def get(self, job_id):
-        raise TrainJobResultUnreadableError(f"El entrenamiento {job_id} terminó (succeeded) pero ...")
+        raise TrainJobResultUnreadableError(
+            f"El entrenamiento {job_id} terminó (succeeded) pero ..."
+        )
 
 
 class _BuggyStore(InMemoryJobStore):
@@ -79,6 +94,7 @@ def _client(
 
 
 def test_async_post_returns_202_queued_then_get_returns_result():
+    """POST ?wait=false answers 202 queued and GET /train/{job_id} then returns the result."""
     client, _, executor = _client()
     resp = client.post(f"{BASE}/train?wait=false", json=BODY)
     assert resp.status_code == 202
@@ -98,6 +114,7 @@ def test_async_post_returns_202_queued_then_get_returns_result():
 
 
 def test_default_post_stays_synchronous():
+    """POST /train without wait stays synchronous and records no job."""
     client, store, executor = _client()
     resp = client.post(f"{BASE}/train", json=BODY)
     assert resp.status_code == 200
@@ -107,12 +124,14 @@ def test_default_post_stays_synchronous():
 
 
 def test_wait_true_is_the_synchronous_path():
+    """POST /train?wait=true takes the synchronous path."""
     client, store, _ = _client()
     assert client.post(f"{BASE}/train?wait=true", json=BODY).status_code == 200
     assert store.records == {}
 
 
 def test_redelivered_post_is_idempotent():
+    """A redelivered async POST returns the existing job without resubmitting it."""
     client, _, executor = _client()
     client.post(f"{BASE}/train?wait=false", json=BODY)
     again = client.post(f"{BASE}/train?wait=false", json=BODY)
@@ -122,6 +141,7 @@ def test_redelivered_post_is_idempotent():
 
 
 def test_empty_run_id_is_400():
+    """An async POST with an empty mlflow_run_id answers 400."""
     client, _, _ = _client()
     resp = client.post(f"{BASE}/train?wait=false", json={**BODY, "mlflow_run_id": ""})
     assert resp.status_code == 400
@@ -129,18 +149,21 @@ def test_empty_run_id_is_400():
 
 
 def test_busy_model_is_409():
+    """An async POST while the executor is busy answers 409."""
     client, _, _ = _client(executor=InlineExecutor(busy=True))
     resp = client.post(f"{BASE}/train?wait=false", json=BODY)
     assert resp.status_code == 409
 
 
 def test_unknown_job_is_404():
+    """GET of an unknown job answers 404."""
     client, _, _ = _client()
     assert client.get(f"{BASE}/train/does-not-exist").status_code == 404
 
 
 @pytest.mark.parametrize("method,path", [("post", "/train?wait=false"), ("get", "/train/run-1")])
 def test_store_down_is_503(method, path):
+    """An unavailable job store maps to 503 on both POST and GET."""
     client, _, _ = _client(store=_BrokenStore())
     resp = getattr(client, method)(f"{BASE}{path}", **({"json": BODY} if method == "post" else {}))
     assert resp.status_code == 503
@@ -148,6 +171,7 @@ def test_store_down_is_503(method, path):
 
 
 def test_nonexistent_run_is_400_not_retryable_503():
+    """A run missing in MLflow answers 400 (not 503) and starts nothing."""
     client, _, executor = _client(store=_MissingRunStore())
     resp = client.post(f"{BASE}/train?wait=false", json=BODY)
     assert resp.status_code == 400
@@ -157,16 +181,14 @@ def test_nonexistent_run_is_400_not_retryable_503():
 
 @pytest.mark.parametrize("method,path", [("post", "/train?wait=false"), ("get", "/train/run-1")])
 def test_programming_errors_are_500_not_503(method, path):
+    """Unexpected store errors map to 500, not 503."""
     client, _, _ = _client(store=_BuggyStore())
     resp = getattr(client, method)(f"{BASE}{path}", **({"json": BODY} if method == "post" else {}))
     assert resp.status_code == 500
 
 
 def test_model_container_wires_async_training_lazily():
-    from app.infrastructure.http.dependencies.container import ModelContainer
-    from app.infrastructure.train_jobs.mlflow_job_store import MLflowTrainJobStore
-    from app.infrastructure.train_jobs.process_executor import ProcessTrainExecutor
-
+    """ModelContainer wires the async use cases without connecting to MLflow yet."""
     container = ModelContainer(plugin=EchoTrainPlugin(), model_id="m47")
     submit, get = container.submit_train_job_use_case, container.get_train_job_use_case
     assert isinstance(submit, SubmitTrainJobUseCase) and isinstance(get, GetTrainJobUseCase)
@@ -177,6 +199,7 @@ def test_model_container_wires_async_training_lazily():
 
 
 def test_async_post_on_a_base_promoting_model_is_501_and_starts_nothing():
+    """Async POST on a base-promoting model answers 501 and starts nothing; sync still works."""
     client, store, executor = _client(promotes_base=True)
     resp = client.post(f"{BASE}/train?wait=false", json=BODY)
     assert resp.status_code == 501
@@ -188,6 +211,7 @@ def test_async_post_on_a_base_promoting_model_is_501_and_starts_nothing():
 
 @pytest.mark.parametrize("data_path", sorted(TRAIN_ERRORS))
 def test_failed_job_http_status_matches_the_synchronous_train(data_path):
+    """A failed job reports the same HTTP status the synchronous /train answers."""
     exc, expected = TRAIN_ERRORS[data_path]
     client, _, _ = _client(plugin_class=RaisingTrainPlugin)
     body = {"data_path": data_path, "mlflow_run_id": f"run-{data_path}"}
@@ -202,6 +226,7 @@ def test_failed_job_http_status_matches_the_synchronous_train(data_path):
 
 
 def test_sync_train_is_409_while_an_async_job_runs():
+    """Synchronous /train answers 409 while an async job runs."""
     client, store, _ = _client(executor=InlineExecutor(busy=True))
     resp = client.post(f"{BASE}/train", json=BODY)
     assert resp.status_code == 409
@@ -210,6 +235,7 @@ def test_sync_train_is_409_while_an_async_job_runs():
 
 
 def test_async_train_is_409_while_a_sync_train_runs():
+    """Async /train answers 409 while a synchronous train runs."""
     client, store, executor = _client()
     submit = client.app.state.containers[MODEL_ID].submit_train_job_use_case
     with submit.sync_training():  # a synchronous /train in another request thread
@@ -219,6 +245,7 @@ def test_async_train_is_409_while_a_sync_train_runs():
 
 
 def test_unreadable_result_is_500_with_detail_not_503():
+    """An unreadable job result maps to 500 with its detail, not 503."""
     client, _, _ = _client(store=_UnreadableResultStore())
     resp = client.get(f"{BASE}/train/run-1")
     assert resp.status_code == 500

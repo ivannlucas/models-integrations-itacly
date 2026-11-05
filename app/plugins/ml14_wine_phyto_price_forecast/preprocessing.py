@@ -42,7 +42,7 @@ def _build_gap_warning(last_date: pd.Timestamp) -> str | None:
     )
 
 
-def run_inference(bundle: dict, rows: list[dict]) -> dict:
+def run_inference(bundle: dict, rows: list[dict]) -> dict:  # pylint: disable=too-many-locals
     """Derive features from a raw weekly history and run the GRU forecast.
 
     Returns a dict with predicted_price, current_price, drift_baseline, horizon_weeks,
@@ -74,7 +74,10 @@ def run_inference(bundle: dict, rows: list[dict]) -> dict:
     with torch.no_grad():
         residual_scaled = float(model(x).item())
 
-    residual = residual_scaled * float(bundle["target_scaler_scale"]) + float(bundle["target_scaler_mean"])
+    residual = (
+        residual_scaled * float(bundle["target_scaler_scale"])
+        + float(bundle["target_scaler_mean"])
+    )
 
     last_row = features_df.iloc[-1]
     last_date = pd.Timestamp(last_row[DATE_COL])

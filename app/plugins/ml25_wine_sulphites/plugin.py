@@ -1,9 +1,10 @@
 """Plugin for recommending optimal free SO2 doses for wine preservation."""
 import logging
+import os
 import shutil
+import tempfile
 import time
 import types
-import os
 from datetime import datetime, timezone
 from typing import Any
 
@@ -76,7 +77,7 @@ class Ml25WineSulphitesPlugin(ModelPluginPort):
         """Return True if both models and metadata have been loaded."""
         return self._loaded
 
-    def _run_inference(self, features: dict, ctx: tuple) -> dict:
+    def _run_inference(self, features: dict, ctx: tuple) -> dict:  # pylint: disable=too-many-locals
         """Run the full dual-model simulation pipeline for *features* and return raw results."""
         model_qual, model_bound, metadata = ctx
         mae_quality: float = (
@@ -158,25 +159,28 @@ class Ml25WineSulphitesPlugin(ModelPluginPort):
         """
         if not mlflow_run_id:
             return (self._model_qual, self._model_bound, self._metadata), None
-        model_qual, model_bound, metadata, user_temp_dir = download_user_predictor_from_mlflow(mlflow_run_id)
+        model_qual, model_bound, metadata, user_temp_dir = download_user_predictor_from_mlflow(
+            mlflow_run_id
+        )
         return (model_qual, model_bound, metadata), user_temp_dir
 
-    def predict_batch(self, *, data_path: str, mlflow_run_id: str = "") -> PredictBatchResponse:
+    def predict_batch(  # pylint: disable=too-many-locals
+        self, *, data_path: str, mlflow_run_id: str = ""
+    ) -> PredictBatchResponse:
         """Run inference on every row of the CSV at *data_path* and return all predictions."""
-        import os
-        import tempfile
-
         _tmp_csv: str | None = None
         local_data_path = data_path
 
         # ── MLflow: user-trained model for this request only (never assigned to self) ──
         if mlflow_run_id:
-            logger.info("predict_batch — using user-trained model from MLflow run_id=%s", mlflow_run_id)
+            logger.info(
+                "predict_batch — using user-trained model from MLflow run_id=%s", mlflow_run_id
+            )
         ctx, user_temp_dir = self._resolve_model(mlflow_run_id)
 
         if data_path.startswith("s3://"):
-            import boto3
-            from botocore.client import Config as BotoConfig
+            import boto3  # pylint: disable=import-outside-toplevel
+            from botocore.client import Config as BotoConfig  # pylint: disable=import-outside-toplevel
             without_prefix = data_path[5:]
             bucket, _, s3_key = without_prefix.partition("/")
             s3 = boto3.client(
@@ -239,7 +243,7 @@ class Ml25WineSulphitesPlugin(ModelPluginPort):
                             for j in range(len(res["valid_free"]))
                         ]
                     predictions.append(prediction_row)
-                except Exception as exc:
+                except Exception as exc:  # pylint: disable=broad-exception-caught  # per-row error capture
                     predictions.append({"row": int(idx), "error": str(exc)})
 
             self._total_latency_ms += (time.perf_counter() - t0) * 1000
@@ -271,7 +275,9 @@ class Ml25WineSulphitesPlugin(ModelPluginPort):
     ) -> PredictInlineResponse:
         """Run a single-sample inference and return the sulphite recommendation."""
         if mlflow_run_id:
-            logger.info("predict_inline — using user-trained model from MLflow run_id=%s", mlflow_run_id)
+            logger.info(
+                "predict_inline — using user-trained model from MLflow run_id=%s", mlflow_run_id
+            )
         ctx, user_temp_dir = self._resolve_model(mlflow_run_id)
         try:
             t0 = time.perf_counter()
@@ -282,7 +288,8 @@ class Ml25WineSulphitesPlugin(ModelPluginPort):
             self._predict_count += 1
             self._last_predict_at = datetime.now(tz=timezone.utc).isoformat()
             logger.info(
-                "predict_inline done — intervention=%s rec_free=%.1f quality=%.3f count=%d mlflow=%s",
+                "predict_inline done — intervention=%s rec_free=%.1f quality=%.3f count=%d "
+                "mlflow=%s",
                 res["intervention"],
                 float(res["valid_free"][i]),
                 float(res["valid_qualities"][i]),
@@ -337,11 +344,6 @@ class Ml25WineSulphitesPlugin(ModelPluginPort):
 
     def train(self, *, data_path: str, mlflow_run_id: str) -> TrainResponse:  # pylint: disable=too-many-locals
         """Train dual RandomForest models from the CSV at *data_path* and upload them to MLflow."""
-        # pylint: disable=import-outside-toplevel
-        import os
-        import tempfile
-        # pylint: enable=import-outside-toplevel
-
         if mlflow_run_id:
             logger.info("Training with MLflow tracking, run_id=%s", mlflow_run_id)
             tracker = BaseMLflowTracker(mlflow_run_id)
@@ -362,8 +364,8 @@ class Ml25WineSulphitesPlugin(ModelPluginPort):
         local_data_path = data_path
 
         if data_path.startswith("s3://"):
-            import boto3
-            from botocore.client import Config as BotoConfig
+            import boto3  # pylint: disable=import-outside-toplevel
+            from botocore.client import Config as BotoConfig  # pylint: disable=import-outside-toplevel
 
             without_prefix = data_path[5:]
             bucket, _, s3_key = without_prefix.partition("/")
@@ -382,7 +384,11 @@ class Ml25WineSulphitesPlugin(ModelPluginPort):
             local_data_path = _tmp_path
 
         try:
-            result = self._train_from_local(local_data_path, mlflow_run_id=mlflow_run_id, tracker=tracker if mlflow_run_id else None)
+            result = self._train_from_local(
+                local_data_path,
+                mlflow_run_id=mlflow_run_id,
+                tracker=tracker if mlflow_run_id else None,
+            )
             return result
         finally:
             if _tmp_path is not None:
@@ -411,7 +417,6 @@ class Ml25WineSulphitesPlugin(ModelPluginPort):
         # pylint: disable=import-outside-toplevel
         import json
         import joblib
-        import tempfile
         from sklearn.base import clone
         from sklearn.ensemble import RandomForestRegressor
         from sklearn.metrics import mean_absolute_error, r2_score
@@ -508,7 +513,9 @@ class Ml25WineSulphitesPlugin(ModelPluginPort):
         # mlflow_run_id); the served base model and its local artifacts are never replaced.
         upload_warning = None
         if not tracker:
-            raise ModelPersistenceError("Sin run de MLflow: el modelo reentrenado no se ha guardado.")
+            raise ModelPersistenceError(
+                "Sin run de MLflow: el modelo reentrenado no se ha guardado."
+            )
         if tracker:
             tracker.log_metrics({
                 "mae_quality": mae_qual,
@@ -520,13 +527,15 @@ class Ml25WineSulphitesPlugin(ModelPluginPort):
                 mlflow_tmp = tempfile.mkdtemp(prefix="wine_mlflow_")
                 joblib.dump(model_qual, os.path.join(mlflow_tmp, QUALITY_RF_MODEL_FILENAME))
                 joblib.dump(model_bound, os.path.join(mlflow_tmp, BOUND_RF_MODEL_FILENAME))
-                with open(os.path.join(mlflow_tmp, METADATA_FILENAME), "w") as fh:
+                with open(os.path.join(mlflow_tmp, METADATA_FILENAME), "w", encoding="utf-8") as fh:
                     json.dump(metadata, fh)
                 tracker.upload_artifacts(mlflow_tmp, artifact_path="model")
                 shutil.rmtree(mlflow_tmp, ignore_errors=True)
             except Exception as exc:
                 logger.error("MLflow artifact upload failed: %s", exc)
-                raise ModelPersistenceError(f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}") from exc
+                raise ModelPersistenceError(
+                    f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}"
+                ) from exc
 
         elapsed = time.perf_counter() - t0
         logger.info("train() done — mae_qual=%.4f mae_bound=%.4f elapsed=%.1fs mlflow=%s",
@@ -544,7 +553,7 @@ class Ml25WineSulphitesPlugin(ModelPluginPort):
         )
 
     def stats(self, mlflow_run_id: str = "") -> StatsResponse:
-        """Build and return the full stats response including input/output schema and runtime metrics."""
+        """Build and return the full stats response (input/output schema and runtime metrics)."""
         avg = self._total_latency_ms / self._predict_count if self._predict_count > 0 else None
         base = StatsResponse(
             model_name=MODEL_ID,
@@ -557,45 +566,94 @@ class Ml25WineSulphitesPlugin(ModelPluginPort):
             framework="sklearn",
             inputs=[
                 InputField(name="fixed_acidity", type="float", description="Fixed acidity (g/dm³)"),
-                InputField(name="volatile_acidity", type="float", description="Volatile acidity (g/dm³)"),
+                InputField(
+                    name="volatile_acidity", type="float", description="Volatile acidity (g/dm³)"
+                ),
                 InputField(name="citric_acid", type="float", description="Citric acid (g/dm³)"),
-                InputField(name="residual_sugar", type="float", description="Residual sugar (g/dm³)"),
+                InputField(
+                    name="residual_sugar", type="float", description="Residual sugar (g/dm³)"
+                ),
                 InputField(name="chlorides", type="float", description="Chlorides (g/dm³)"),
                 InputField(name="density", type="float", description="Density (g/cm³)"),
                 InputField(name="pH", type="float", description="pH"),
                 InputField(name="sulphates", type="float", description="Sulphates (g/dm³)"),
                 InputField(name="alcohol", type="float", description="Alcohol (% vol.)"),
-                InputField(name="free_sulfur_dioxide", type="float", description="Current free SO2 (mg/L)"),
-                InputField(name="total_sulfur_dioxide", type="float", description="Current total SO2 (mg/L)"),
-                InputField(name="min_molecular", type="float", default=0.6, description="Minimum molecular SO2 (mg/L)"),
-                InputField(name="max_total", type="float", default=200.0, description="Maximum legal total SO2 (mg/L)"),
                 InputField(
-                    name="delta_max", type="float", default=40.0,
+                    name="free_sulfur_dioxide", type="float", description="Current free SO2 (mg/L)"
+                ),
+                InputField(
+                    name="total_sulfur_dioxide",
+                    type="float",
+                    description="Current total SO2 (mg/L)",
+                ),
+                InputField(
+                    name="min_molecular",
+                    type="float",
+                    default=0.6,
+                    description="Minimum molecular SO2 (mg/L)",
+                ),
+                InputField(
+                    name="max_total",
+                    type="float",
+                    default=200.0,
+                    description="Maximum legal total SO2 (mg/L)",
+                ),
+                InputField(
+                    name="delta_max",
+                    type="float",
+                    default=40.0,
                     description="Maximum free SO2 increment to explore (mg/L)",
                 ),
             ],
             outputs=[
-                OutputField(name="recommended_free_so2", type="float", description="Recommended free SO2 dose (mg/L)"),
-                OutputField(name="recommended_bound_so2", type="float", description="Estimated bound SO2 (mg/L)"),
-                OutputField(name="recommended_total_so2", type="float", description="Estimated total SO2 (mg/L)"),
-                OutputField(name="recommended_molecular_so2", type="float", description="Molecular SO2 (mg/L)"),
-                OutputField(name="predicted_quality", type="float", description="Predicted sensory quality (0–10)"),
                 OutputField(
-                    name="baseline_predicted_quality", type="float",
+                    name="recommended_free_so2",
+                    type="float",
+                    description="Recommended free SO2 dose (mg/L)",
+                ),
+                OutputField(
+                    name="recommended_bound_so2",
+                    type="float",
+                    description="Estimated bound SO2 (mg/L)",
+                ),
+                OutputField(
+                    name="recommended_total_so2",
+                    type="float",
+                    description="Estimated total SO2 (mg/L)",
+                ),
+                OutputField(
+                    name="recommended_molecular_so2",
+                    type="float",
+                    description="Molecular SO2 (mg/L)",
+                ),
+                OutputField(
+                    name="predicted_quality",
+                    type="float",
+                    description="Predicted sensory quality (0–10)",
+                ),
+                OutputField(
+                    name="baseline_predicted_quality",
+                    type="float",
                     description="Predicted sensory quality at the current free SO2 (0–10)",
                 ),
                 OutputField(
-                    name="intervention_recommended", type="bool",
+                    name="intervention_recommended",
+                    type="bool",
                     description="True if sulphite intervention is recommended",
                 ),
                 OutputField(
-                    name="recommendation_reason", type="string",
+                    name="recommendation_reason",
+                    type="string",
                     description="Quality gain vs. decision threshold behind the recommendation",
                 ),
             ],
             metrics={
-                "mae_quality": self._metadata.get("metrics", {}).get("quality_cv", {}).get("mae_mean", 0.427),
-                "mae_bound_so2_mg_l": self._metadata.get("metrics", {}).get("bound_cv", {}).get("mae_mean", 14.5),
+                "mae_quality": self._metadata.get("metrics", {})
+                .get("quality_cv", {})
+                .get("mae_mean", 0.427),
+                "mae_bound_so2_mg_l": self._metadata.get("metrics", {})
+                .get("bound_cv", {})
+                .get("mae_mean", 14.5),
             },
             runtime_stats=RuntimeStats(
                 total_predictions=self._predict_count,
@@ -610,6 +668,6 @@ class Ml25WineSulphitesPlugin(ModelPluginPort):
                     "metrics": tracker.get_metrics(),
                 }
                 logger.info("Stats enriched with MLflow data for run_id=%s", mlflow_run_id)
-            except Exception as exc:
+            except Exception as exc:  # pylint: disable=broad-exception-caught  # MLflow stats are best-effort
                 logger.warning("Could not fetch MLflow stats for run_id=%s: %s", mlflow_run_id, exc)
         return base

@@ -37,10 +37,14 @@ class HorizonResult(BaseModel):
     """Full result (regression + classification + ensemble) for one horizon."""
 
     horizon: int = Field(..., description="1, 2 o 3 (meses)")
-    predicted_for: str = Field(..., description="Mes calendario que predice este horizonte (YYYY-MM)")
+    predicted_for: str = Field(
+        ..., description="Mes calendario que predice este horizonte (YYYY-MM)"
+    )
     reg: RegResult | None = None
     clf: ClfResult | None = None
-    ensemble_signal: int | None = Field(default=None, description="np.sign(signal_reg + signal_clf)")
+    ensemble_signal: int | None = Field(
+        default=None, description="np.sign(signal_reg + signal_clf)"
+    )
     ensemble_str: str | None = Field(default=None, description="LONG | SHORT | FLAT")
     confidence: str | None = Field(
         default=None, description="ALTA (reg y clf coinciden en signo) | BAJA (discrepan)",
@@ -53,7 +57,9 @@ class PredictInlineRequest(BaseModel):
     model_config = ConfigDict(protected_namespaces=())
     mode: Literal["inline"] = "inline"
     date: str | None = Field(default=None, pattern=r"^\d{4}-\d{2}$", description=_DATE_DESC)
-    mlflow_run_id: str = Field(default="", description="Sin efecto -- ml19 no soporta reentrenamiento")
+    mlflow_run_id: str = Field(
+        default="", description="Sin efecto -- ml19 no soporta reentrenamiento"
+    )
 
 
 class PredictInlineResponse(BaseModel):
@@ -63,7 +69,8 @@ class PredictInlineResponse(BaseModel):
     model_id: str
     date_label: str = Field(..., description="Mes 'hoy' usado (fila de referencia), YYYY-MM")
     mapa_month_used: str = Field(
-        ..., description="Mes MAPA real que alimenta las features de esa fila (date_label - 3 meses)",
+        ...,
+        description="Mes MAPA real que alimenta las features de esa fila (date_label - 3 meses)",
     )
     train_cutoff: str = Field(..., description="training_meta.json['train_end']")
     horizons: list[HorizonResult]
@@ -81,7 +88,9 @@ class PredictBatchRequest(BaseModel):
             "dataset de referencia empaquetado que se quieren consultar."
         ),
     )
-    mlflow_run_id: str = Field(default="", description="Sin efecto -- ml19 no soporta reentrenamiento")
+    mlflow_run_id: str = Field(
+        default="", description="Sin efecto -- ml19 no soporta reentrenamiento"
+    )
 
 
 class BatchPrediction(BaseModel):

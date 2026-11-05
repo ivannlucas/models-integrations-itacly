@@ -19,4 +19,3 @@ def download_user_model_from_mlflow(run_id: str):
         "serving the fixed rules engine.",
         run_id,
     )
-    return None

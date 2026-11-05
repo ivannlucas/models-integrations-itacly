@@ -133,7 +133,9 @@ class Ml34DairyPasteurizationEnergyGaPlugin(ModelPluginPort):
         if not mlflow_run_id:
             self._require_loaded()
             return (self._model, self._scaler_X, self._scaler_y), None
-        model, scaler_x, scaler_y, _config, user_temp_dir = download_user_model_from_mlflow(mlflow_run_id)
+        model, scaler_x, scaler_y, _config, user_temp_dir = download_user_model_from_mlflow(
+            mlflow_run_id
+        )
         return (model, scaler_x, scaler_y), user_temp_dir
 
     def predict_inline(
@@ -174,7 +176,9 @@ class Ml34DairyPasteurizationEnergyGaPlugin(ModelPluginPort):
             T_out_pred=round(t_out, 4),
         )
 
-    def _run_optimize(self, features: dict, ctx: tuple) -> PredictOptimizeResponse:
+    def _run_optimize(  # pylint: disable=too-many-locals
+        self, features: dict, ctx: tuple
+    ) -> PredictOptimizeResponse:
         """Run the single-objective GA for one scenario (deterministic per seed)."""
         model, scaler_X, scaler_y = ctx
         t_in = float(features["T_in_leche"])
@@ -250,7 +254,9 @@ class Ml34DairyPasteurizationEnergyGaPlugin(ModelPluginPort):
                 "predict_batch done — %d rows, model_key=%s, mlflow=%s",
                 len(predictions), model_key or "(estimate)", bool(mlflow_run_id),
             )
-            return PredictBatchResponse(model_id=MODEL_ID, predictions=predictions, output_path=None)
+            return PredictBatchResponse(
+                model_id=MODEL_ID, predictions=predictions, output_path=None
+            )
         finally:
             if user_temp_dir:
                 shutil.rmtree(user_temp_dir, ignore_errors=True)
@@ -300,11 +306,17 @@ class Ml34DairyPasteurizationEnergyGaPlugin(ModelPluginPort):
         predictions: list[dict] = []
         for idx, row in df.iterrows():
             try:
-                t_in, delta_p, t_ciclo = float(row["T_in_leche"]), float(row["Delta_P"]), float(row["t_ciclo"])
+                t_in, delta_p, t_ciclo = (
+                    float(row["T_in_leche"]), float(row["Delta_P"]), float(row["t_ciclo"])
+                )
                 seed = int(row["seed"]) if has_seed_col and pd.notna(row["seed"]) else 1 + int(idx)
-                features = {"T_in_leche": t_in, "Delta_P": delta_p, "t_ciclo": t_ciclo, "seed": seed}
+                features = {
+                    "T_in_leche": t_in, "Delta_P": delta_p, "t_ciclo": t_ciclo, "seed": seed
+                }
                 pred = self._run_optimize(features, ctx).model_dump()
-                pred.update({"row": int(idx), "T_in_leche": t_in, "Delta_P": delta_p, "t_ciclo": t_ciclo})
+                pred.update({
+                    "row": int(idx), "T_in_leche": t_in, "Delta_P": delta_p, "t_ciclo": t_ciclo
+                })
                 predictions.append(pred)
             except Exception as exc:  # pylint: disable=broad-exception-caught
                 logger.warning("Error en fila %s (optimize): %s", idx, exc)
@@ -425,13 +437,17 @@ class Ml34DairyPasteurizationEnergyGaPlugin(ModelPluginPort):
         # mlflow_run_id); the served base model and its local artifacts are never replaced.
         upload_warning = None
         if not tracker:
-            raise ModelPersistenceError("Sin run de MLflow: el modelo reentrenado no se ha guardado.")
+            raise ModelPersistenceError(
+                "Sin run de MLflow: el modelo reentrenado no se ha guardado."
+            )
         if tracker:
             tracker.log_metrics({**metrics, "n_samples": len(df)})
             try:
                 mlflow_tmp = tempfile.mkdtemp(prefix="ml34_mlflow_")
                 torch.save(fine_model.state_dict(), os.path.join(mlflow_tmp, MODEL_FILENAME))
-                with open(os.path.join(mlflow_tmp, MODEL_CONFIG_FILENAME), "w", encoding="utf-8") as f:
+                with open(
+                    os.path.join(mlflow_tmp, MODEL_CONFIG_FILENAME), "w", encoding="utf-8"
+                ) as f:
                     json.dump(self._config, f, indent=4)
                 joblib.dump(self._scaler_X, os.path.join(mlflow_tmp, SCALER_X_FILENAME))
                 joblib.dump(self._scaler_y, os.path.join(mlflow_tmp, SCALER_Y_FILENAME))
@@ -439,7 +455,9 @@ class Ml34DairyPasteurizationEnergyGaPlugin(ModelPluginPort):
                 shutil.rmtree(mlflow_tmp, ignore_errors=True)
             except Exception as exc:  # pylint: disable=broad-exception-caught
                 logger.error("MLflow artifact upload failed: %s", exc)
-                raise ModelPersistenceError(f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}") from exc
+                raise ModelPersistenceError(
+                    f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}"
+                ) from exc
 
         logger.info(
             "train() done — mae_E=%.2f r2_E=%.4f n=%d epochs=%d mlflow=%s",

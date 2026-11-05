@@ -2,10 +2,11 @@
 Módulo de explicabilidad temporal: análisis LSTM+SHAP y patrones temporales.
 """
 
+from typing import Any, Dict, List, Optional
+
 import numpy as np
 import torch
-import torch.nn as nn
-from typing import Any, Dict, List, Optional
+from torch import nn
 
 
 class _DLBranchForSHAP(nn.Module):
@@ -16,6 +17,7 @@ class _DLBranchForSHAP(nn.Module):
         self.base = base_model
 
     def forward(self, x_window):
+        """Logit de anomalía de la rama DL (LSTM + atención) para *x_window*."""
         lstm_out, _ = self.base.lstm_branch(x_window)
         attn_logits = self.base.attention_layer(lstm_out)
         attn_weights = torch.softmax(attn_logits, dim=1)
@@ -26,16 +28,16 @@ class _DLBranchForSHAP(nn.Module):
 
 def _resolve_temporal_feature_names(feature_names_candidate, n_features_temporal: int):
     """Resuelve nombres de features temporales."""
-    F = int(n_features_temporal)
+    n_feats = int(n_features_temporal)
     if feature_names_candidate is None:
-        return [f"feature_{i}" for i in range(F)]
+        return [f"feature_{i}" for i in range(n_feats)]
     names = list(feature_names_candidate)
-    if len(names) == F:
+    if len(names) == n_feats:
         return names
-    return [f"feature_{i}" for i in range(F)]
+    return [f"feature_{i}" for i in range(n_feats)]
 
 
-def _split_series_spans(T: int) -> Dict[str, slice]:
+def _split_series_spans(T: int) -> Dict[str, slice]:  # pylint: disable=invalid-name
     """Divide una serie temporal en tres tramos."""
     one_third = max(1, T // 3)
     return {
@@ -87,14 +89,14 @@ def _set_temporal_explainer_seed(random_state: int) -> None:
         torch.cuda.manual_seed_all(int(random_state))
 
 
-class TemporalExplainer:
+class TemporalExplainer:  # pylint: disable=too-few-public-methods
     """Generador de explicaciones temporales con SHAP."""
 
     def __init__(self, model, feature_names: Optional[List[str]] = None):
         self.model = model
         self.feature_names = feature_names
 
-    def explain_sample(
+    def explain_sample(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals,too-many-statements
         self,
         x_window: np.ndarray,
         background_windows: np.ndarray,
@@ -106,9 +108,9 @@ class TemporalExplainer:
     ) -> Dict[str, Any]:
         """Genera explicación temporal para una muestra."""
         try:
-            import shap
-        except ImportError:
-            raise ImportError("SHAP no está instalado. Instala con: pip install shap")
+            import shap  # pylint: disable=import-outside-toplevel
+        except ImportError as exc:
+            raise ImportError("SHAP no está instalado. Instala con: pip install shap") from exc
 
         self.model.eval()
         device = next(self.model.parameters()).device
@@ -129,23 +131,24 @@ class TemporalExplainer:
             )
 
         x_one = x_one.to(device)
-        _, T, F = x_one.shape
-        feature_names_local = _resolve_temporal_feature_names(self.feature_names, F)
+        _, n_steps, n_feats = x_one.shape
+        feature_names_local = _resolve_temporal_feature_names(self.feature_names, n_feats)
 
         # Preparar background
-        X_bg = np.asarray(background_windows)
-        if X_bg.ndim != 3:
-            raise ValueError(f"background_windows debe ser [N,T,F], recibido {X_bg.shape}")
-        if X_bg.shape[1] != T or X_bg.shape[2] != F:
+        bg_windows = np.asarray(background_windows)
+        if bg_windows.ndim != 3:
+            raise ValueError(f"background_windows debe ser [N,T,F], recibido {bg_windows.shape}")
+        if bg_windows.shape[1] != n_steps or bg_windows.shape[2] != n_feats:
             raise ValueError(
-                f"background_windows incompatible con x_window. Esperado [N,{T},{F}], recibido {X_bg.shape}"
+                f"background_windows incompatible con x_window. Esperado [N,{n_steps},{n_feats}], "
+                f"recibido {bg_windows.shape}"
             )
 
-        N_bg_total = X_bg.shape[0]
+        n_bg_total = bg_windows.shape[0]
         rng = np.random.default_rng(seed=random_state)
-        bg_n = int(min(max(8, n_background), N_bg_total))
-        bg_idx = rng.choice(np.arange(N_bg_total), size=bg_n, replace=False)
-        x_bg = torch.tensor(X_bg[bg_idx], dtype=torch.float32, device=device)
+        bg_n = int(min(max(8, n_background), n_bg_total))
+        bg_idx = rng.choice(np.arange(n_bg_total), size=bg_n, replace=False)
+        x_bg = torch.tensor(bg_windows[bg_idx], dtype=torch.float32, device=device)
 
         prev_benchmark = torch.backends.cudnn.benchmark
         prev_deterministic = torch.backends.cudnn.deterministic
@@ -210,7 +213,7 @@ class TemporalExplainer:
 
         return sig
 
-    def _aggregate_temporal_shap_signature(
+    def _aggregate_temporal_shap_signature(  # pylint: disable=too-many-locals,too-many-branches
         self,
         shap_values_3d,
         attention_weights_3d=None,
@@ -228,8 +231,8 @@ class TemporalExplainer:
         if sv.ndim != 2:
             raise ValueError(f"Se esperaba SHAP [T,F], recibido {sv.shape}")
 
-        T, F = sv.shape
-        feature_names = _resolve_temporal_feature_names(feature_names, F)
+        n_steps, n_feats = sv.shape
+        feature_names = _resolve_temporal_feature_names(feature_names, n_feats)
 
         abs_sv = np.abs(sv)
         variable_importance = abs_sv.sum(axis=0)
@@ -242,10 +245,10 @@ class TemporalExplainer:
                 aw = aw[0]
             if aw.ndim == 2 and aw.shape[-1] == 1:
                 aw = aw[:, 0]
-            if aw.ndim == 1 and len(aw) == T:
+            if aw.ndim == 1 and len(aw) == n_steps:
                 attention_time = aw.astype(float)
 
-        spans = _split_series_spans(T)
+        spans = _split_series_spans(n_steps)
 
         temporal_by_var = {} if include_raw else None
         span_importance = {}
@@ -254,7 +257,7 @@ class TemporalExplainer:
         for span_name, sl in spans.items():
             if sl.start >= sl.stop:
                 if include_raw:
-                    temporal_by_var[span_name] = np.zeros(F, dtype=float)
+                    temporal_by_var[span_name] = np.zeros(n_feats, dtype=float)
                 span_importance[span_name] = 0.0
                 span_attention[span_name] = 0.0
             else:
@@ -266,8 +269,12 @@ class TemporalExplainer:
                 else:
                     span_attention[span_name] = 0.0
 
-        dominant_span_shap = max(span_importance, key=span_importance.get) if span_importance else "unknown"
-        dominant_span_attention = max(span_attention, key=span_attention.get) if span_attention else "unknown"
+        dominant_span_shap = (
+            max(span_importance, key=span_importance.get) if span_importance else "unknown"
+        )
+        dominant_span_attention = (
+            max(span_attention, key=span_attention.get) if span_attention else "unknown"
+        )
 
         top_var_idx = _top_k_indices(variable_importance, top_variables)
         top_vars = []

@@ -25,7 +25,9 @@ class PredictBatchRequest(BaseModel):
             "predicción (warmup de features + lookback)."
         ),
     )
-    mlflow_run_id: str = Field(default="", description="MLflow run ID de un modelo reentrenado por el usuario")
+    mlflow_run_id: str = Field(
+        default="", description="MLflow run ID de un modelo reentrenado por el usuario"
+    )
 
 
 class PredictBatchResponse(BaseModel):
@@ -68,7 +70,9 @@ class PredictInlineRequest(BaseModel):
             "predicción del mes objetivo más reciente que el historial permite calcular."
         ),
     )
-    mlflow_run_id: str = Field(default="", description="MLflow run ID de un modelo reentrenado por el usuario")
+    mlflow_run_id: str = Field(
+        default="", description="MLflow run ID de un modelo reentrenado por el usuario"
+    )
 
 
 class PredictInlineResponse(BaseModel):
@@ -83,13 +87,16 @@ class PredictInlineResponse(BaseModel):
     target_animales_proba: float
     target_animales_proba_low: float | None = None
     target_animales_proba_high: float | None = None
-    target_insumos_pred: int = Field(..., description="1 = alerta de encarecimiento (LogisticRegression)")
+    target_insumos_pred: int = Field(
+        ..., description="1 = alerta de encarecimiento (LogisticRegression)"
+    )
     target_insumos_proba: float
     target_insumos_proba_low: float | None = None
     target_insumos_proba_high: float | None = None
     n_rows_used: int
     n_predictions_available: int = Field(
-        ..., description="Nº de meses objetivo distintos que el historial recibido permite predecir."
+        ...,
+        description="Nº de meses objetivo distintos que el historial recibido permite predecir.",
     )
     model_name: str
     xai_feature_values: dict[str, Any] | None = Field(

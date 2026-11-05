@@ -87,12 +87,15 @@ def _check_bounds(low: list, up: list):
     return decorator
 
 
+# pylint: disable-next=too-many-locals
 def run_adaptive_ga(model, scaler_X, scaler_Y, context: dict,
                     seed_individuals: list[list[float]], row_seed: int) -> list[float]:
-    """Run the adaptive GA for one context row; returns the best (T_serv, Delta_P, Regeneration_perc).
+    """Run the adaptive GA for one context row; returns the best
+    (T_serv, Delta_P, Regeneration_perc).
 
     Deterministic for a given *row_seed*.
     """
+
     random.seed(row_seed)
     np.random.seed(row_seed)
 

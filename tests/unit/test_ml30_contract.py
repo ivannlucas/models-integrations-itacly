@@ -33,11 +33,13 @@ def _preprocessor():
 
 
 def test_valid_data_has_no_errors_or_warnings(preprocessor):
+    """Data like the fitted data yields no errors and no warnings."""
     df = _valid_frame()
     assert check_data_contract(df, preprocessor, df.columns) == ([], [])
 
 
 def test_column_with_only_unknown_values_is_an_error(preprocessor):
+    """A categorical column with only unseen values is an error."""
     df = _valid_frame()
     df["stage"] = "boning"
     errors, _ = check_data_contract(df, preprocessor, df.columns)
@@ -45,6 +47,7 @@ def test_column_with_only_unknown_values_is_an_error(preprocessor):
 
 
 def test_ratio_sent_as_percentage_is_an_error(preprocessor):
+    """A 0-1 ratio sent as a percentage is an error."""
     df = _valid_frame()
     df["yield_pct_from_parent"] = df["yield_pct_from_parent"] * 100
     errors, _ = check_data_contract(df, preprocessor, df.columns)
@@ -52,28 +55,32 @@ def test_ratio_sent_as_percentage_is_an_error(preprocessor):
 
 
 def test_partially_unknown_values_only_warn(preprocessor):
+    """Some unseen categorical values only produce a warning."""
     df = _valid_frame()
     df.loc[:4, "plant_line"] = "L2"
     errors, warnings = check_data_contract(df, preprocessor, df.columns)
-    assert errors == []
+    assert not errors
     assert any("plant_line" in w for w in warnings)
 
 
 def test_missing_values_are_not_unknown_categories(preprocessor):
+    """'nan' values are not reported as unknown categories."""
     df = _valid_frame()
     df.loc[:9, "prev_stage"] = "nan"
     assert check_data_contract(df, preprocessor, df.columns) == ([], [])
 
 
 def test_absent_column_warns_instead_of_failing(preprocessor):
+    """A column absent from the input only produces a warning."""
     df = _valid_frame()
     present = [c for c in df.columns if c != "cold_room_id"]
     errors, warnings = check_data_contract(df, preprocessor, present)
-    assert errors == []
+    assert not errors
     assert any("cold_room_id" in w for w in warnings)
 
 
 def test_enforce_raises_short_detail(preprocessor):
+    """enforce_data_contract raises DataContractError with a detail of at most 300 chars."""
     df = _valid_frame()
     for col in CATEGORICAL_FEATURES:
         df[col] = "desconocido"

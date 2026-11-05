@@ -1,4 +1,8 @@
-"""Loads ml43-cereals-dnsl-anomaly-fault-detection (Deep Neuro-Fuzzy cereal oven anomaly detector) artifacts."""
+"""Loads ml43-cereals-dnsl-anomaly-fault-detection artifacts.
+
+Deep Neuro-Fuzzy cereal oven anomaly detector.
+"""
+
 from __future__ import annotations
 
 import logging
@@ -8,9 +12,16 @@ import numpy as np
 import torch
 
 from app.infrastructure.artifact_store import ArtifactStore
-from app.plugins.ml43_cereals_dnsl_anomaly_fault_detection._vendor.model_arch import ParallelDeepNeuroFuzzyModel
-from app.plugins.ml43_cereals_dnsl_anomaly_fault_detection._vendor.preprocess import SENSOR_COLUMNS, STATS_CREATION
-from app.plugins.ml43_cereals_dnsl_anomaly_fault_detection._vendor.xai.explainer import DNFLExplainer
+from app.plugins.ml43_cereals_dnsl_anomaly_fault_detection._vendor.model_arch import (
+    ParallelDeepNeuroFuzzyModel,
+)
+from app.plugins.ml43_cereals_dnsl_anomaly_fault_detection._vendor.preprocess import (
+    SENSOR_COLUMNS,
+    STATS_CREATION,
+)
+from app.plugins.ml43_cereals_dnsl_anomaly_fault_detection._vendor.xai.explainer import (
+    DNFLExplainer,
+)
 from app.plugins.ml43_cereals_dnsl_anomaly_fault_detection.constants import (
     ARTIFACT_FOLDER_NAME,
     DEFAULT_MODEL_CFG,
@@ -50,7 +61,9 @@ def load_artifacts():
     Raises FileNotFoundError if the model checkpoint or scaler is missing locally
     and STORAGE_BUCKET is not configured to download them.
     """
-    checkpoint = torch.load(str(_store.path(MODEL_FILENAME)), map_location="cpu", weights_only=False)
+    checkpoint = torch.load(
+        str(_store.path(MODEL_FILENAME)), map_location="cpu", weights_only=False
+    )
     model_cfg = checkpoint.get("model_cfg", DEFAULT_MODEL_CFG)
 
     model = build_model(model_cfg)

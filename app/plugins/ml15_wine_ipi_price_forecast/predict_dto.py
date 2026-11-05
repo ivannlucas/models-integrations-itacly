@@ -43,7 +43,10 @@ class PredictBatchRequest(BaseModel):
             "las filas del CSV para que unas sirvan de contexto de retardo a las otras."
         ),
     )
-    mlflow_run_id: str = Field(default="", description="MLflow run ID de un modelo reentrenado por el usuario")
+    mlflow_run_id: str = Field(
+        default="",
+        description="MLflow run ID de un modelo reentrenado por el usuario",
+    )
 
 
 class PredictBatchResponse(BaseModel):
@@ -55,7 +58,8 @@ class PredictBatchResponse(BaseModel):
         ...,
         description=(
             "Una entrada por fila: row, origin_date/target_date (si derivables), y_pred, y_anchor, "
-            "y_true (null si aún no se conoce), feature_status y feature_notes; o 'error' si la fila falló."
+            "y_true (null si aún no se conoce), feature_status y feature_notes; o 'error' si "
+            "la fila falló."
         ),
     )
     n_predictions: int
@@ -69,7 +73,8 @@ class PredictInlineRequest(BaseModel):
     mode: Literal["inline"] = "inline"
     model_key: str | None = None
     threshold: float | None = Field(
-        default=None, description="No usado por este modelo; se acepta por compatibilidad de contrato."
+        default=None,
+        description="No usado por este modelo; se acepta por compatibilidad de contrato."
     )
 
     date: str | None = Field(
@@ -87,27 +92,68 @@ class PredictInlineRequest(BaseModel):
             "recientes de lo que cubre el snapshot bundled)."
         ),
     )
-    ipi_national_lag_1: float | None = Field(default=None, description="IPI nacional 1 mes antes de origin_date. " + _HISTORY_NOTE)
-    ipi_national_lag_2: float | None = Field(default=None, description="IPI nacional 2 meses antes de origin_date. " + _HISTORY_NOTE)
-    ipi_national_lag_3: float | None = Field(default=None, description="IPI nacional 3 meses antes de origin_date. " + _HISTORY_NOTE)
-    ipi_national_lag_4: float | None = Field(default=None, description="IPI nacional 4 meses antes de origin_date. " + _HISTORY_NOTE)
-    ipi_national_lag_5: float | None = Field(default=None, description="IPI nacional 5 meses antes de origin_date. " + _HISTORY_NOTE)
-    ipi_national_lag_6: float | None = Field(default=None, description="IPI nacional 6 meses antes de origin_date. " + _HISTORY_NOTE)
-    chem_sector_lag_11: float | None = Field(default=None, description="Índice sectorial químico retardado 11 meses. " + _HISTORY_NOTE)
-    copper_lag_14: float | None = Field(default=None, description="Precio del cobre retardado 14 meses. " + _HISTORY_NOTE)
-    eur_usd_lag_17: float | None = Field(default=None, description="Tipo de cambio EUR/USD retardado 17 meses. " + _HISTORY_NOTE)
-    oil_brent_lag_12: float | None = Field(default=None, description="Precio del petróleo Brent retardado 12 meses. " + _HISTORY_NOTE)
-    usa_lag_1: float | None = Field(default=None, description="Índice de pesticidas de EE.UU. retardado 1 mes. " + _HISTORY_NOTE)
+    ipi_national_lag_1: float | None = Field(
+        default=None,
+        description="IPI nacional 1 mes antes de origin_date. " + _HISTORY_NOTE,
+    )
+    ipi_national_lag_2: float | None = Field(
+        default=None,
+        description="IPI nacional 2 meses antes de origin_date. " + _HISTORY_NOTE,
+    )
+    ipi_national_lag_3: float | None = Field(
+        default=None,
+        description="IPI nacional 3 meses antes de origin_date. " + _HISTORY_NOTE,
+    )
+    ipi_national_lag_4: float | None = Field(
+        default=None,
+        description="IPI nacional 4 meses antes de origin_date. " + _HISTORY_NOTE,
+    )
+    ipi_national_lag_5: float | None = Field(
+        default=None,
+        description="IPI nacional 5 meses antes de origin_date. " + _HISTORY_NOTE,
+    )
+    ipi_national_lag_6: float | None = Field(
+        default=None,
+        description="IPI nacional 6 meses antes de origin_date. " + _HISTORY_NOTE,
+    )
+    chem_sector_lag_11: float | None = Field(
+        default=None,
+        description="Índice sectorial químico retardado 11 meses. " + _HISTORY_NOTE,
+    )
+    copper_lag_14: float | None = Field(
+        default=None,
+        description="Precio del cobre retardado 14 meses. " + _HISTORY_NOTE,
+    )
+    eur_usd_lag_17: float | None = Field(
+        default=None,
+        description="Tipo de cambio EUR/USD retardado 17 meses. " + _HISTORY_NOTE,
+    )
+    oil_brent_lag_12: float | None = Field(
+        default=None,
+        description="Precio del petróleo Brent retardado 12 meses. " + _HISTORY_NOTE,
+    )
+    usa_lag_1: float | None = Field(
+        default=None,
+        description="Índice de pesticidas de EE.UU. retardado 1 mes. " + _HISTORY_NOTE,
+    )
 
     month_sin: float | None = Field(default=None, description="sin(2*pi*mes/12). " + _CALENDAR_NOTE)
     month_cos: float | None = Field(default=None, description="cos(2*pi*mes/12). " + _CALENDAR_NOTE)
-    quarter: int | None = Field(default=None, description="Trimestre natural (1-4). " + _CALENDAR_NOTE)
+    quarter: int | None = Field(
+        default=None,
+        description="Trimestre natural (1-4). " + _CALENDAR_NOTE,
+    )
     is_spring_risk: int | None = Field(
         default=None,
-        description="1 si abril/mayo/junio (riesgo fúngico primaveral vid), 0 en otro caso. " + _CALENDAR_NOTE,
+        description=(
+            "1 si abril/mayo/junio (riesgo fúngico primaveral vid), 0 en otro caso. "
+        ) + _CALENDAR_NOTE,
     )
 
-    mlflow_run_id: str = Field(default="", description="MLflow run ID de un modelo reentrenado por el usuario")
+    mlflow_run_id: str = Field(
+        default="",
+        description="MLflow run ID de un modelo reentrenado por el usuario",
+    )
 
 
 class PredictInlineResponse(BaseModel):
@@ -116,26 +162,45 @@ class PredictInlineResponse(BaseModel):
     model_config = ConfigDict(protected_namespaces=())
     model_id: str
     origin_date: str | None = Field(
-        default=None, description="Fecha de origen (YYYY-MM-01), si se pudo derivar de 'date'/'origin_date'."
+        default=None,
+        description="Fecha de origen (YYYY-MM-01), si se pudo derivar de 'date'/'origin_date'."
     )
     target_date: str | None = Field(
         default=None, description="origin_date + horizon (YYYY-MM-01), si origin_date es derivable."
     )
     horizon: int = Field(default=6, description="Horizonte productivo vigente (siempre 6).")
-    y_pred: float = Field(..., description="IPI fitosanitario nacional predicho a t+6 (índice base 2020=100).")
-    y_anchor: float = Field(..., description="ipi_national_current usado como ancla (referencia de dirección).")
+    y_pred: float = Field(
+        ...,
+        description="IPI fitosanitario nacional predicho a t+6 (índice base 2020=100).",
+    )
+    y_anchor: float = Field(
+        ...,
+        description="ipi_national_current usado como ancla (referencia de dirección).",
+    )
     model_name: str
     y_true: float | None = Field(
         default=None,
-        description="IPI real observado en target_date si ya se conoce (histórico de referencia o el target del panel); null si es futuro.",
+        description=(
+            "IPI real observado en target_date si ya se conoce (histórico de referencia o el "
+            "target del panel); null si es futuro."
+        ),
     )
     feature_status: str = Field(
         default="exact",
-        description="'exact', o 'exogenous_last_available' si alguna exógena usó el último dato disponible por retraso de publicación.",
+        description=(
+            "'exact', o 'exogenous_last_available' si alguna exógena usó el último dato "
+            "disponible por retraso de publicación."
+        ),
     )
-    feature_notes: str = Field(default="", description="Qué variable usó el último dato disponible y con qué desfase; vacío si exact.")
+    feature_notes: str = Field(
+        default="",
+        description="Qué variable usó el último dato disponible y con qué desfase; vacío si exact.",
+    )
     xai_feature_values: dict[str, float] | None = Field(
-        default=None, description="Valores de las 16 features usadas — consumido por el servicio de explicabilidad."
+        default=None,
+        description=(
+            "Valores de las 16 features usadas — consumido por el servicio de explicabilidad."
+        )
     )
 
 

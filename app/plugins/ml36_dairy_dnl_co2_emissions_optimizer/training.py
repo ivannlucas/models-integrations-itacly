@@ -87,7 +87,9 @@ def prepare_frame(df: pd.DataFrame) -> pd.DataFrame:
     if absent:
         out[absent] = add_derived_features(out)[absent]
     if out[FEATURE_ORDER + TARGETS].isna().any().any():
-        raise ValueError("El CSV de entrenamiento tiene valores vacíos en las features o los targets.")
+        raise ValueError(
+            "El CSV de entrenamiento tiene valores vacíos en las features o los targets."
+        )
     return out
 
 
@@ -165,13 +167,16 @@ def split_frame(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFr
     )
     if len(cycle_meta) < 3:
         raise ValueError(
-            f"Se requieren al menos 3 ciclos para separar train/validación/test y solo hay {len(cycle_meta)} "
+            "Se requieren al menos 3 ciclos para separar train/validación/test y solo hay "
+            f"{len(cycle_meta)} "
             "(columna cycle_id, o ciclos reconstruidos a partir de los reinicios de t_ciclo)."
         )
     train_c, val_c, test_c = split_cycles(cycle_meta)
     parts = tuple(df[cycle_ids.isin(c)].copy() for c in (train_c, val_c, test_c))
     if any(part.empty for part in parts):
-        raise ValueError("No hay ciclos suficientes para que train, validación y test tengan datos.")
+        raise ValueError(
+            "No hay ciclos suficientes para que train, validación y test tengan datos."
+        )
     return parts
 
 
@@ -200,8 +205,11 @@ def _real_unit_metrics(model, x_t, y_t, scaler_y) -> dict[str, dict[str, float]]
     }
 
 
+# pylint: disable-next=too-many-locals
 def train_model(df: pd.DataFrame) -> dict:
-    """Split, fit the scalers and train a new MLP; returns the model, its scalers and test metrics."""
+    """Split, fit the scalers and train a new MLP; returns the model, its scalers and test
+    metrics.
+    """
     started = time.perf_counter()
     data = prepare_frame(df)
     train_df, val_df, test_df = split_frame(data)
@@ -282,6 +290,11 @@ def train_model(df: pd.DataFrame) -> dict:
     }
     logger.info(
         "ml36 train_model() done — train/val/test=%d/%d/%d epochs=%d best_val_loss=%.6g test=%s",
-        result["n_train"], result["n_val"], result["n_test"], epochs_run, best_loss, result["metrics"],
+        result["n_train"],
+        result["n_val"],
+        result["n_test"],
+        epochs_run,
+        best_loss,
+        result["metrics"],
     )
     return result

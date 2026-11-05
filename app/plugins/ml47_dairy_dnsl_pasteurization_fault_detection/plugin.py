@@ -1,3 +1,4 @@
+"""Plugin ml47: detección de fallos en pasteurización (DNSL, CNN 1D con 4 cabezas)."""
 from __future__ import annotations
 
 import logging
@@ -57,6 +58,8 @@ _ARTIFACT_DIR = ARTIFACTS_ROOT / ARTIFACT_FOLDER_NAME
 
 
 class Ml47DairyDnslPasteurizationFaultDetectionPlugin(ModelPluginPort):
+    """Clasifica el estado (sano/warning/crítico) de 4 componentes del pasteurizador por ciclo."""
+
     def __init__(self) -> None:
         self._model = None
         self._scaler = None
@@ -69,6 +72,7 @@ class Ml47DairyDnslPasteurizationFaultDetectionPlugin(ModelPluginPort):
     def load(self) -> None:
         bucket = os.environ.get("STORAGE_BUCKET")
         if bucket:
+            # pylint: disable-next=import-outside-toplevel
             from app.infrastructure.artifact_store import ArtifactStore
 
             store = ArtifactStore(ARTIFACT_FOLDER_NAME)
@@ -112,7 +116,7 @@ class Ml47DairyDnslPasteurizationFaultDetectionPlugin(ModelPluginPort):
             "temp_dir": user_temp_dir,
         }
 
-    def predict_inline(
+    def predict_inline(  # pylint: disable=too-many-locals
         self,
         *,
         data_path: str | None = None,
@@ -131,7 +135,8 @@ class Ml47DairyDnslPasteurizationFaultDetectionPlugin(ModelPluginPort):
             "temp_dir": None,
         }
         try:
-            self._require_loaded() if mlflow_ctx is None else None
+            if mlflow_ctx is None:
+                self._require_loaded()
 
             if data_path:
                 with local_file_path(data_path) as local_path:
@@ -166,7 +171,10 @@ class Ml47DairyDnslPasteurizationFaultDetectionPlugin(ModelPluginPort):
                 )
                 inline_label = f"Cycle_ID={features.get('Cycle_ID')}"
 
-            resultados = run_inference(ctx["model"], ctx["scaler"], ctx["feature_cols"], x_df, self._device, label=inline_label)
+            resultados = run_inference(
+                ctx["model"], ctx["scaler"], ctx["feature_cols"], x_df, self._device,
+                label=inline_label,
+            )
             if resultados is None:
                 raise ValueError("Feature columns mismatch during inference")
             self._record()
@@ -200,28 +208,40 @@ class Ml47DairyDnslPasteurizationFaultDetectionPlugin(ModelPluginPort):
                     cycle_df = x_df[mask].drop(columns=["Cycle_ID"], errors="ignore")
                     if cycle_df.empty:
                         continue
-                    result = run_inference(ctx["model"], ctx["scaler"], ctx["feature_cols"], cycle_df, self._device, label=f"Cycle_ID={cid}")
+                    result = run_inference(
+                        ctx["model"], ctx["scaler"], ctx["feature_cols"], cycle_df, self._device,
+                        label=f"Cycle_ID={cid}",
+                    )
                     if result:
                         predictions.append(format_batch_row(result, cid))
             else:
-                result = run_inference(ctx["model"], ctx["scaler"], ctx["feature_cols"], x_df, self._device, label="single-cycle")
+                result = run_inference(
+                    ctx["model"], ctx["scaler"], ctx["feature_cols"], x_df, self._device,
+                    label="single-cycle",
+                )
                 if result:
                     predictions.append(format_batch_row(result, None))
 
             self._record()
-            return PredictBatchResponse(model_id=MODEL_ID, predictions=predictions, output_path=None)
+            return PredictBatchResponse(
+                model_id=MODEL_ID, predictions=predictions, output_path=None
+            )
         finally:
             if mlflow_ctx and mlflow_ctx["temp_dir"]:
                 shutil.rmtree(mlflow_ctx["temp_dir"], ignore_errors=True)
 
-    def train(self, *, data_path: str, mlflow_run_id: str, mode: str = "fine_tune") -> TrainResponse:
+    def train(
+        self, *, data_path: str, mlflow_run_id: str, mode: str = "fine_tune"
+    ) -> TrainResponse:
         """Retrain with one of the AI team's two procedures (see trainer.py).
 
         fine_tune (default — the platform sends a few hundred plant cycles at most) recalibrates a
         copy of the served model; full trains a new CNN from scratch. Either way the result lives
         only in its MLflow run — the served model and its artifacts are never touched.
         """
-        logger.info("ml47 train mode=%s data_path=%s mlflow_run_id=%s", mode, data_path, mlflow_run_id)
+        logger.info(
+            "ml47 train mode=%s data_path=%s mlflow_run_id=%s", mode, data_path, mlflow_run_id
+        )
         with local_file_path(data_path) as local_path:
             if mode == "full":
                 result = train_full(local_path)
@@ -238,11 +258,14 @@ class Ml47DairyDnslPasteurizationFaultDetectionPlugin(ModelPluginPort):
             save_training_artifacts(temp_dir, result)
             try:
                 new_run_id = upload_artifacts_to_mlflow(
-                    str(temp_dir), mlflow_run_id=mlflow_run_id, metrics={**metrics, "mode_full": float(mode == "full")},
+                    str(temp_dir), mlflow_run_id=mlflow_run_id,
+                    metrics={**metrics, "mode_full": float(mode == "full")},
                 )
             except Exception as exc:  # pylint: disable=broad-exception-caught
                 logger.error("MLflow artifact upload failed: %s", exc)
-                raise ModelPersistenceError(f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}") from exc
+                raise ModelPersistenceError(
+                    f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}"
+                ) from exc
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
 
@@ -250,7 +273,8 @@ class Ml47DairyDnslPasteurizationFaultDetectionPlugin(ModelPluginPort):
         detail = (
             "Reentrenamiento completo desde cero (procedimiento train del equipo de IA)."
             if mode == "full" else
-            "Calibración a planta de las 4 cabezas del modelo servido (procedimiento fine_tune del equipo de IA)."
+            "Calibración a planta de las 4 cabezas del modelo servido "
+            "(procedimiento fine_tune del equipo de IA)."
         )
         return TrainResponse(
             detail=detail,
@@ -312,6 +336,6 @@ class Ml47DairyDnslPasteurizationFaultDetectionPlugin(ModelPluginPort):
                     "params": tracker.get_params(),
                     "metrics": tracker.get_metrics(),
                 }
-            except Exception as exc:
+            except Exception as exc:  # pylint: disable=broad-exception-caught  # stats stay usable
                 logger.warning("MLflow stats fetch failed for run_id=%s: %s", mlflow_run_id, exc)
         return base

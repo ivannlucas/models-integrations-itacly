@@ -6,10 +6,14 @@ directional classification. Generates decision cards for buyers/sellers.
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import os
 import shutil
+import tempfile
 import time
+import uuid
 from datetime import datetime, timezone
 from typing import Any
 
@@ -49,6 +53,7 @@ from app.plugins.ml21_cereals_price_spatial.preprocessing import (
     lookup_panel_row,
     signal_from_prob_return,
 )
+from app.plugins.ml21_cereals_price_spatial.train_dto import TrainResponse
 
 logger = logging.getLogger(__name__)
 
@@ -85,7 +90,7 @@ def _timing_decision(
     return "SEGUIMIENTO ACTIVO"
 
 
-def _build_recommendation(
+def _build_recommendation(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     role: str,
     predictions: dict[int, dict[str, Any]],
     province: str,
@@ -135,7 +140,10 @@ def _build_recommendation(
         base = f"Timing Operativo: {timing_label}. " + base
 
     if h1_signal != h3_signal and h1_signal != "NEUTRAL/ESPERA" and h3_signal != "NEUTRAL/ESPERA":
-        base += " Existe divergencia entre corto y largo plazo, por lo que se sugiere tactica escalonada."
+        base += (
+            " Existe divergencia entre corto y largo plazo, por lo que se sugiere tactica "
+            "escalonada."
+        )
 
     if geo_risk:
         base += (
@@ -147,7 +155,7 @@ def _build_recommendation(
     return base
 
 
-def _build_card_text(
+def _build_card_text(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     province: str,
     cereal: str,
     month_text: str,
@@ -211,7 +219,7 @@ def _xai_values_from_row(row: pd.Series, feature_cols: list[str]) -> dict[str, f
     return xai
 
 
-class Ml21CerealsPriceSpatialPlugin(ModelPluginPort):
+class Ml21CerealsPriceSpatialPlugin(ModelPluginPort):  # pylint: disable=too-many-instance-attributes
     """ESP-CEREAL plugin for spatial cereal price prediction across Spanish provinces."""
 
     BASE_ARTIFACT_FOLDER = ARTIFACT_FOLDER_NAME   # every /train publishes the new base model
@@ -283,6 +291,7 @@ class Ml21CerealsPriceSpatialPlugin(ModelPluginPort):
         self._last_predict_at = datetime.now(tz=timezone.utc).isoformat()
 
     def _get_geo_risk_provinces(self, metadata: dict) -> set[str]:
+        _ = metadata
         return GEO_RISK_DEFAULT_PROVINCES.copy()
 
     def _predict_single(
@@ -331,7 +340,7 @@ class Ml21CerealsPriceSpatialPlugin(ModelPluginPort):
             return self._models, self._metadata, None
         return download_user_model_from_mlflow(mlflow_run_id)
 
-    def predict_inline(
+    def predict_inline(  # pylint: disable=too-many-locals
         self,
         *,
         features: dict,
@@ -419,7 +428,9 @@ class Ml21CerealsPriceSpatialPlugin(ModelPluginPort):
             # The H3 regression model's own input row (one-hot cereal/provincia columns included),
             # not the raw panel row: the explainability service feeds these values straight to
             # datagia_best_h3_reg, so any column missing here would be explained as 0.
-            xai_values = _xai_values_from_row(build_features_from_row(raw_row, expected_r).iloc[0], expected_r) or None
+            xai_values = _xai_values_from_row(
+                build_features_from_row(raw_row, expected_r).iloc[0], expected_r
+            ) or None
 
             elapsed_ms = (time.perf_counter() - t0) * 1000
             self._record(elapsed_ms)
@@ -442,7 +453,7 @@ class Ml21CerealsPriceSpatialPlugin(ModelPluginPort):
             if user_temp_dir:
                 shutil.rmtree(user_temp_dir, ignore_errors=True)
 
-    def predict_batch(
+    def predict_batch(  # pylint: disable=too-many-locals
         self, *, data_path: str, mlflow_run_id: str = ""
     ) -> Any:
         """Batch inference: CSV with raw panel rows → predictions for all province×cereal."""
@@ -472,9 +483,12 @@ class Ml21CerealsPriceSpatialPlugin(ModelPluginPort):
                         **{f"ret_h{h}": predictions[h]["expected_return"] for h in VALID_HORIZONS},
                         **{f"prob_up_h{h}": predictions[h]["prob_up"] for h in VALID_HORIZONS},
                         **{f"signal_h{h}": predictions[h]["signal"] for h in VALID_HORIZONS},
-                        **{f"confidence_h{h}": predictions[h]["confidence"] for h in VALID_HORIZONS},
+                        **{
+                            f"confidence_h{h}": predictions[h]["confidence"]
+                            for h in VALID_HORIZONS
+                        },
                     })
-                except Exception as exc:
+                except Exception as exc:  # pylint: disable=broad-exception-caught  # per-row error capture
                     logger.warning("Error en fila %s: %s", idx, exc)
                     results.append({"row": int(idx), "error": str(exc)})
 
@@ -495,8 +509,11 @@ class Ml21CerealsPriceSpatialPlugin(ModelPluginPort):
             if user_temp_dir:
                 shutil.rmtree(user_temp_dir, ignore_errors=True)
 
-    def train(self, *, data_path: str = "", mlflow_run_id: str = "") -> Any:
-        """Train 6 models (3 horizons × reg+clf) from a CSV and publish them as the new base version.
+    def train(  # pylint: disable=too-many-locals,too-many-branches,too-many-statements
+        self, *, data_path: str = "", mlflow_run_id: str = ""
+    ) -> Any:
+        """Train 6 models (3 horizons × reg+clf) from a CSV and publish them as the new base
+        version.
 
         The bundle is also uploaded to the MLflow run when *mlflow_run_id* is given.
 
@@ -509,12 +526,8 @@ class Ml21CerealsPriceSpatialPlugin(ModelPluginPort):
         published as the new base model version; if mlflow_run_id is given they are also
         saved to that run. The CSV must have every column of the current panel (400 if not).
         """
-        import hashlib
-        import json
-        import tempfile
-        import uuid
-        from datetime import datetime, timezone
-
+        # Heavy training libs are imported lazily so that serving does not load them.
+        # pylint: disable=import-outside-toplevel
         import joblib
         from scipy.stats import pearsonr
         from sklearn.calibration import CalibratedClassifierCV
@@ -524,7 +537,9 @@ class Ml21CerealsPriceSpatialPlugin(ModelPluginPort):
         from sklearn.model_selection import GridSearchCV, TimeSeriesSplit
         from xgboost import XGBRegressor
 
+        # Lazy so tests can monkeypatch preprocessing.prepare_train_test.
         from app.plugins.ml21_cereals_price_spatial.preprocessing import prepare_train_test
+        # pylint: enable=import-outside-toplevel
 
         t0 = time.perf_counter()
 
@@ -575,8 +590,8 @@ class Ml21CerealsPriceSpatialPlugin(ModelPluginPort):
         try:
             for h in VALID_HORIZONS:
                 for task in ("regresion", "clasificacion"):
-                    X_train, X_test, y_train, y_test = prepare_train_test(df, h, task)
-                    features = X_train.columns.tolist()
+                    x_train, x_test, y_train, y_test = prepare_train_test(df, h, task)
+                    features = x_train.columns.tolist()
                     cv = TimeSeriesSplit(n_splits=5)
 
                     if task == "regresion":
@@ -610,13 +625,16 @@ class Ml21CerealsPriceSpatialPlugin(ModelPluginPort):
                                 n_jobs=-1, refit=True, verbose=0,
                             )
 
-                        search.fit(X_train, y_train)
+                        search.fit(x_train, y_train)
                         best_model = search.best_estimator_
-                        y_pred = best_model.predict(X_test)
+                        y_pred = best_model.predict(x_test)
                         y_true = y_test.to_numpy()
 
                         mae = float(mean_absolute_error(y_true, y_pred))
-                        pearson = float(pearsonr(y_true, y_pred)[0]) if len(y_true) >= 2 else float("nan")
+                        pearson = (
+                            float(pearsonr(y_true, y_pred)[0]) if len(y_true) >= 2
+                            else float("nan")
+                        )
                         da = float(np.mean((y_true > 0).astype(int) == (y_pred > 0).astype(int)))
                         auc = float("nan")
 
@@ -635,7 +653,9 @@ class Ml21CerealsPriceSpatialPlugin(ModelPluginPort):
                                 "chosen_candidate": "extra_trees" if h != 3 else "xgb",
                                 "best_params": search.best_params_,
                                 "cv_best_score": float(search.best_score_),
-                                "metrics_test": {"MAE": mae, "Pearson": pearson, "DA": da, "AUC": float("nan")},
+                                "metrics_test": {
+                                    "MAE": mae, "Pearson": pearson, "DA": da, "AUC": float("nan"),
+                                },
                                 "expected_columns": features,
                                 "feature_importance": extract_feature_importance(
                                     best_model, features
@@ -655,13 +675,13 @@ class Ml21CerealsPriceSpatialPlugin(ModelPluginPort):
                             cv=cv, scoring="roc_auc",
                             n_jobs=-1, refit=True, verbose=0,
                         )
-                        search.fit(X_train, y_train)
+                        search.fit(x_train, y_train)
                         best_base = search.best_estimator_
                         calibrated = CalibratedClassifierCV(best_base, method="sigmoid", cv=cv)
-                        calibrated.fit(X_train, y_train)
+                        calibrated.fit(x_train, y_train)
 
-                        y_pred = calibrated.predict(X_test)
-                        y_prob = calibrated.predict_proba(X_test)[:, 1]
+                        y_pred = calibrated.predict(x_test)
+                        y_prob = calibrated.predict_proba(x_test)[:, 1]
                         y_true = y_test.to_numpy()
 
                         try:
@@ -683,7 +703,9 @@ class Ml21CerealsPriceSpatialPlugin(ModelPluginPort):
                             "chosen_candidate": "logistic",
                             "best_params": search.best_params_,
                             "cv_best_score": float(search.best_score_),
-                            "metrics_test": {"MAE": float("nan"), "Pearson": float("nan"), "DA": da, "AUC": auc},
+                            "metrics_test": {
+                                "MAE": float("nan"), "Pearson": float("nan"), "DA": da, "AUC": auc,
+                            },
                             "expected_columns": features,
                             "feature_importance": extract_feature_importance(calibrated, features),
                         }
@@ -706,9 +728,13 @@ class Ml21CerealsPriceSpatialPlugin(ModelPluginPort):
                     "random_state": "42",
                 })
                 tracker.log_metrics(
-                    {k: v for k, v in all_metrics.items() if not (isinstance(v, float) and np.isnan(v))}
+                    {
+                        k: v for k, v in all_metrics.items()
+                        if not (isinstance(v, float) and np.isnan(v))
+                    }
                 )
-                # The run keeps only the models + metadata; the training CSV goes to the base version.
+                # The run keeps only the models + metadata; the training CSV goes to the base
+                # version.
                 run_dir = tempfile.mkdtemp(prefix="ml21_run_")
                 try:
                     shutil.copytree(tmp_dir, run_dir, dirs_exist_ok=True,
@@ -731,10 +757,11 @@ class Ml21CerealsPriceSpatialPlugin(ModelPluginPort):
             )
 
             # The container swaps in a fresh plugin on the new base; train() never reloads itself.
-            from app.plugins.ml21_cereals_price_spatial.train_dto import TrainResponse
-
             return TrainResponse(
-                detail=f"Training completado — 6 modelos entrenados (3H × reg+clf). Modelo base {persisted.base_version['version']}.",
+                detail=(
+                    "Training completado — 6 modelos entrenados (3H × reg+clf). "
+                    f"Modelo base {persisted.base_version['version']}."
+                ),
                 mae_h1=all_metrics.get("mae_h1"),
                 mae_h2=all_metrics.get("mae_h2"),
                 mae_h3=all_metrics.get("mae_h3"),
@@ -761,7 +788,7 @@ class Ml21CerealsPriceSpatialPlugin(ModelPluginPort):
         finally:
             shutil.rmtree(tmp_dir, ignore_errors=True)
 
-    def stats(self, mlflow_run_id: str = "") -> StatsResponse:
+    def stats(self, mlflow_run_id: str = "") -> StatsResponse:  # pylint: disable=too-many-locals
         """Return model metadata and runtime statistics."""
         avg = self._total_latency_ms / self._predict_count if self._predict_count else None
         metrics: dict[str, Any] = {
@@ -821,7 +848,10 @@ class Ml21CerealsPriceSpatialPlugin(ModelPluginPort):
                 OutputField(
                     name="predictions",
                     type="dict",
-                    description="Predicciones por horizonte H1/H2/H3 con signal, confidence, expected_return",
+                    description=(
+                        "Predicciones por horizonte H1/H2/H3 con signal, confidence, "
+                        "expected_return"
+                    ),
                 ),
                 OutputField(
                     name="card_text",

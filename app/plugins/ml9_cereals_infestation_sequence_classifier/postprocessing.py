@@ -38,7 +38,9 @@ def clean_scalar(value: Any) -> Any:  # pylint: disable=too-many-return-statemen
         return bool(value)
     if isinstance(value, float) and not math.isfinite(value):
         return None
-    if value is pd.NaT or (value is not None and not isinstance(value, (str, bool)) and pd.isna(value)):
+    if value is pd.NaT or (
+        value is not None and not isinstance(value, (str, bool)) and pd.isna(value)
+    ):
         return None
     return value
 
@@ -48,7 +50,9 @@ def serialize_records(df: pd.DataFrame) -> list[dict[str, Any]]:
     return [{k: clean_scalar(v) for k, v in rec.items()} for rec in df.to_dict(orient="records")]
 
 
-def run_inference(checkpoint: dict, scaler: Any, x_seq: np.ndarray, *, batch_size: int = 128) -> np.ndarray:
+def run_inference(
+    checkpoint: dict, scaler: Any, x_seq: np.ndarray, *, batch_size: int = 128
+) -> np.ndarray:
     """Scale the windows with the fitted StandardScaler and return softmax probabilities.
 
     Same two steps as the delivered predictor's run_inference(): transform_sequences() flattens the
@@ -58,7 +62,9 @@ def run_inference(checkpoint: dict, scaler: Any, x_seq: np.ndarray, *, batch_siz
     if len(x_seq) == 0:
         return np.zeros((0, len(CLASS_LABELS)), dtype=np.float32)
     x_scaled = transform_sequences(scaler, x_seq)
-    return predict_sequence_proba(checkpoint["model"], x_scaled, batch_size=batch_size, device="cpu")
+    return predict_sequence_proba(
+        checkpoint["model"], x_scaled, batch_size=batch_size, device="cpu"
+    )
 
 
 def label_for(pred_class: int) -> str:
@@ -70,7 +76,7 @@ def label_for(pred_class: int) -> str:
     return CLASS_LABELS.get(int(pred_class), f"clase_{int(pred_class)}")
 
 
-def build_predictions_frame(
+def build_predictions_frame(  # pylint: disable=too-many-arguments
     window_meta: pd.DataFrame,
     proba: np.ndarray,
     y_seq: np.ndarray | None,

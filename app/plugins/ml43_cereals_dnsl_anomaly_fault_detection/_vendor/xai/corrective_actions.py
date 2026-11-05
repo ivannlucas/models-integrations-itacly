@@ -2,8 +2,9 @@
 Módulo de acciones correctivas: generación inteligente según estado y evidencia.
 """
 
-import numpy as np
 from typing import Any, Dict, Optional
+
+import numpy as np
 
 
 # Configuración por defecto de bloques de acción
@@ -18,7 +19,8 @@ DEFAULT_ACTION_CONFIG = {
     "termico": {
         "variables": ["temp_zona1", "temp_zona2", "temp_zona3", "temp_salida_gases"],
         "actions": [
-            "Revisar estabilidad térmica del horno y la respuesta del sistema de aporte energético.",
+            "Revisar estabilidad térmica del horno y la respuesta del sistema de aporte "
+            "energético.",
             "Comprobar coherencia entre potencia aplicada y evolución de temperaturas.",
         ],
     },
@@ -38,7 +40,9 @@ def _get_fuzzy_variable_weights_from_fusion(fusion_report: Dict[str, Any]) -> Di
     return {str(k): float(v) for k, v in pairs}
 
 
-def _get_temporal_variable_info_from_fusion(fusion_report: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+def _get_temporal_variable_info_from_fusion(
+    fusion_report: Dict[str, Any],
+) -> Dict[str, Dict[str, Any]]:
     """Extrae información temporal desde el bloque fusionado."""
     out = {}
     for v in fusion_report.get("temporal", {}).get("top_variables", []):
@@ -52,7 +56,7 @@ def _get_temporal_variable_info_from_fusion(fusion_report: Dict[str, Any]) -> Di
     return out
 
 
-def _interpretive_state_label(
+def _interpretive_state_label(  # pylint: disable=too-many-locals
     fusion_report: Dict[str, Any],
     strong_margin: float = 0.20,
     weak_margin: float = 0.10,
@@ -65,7 +69,9 @@ def _interpretive_state_label(
     threshold = float(pred.get("decision_threshold", 0.5))
     fuzzy_prob = float(pred.get("fuzzy", {}).get("probability", 0.0))
     temporal_prob = float(pred.get("temporal", {}).get("probability", 0.0))
-    ensemble_prob = float(pred.get("ensemble", {}).get("probability", 0.5 * (fuzzy_prob + temporal_prob)))
+    ensemble_prob = float(
+        pred.get("ensemble", {}).get("probability", 0.5 * (fuzzy_prob + temporal_prob))
+    )
 
     support_ratio = float(fusion_report.get("fuzzy", {}).get("support_ratio", 1.0))
 
@@ -87,7 +93,12 @@ def _interpretive_state_label(
         dominant_branch = "none"
 
     if ensemble_class == 1:
-        if fuzzy_class == 1 and temporal_class == 1 and margin >= weak_margin and support_ratio >= support_ratio_min:
+        if (
+            fuzzy_class == 1
+            and temporal_class == 1
+            and margin >= weak_margin
+            and support_ratio >= support_ratio_min
+        ):
             state_label = "confirmed_anomaly"
         else:
             state_label = "unconfirmed_alert"
@@ -100,7 +111,7 @@ def _interpretive_state_label(
     return state_label, dominant_branch
 
 
-def _score_action_block(
+def _score_action_block(  # pylint: disable=too-many-locals
     block_name: str,
     block_cfg: Dict[str, Any],
     fuzzy_vars: Dict[str, float],
@@ -131,7 +142,9 @@ def _score_action_block(
 
     fuzzy_score_norm = (fuzzy_match_mass / fuzzy_total) if fuzzy_total > 0 else 0.0
     temporal_score_norm = (temporal_match_mass / temporal_total) if temporal_total > 0 else 0.0
-    coverage = (len(set(fuzzy_matches) | set(temporal_matches)) / len(cfg_vars)) if cfg_vars else 0.0
+    coverage = (
+        (len(set(fuzzy_matches) | set(temporal_matches)) / len(cfg_vars)) if cfg_vars else 0.0
+    )
 
     lambda_anom = float(fusion_report.get("prediction", {}).get("lambda_anomaly", 0.5))
     lambda_anom = float(np.clip(lambda_anom, 0.05, 0.95))
@@ -155,7 +168,7 @@ def _score_action_block(
     }
 
 
-def generate_corrective_actions(
+def generate_corrective_actions(  # pylint: disable=too-many-locals
     fusion_report: Dict[str, Any],
     action_config: Optional[Dict[str, Any]] = None,
     corrective_actions_cfg: Optional[Dict[str, Any]] = None,

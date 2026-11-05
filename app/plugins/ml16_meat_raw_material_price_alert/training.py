@@ -77,7 +77,10 @@ def _build_model(target: str, spw: float, seed: int):
 
 
 def _find_optimal_threshold(y_true: np.ndarray, y_proba: np.ndarray) -> tuple[float, float]:
-    """Port of trainer.py::find_optimal_threshold — grid search over [0.10, 0.90] step 0.01, max F1."""
+    """Port of trainer.py::find_optimal_threshold.
+
+    Grid search over [0.10, 0.90] step 0.01, max F1.
+    """
     best_th, best_f1 = 0.5, -1.0
     for th in np.arange(0.10, 0.91, 0.01):
         preds = (y_proba >= th).astype(int)
@@ -102,7 +105,7 @@ def _evaluate(y_true: np.ndarray, y_pred: np.ndarray, y_proba: np.ndarray) -> di
     }
 
 
-def train_models(
+def train_models(  # pylint: disable=too-many-arguments,too-many-locals,too-many-branches,too-many-statements
     df: pd.DataFrame,
     *,
     seed: int = DEFAULT_SEED,
@@ -180,7 +183,10 @@ def train_models(
     for target in TARGET_COLS:
         valid = ~np.isnan(oof_probas[target])
         y_true_oof, y_proba_oof = oof_true[target][valid], oof_probas[target][valid]
-        best_th = 0.5 if len(np.unique(y_true_oof)) < 2 else _find_optimal_threshold(y_true_oof, y_proba_oof)[0]
+        best_th = (
+            0.5 if len(np.unique(y_true_oof)) < 2
+            else _find_optimal_threshold(y_true_oof, y_proba_oof)[0]
+        )
         if target == "target_insumos" and use_manual_threshold:
             final_thresholds[target] = manual_threshold_insumos
         else:
@@ -199,7 +205,7 @@ def train_models(
         pred_test[target] = (proba >= final_thresholds[target]).astype(int)
 
     # -- Bootstrap bagging for uncertainty (Fase 5b) ----------------------------
-    rng = np.random.RandomState(seed)
+    rng = np.random.RandomState(seed)  # pylint: disable=no-member  # false positive
     bagging_models: dict[str, list] = {t: [] for t in TARGET_COLS}
     for i, target in enumerate(TARGET_COLS):
         x_tr_t, y_tr_t = x_train_flat[target], y_train[:, i]
@@ -228,7 +234,8 @@ def train_models(
 
     logger.info(
         "ml16 train_models() done — n_train=%d n_test=%d animales_f1=%.3f insumos_f1=%.3f",
-        len(y_train), len(y_test), metrics["target_animales"]["f1"], metrics["target_insumos"]["f1"],
+        len(y_train), len(y_test),
+        metrics["target_animales"]["f1"], metrics["target_insumos"]["f1"],
     )
     return {
         "models": final_models,

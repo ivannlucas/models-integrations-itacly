@@ -30,7 +30,10 @@ from app.plugins.ml45_cereals_dnsl_critical_point_detection.constants import (
 
 
 def build_config_dict() -> dict:
-    """Config dict shim matching the shape the vendored functions expect (config.yaml equivalent)."""
+    """Config dict shim matching the shape the vendored functions expect.
+
+    It is the config.yaml equivalent.
+    """
     return {
         "data_generation": {"sensors": [{"name": name} for name in SENSOR_COLUMNS]},
         "data_processing": {
@@ -96,10 +99,14 @@ def build_windows_from_dataframe(
     stats_df = stats_windows(sequences, feature_names=SENSOR_COLUMNS, stats_creation=STATS_CREATION)
 
     n_features = sequences.shape[-1]
-    sequences_scaled = scaler_x.transform(sequences.reshape(-1, n_features)).reshape(sequences.shape)
+    sequences_scaled = scaler_x.transform(
+        sequences.reshape(-1, n_features)
+    ).reshape(sequences.shape)
     stats_scaled = scaler_num.transform(stats_df)
 
-    return sequences_scaled, stats_scaled, list(stats_df.columns), timestamp_windows, entity_ids, y_seq
+    return (
+        sequences_scaled, stats_scaled, list(stats_df.columns), timestamp_windows, entity_ids, y_seq
+    )
 
 
 def build_raw_windows_from_dataframe(df: pd.DataFrame, *, require_target: bool = False):
@@ -176,7 +183,10 @@ def build_windows_from_sensor_arrays(
     scaler_x,
     scaler_num,
 ):
-    """Build a single-cycle DataFrame from inline sensor arrays (predict_inline without data_path)."""
+    """Build a single-cycle DataFrame from inline sensor arrays.
+
+    Used by predict_inline without data_path.
+    """
     n_rows = len(timestamps)
     data = {TIMESTAMP_COLUMN: timestamps}
     for sensor in SENSOR_COLUMNS:

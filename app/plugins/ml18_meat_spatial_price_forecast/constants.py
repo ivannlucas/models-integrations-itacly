@@ -65,13 +65,22 @@ MLFLOW_ARTIFACT_PATH = "model"
 # fallback para estas dos, documentado explícitamente en la memoria).
 VECINOS_CCAA = {
     "ANDALUCIA": ["EXTREMADURA", "CASTILLA LA MANCHA", "MURCIA"],
-    "ARAGON": ["CATALUNA", "CASTILLA LA MANCHA", "CASTILLA Y LEON", "LA RIOJA", "NAVARRA", "COMUNIDAD VALENCIANA"],
+    "ARAGON": [
+        "CATALUNA", "CASTILLA LA MANCHA", "CASTILLA Y LEON", "LA RIOJA", "NAVARRA",
+        "COMUNIDAD VALENCIANA",
+    ],
     "ASTURIAS": ["CANTABRIA", "CASTILLA Y LEON", "GALICIA"],
     "BALEARES": [],
     "CANARIAS": [],
     "CANTABRIA": ["ASTURIAS", "CASTILLA Y LEON", "PAIS VASCO"],
-    "CASTILLA LA MANCHA": ["ANDALUCIA", "ARAGON", "CASTILLA Y LEON", "EXTREMADURA", "MADRID", "MURCIA", "COMUNIDAD VALENCIANA"],
-    "CASTILLA Y LEON": ["ASTURIAS", "CANTABRIA", "PAIS VASCO", "LA RIOJA", "ARAGON", "CASTILLA LA MANCHA", "MADRID", "EXTREMADURA", "GALICIA"],
+    "CASTILLA LA MANCHA": [
+        "ANDALUCIA", "ARAGON", "CASTILLA Y LEON", "EXTREMADURA", "MADRID", "MURCIA",
+        "COMUNIDAD VALENCIANA",
+    ],
+    "CASTILLA Y LEON": [
+        "ASTURIAS", "CANTABRIA", "PAIS VASCO", "LA RIOJA", "ARAGON", "CASTILLA LA MANCHA",
+        "MADRID", "EXTREMADURA", "GALICIA",
+    ],
     "CATALUNA": ["ARAGON", "COMUNIDAD VALENCIANA"],
     "COMUNIDAD VALENCIANA": ["CATALUNA", "ARAGON", "CASTILLA LA MANCHA", "MURCIA"],
     "EXTREMADURA": ["ANDALUCIA", "CASTILLA LA MANCHA", "CASTILLA Y LEON"],
@@ -91,5 +100,7 @@ METRICS_REPORTED = {
     "test_r2": 0.8114,
     "kpi_contractual": "MAPE test <= 20%",
     "accepted_for_production": True,
-    "baselines_test_mape_pct": {"naive_estacional_lag12": 14.1242, "media_historica_ccaa_producto": 20.2947},
+    "baselines_test_mape_pct": {
+        "naive_estacional_lag12": 14.1242, "media_historica_ccaa_producto": 20.2947,
+    },
 }

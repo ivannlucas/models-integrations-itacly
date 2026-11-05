@@ -2,15 +2,18 @@
 import numpy as np
 import pandas as pd
 
-from app.plugins.ml40_meat_refrigeration_aeration_fault_diagnosis.postprocessing import run_inference
+from app.plugins.ml40_meat_refrigeration_aeration_fault_diagnosis.postprocessing import (
+    run_inference,
+)
 
 
-class _FakeScaler:
+class _FakeScaler:  # pylint: disable=too-few-public-methods
     """Stand-in for a fitted sklearn scaler."""
 
     feature_names_in_ = ["sensor_a", "sensor_b"]
 
     def transform(self, x):
+        """Return x * 0.1 - 5.0 as float64."""
         return np.asarray(x, dtype="float64") * 0.1 - 5.0
 
 
@@ -23,10 +26,12 @@ class _FakeModel:
         self.seen = None
 
     def predict(self, x):
+        """Record the scored frame and predict class 0 for every row."""
         self.seen = x.copy()
         return np.zeros(len(x), dtype=int)
 
     def predict_proba(self, x):
+        """Return a 0.5/0.5 probability for every row."""
         return np.tile([0.5, 0.5], (len(x), 1))
 
 

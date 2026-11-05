@@ -11,6 +11,7 @@ from __future__ import annotations
 import logging
 import os
 import shutil
+import tempfile
 
 from app.domain.services.mlflow_tracker import BaseMLflowTracker, require_user_model
 from app.plugins.ml7_cereals_grain_pest_detection.constants import (
@@ -28,9 +29,7 @@ def download_user_model_from_mlflow(run_id: str):
     Returns (model, temp_dir) or None. Caller MUST shutil.rmtree(temp_dir) after
     inference — use try/finally.
     """
-    import tempfile  # noqa: PLC0415
-
-    from ultralytics import YOLO  # noqa: PLC0415 — heavy import kept lazy
+    from ultralytics import YOLO  # noqa: PLC0415 # pylint: disable=import-outside-toplevel
 
     tmp = tempfile.mkdtemp(prefix="mlflow_ml7_grain_")
     try:

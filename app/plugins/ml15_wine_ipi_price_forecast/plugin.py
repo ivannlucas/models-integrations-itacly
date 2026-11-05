@@ -104,19 +104,20 @@ class Ml15WineIpiPriceForecastPlugin(ModelPluginPort):
         horizon = int(payload["horizon"])
         try:
             values, meta = preprocessing.resolve_feature_row(
-                row, feature_columns, CALENDAR_DERIVED_COLUMNS, target_column=str(payload["target_column"]),
+                row, feature_columns, CALENDAR_DERIVED_COLUMNS,
+                target_column=str(payload["target_column"]),
             )
         except ValueError as exc:
             raise MissingRequiredFeatureError(str(exc)) from exc
-        X = pd.DataFrame([values])[feature_columns]
+        x_df = pd.DataFrame([values])[feature_columns]
 
         origin_date, target_date = preprocessing.resolve_origin_target_dates(row, horizon)
         return {
             "feature_columns": feature_columns,
             "horizon": horizon,
-            "X": X,
-            "y_pred": float(payload["model"].predict(X)[0]),
-            "y_anchor": float(X.iloc[0][str(payload["anchor_column"])]),
+            "X": x_df,
+            "y_pred": float(payload["model"].predict(x_df)[0]),
+            "y_anchor": float(x_df.iloc[0][str(payload["anchor_column"])]),
             "origin_date": origin_date,
             "target_date": target_date,
             **meta,
@@ -154,7 +155,9 @@ class Ml15WineIpiPriceForecastPlugin(ModelPluginPort):
                 y_true=r["y_true"],
                 feature_status=r["feature_status"],
                 feature_notes=r["feature_notes"],
-                xai_feature_values={col: float(r["X"].iloc[0][col]) for col in r["feature_columns"]},
+                xai_feature_values={
+                    col: float(r["X"].iloc[0][col]) for col in r["feature_columns"]
+                },
             )
         finally:
             if tmp:
@@ -163,7 +166,9 @@ class Ml15WineIpiPriceForecastPlugin(ModelPluginPort):
     # ── predict_batch ─────────────────────────────────────────────────────────
 
     @staticmethod
-    def _resolve_batch_dates(df: pd.DataFrame) -> tuple[list[pd.Timestamp | None], list[dict[str, Any]], dict[int, str]]:
+    def _resolve_batch_dates(
+        df: pd.DataFrame,
+    ) -> tuple[list[pd.Timestamp | None], list[dict[str, Any]], dict[int, str]]:
         """Resolve each row's origin date + collect (date, value) override points.
 
         Returns (dates, user_points, row_errors) — dates[i] is None where the row's date
@@ -188,7 +193,9 @@ class Ml15WineIpiPriceForecastPlugin(ModelPluginPort):
 
         return dates, user_points, row_errors
 
-    def _predict_simple_history_batch(self, payload: dict, df: pd.DataFrame) -> list[dict[str, Any]]:
+    def _predict_simple_history_batch(
+        self, payload: dict, df: pd.DataFrame
+    ) -> list[dict[str, Any]]:
         """Batch-predict a simple date(+year/month)+IPI-value history CSV — e.g. the AI
         team's own data/input/ipi_history.csv (date,year,month,ipi_national_current) — one
         prediction per row. Merges the WHOLE file into the bundled reference history first
@@ -207,11 +214,13 @@ class Ml15WineIpiPriceForecastPlugin(ModelPluginPort):
 
         valid_idx = [i for i, d in enumerate(dates) if d is not None]
         if valid_idx:
-            self._fill_batch_predictions(payload, dates, valid_idx, prices_df, financial_df, predictions)
+            self._fill_batch_predictions(
+                payload, dates, valid_idx, prices_df, financial_df, predictions
+            )
         return predictions
 
     @staticmethod
-    def _fill_batch_predictions(
+    def _fill_batch_predictions(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
         payload: dict, dates: list[pd.Timestamp], valid_idx: list[int],
         prices_df: pd.DataFrame, financial_df: pd.DataFrame, predictions: list,
     ) -> None:
@@ -219,7 +228,9 @@ class Ml15WineIpiPriceForecastPlugin(ModelPluginPort):
         feature_columns = list(payload["feature_columns"])
         horizon = int(payload["horizon"])
         try:
-            derived = history.derive_feature_rows([dates[i] for i in valid_idx], prices_df, financial_df)
+            derived = history.derive_feature_rows(
+                [dates[i] for i in valid_idx], prices_df, financial_df
+            )
             y_pred = payload["model"].predict(derived[feature_columns])
         except ValueError as exc:
             for row_idx in valid_idx:
@@ -231,7 +242,9 @@ class Ml15WineIpiPriceForecastPlugin(ModelPluginPort):
             origin_date, target_date = preprocessing.resolve_origin_target_dates(
                 {"date": dates[row_idx].strftime("%Y-%m-%d")}, horizon,
             )
-            status, notes = history.feature_status([note for _, note in derived.iloc[pos]["_notes"]])
+            status, notes = history.feature_status(
+                [note for _, note in derived.iloc[pos]["_notes"]]
+            )
             predictions[row_idx] = {
                 "row": row_idx,
                 "origin_date": origin_date,
@@ -288,7 +301,8 @@ class Ml15WineIpiPriceForecastPlugin(ModelPluginPort):
                 "predict_batch done — %d filas, mlflow=%s", len(predictions), bool(mlflow_run_id),
             )
             return PredictBatchResponse(
-                model_id=MODEL_ID, predictions=predictions, n_predictions=len(predictions), output_path=None,
+                model_id=MODEL_ID, predictions=predictions, n_predictions=len(predictions),
+                output_path=None,
             )
         finally:
             if tmp:
@@ -297,7 +311,9 @@ class Ml15WineIpiPriceForecastPlugin(ModelPluginPort):
     # ── train (retraining with the original procedure) ────────────────────────
 
     @staticmethod
-    def _validated_reference_csvs(prices_path: str, financial_path: str) -> list[tuple[str, str]]:
+    def _validated_reference_csvs(  # pylint: disable=too-many-locals
+        prices_path: str, financial_path: str
+    ) -> list[tuple[str, str]]:
         """Check the optional reference CSVs against the current ones' columns, before training.
 
         Returns [(local copy, canonical filename)] to add to the new base bundle; [] if none
@@ -307,8 +323,8 @@ class Ml15WineIpiPriceForecastPlugin(ModelPluginPort):
             return []
         if not (prices_path and financial_path):
             raise ValueError(
-                "reference_prices_path y reference_financial_path se indican juntos: el histórico de "
-                "referencia del modelo base se renueva entero."
+                "reference_prices_path y reference_financial_path se indican juntos: "
+                "el histórico de referencia del modelo base se renueva entero."
             )
         # Compare raw file against raw file: load_reference_data() derives extra columns.
         current_prices_path, current_financial_path = model_loader.reference_data_paths()
@@ -318,20 +334,28 @@ class Ml15WineIpiPriceForecastPlugin(ModelPluginPort):
         try:
             for field, path, current, filename in (
                 ("reference_prices_path", prices_path, current_prices, REFERENCE_PRICES_FILENAME),
-                ("reference_financial_path", financial_path, current_financial, REFERENCE_FINANCIAL_FILENAME),
+                (
+                    "reference_financial_path", financial_path, current_financial,
+                    REFERENCE_FINANCIAL_FILENAME,
+                ),
             ):
                 fd, copy_path = tempfile.mkstemp(suffix=".csv")
                 os.close(fd)
-                checked.append((copy_path, filename))  # registered first so the cleanup below sees it
+                # registered first so the cleanup below sees it
+                checked.append((copy_path, filename))
                 try:
                     with local_file_path(path) as local_path:
                         shutil.copyfile(local_path, copy_path)
                     frame = history.load_monthly_csv(copy_path)
                 except Exception as exc:  # pylint: disable=broad-exception-caught
-                    raise ValueError(f"{field}: no se puede leer como histórico mensual ({exc}).") from exc
+                    raise ValueError(
+                        f"{field}: no se puede leer como histórico mensual ({exc})."
+                    ) from exc
                 missing = [col for col in current.columns if col not in frame.columns]
                 if missing:
-                    raise ValueError(f"{field}: faltan las columnas del histórico vigente {missing}.")
+                    raise ValueError(
+                        f"{field}: faltan las columnas del histórico vigente {missing}."
+                    )
         except BaseException:
             for copy_path, _ in checked:
                 if os.path.exists(copy_path):
@@ -339,7 +363,7 @@ class Ml15WineIpiPriceForecastPlugin(ModelPluginPort):
             raise
         return checked
 
-    def train(
+    def train(  # pylint: disable=too-many-locals
         self, *, data_path: str, mlflow_run_id: str = "",
         reference_prices_path: str = "", reference_financial_path: str = "",
     ) -> TrainResponse:
@@ -407,7 +431,10 @@ class Ml15WineIpiPriceForecastPlugin(ModelPluginPort):
             result["n_train"], result["n_test"], metrics["rmse"], mlflow_run_id,
         )
         return TrainResponse(
-            detail=f"Reentrenamiento completado (Ridge, procedimiento original). Modelo base {persisted.base_version['version']}.",
+            detail=(
+                "Reentrenamiento completado (Ridge, procedimiento original). "
+                f"Modelo base {persisted.base_version['version']}."
+            ),
             n_train_rows=result["n_train"],
             n_test_rows=result["n_test"],
             train_end_date=str(result["train_end_date"].date()),
@@ -431,20 +458,43 @@ class Ml15WineIpiPriceForecastPlugin(ModelPluginPort):
         inputs = [
             InputField(
                 name="ipi_national_current", type="float",
-                description="Último IPI fitosanitario nacional observado en el mes de origen (índice base 2020=100).",
+                description=(
+                    "Último IPI fitosanitario nacional observado en el mes de origen (índice base "
+                    "2020=100)."
+                ),
             ),
             *[
                 InputField(
                     name=f"ipi_national_lag_{i}", type="float",
-                    description=f"IPI fitosanitario nacional observado {i} mes(es) antes del mes de origen.",
+                    description=(
+                        f"IPI fitosanitario nacional observado {i} mes(es) antes del mes de "
+                        "origen."
+                    ),
                 )
                 for i in range(1, 7)
             ],
-            InputField(name="chem_sector_lag_11", type="float", description="Índice sectorial químico retardado 11 meses (base 2020=100)."),
-            InputField(name="copper_lag_14", type="float", description="Precio del cobre retardado 14 meses (base 2020=100)."),
-            InputField(name="eur_usd_lag_17", type="float", description="Tipo de cambio EUR/USD retardado 17 meses (base 2020=100)."),
-            InputField(name="oil_brent_lag_12", type="float", description="Precio del petróleo Brent retardado 12 meses (base 2020=100)."),
-            InputField(name="usa_lag_1", type="float", description="Índice de precios de pesticidas de EE.UU. retardado 1 mes (base 2020=100)."),
+            InputField(
+                name="chem_sector_lag_11", type="float",
+                description="Índice sectorial químico retardado 11 meses (base 2020=100).",
+            ),
+            InputField(
+                name="copper_lag_14", type="float",
+                description="Precio del cobre retardado 14 meses (base 2020=100).",
+            ),
+            InputField(
+                name="eur_usd_lag_17", type="float",
+                description="Tipo de cambio EUR/USD retardado 17 meses (base 2020=100).",
+            ),
+            InputField(
+                name="oil_brent_lag_12", type="float",
+                description="Precio del petróleo Brent retardado 12 meses (base 2020=100).",
+            ),
+            InputField(
+                name="usa_lag_1", type="float",
+                description=(
+                    "Índice de precios de pesticidas de EE.UU. retardado 1 mes (base 2020=100)."
+                ),
+            ),
             InputField(
                 name="month_sin", type="float", default=None,
                 description="sin(2*pi*mes/12) — se deriva de 'date'/'origin_date' si se omite.",
@@ -455,27 +505,53 @@ class Ml15WineIpiPriceForecastPlugin(ModelPluginPort):
             ),
             InputField(
                 name="quarter", type="int", default=None,
-                description="Trimestre natural (1-4) — se deriva de 'date'/'origin_date' si se omite.",
+                description=(
+                    "Trimestre natural (1-4) — se deriva de 'date'/'origin_date' si se omite."
+                ),
             ),
             InputField(
                 name="is_spring_risk", type="int", default=None,
-                description="1 si el mes es abril/mayo/junio (riesgo fúngico primaveral), 0 en otro caso — se deriva si se omite.",
+                description=(
+                    "1 si el mes es abril/mayo/junio (riesgo fúngico primaveral), 0 en otro caso "
+                    "— se deriva si se omite."
+                ),
             ),
             InputField(
                 name="date", type="str", default=None,
-                description="Fecha de origen (YYYY-MM-DD), alias 'origin_date'. Opcional si ya se aportan las 4 variables de calendario.",
+                description=(
+                    "Fecha de origen (YYYY-MM-DD), alias 'origin_date'. Opcional si ya se aportan "
+                    "las 4 variables de calendario."
+                ),
             ),
         ]
         outputs = [
-            OutputField(name="y_pred", type="float", description="IPI fitosanitario nacional predicho a t+6 (índice base 2020=100)."),
-            OutputField(name="y_anchor", type="float", description="ipi_national_current usado como ancla."),
-            OutputField(name="target_date", type="date", description="origin_date + 6 meses, si origin_date es derivable."),
-            OutputField(name="y_true", type="float", description="IPI real en target_date si ya se conoce; null si es futuro."),
+            OutputField(
+                name="y_pred", type="float",
+                description="IPI fitosanitario nacional predicho a t+6 (índice base 2020=100).",
+            ),
+            OutputField(
+                name="y_anchor", type="float",
+                description="ipi_national_current usado como ancla.",
+            ),
+            OutputField(
+                name="target_date", type="date",
+                description="origin_date + 6 meses, si origin_date es derivable.",
+            ),
+            OutputField(
+                name="y_true", type="float",
+                description="IPI real en target_date si ya se conoce; null si es futuro.",
+            ),
             OutputField(
                 name="feature_status", type="str",
-                description="exact | exogenous_last_available (alguna exógena usó el último dato disponible).",
+                description=(
+                    "exact | exogenous_last_available (alguna exógena usó el último dato "
+                    "disponible)."
+                ),
             ),
-            OutputField(name="feature_notes", type="str", description="Detalle del desfase de cada exógena; vacío si exact."),
+            OutputField(
+                name="feature_notes", type="str",
+                description="Detalle del desfase de cada exógena; vacío si exact.",
+            ),
         ]
         base = StatsResponse(
             model_name=MODEL_ID,
@@ -501,7 +577,9 @@ class Ml15WineIpiPriceForecastPlugin(ModelPluginPort):
         if mlflow_run_id:
             try:
                 tracker = BaseMLflowTracker(mlflow_run_id)
-                base.metrics["mlflow"] = {"params": tracker.get_params(), "metrics": tracker.get_metrics()}
+                base.metrics["mlflow"] = {
+                    "params": tracker.get_params(), "metrics": tracker.get_metrics(),
+                }
                 logger.info("Stats enriched with MLflow data for run_id=%s", mlflow_run_id)
             except Exception as exc:  # pylint: disable=broad-exception-caught
                 logger.warning("Could not fetch MLflow stats for run_id=%s: %s", mlflow_run_id, exc)

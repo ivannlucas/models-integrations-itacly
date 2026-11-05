@@ -18,7 +18,7 @@ from app.plugins.ml31_cereals_residue_optimizer.preprocessing import PriceCostMa
 
 
 @dataclass
-class LPSolution:
+class LPSolution:  # pylint: disable=too-many-instance-attributes
     """Holds the result of a single LP solve."""
 
     status: str
@@ -36,10 +36,10 @@ class LPSolution:
     raw: Optional[Any] = None
 
 
-class LPOptimizer:
+class LPOptimizer:  # pylint: disable=too-many-instance-attributes,too-few-public-methods
     """Builds and solves the LP model for crop allocation."""
 
-    def __init__(
+    def __init__(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
         self,
         crops: List[str],
         price_cost_mgr: PriceCostManager,
@@ -58,8 +58,8 @@ class LPOptimizer:
     ):
         self.crops = crops
         self.pcm = price_cost_mgr
-        self.S_s = total_secano_ha
-        self.S_r = total_regadio_ha
+        self.S_s = total_secano_ha  # pylint: disable=invalid-name  # LP notation S_s
+        self.S_r = total_regadio_ha  # pylint: disable=invalid-name  # LP notation S_r
         self.yield_s = yield_s
         self.yield_r = yield_r
         self.f_clima = climate_factor
@@ -99,7 +99,7 @@ class LPOptimizer:
         return self.crop_constraints.get(crop, {}).get("min_surface_pct", default)
 
     # ── build & solve ────────────────────────────────────────────────────────
-    def solve(
+    def solve(  # pylint: disable=too-many-branches,too-many-locals,too-many-statements
         self,
         mode: str = "minimize_residue",
         min_benefit_eur: Optional[float] = None,
@@ -138,9 +138,15 @@ class LPOptimizer:
 
         # R1b / R2b: land-use floors
         if self.min_secano_use_ha > 0:
-            prob += pulp.lpSum(x_s[c] for c in self.crops) >= self.min_secano_use_ha, "R1b_min_secano_use"
+            prob += (
+                pulp.lpSum(x_s[c] for c in self.crops) >= self.min_secano_use_ha,
+                "R1b_min_secano_use",
+            )
         if self.min_regadio_use_ha > 0:
-            prob += pulp.lpSum(x_r[c] for c in self.crops) >= self.min_regadio_use_ha, "R2b_min_regadio_use"
+            prob += (
+                pulp.lpSum(x_r[c] for c in self.crops) >= self.min_regadio_use_ha,
+                "R2b_min_regadio_use",
+            )
 
         total_surface = self.S_s + self.S_r
 

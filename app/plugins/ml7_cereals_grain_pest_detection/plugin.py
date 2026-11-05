@@ -19,7 +19,11 @@ import yaml
 
 from app.application.dto.stats_dto import InputField, OutputField, RuntimeStats, StatsResponse
 from app.domain.ports.model_plugin_port import ModelPluginPort
-from app.domain.services.exceptions import InvalidImageError, ModelNotLoadedError, ModelPersistenceError
+from app.domain.services.exceptions import (
+    InvalidImageError,
+    ModelNotLoadedError,
+    ModelPersistenceError,
+)
 from app.domain.services.mlflow_tracker import BaseMLflowTracker
 from app.infrastructure.archive import safe_extract_zip
 from app.infrastructure.artifact_store import local_file_path
@@ -222,7 +226,7 @@ class Ml7CerealsGrainPestDetectionPlugin(ModelPluginPort):
                             )
                             result = yolo_results_to_dict(results[0], img_np)
                             predictions.append({"filename": img_file.name, **result})
-                        except Exception as exc:
+                        except Exception as exc:  # pylint: disable=broad-exception-caught  # per-image error capture
                             logger.warning("Error processing %s: %s", img_file.name, exc)
                             predictions.append({"filename": img_file.name, "error": str(exc)})
 
@@ -237,7 +241,9 @@ class Ml7CerealsGrainPestDetectionPlugin(ModelPluginPort):
             if mlflow_temp_dir:
                 shutil.rmtree(mlflow_temp_dir, ignore_errors=True)
 
-    def train(self, *, data_path: str, mlflow_run_id: str) -> TrainResponse:
+    def train(  # pylint: disable=too-many-locals
+        self, *, data_path: str, mlflow_run_id: str
+    ) -> TrainResponse:
         """Fine-tune the YOLO detector, faithfully porting
         src/training/train.py::train_model() from inbox/a07/codigo/.
 
@@ -296,20 +302,23 @@ class Ml7CerealsGrainPestDetectionPlugin(ModelPluginPort):
             shutil.copy2(best_weights, upload_dir / MODEL_FILENAME)
 
             if not mlflow_run_id:
-                raise ModelPersistenceError("Sin run de MLflow: el modelo reentrenado no se ha guardado.")
-            else:
-                try:
-                    upload_artifacts_to_mlflow(
-                        str(upload_dir),
-                        mlflow_run_id,
-                        metrics={
-                            "map50": map50, "map50_95": map50_95,
-                            "precision": precision, "recall": recall, "n_images": n_images,
-                        },
-                    )
-                except Exception as exc:  # pylint: disable=broad-exception-caught
-                    logger.error("MLflow artifact upload failed: %s", exc)
-                    raise ModelPersistenceError(f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}") from exc
+                raise ModelPersistenceError(
+                    "Sin run de MLflow: el modelo reentrenado no se ha guardado."
+                )
+            try:
+                upload_artifacts_to_mlflow(
+                    str(upload_dir),
+                    mlflow_run_id,
+                    metrics={
+                        "map50": map50, "map50_95": map50_95,
+                        "precision": precision, "recall": recall, "n_images": n_images,
+                    },
+                )
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                logger.error("MLflow artifact upload failed: %s", exc)
+                raise ModelPersistenceError(
+                    f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}"
+                ) from exc
 
             logger.info(
                 "train() done — map50=%.4f map50_95=%.4f precision=%.4f recall=%.4f "
@@ -383,6 +392,6 @@ class Ml7CerealsGrainPestDetectionPlugin(ModelPluginPort):
 
 def _load_yolo_from_path(path: Path):
     """Load a YOLO model directly from a checkpoint path (used for post-train val())."""
-    from ultralytics import YOLO  # noqa: PLC0415 — heavy import kept lazy
+    from ultralytics import YOLO  # noqa: PLC0415 # pylint: disable=import-outside-toplevel
 
     return YOLO(str(path))

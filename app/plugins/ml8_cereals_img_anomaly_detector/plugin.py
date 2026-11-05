@@ -1,3 +1,4 @@
+"""Ml8CerealsImgAnomalyDetectorPlugin — multitask CNN (sanitary category + cereal) for grain."""
 from __future__ import annotations
 
 import gc
@@ -7,6 +8,7 @@ import random
 import shutil
 import tempfile
 import time
+from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -14,7 +16,11 @@ import torch
 
 from app.application.dto.stats_dto import InputField, OutputField, RuntimeStats, StatsResponse
 from app.domain.ports.model_plugin_port import ModelPluginPort
-from app.domain.services.exceptions import InvalidImageError, ModelNotLoadedError, ModelPersistenceError
+from app.domain.services.exceptions import (
+    InvalidImageError,
+    ModelNotLoadedError,
+    ModelPersistenceError,
+)
 from app.domain.services.mlflow_tracker import BaseMLflowTracker
 from app.infrastructure.archive import safe_extract_zip
 from app.plugins.ml8_cereals_img_anomaly_detector.constants import (
@@ -24,7 +30,11 @@ from app.plugins.ml8_cereals_img_anomaly_detector.constants import (
     MODEL_FILENAME,
     MODEL_ID,
 )
-from app.plugins.ml8_cereals_img_anomaly_detector.model_loader import load_model_bundle
+from app.plugins.ml8_cereals_img_anomaly_detector.model_loader import (
+    MultiTaskMobileNetV3Large,
+    _safe_device,
+    load_model_bundle,
+)
 from app.plugins.ml8_cereals_img_anomaly_detector.postprocessing import (
     build_batch_response,
     build_inline_response,
@@ -34,7 +44,9 @@ from app.plugins.ml8_cereals_img_anomaly_detector.predict_dto import (
     PredictBatchResponse,
     PredictInlineResponse,
 )
-from app.plugins.ml8_cereals_img_anomaly_detector.mlflow_utils import download_user_model_from_mlflow
+from app.plugins.ml8_cereals_img_anomaly_detector.mlflow_utils import (
+    download_user_model_from_mlflow,
+)
 from app.plugins.ml8_cereals_img_anomaly_detector.preprocessing import (
     image_base64_to_tensor,
     image_path_to_tensor_and_image,
@@ -68,8 +80,6 @@ def _balance_hongos(records: list, max_samples_hongos: int | None, seed: int) ->
     category in the TRAIN split only, down to max_samples_hongos (or, if None, to the
     average count of the other categories). Part of the real delivered training
     procedure (memoria sección 6.2: "esquema de balanceo en entrenamiento"), not optional."""
-    from collections import Counter
-
     counts = Counter(categoria for _, categoria, _ in records)
     current_hongos = counts.get("hongos", 0)
     if current_hongos == 0:
@@ -99,12 +109,12 @@ def _load_mobilenetv3_backbone():
     real IMAGENET1K_V1 pretrained weights (as used in training/model.py and notebook
     04_MobileNetV3.ipynb), falling back to weights=None if the download is unreachable
     (e.g. sandboxed/offline environment)."""
-    from torchvision import models as _tv_models
+    from torchvision import models as _tv_models  # pylint: disable=import-outside-toplevel
     try:
         return _tv_models.mobilenet_v3_large(
             weights=_tv_models.MobileNet_V3_Large_Weights.IMAGENET1K_V1
         )
-    except Exception as exc:
+    except Exception as exc:  # pylint: disable=broad-exception-caught  # offline -> weights=None
         logger.warning(
             "No se pudieron descargar los pesos preentrenados IMAGENET1K_V1 (%s). "
             "Continuando con inicialización aleatoria (weights=None).", exc,
@@ -112,7 +122,9 @@ def _load_mobilenetv3_backbone():
         return _tv_models.mobilenet_v3_large(weights=None)
 
 
-def _train_epoch(model, loader, optimizer, crit_cat, crit_cer, device, accumulation_steps=1):
+def _train_epoch(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
+    model, loader, optimizer, crit_cat, crit_cer, device, accumulation_steps=1
+):
     """Replicates src/training/train.py:train_one_epoch — gradient accumulation included,
     since the delivered training procedure uses accumulation_steps=2 (config.yaml)."""
     model.train()
@@ -137,7 +149,11 @@ def _train_epoch(model, loader, optimizer, crit_cat, crit_cer, device, accumulat
         optimizer.step()
         optimizer.zero_grad()
     n = max(len(loader), 1)
-    return total_loss / n, 100 * correct_cat / total if total else 0.0, 100 * correct_cer / total if total else 0.0
+    return (
+        total_loss / n,
+        100 * correct_cat / total if total else 0.0,
+        100 * correct_cer / total if total else 0.0,
+    )
 
 
 def _validate_epoch(model, loader, crit_cat, crit_cer, device):
@@ -154,11 +170,17 @@ def _validate_epoch(model, loader, crit_cat, crit_cer, device):
             correct_cer += (out_cer.argmax(1) == lbls_cer).sum().item()
             total += lbls_cat.size(0)
     n = max(len(loader), 1)
-    return total_loss / n, 100 * correct_cat / total if total else 0.0, 100 * correct_cer / total if total else 0.0
+    return (
+        total_loss / n,
+        100 * correct_cat / total if total else 0.0,
+        100 * correct_cer / total if total else 0.0,
+    )
 
 
-def _run_phase(model, train_loader, val_loader, optimizer, crit_cat, crit_cer,
-               device, epochs, patience, phase_name, accumulation_steps=1):
+def _run_phase(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
+    model, train_loader, val_loader, optimizer, crit_cat, crit_cer,
+    device, epochs, patience, phase_name, accumulation_steps=1,
+):
     best_loss, no_improve, best_state = float("inf"), 0, None
     history: dict = {"val_acc_cat": [], "val_acc_cer": []}
     logger.info("Iniciando %s", phase_name)
@@ -192,6 +214,7 @@ def _run_phase(model, train_loader, val_loader, optimizer, crit_cat, crit_cer,
 # ── Plugin ────────────────────────────────────────────────────────────────────
 
 class Ml8CerealsImgAnomalyDetectorPlugin(ModelPluginPort):
+    """ModelPluginPort implementation for ml8-cereals-img-anomaly-detector."""
 
     def __init__(self) -> None:
         self._bundle: dict | None = None
@@ -231,7 +254,9 @@ class Ml8CerealsImgAnomalyDetectorPlugin(ModelPluginPort):
         mlflow_run_id: str = "",
     ) -> PredictInlineResponse:
         if mlflow_run_id:
-            logger.info("predict_inline — using user-trained model from MLflow run_id=%s", mlflow_run_id)
+            logger.info(
+                "predict_inline — using user-trained model from MLflow run_id=%s", mlflow_run_id
+            )
         bundle, user_temp_dir = self._resolve_bundle(mlflow_run_id)
         try:
             tensor = image_base64_to_tensor(
@@ -244,7 +269,9 @@ class Ml8CerealsImgAnomalyDetectorPlugin(ModelPluginPort):
 
             self._predict_count += 1
             self._last_predict_at = datetime.now(tz=timezone.utc).isoformat()
-            logger.info("predict_inline done — count=%d mlflow=%s", self._predict_count, bool(mlflow_run_id))
+            logger.info(
+                "predict_inline done — count=%d mlflow=%s", self._predict_count, bool(mlflow_run_id)
+            )
 
             return PredictInlineResponse(**build_inline_response(
                 logits_cat,
@@ -257,9 +284,13 @@ class Ml8CerealsImgAnomalyDetectorPlugin(ModelPluginPort):
             if user_temp_dir:
                 shutil.rmtree(user_temp_dir, ignore_errors=True)
 
-    def predict_batch(self, *, data_path: str, mlflow_run_id: str = "") -> PredictBatchResponse:
+    def predict_batch(  # pylint: disable=too-many-locals
+        self, *, data_path: str, mlflow_run_id: str = ""
+    ) -> PredictBatchResponse:
         if mlflow_run_id:
-            logger.info("predict_batch — using user-trained model from MLflow run_id=%s", mlflow_run_id)
+            logger.info(
+                "predict_batch — using user-trained model from MLflow run_id=%s", mlflow_run_id
+            )
         bundle, user_temp_dir = self._resolve_bundle(mlflow_run_id)
         try:
             model = bundle["model"]
@@ -270,8 +301,8 @@ class Ml8CerealsImgAnomalyDetectorPlugin(ModelPluginPort):
             _tmp_zip: str | None = None
             local_data_path = data_path
             if data_path.startswith("s3://"):
-                import boto3
-                from botocore.client import Config as BotoConfig
+                import boto3  # pylint: disable=import-outside-toplevel
+                from botocore.client import Config as BotoConfig  # pylint: disable=import-outside-toplevel
                 without_prefix = data_path[5:]
                 bucket, _, s3_key = without_prefix.partition("/")
                 s3 = boto3.client(
@@ -300,7 +331,9 @@ class Ml8CerealsImgAnomalyDetectorPlugin(ModelPluginPort):
                     model.eval()
                     for image_path in image_paths:
                         try:
-                            tensor, image = image_path_to_tensor_and_image(image_path, image_size=image_size)
+                            tensor, image = image_path_to_tensor_and_image(
+                                image_path, image_size=image_size
+                            )
                             tensor = tensor.to(device)
                             with torch.no_grad():
                                 logits_cat, logits_cer = model(tensor)
@@ -316,8 +349,10 @@ class Ml8CerealsImgAnomalyDetectorPlugin(ModelPluginPort):
                             predictions.append(result)
                         except InvalidImageError as exc:
                             predictions.append({"filename": image_path.name, "error": str(exc)})
-                        except Exception as exc:
-                            logger.warning("Unexpected error processing %s: %s", image_path.name, exc)
+                        except Exception as exc:  # pylint: disable=broad-exception-caught  # per-image error capture
+                            logger.warning(
+                                "Unexpected error processing %s: %s", image_path.name, exc
+                            )
                             predictions.append({"filename": image_path.name, "error": str(exc)})
             finally:
                 if _tmp_zip:
@@ -328,7 +363,9 @@ class Ml8CerealsImgAnomalyDetectorPlugin(ModelPluginPort):
             logger.info("predict_batch done — %d predictions count=%d mlflow=%s",
                         len(predictions), self._predict_count, bool(mlflow_run_id))
 
-            return PredictBatchResponse(**build_batch_response(predictions, model_id=bundle["model_id"]))
+            return PredictBatchResponse(
+                **build_batch_response(predictions, model_id=bundle["model_id"])
+            )
         finally:
             if user_temp_dir:
                 shutil.rmtree(user_temp_dir, ignore_errors=True)
@@ -355,14 +392,31 @@ class Ml8CerealsImgAnomalyDetectorPlugin(ModelPluginPort):
                 ),
             ],
             outputs=[
-                OutputField(name="categoria", type="str", description="Categoría predicha (anomalía/estado)"),
+                OutputField(
+                    name="categoria", type="str", description="Categoría predicha (anomalía/estado)"
+                ),
                 OutputField(name="cereal", type="str", description="Tipo de cereal predicho"),
-                OutputField(name="confianza_categoria", type="float", description="Confianza de la categoría [0, 1]"),
-                OutputField(name="confianza_cereal", type="float", description="Confianza del cereal [0, 1]"),
-                OutputField(name="probabilidades_categoria", type="dict", description="Probabilidad por categoría"),
-                OutputField(name="probabilidades_cereal", type="dict", description="Probabilidad por cereal"),
-                OutputField(name="annotated_image", type="str",
-                            description="Imagen re-escalada en base64 JPEG (solo en predict_batch)"),
+                OutputField(
+                    name="confianza_categoria",
+                    type="float",
+                    description="Confianza de la categoría [0, 1]",
+                ),
+                OutputField(
+                    name="confianza_cereal", type="float", description="Confianza del cereal [0, 1]"
+                ),
+                OutputField(
+                    name="probabilidades_categoria",
+                    type="dict",
+                    description="Probabilidad por categoría",
+                ),
+                OutputField(
+                    name="probabilidades_cereal", type="dict", description="Probabilidad por cereal"
+                ),
+                OutputField(
+                    name="annotated_image",
+                    type="str",
+                    description="Imagen re-escalada en base64 JPEG (solo en predict_batch)",
+                ),
             ],
             metrics={"arch": arch},
             runtime_stats=RuntimeStats(
@@ -378,43 +432,51 @@ class Ml8CerealsImgAnomalyDetectorPlugin(ModelPluginPort):
                     "metrics": tracker.get_metrics(),
                 }
                 logger.info("Stats enriched with MLflow data for run_id=%s", mlflow_run_id)
-            except Exception as exc:
+            except Exception as exc:  # pylint: disable=broad-exception-caught  # MLflow stats are best-effort
                 logger.warning("Could not fetch MLflow stats for run_id=%s: %s", mlflow_run_id, exc)
         return base
 
     # ── Entrenamiento ─────────────────────────────────────────────────────────
 
-    def train(self, *, data_path: str, mlflow_run_id: str) -> TrainResponse:
-        import torch.nn as nn
+    def train(  # pylint: disable=too-many-locals,too-many-branches,too-many-statements
+        self, *, data_path: str, mlflow_run_id: str
+    ) -> TrainResponse:
+        # pylint: disable=import-outside-toplevel  # heavy training-only deps kept lazy
+        from torch import nn
         from PIL import Image
         from torch.utils.data import DataLoader, Dataset
         from torchvision import transforms
 
-        from app.plugins.ml8_cereals_img_anomaly_detector.model_loader import MultiTaskMobileNetV3Large
+        # pylint: enable=import-outside-toplevel
 
         if mlflow_run_id:
             logger.info("Training with MLflow tracking, run_id=%s", mlflow_run_id)
             tracker = BaseMLflowTracker(mlflow_run_id)
-            tracker.log_params({
-                "batch_size": 16,
-                "fase1_lr": 0.001,
-                "fase1_epochs": 10,
-                "fase1_optimizer": "Adam",
-                "fase2_lr": 0.00001,
-                "fase2_epochs": 5,
-                "fase2_optimizer": "Adam",
-                "model": "MultiTaskMobileNetV3Large",
-                "backbone_weights": "IMAGENET1K_V1",
-                "accumulation_steps": 2,
-                "seed": 42,
-                "class_balancing": "balance_hongos + class/cereal_weights (CrossEntropyLoss) + WeightedRandomSampler",
-            })
+            tracker.log_params(
+                {
+                    "batch_size": 16,
+                    "fase1_lr": 0.001,
+                    "fase1_epochs": 10,
+                    "fase1_optimizer": "Adam",
+                    "fase2_lr": 0.00001,
+                    "fase2_epochs": 5,
+                    "fase2_optimizer": "Adam",
+                    "model": "MultiTaskMobileNetV3Large",
+                    "backbone_weights": "IMAGENET1K_V1",
+                    "accumulation_steps": 2,
+                    "seed": 42,
+                    "class_balancing": (
+                        "balance_hongos + class/cereal_weights (CrossEntropyLoss) + "
+                        "WeightedRandomSampler"
+                    ),
+                }
+            )
 
         _tmp_zip: str | None = None
         local_data_path = data_path
         if data_path.startswith("s3://"):
-            import boto3
-            from botocore.client import Config as BotoConfig
+            import boto3  # pylint: disable=import-outside-toplevel
+            from botocore.client import Config as BotoConfig  # pylint: disable=import-outside-toplevel
             without_prefix = data_path[5:]
             bucket, _, s3_key = without_prefix.partition("/")
             s3 = boto3.client(
@@ -434,11 +496,9 @@ class Ml8CerealsImgAnomalyDetectorPlugin(ModelPluginPort):
         if not local_data_path.lower().endswith(".zip"):
             raise ValueError("data_path debe ser un fichero .zip")
 
-        from app.plugins.ml8_cereals_img_anomaly_detector.model_loader import _safe_device
-
-        _SEED = 42
-        torch.manual_seed(_SEED)
-        random.seed(_SEED)
+        seed = 42
+        torch.manual_seed(seed)
+        random.seed(seed)
 
         device = _safe_device()
         class_to_idx = {c: i for i, c in enumerate(CATEGORY_NAMES)}
@@ -472,7 +532,7 @@ class Ml8CerealsImgAnomalyDetectorPlugin(ModelPluginPort):
                 try:
                     img = Image.open(img_path).convert("RGB")
                     img = self.tfm(img)
-                except Exception:
+                except Exception:  # pylint: disable=broad-exception-caught  # unreadable image -> zeros
                     img = torch.zeros(3, 224, 224)
                 return img, class_to_idx[categoria], cereal_to_idx[cereal], img_path
 
@@ -504,11 +564,10 @@ class Ml8CerealsImgAnomalyDetectorPlugin(ModelPluginPort):
             # Esquema de balanceo real (memoria 6.2 / src/main.py:run_training) — se aplica
             # SOLO sobre train, nunca sobre validación:
             #   1) balance_hongos: recorte de la categoría mayoritaria 'hongos'
-            train_records = _balance_hongos(train_records, max_samples_hongos=None, seed=_SEED)
+            train_records = _balance_hongos(train_records, max_samples_hongos=None, seed=seed)
 
             #   2) class_weights / cereal_weights (inverse frequency, normalizados) para
             #      CrossEntropyLoss — igual que src/main.py:run_training
-            from collections import Counter
             cat_counts = Counter(categoria for _, categoria, _ in train_records)
             cer_counts = Counter(cereal for _, _, cereal in train_records)
             total_train = len(train_records)
@@ -518,19 +577,23 @@ class Ml8CerealsImgAnomalyDetectorPlugin(ModelPluginPort):
             # una categoría/cereal podría venir ausente — evitamos un ZeroDivisionError en
             # lugar de que /train devuelva 500 por un dataset de usuario incompleto.
             class_weights = torch.tensor(
-                [total_train / max(cat_counts.get(c, 0), 1) for c in CATEGORY_NAMES], dtype=torch.float32
+                [total_train / max(cat_counts.get(c, 0), 1) for c in CATEGORY_NAMES],
+                dtype=torch.float32,
             )
             class_weights = class_weights / class_weights.sum() * len(CATEGORY_NAMES)
 
             cereal_weights = torch.tensor(
-                [total_train / max(cer_counts.get(c, 0), 1) for c in CEREAL_NAMES], dtype=torch.float32
+                [total_train / max(cer_counts.get(c, 0), 1) for c in CEREAL_NAMES],
+                dtype=torch.float32,
             )
             cereal_weights = cereal_weights / cereal_weights.sum() * len(CEREAL_NAMES)
 
             #   3) WeightedRandomSampler (balanceo por lote, basado en categoría) — reemplaza
             #      el shuffle=True plano para que el train_loader muestree igual que el
             #      pipeline original
-            sample_weights = [1.0 / max(cat_counts.get(categoria, 0), 1) for _, categoria, _ in train_records]
+            sample_weights = [
+                1.0 / max(cat_counts.get(categoria, 0), 1) for _, categoria, _ in train_records
+            ]
             sampler = torch.utils.data.WeightedRandomSampler(
                 sample_weights, num_samples=len(sample_weights), replacement=True
             )
@@ -615,7 +678,9 @@ class Ml8CerealsImgAnomalyDetectorPlugin(ModelPluginPort):
             }
             upload_warning = None
             if not mlflow_run_id:
-                raise ModelPersistenceError("Sin run de MLflow: el modelo reentrenado no se ha guardado.")
+                raise ModelPersistenceError(
+                    "Sin run de MLflow: el modelo reentrenado no se ha guardado."
+                )
             if mlflow_run_id:
                 combined_cat_m = h2["val_acc_cat"] or h1["val_acc_cat"]
                 combined_cer_m = h2["val_acc_cer"] or h1["val_acc_cer"]
@@ -632,7 +697,9 @@ class Ml8CerealsImgAnomalyDetectorPlugin(ModelPluginPort):
                     shutil.rmtree(mlflow_tmp, ignore_errors=True)
                 except Exception as exc:
                     logger.error("MLflow artifact upload failed: %s", exc)
-                    raise ModelPersistenceError(f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}") from exc
+                    raise ModelPersistenceError(
+                        f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}"
+                    ) from exc
 
             combined_cat = h2["val_acc_cat"] or h1["val_acc_cat"]
             combined_cer = h2["val_acc_cer"] or h1["val_acc_cer"]

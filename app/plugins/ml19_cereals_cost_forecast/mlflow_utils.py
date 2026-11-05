@@ -23,7 +23,7 @@ from app.plugins.ml19_cereals_cost_forecast.model_loader import load_bundle_from
 logger = logging.getLogger(__name__)
 
 
-@require_user_model   # None or an artifact load error, with run_id → UserModelUnavailableError (422)
+@require_user_model  # None or an artifact load error, with run_id → UserModelUnavailableError (422)
 def download_user_model_from_mlflow(run_id: str):
     """Download a retrained bundle and return (bundle, temp_dir), or None if the run has none.
 
@@ -31,9 +31,13 @@ def download_user_model_from_mlflow(run_id: str):
     """
     tmp = tempfile.mkdtemp(prefix="mlflow_ml19_")
     try:
-        local_path = BaseMLflowTracker(run_id).download_artifacts(tmp, artifact_path=MLFLOW_ARTIFACT_PATH)
+        local_path = BaseMLflowTracker(run_id).download_artifacts(
+            tmp, artifact_path=MLFLOW_ARTIFACT_PATH
+        )
         if not local_path or not os.path.exists(os.path.join(local_path, TRAINING_META_FILENAME)):
-            logger.warning("MLflow run_id=%s sin artefacto completo en '%s'", run_id, MLFLOW_ARTIFACT_PATH)
+            logger.warning(
+                "MLflow run_id=%s sin artefacto completo en '%s'", run_id, MLFLOW_ARTIFACT_PATH
+            )
             shutil.rmtree(tmp, ignore_errors=True)
             return None
         bundle = load_bundle_from_dir(local_path)
@@ -44,7 +48,9 @@ def download_user_model_from_mlflow(run_id: str):
         raise
 
 
-def upload_artifacts_to_mlflow(artifact_dir: str, mlflow_run_id: str, metrics: dict, params: dict) -> None:
+def upload_artifacts_to_mlflow(
+    artifact_dir: str, mlflow_run_id: str, metrics: dict, params: dict
+) -> None:
     """Log params and the walk-forward metrics of the selected models, then upload to "model"."""
     tracker = BaseMLflowTracker(mlflow_run_id)
     tracker.connect(mlflow_run_id)

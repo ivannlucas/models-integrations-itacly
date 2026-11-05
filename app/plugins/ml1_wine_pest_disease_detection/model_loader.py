@@ -73,7 +73,9 @@ def _efficientnet_b0_imagenet_topology(img_shape: tuple) -> "models.Model":
             out = layers.Rescaling([1.0 / math.sqrt(stddev) for stddev in IMAGENET_STDDEV_RGB])(out)
         return out
 
-    return keras.models.clone_model(base_model, clone_function=lambda layer: layer, call_function=_call)
+    return keras.models.clone_model(
+        base_model, clone_function=lambda layer: layer, call_function=_call
+    )
 
 
 def build_hybrid_model(backbone_type: str) -> "models.Model":

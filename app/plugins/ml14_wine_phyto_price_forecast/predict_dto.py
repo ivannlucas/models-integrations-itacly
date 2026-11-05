@@ -45,7 +45,10 @@ class PredictInlineRequest(BaseModel):
     model_key: str | None = None
     threshold: float | None = Field(
         default=None,
-        description="No usado por este modelo (no hay umbral de decisión); se acepta por compatibilidad de contrato.",
+        description=(
+            "No usado por este modelo (no hay umbral de decisión); se acepta por compatibilidad "
+            "de contrato."
+        ),
     )
     rows: list[dict[str, Any]] = Field(
         ...,
@@ -64,9 +67,19 @@ class PredictInlineResponse(BaseModel):
 
     model_config = ConfigDict(protected_namespaces=())
     model_id: str
-    predicted_price: float = Field(..., description="PROTECCION_FITO predicho a horizon_weeks vista (índice base 2020=100).")
-    current_price: float = Field(..., description="PROTECCION_FITO de la última fila del histórico aportado.")
-    drift_baseline: float = Field(..., description="Baseline lineal de drift — referencia frente a la que el GRU compara en el test reportado (ver manifest).")
+    predicted_price: float = Field(
+        ..., description="PROTECCION_FITO predicho a horizon_weeks vista (índice base 2020=100)."
+    )
+    current_price: float = Field(
+        ..., description="PROTECCION_FITO de la última fila del histórico aportado."
+    )
+    drift_baseline: float = Field(
+        ...,
+        description=(
+            "Baseline lineal de drift — referencia frente a la que el GRU compara en el test "
+            "reportado (ver manifest)."
+        ),
+    )
     horizon_weeks: int
     last_observed_date: str
     prediction_date: str
@@ -77,13 +90,19 @@ class PredictInlineResponse(BaseModel):
     )
     n_rows_used: int
     xai_feature_values: dict[str, float] | None = Field(
-        default=None, description="Valores de la última fila de features usados — consumidos por el servicio de explicabilidad",
+        default=None,
+        description=(
+            "Valores de la última fila de features usados — consumidos por el servicio de "
+            "explicabilidad"
+        ),
     )
     xai_feature_window: list[list[float]] | None = Field(
         default=None,
         description=(
-            "Ventana real (12 semanas x features, sin escalar, en el orden de xai_feature_values) que "
-            "puntuó la GRU — el servicio de explicabilidad la explica en lugar de repetir la última fila."
+            "Ventana real (12 semanas x features, sin escalar, en el orden de "
+            "xai_feature_values) que "
+            "puntuó la GRU — el servicio de explicabilidad la explica en lugar de repetir la "
+            "última fila."
         ),
     )
 

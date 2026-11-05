@@ -12,7 +12,14 @@ from sklearn.metrics import average_precision_score, roc_auc_score
 PHASES: Tuple[str, ...] = ("production", "CIP_alkaline", "CIP_acid", "idle", "maintenance")
 MILK_TYPES: Tuple[str, ...] = ("whole", "semi_skim", "skim", "high_solids", "none")
 ASSET_FAMILIES: Tuple[str, ...] = ("standard_phe", "robust_phe", "compact_phe", "unknown")
-LAST_MAINT_TYPES: Tuple[str, ...] = ("none", "scheduled_CIP", "CIP_extra", "unclog", "mechanical_clean", "other")
+LAST_MAINT_TYPES: Tuple[str, ...] = (
+    "none",
+    "scheduled_CIP",
+    "CIP_extra",
+    "unclog",
+    "mechanical_clean",
+    "other",
+)
 STAGE_NAMES: Tuple[str, ...] = ("stable", "incipient", "advanced")
 
 PHASE_TO_ID = {v: i for i, v in enumerate(PHASES)}
@@ -28,7 +35,13 @@ CLOCK_SOURCE_COLS = {
     "cip_clock_log",
     "maint_clock_log",
 }
-BASELINE_COLS: Tuple[str, ...] = ("flow_kg_s", "dP_kPa", "vibration_mm_s", "thermal_eff_proxy", "heat_proxy")
+BASELINE_COLS: Tuple[str, ...] = (
+    "flow_kg_s",
+    "dP_kPa",
+    "vibration_mm_s",
+    "thermal_eff_proxy",
+    "heat_proxy",
+)
 CIP_EVENT_TYPES = {"scheduled_CIP", "CIP_extra"}
 
 LATENT_OR_TARGET_COLS = {
@@ -85,6 +98,7 @@ DEFAULT_NUMERIC_COLS: Tuple[str, ...] = (
 
 
 @dataclass
+# pylint: disable-next=too-many-instance-attributes
 class TrainConfig:
     """Runtime + training configuration, mirrors models/artifacts/training_config.json."""
 
@@ -130,13 +144,18 @@ class TrainConfig:
                 raise ValueError("stage_thr_advanced must be greater than stage_thr_incipient.")
             return float(self.stage_thr_incipient), float(self.stage_thr_advanced)
         if self.severity_col == "Rf_m2K_W":
-            incipient = 5.5e-4 if self.stage_thr_incipient is None else float(self.stage_thr_incipient)
-            advanced = 1.10e-3 if self.stage_thr_advanced is None else float(self.stage_thr_advanced)
+            incipient = (
+                5.5e-4 if self.stage_thr_incipient is None else float(self.stage_thr_incipient)
+            )
+            advanced = (
+                1.10e-3 if self.stage_thr_advanced is None else float(self.stage_thr_advanced)
+            )
             if advanced <= incipient:
                 raise ValueError("stage_thr_advanced must be greater than stage_thr_incipient.")
             return incipient, advanced
         raise ValueError(
-            "For severity columns other than Rf_m2K_W, pass explicit stage_thr_incipient and stage_thr_advanced."
+            "For severity columns other than Rf_m2K_W, pass explicit stage_thr_incipient and "
+            "stage_thr_advanced."
         )
 
     def severity_scale(self) -> float:
@@ -149,8 +168,11 @@ class TrainConfig:
 
 
 @dataclass
+# pylint: disable-next=too-many-instance-attributes
 class FeatureArtifacts:
-    """Fitted scaling/baseline/weighting artifacts, mirrors models/artifacts/feature_artifacts.json."""
+    """Fitted scaling/baseline/weighting artifacts, mirrors
+    models/artifacts/feature_artifacts.json.
+    """
 
     numeric_feature_names: List[str]
     medians: Dict[str, float]
@@ -168,7 +190,9 @@ class FeatureArtifacts:
     created_from_train_assets: List[str] = field(default_factory=list)
 
 
-def robust_quantiles(values: np.ndarray, q_lo: float, q_hi: float, default: Tuple[float, float]) -> Tuple[float, float]:
+def robust_quantiles(
+    values: np.ndarray, q_lo: float, q_hi: float, default: Tuple[float, float]
+) -> Tuple[float, float]:
     """Quantiles of the finite values in *values*, or *default* if none are finite."""
     arr = np.asarray(values, dtype=float)
     arr = arr[np.isfinite(arr)]
@@ -182,7 +206,9 @@ def stage_to_label(stage: int) -> str:
     return STAGE_NAMES[int(max(0, min(2, int(stage))))]
 
 
-def derive_stage_from_severity(values: pd.Series | np.ndarray, thr_incipient: float, thr_advanced: float) -> np.ndarray:
+def derive_stage_from_severity(
+    values: pd.Series | np.ndarray, thr_incipient: float, thr_advanced: float
+) -> np.ndarray:
     """Bucket a severity series into 0 (stable) / 1 (incipient) / 2 (advanced)."""
     arr = pd.to_numeric(pd.Series(values), errors="coerce").fillna(0.0).to_numpy(dtype=float)
     stage = np.where(arr >= thr_advanced, 2, np.where(arr >= thr_incipient, 1, 0))

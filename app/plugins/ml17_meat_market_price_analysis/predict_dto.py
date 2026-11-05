@@ -62,7 +62,9 @@ class PredictInlineResponse(BaseModel):
     model_config = ConfigDict(protected_namespaces=())
     model_id: str
     line: str
-    prediction: Any = Field(..., description="Precio predicho porcino clase E España t+1 (€/100 kg)")
+    prediction: Any = Field(
+        ..., description="Precio predicho porcino clase E España t+1 (€/100 kg)"
+    )
     y_pred: float = Field(..., description="Alias de prediction")
     confidence: float | None = None
     base_date: str = Field(..., description="Fecha de referencia usada (YYYY-MM-DD)")

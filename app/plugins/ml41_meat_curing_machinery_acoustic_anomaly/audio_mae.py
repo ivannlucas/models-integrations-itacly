@@ -8,7 +8,7 @@ will fail on any shape-affecting change.
 from __future__ import annotations
 
 import torch
-import torch.nn as nn
+from torch import nn
 
 
 class PatchEmbed(nn.Module):
@@ -24,6 +24,7 @@ class PatchEmbed(nn.Module):
         self.proj = nn.Conv2d(in_chans, embed_dim, kernel_size=patch_size, stride=patch_size)
 
     def forward(self, x):
+        """Project a spectrogram (B, C, H, W) into a sequence of patch embeddings (B, N, E)."""
         x = self.proj(x)  # (B, E, H/P, W/P)
         x = x.flatten(2).transpose(1, 2)  # (B, N, E)
         return x
@@ -57,9 +58,11 @@ def get_2d_sincos_pos_embed(embed_dim, grid_size_h, grid_size_w, cls_token=False
     return pos_embed
 
 
+# pylint: disable-next=too-many-instance-attributes
 class AudioMAE(nn.Module):
     """Masked Autoencoder (MAE) with Transformer backbone, adapted for audio spectrograms."""
 
+    # pylint: disable-next=too-many-arguments,too-many-positional-arguments,too-many-locals
     def __init__(self, img_size=(128, 1024), patch_size=(16, 16), in_chans=1,
                  embed_dim=768, depth=12, num_heads=12,
                  decoder_embed_dim=512, decoder_depth=8, decoder_num_heads=16,
@@ -70,7 +73,7 @@ class AudioMAE(nn.Module):
 
         # --- ENCODER ---
         self.patch_embed = PatchEmbed(img_size, patch_size, in_chans, embed_dim)
-        num_patches = self.patch_embed.num_patches  # noqa: F841 (kept for parity with original)
+        _ = self.patch_embed.num_patches  # kept for parity with original
         grid_h, grid_w = self.patch_embed.grid_size
 
         self.cls_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
@@ -92,7 +95,9 @@ class AudioMAE(nn.Module):
 
         self.mask_token = nn.Parameter(torch.zeros(1, 1, decoder_embed_dim))
 
-        decoder_pos_embed = get_2d_sincos_pos_embed(decoder_embed_dim, grid_h, grid_w, cls_token=True)
+        decoder_pos_embed = get_2d_sincos_pos_embed(
+            decoder_embed_dim, grid_h, grid_w, cls_token=True
+        )
         self.decoder_pos_embed = nn.Parameter(decoder_pos_embed.unsqueeze(0), requires_grad=False)
 
         decoder_layer = nn.TransformerEncoderLayer(
@@ -104,11 +109,14 @@ class AudioMAE(nn.Module):
         self.decoder = nn.TransformerEncoder(decoder_layer, num_layers=decoder_depth)
         self.decoder_norm = norm_layer(decoder_embed_dim)
 
-        self.decoder_pred = nn.Linear(decoder_embed_dim, patch_size[0] * patch_size[1] * in_chans, bias=True)
+        self.decoder_pred = nn.Linear(
+            decoder_embed_dim, patch_size[0] * patch_size[1] * in_chans, bias=True
+        )
 
         self.initialize_weights()
 
     def initialize_weights(self):
+        """Initialise cls/mask tokens and every Linear/LayerNorm/Conv2d submodule."""
         nn.init.trunc_normal_(self.cls_token, std=.02)
         nn.init.trunc_normal_(self.mask_token, std=.02)
         self.apply(self._init_weights)
@@ -128,24 +136,25 @@ class AudioMAE(nn.Module):
 
     def random_masking(self, x, mask_ratio):
         """Per-sample random masking by per-sample shuffling. x: [N, L, D]."""
-        N, L, D = x.shape
-        len_keep = int(L * (1 - mask_ratio))
+        n_batch, seq_len, dim = x.shape
+        len_keep = int(seq_len * (1 - mask_ratio))
 
-        noise = torch.rand(N, L, device=x.device)
+        noise = torch.rand(n_batch, seq_len, device=x.device)
 
         ids_shuffle = torch.argsort(noise, dim=1)
         ids_restore = torch.argsort(ids_shuffle, dim=1)
 
         ids_keep = ids_shuffle[:, :len_keep]
-        x_masked = torch.gather(x, dim=1, index=ids_keep.unsqueeze(-1).repeat(1, 1, D))
+        x_masked = torch.gather(x, dim=1, index=ids_keep.unsqueeze(-1).repeat(1, 1, dim))
 
-        mask = torch.ones([N, L], device=x.device)
+        mask = torch.ones([n_batch, seq_len], device=x.device)
         mask[:, :len_keep] = 0
         mask = torch.gather(mask, dim=1, index=ids_restore)
 
         return x_masked, mask, ids_restore
 
     def forward_encoder(self, x, mask_ratio):
+        """Embed patches, randomly mask them and run the encoder; returns (x, mask, ids)."""
         x = self.patch_embed(x)  # (N, L, E)
         x = x + self.pos_embed[:, 1:, :]
 
@@ -161,6 +170,7 @@ class AudioMAE(nn.Module):
         return x, mask, ids_restore
 
     def forward_decoder(self, x, ids_restore):
+        """Insert mask tokens, unshuffle and decode to per-patch pixel predictions."""
         x = self.decoder_embed(x)
 
         mask_tokens = self.mask_token.repeat(x.shape[0], ids_restore.shape[1] + 1 - x.shape[1], 1)
@@ -216,6 +226,7 @@ class AudioMAE(nn.Module):
         return imgs
 
     def forward(self, x, mask_ratio=0.75):
+        """Full MAE pass; returns (loss, pred, mask)."""
         latent, mask, ids_restore = self.forward_encoder(x, mask_ratio)
         pred = self.forward_decoder(latent, ids_restore)
         loss = self.forward_loss(x, pred, mask)

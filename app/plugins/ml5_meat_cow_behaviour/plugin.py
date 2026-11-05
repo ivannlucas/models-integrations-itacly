@@ -87,8 +87,8 @@ def _resolve_video_path(data_path: str) -> tuple[str, str | None]:
     without_prefix = data_path[len("s3://"):]
     bucket, key = without_prefix.split("/", 1)
     suffix = os.path.splitext(key)[-1] or ".mp4"
-    tmp = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
-    tmp.close()
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+        pass
     logger.info("Downloading video from S3: %s → %s", data_path, tmp.name)
     _build_s3_client().download_file(bucket, key, tmp.name)
     return tmp.name, tmp.name
@@ -177,11 +177,11 @@ class Ml5MeatCowBehaviourPlugin(ModelPluginPort):
         self, bundle: dict, detector: object, local_path: str, original_path: str
     ) -> PredictBatchResponse:
         """Execute the frame-by-frame detection + tracking + classification loop."""
-        cap = cv2.VideoCapture(local_path)
+        cap = cv2.VideoCapture(local_path)  # pylint: disable=no-member
         if not cap.isOpened():
             raise InvalidVideoError(f"Cannot open video file: {original_path}")
 
-        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))  # pylint: disable=no-member
         logger.info("predict_batch — video=%s total_frames=%d", original_path, total_frames)
 
         tracker = ByteTracker(track_thresh=0.5, track_buffer=30, match_thresh=0.8)
@@ -316,8 +316,8 @@ class Ml5MeatCowBehaviourPlugin(ModelPluginPort):
         _tmp_zip: str | None = None
         local_data_path = data_path
         if data_path.startswith("s3://"):
-            import boto3
-            from botocore.client import Config as BotoConfig
+            import boto3  # pylint: disable=import-outside-toplevel
+            from botocore.client import Config as BotoConfig  # pylint: disable=import-outside-toplevel
             without_prefix = data_path[len("s3://"):]
             bucket, _, s3_key = without_prefix.partition("/")
             s3 = boto3.client(
@@ -404,7 +404,9 @@ class Ml5MeatCowBehaviourPlugin(ModelPluginPort):
                 tracker.upload_artifacts(mlflow_tmp, artifact_path="classifier")
             except Exception as exc:  # pylint: disable=broad-except
                 logger.error("MLflow artifact upload failed: %s", exc)
-                raise ModelPersistenceError(f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}") from exc
+                raise ModelPersistenceError(
+                    f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}"
+                ) from exc
             finally:
                 shutil.rmtree(mlflow_tmp, ignore_errors=True)
 

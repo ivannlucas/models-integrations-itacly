@@ -19,6 +19,7 @@ from app.domain.services.exceptions import (
 )
 from app.domain.ports.train_job_store_port import TrainJobStorePort
 from app.domain.services.train_job import TrainJobRecord, TrainJobStatus
+from app.infrastructure.train_jobs.process_executor import run_train_job
 
 
 class InMemoryJobStore(TrainJobStorePort):
@@ -82,13 +83,18 @@ class RecordingExecutor(TrainExecutorPort):
     def is_busy(self) -> bool:
         return self.busy
 
-    def submit(self, *, job_id: str, plugin_class: type, train_kwargs: dict, store: TrainJobStorePort) -> None:
+    def submit(
+        self, *, job_id: str, plugin_class: type, train_kwargs: dict, store: TrainJobStorePort
+    ) -> None:
         if self.fail_on_submit is not None:
             raise self.fail_on_submit
-        self.submitted.append({"job_id": job_id, "plugin_class": plugin_class, "train_kwargs": train_kwargs})
+        self.submitted.append(
+            {"job_id": job_id, "plugin_class": plugin_class, "train_kwargs": train_kwargs}
+        )
 
 
 class FakeTrainResponse(BaseModel):
+    """Train response shaped like the plugins' (detail, metrics, mlflow_run_id)."""
     detail: str
     metrics: dict = {}
     mlflow_run_id: str = ""
@@ -101,22 +107,29 @@ class EchoTrainPlugin:
         self.loaded = False
 
     def load(self) -> None:
+        """Marks the plugin as loaded."""
         self.loaded = True
 
     def train(self, *, data_path: str, mlflow_run_id: str) -> FakeTrainResponse:
+        """Echoes ``data_path`` and the current pid; fails if load() was not called."""
         if not self.loaded:
             raise RuntimeError("train() called before load()")
         return FakeTrainResponse(
-            detail="ok", metrics={"data_path": data_path, "pid": os.getpid()}, mlflow_run_id=mlflow_run_id,
+            detail="ok",
+            metrics={"data_path": data_path, "pid": os.getpid()},
+            mlflow_run_id=mlflow_run_id,
         )
 
 
 class FailingTrainPlugin(EchoTrainPlugin):
+    """Always raises FileNotFoundError from train()."""
+
     def train(self, *, data_path: str, mlflow_run_id: str) -> FakeTrainResponse:
         raise FileNotFoundError(f"no existe {data_path}")
 
 
-# data_path -> exception raised by RaisingTrainPlugin, with the status the synchronous /train answers.
+# data_path -> exception raised by RaisingTrainPlugin, with the status the synchronous
+# /train answers.
 TRAIN_ERRORS = {
     "not-supported": (TrainingNotSupportedError("no reentrenable"), 501),
     "archive": (ArchiveLimitExceededError("zip demasiado grande"), 413),
@@ -142,7 +155,9 @@ class NiceReportingTrainPlugin(EchoTrainPlugin):
     """Reports the niceness it trained with."""
 
     def train(self, *, data_path: str, mlflow_run_id: str) -> FakeTrainResponse:
-        return FakeTrainResponse(detail="ok", metrics={"nice": os.nice(0)}, mlflow_run_id=mlflow_run_id)
+        return FakeTrainResponse(
+            detail="ok", metrics={"nice": os.nice(0)}, mlflow_run_id=mlflow_run_id
+        )
 
 
 class SlowTrainPlugin(EchoTrainPlugin):
@@ -154,6 +169,8 @@ class SlowTrainPlugin(EchoTrainPlugin):
 
 
 class NumpyMetricsTrainPlugin(EchoTrainPlugin):
+    """Returns numpy scalars/arrays in metrics, to check they get serialised."""
+
     def train(self, *, data_path: str, mlflow_run_id: str) -> FakeTrainResponse:
         return FakeTrainResponse(
             detail="ok",
@@ -165,7 +182,9 @@ class NumpyMetricsTrainPlugin(EchoTrainPlugin):
 class SystemTrainPlugin(EchoTrainPlugin):
     """Declares ``system`` like ml40 does, to check kwargs forwarding."""
 
-    def train(self, *, data_path: str, mlflow_run_id: str, system: str | None = None) -> FakeTrainResponse:
+    def train(
+        self, *, data_path: str, mlflow_run_id: str, system: str | None = None
+    ) -> FakeTrainResponse:
         return FakeTrainResponse(detail=f"system={system}", mlflow_run_id=mlflow_run_id)
 
 
@@ -179,8 +198,14 @@ class InlineExecutor(TrainExecutorPort):
     def is_busy(self) -> bool:
         return self.busy
 
-    def submit(self, *, job_id: str, plugin_class: type, train_kwargs: dict, store: TrainJobStorePort) -> None:
-        from app.infrastructure.train_jobs.process_executor import run_train_job
-
+    def submit(
+        self, *, job_id: str, plugin_class: type, train_kwargs: dict, store: TrainJobStorePort
+    ) -> None:
         self.calls += 1
-        run_train_job(job_id=job_id, plugin_class=plugin_class, train_kwargs=train_kwargs, store=store, heartbeat_s=3600)
+        run_train_job(
+            job_id=job_id,
+            plugin_class=plugin_class,
+            train_kwargs=train_kwargs,
+            store=store,
+            heartbeat_s=3600,
+        )

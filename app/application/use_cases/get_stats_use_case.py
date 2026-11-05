@@ -10,7 +10,7 @@ from app.domain.ports.model_plugin_port import ModelPluginPort
 logger = logging.getLogger(__name__)
 
 
-class GetStatsUseCase:
+class GetStatsUseCase:  # pylint: disable=too-few-public-methods
     """Use case for retrieving model statistics."""
     def __init__(
         self, plugin: ModelPluginPort, base_version_provider: Callable[[], dict] | None = None,

@@ -23,15 +23,23 @@ import pytest
 # keras is only reached through model_loader, which sets KERAS_BACKEND=torch before importing it
 # (production config). Importing keras here first would pin the backend for the whole session.
 from app.domain.services.exceptions import DataContractError
-from app.plugins.ml1_wine_pest_disease_detection import inference, model_loader, plugin, preprocessing
+from app.plugins.ml1_wine_pest_disease_detection import (
+    inference,
+    model_loader,
+    plugin,
+    preprocessing,
+)
 from app.plugins.ml1_wine_pest_disease_detection.constants import (
     ENSEMBLE_WEIGHTS_FILENAMES,
     IMAGENET_STDDEV_RGB,
     SENSOR_COLS,
 )
-from keras.src.utils.naming import to_snake_case  # after model_loader: backend already set  # noqa: I100
+# after model_loader: backend already set
+from keras.src.utils.naming import to_snake_case  # noqa: I100  # pylint: disable=wrong-import-order
 
-_DELIVERED_ARTIFACTS = Path(__file__).resolve().parents[2] / "inbox" / "a01" / "codigo" / "models" / "artifacts"
+_DELIVERED_ARTIFACTS = (
+    Path(__file__).resolve().parents[2] / "inbox" / "a01" / "codigo" / "models" / "artifacts"
+)
 _SENSORS_OK = {
     "Mes": 7, "Temp_Max_Media_5d_C": 30.0, "Temp_Min_Media_5d_C": 18.0,
     "Hum_Rel_Max_5d_Pct": 60.0, "Hum_Rel_Min_5d_Pct": 25.0, "Hum_Suelo_Pct": 30.0,
@@ -53,6 +61,7 @@ def test_all_backbones_build_in_load_order_from_a_fresh_session():
 
 
 def test_efficientnet_has_imagenet_rescaling_after_normalization():
+    """EfficientNet keeps the imagenet 1/sqrt(stddev) Rescaling right after Normalization."""
     backbone = _backbone("efficientnet")
     names = [type(layer).__name__ for layer in backbone.layers]
     norm_idx = names.index("Normalization")
@@ -72,11 +81,14 @@ def test_backbone_layers_match_delivered_checkpoint(backbone_type):
         pytest.skip(f"Artefacto entregado no disponible: {weights_path}")
     with h5py.File(weights_path, "r") as fh:
         stored = Counter(re.sub(r"_\d+$", "", key) for key in fh["layers/functional/layers"].keys())
-    rebuilt = Counter(to_snake_case(type(layer).__name__) for layer in _backbone(backbone_type).layers)
+    rebuilt = Counter(
+        to_snake_case(type(layer).__name__) for layer in _backbone(backbone_type).layers
+    )
     assert rebuilt == stored
 
 
 def test_missing_rf_riesgo_does_not_block_load(monkeypatch):
+    """Loading succeeds without the RF joblibs and leaves rf_riesgo as None."""
     monkeypatch.setattr(model_loader, "_load_class_mapping", dict)
     monkeypatch.setattr(model_loader, "YOLO", lambda _path: object())
     monkeypatch.setattr(model_loader, "build_hybrid_model", lambda _name: _NoWeights())
@@ -94,19 +106,22 @@ def _missing_joblib(filename):
     return Path(filename)
 
 
-class _NoWeights:
+class _NoWeights:  # pylint: disable=too-few-public-methods  # load_weights stub
     def load_weights(self, _path):
+        """Accept any weights path without loading anything."""
         return None
 
 
 def test_tabular_only_without_rf_riesgo_raises_data_contract_error():
+    """Tabular-only inference without rf_riesgo raises DataContractError."""
     sensors = preprocessing.validate_and_align_sensors(_SENSORS_OK)
     with pytest.raises(DataContractError, match="Envía una imagen"):
         inference.run_inference_tabular_only({"rf_riesgo": None}, sensors)
 
 
-class _ConstantRegressor:
+class _ConstantRegressor:  # pylint: disable=too-few-public-methods  # predict stub
     def predict(self, x):
+        """Check the input has one row of SENSOR_COLS and return a constant risk."""
         assert x.shape == (1, len(SENSOR_COLS))
         return [0.42]
 

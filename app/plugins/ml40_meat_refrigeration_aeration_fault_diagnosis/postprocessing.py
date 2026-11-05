@@ -56,7 +56,7 @@ def run_inference(model, scaler, df: pd.DataFrame, system: str) -> tuple[np.ndar
     return y_pred, y_probs
 
 
-def apply_neurosymbolic_rules(
+def apply_neurosymbolic_rules(  # pylint: disable=too-many-locals
     df: pd.DataFrame,
     y_pred: np.ndarray,
     system: str,

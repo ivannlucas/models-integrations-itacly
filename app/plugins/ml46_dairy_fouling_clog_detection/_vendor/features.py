@@ -18,14 +18,24 @@ from app.plugins.ml46_dairy_fouling_clog_detection._vendor.common import (
     TrainConfig,
     robust_quantiles,
 )
-from app.plugins.ml46_dairy_fouling_clog_detection._vendor.utils_common import sequence_group_columns
+from app.plugins.ml46_dairy_fouling_clog_detection._vendor.utils_common import (
+    sequence_group_columns,
+)
 
 
 def engineer_row_features(df: pd.DataFrame) -> pd.DataFrame:
     """Add derived thermal/hydraulic proxies, residuals and rolling stats per sequence."""
     out = df.copy()
-    global_amb_t = float(pd.to_numeric(out.get("ambient_T_C", pd.Series([25.0])), errors="coerce").median()) if "ambient_T_C" in out.columns else 25.0
-    global_amb_rh = float(pd.to_numeric(out.get("ambient_RH_pct", pd.Series([50.0])), errors="coerce").median()) if "ambient_RH_pct" in out.columns else 50.0
+    global_amb_t = (
+        float(pd.to_numeric(out.get("ambient_T_C", pd.Series([25.0])), errors="coerce").median())
+        if "ambient_T_C" in out.columns
+        else 25.0
+    )
+    global_amb_rh = (
+        float(pd.to_numeric(out.get("ambient_RH_pct", pd.Series([50.0])), errors="coerce").median())
+        if "ambient_RH_pct" in out.columns
+        else 50.0
+    )
 
     for c in DEFAULT_NUMERIC_COLS:
         if c not in out.columns:
@@ -44,25 +54,44 @@ def engineer_row_features(df: pd.DataFrame) -> pd.DataFrame:
         g["ambient_T_C"] = g["ambient_T_C"].fillna(global_amb_t)
         g["ambient_RH_pct"] = g["ambient_RH_pct"].fillna(global_amb_rh)
         g["flow_sp_kg_s"] = g["flow_sp_kg_s"].replace(0.0, np.nan)
-        g["flow_sp_kg_s"] = g["flow_sp_kg_s"].fillna(g["flow_kg_s"].rolling(30, min_periods=1).median())
-        g["Th_sp_C"] = g["Th_sp_C"].fillna(pd.to_numeric(g["Th_in_C"], errors="coerce").rolling(30, min_periods=1).median())
-        g["Tc_sp_C"] = g["Tc_sp_C"].fillna(pd.to_numeric(g["Tc_in_C"], errors="coerce").rolling(30, min_periods=1).median())
+        g["flow_sp_kg_s"] = g["flow_sp_kg_s"].fillna(
+            g["flow_kg_s"].rolling(30, min_periods=1).median()
+        )
+        g["Th_sp_C"] = g["Th_sp_C"].fillna(
+            pd.to_numeric(g["Th_in_C"], errors="coerce").rolling(30, min_periods=1).median()
+        )
+        g["Tc_sp_C"] = g["Tc_sp_C"].fillna(
+            pd.to_numeric(g["Tc_in_C"], errors="coerce").rolling(30, min_periods=1).median()
+        )
         g["batch_thermal_history_factor"] = g["batch_thermal_history_factor"].fillna(1.0)
         g["batch_elapsed_min"] = g["batch_elapsed_min"].fillna(0.0)
         g["time_since_last_cip_min"] = pd.to_numeric(g["time_since_last_cip_min"], errors="coerce")
-        g["time_since_last_maintenance_min"] = pd.to_numeric(g["time_since_last_maintenance_min"], errors="coerce")
+        g["time_since_last_maintenance_min"] = pd.to_numeric(
+            g["time_since_last_maintenance_min"], errors="coerce"
+        )
 
         g["flow_error"] = g["flow_kg_s"] - g["flow_sp_kg_s"]
         g["flow_ratio"] = g["flow_kg_s"] / np.maximum(g["flow_sp_kg_s"], 0.25)
-        g["hot_drop"] = pd.to_numeric(g["Th_in_C"], errors="coerce").fillna(0.0) - pd.to_numeric(g["Th_out_C"], errors="coerce").fillna(0.0)
-        g["cold_lift"] = pd.to_numeric(g["Tc_out_C"], errors="coerce").fillna(0.0) - pd.to_numeric(g["Tc_in_C"], errors="coerce").fillna(0.0)
-        g["temp_gap"] = pd.to_numeric(g["Th_in_C"], errors="coerce").fillna(0.0) - pd.to_numeric(g["Tc_in_C"], errors="coerce").fillna(0.0)
+        g["hot_drop"] = pd.to_numeric(g["Th_in_C"], errors="coerce").fillna(0.0) - pd.to_numeric(
+            g["Th_out_C"], errors="coerce"
+        ).fillna(0.0)
+        g["cold_lift"] = pd.to_numeric(g["Tc_out_C"], errors="coerce").fillna(0.0) - pd.to_numeric(
+            g["Tc_in_C"], errors="coerce"
+        ).fillna(0.0)
+        g["temp_gap"] = pd.to_numeric(g["Th_in_C"], errors="coerce").fillna(0.0) - pd.to_numeric(
+            g["Tc_in_C"], errors="coerce"
+        ).fillna(0.0)
         g["thermal_eff_proxy"] = g["hot_drop"] / np.maximum(g["temp_gap"], 1.0)
-        g["approach_temp"] = pd.to_numeric(g["Th_out_C"], errors="coerce").fillna(0.0) - pd.to_numeric(g["Tc_in_C"], errors="coerce").fillna(0.0)
+        g["approach_temp"] = pd.to_numeric(g["Th_out_C"], errors="coerce").fillna(
+            0.0
+        ) - pd.to_numeric(g["Tc_in_C"], errors="coerce").fillna(0.0)
         g["dP_per_flow"] = g["dP_kPa"] / np.maximum(g["flow_kg_s"], 0.25)
         g["vib_x_dp"] = g["vibration_mm_s"] * g["dP_kPa"]
         g["heat_proxy"] = g["flow_kg_s"] * g["hot_drop"]
-        g["solids_x_thermal"] = pd.to_numeric(g["solids_g_L_nominal"], errors="coerce").fillna(0.0) * g["batch_thermal_history_factor"]
+        g["solids_x_thermal"] = (
+            pd.to_numeric(g["solids_g_L_nominal"], errors="coerce").fillna(0.0)
+            * g["batch_thermal_history_factor"]
+        )
         g["cip_clock_log"] = np.log1p(np.clip(g["time_since_last_cip_min"], 0.0, 1e6))
         g["maint_clock_log"] = np.log1p(np.clip(g["time_since_last_maintenance_min"], 0.0, 1e6))
         g["batch_clock_log"] = np.log1p(np.clip(g["batch_elapsed_min"], 0.0, 1e6))
@@ -79,8 +108,11 @@ def engineer_row_features(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+# pylint: disable-next=too-many-locals,too-many-statements
 def fit_feature_artifacts(train_df: pd.DataFrame, cfg: TrainConfig) -> FeatureArtifacts:
-    """Fit medians/IQR/baselines/class-weights on a labeled training slice (used only by train())."""
+    """Fit medians/IQR/baselines/class-weights on a labeled training slice (used only by
+    train()).
+    """
     stable_mask = (
         (train_df["phase"] == "production")
         & (train_df["maintenance_active"].fillna(0).astype(int) == 0)
@@ -88,10 +120,27 @@ def fit_feature_artifacts(train_df: pd.DataFrame, cfg: TrainConfig) -> FeatureAr
     )
     stable_df = train_df.loc[stable_mask].copy()
     if len(stable_df) == 0:
-        stable_df = train_df.loc[(train_df["phase"] == "production") & (train_df["maintenance_active"].fillna(0).astype(int) == 0)].copy()
+        stable_df = train_df.loc[
+            (train_df["phase"] == "production")
+            & (train_df["maintenance_active"].fillna(0).astype(int) == 0)
+        ].copy()
 
     candidate_numeric = []
-    allowed_prefixes = ("flow_", "hot_", "cold_", "temp_", "thermal_", "approach_", "dP_", "vib_", "heat_", "solids_", "cip_", "maint_", "batch_")
+    allowed_prefixes = (
+        "flow_",
+        "hot_",
+        "cold_",
+        "temp_",
+        "thermal_",
+        "approach_",
+        "dP_",
+        "vib_",
+        "heat_",
+        "solids_",
+        "cip_",
+        "maint_",
+        "batch_",
+    )
     for c in train_df.columns:
         if c in LATENT_OR_TARGET_COLS:
             continue
@@ -113,22 +162,38 @@ def fit_feature_artifacts(train_df: pd.DataFrame, cfg: TrainConfig) -> FeatureAr
     for asset_id, g in stable_df.groupby("asset_id", sort=False):
         base: Dict[str, float] = {}
         for c in BASELINE_COLS:
-            arr = pd.to_numeric(g[c], errors="coerce").astype(float).values if c in g.columns else np.array([], dtype=float)
+            arr = (
+                pd.to_numeric(g[c], errors="coerce").astype(float).values
+                if c in g.columns
+                else np.array([], dtype=float)
+            )
             if arr.size:
                 base[c] = float(np.nanmedian(arr))
         train_asset_baselines[asset_id] = base
 
     global_baseline: Dict[str, float] = {}
     for c in BASELINE_COLS:
-        arr = pd.to_numeric(stable_df[c], errors="coerce").astype(float).values if c in stable_df.columns else np.array([], dtype=float)
+        arr = (
+            pd.to_numeric(stable_df[c], errors="coerce").astype(float).values
+            if c in stable_df.columns
+            else np.array([], dtype=float)
+        )
         global_baseline[c] = float(np.nanmedian(arr)) if arr.size else 0.0
 
     pred_th: Dict[str, float] = {}
     if len(stable_df):
-        stable_centered_dp = stable_df["dP_kPa"] - stable_df.groupby("asset_id")["dP_kPa"].transform("median")
-        stable_centered_flow = stable_df["flow_kg_s"] - stable_df.groupby("asset_id")["flow_kg_s"].transform("median")
-        stable_centered_vib = stable_df["vibration_mm_s"] - stable_df.groupby("asset_id")["vibration_mm_s"].transform("median")
-        stable_centered_therm = stable_df["thermal_eff_proxy"] - stable_df.groupby("asset_id")["thermal_eff_proxy"].transform("median")
+        stable_centered_dp = stable_df["dP_kPa"] - stable_df.groupby("asset_id")[
+            "dP_kPa"
+        ].transform("median")
+        stable_centered_flow = stable_df["flow_kg_s"] - stable_df.groupby("asset_id")[
+            "flow_kg_s"
+        ].transform("median")
+        stable_centered_vib = stable_df["vibration_mm_s"] - stable_df.groupby("asset_id")[
+            "vibration_mm_s"
+        ].transform("median")
+        stable_centered_therm = stable_df["thermal_eff_proxy"] - stable_df.groupby("asset_id")[
+            "thermal_eff_proxy"
+        ].transform("median")
         pred_th["high_dp_resid"] = float(np.nanquantile(stable_centered_dp.values, 0.90))
         pred_th["low_flow_resid"] = float(np.nanquantile(stable_centered_flow.values, 0.10))
         pred_th["high_vib_resid"] = float(np.nanquantile(stable_centered_vib.values, 0.90))
@@ -138,11 +203,34 @@ def fit_feature_artifacts(train_df: pd.DataFrame, cfg: TrainConfig) -> FeatureAr
         pred_th["low_flow_resid"] = -1.0
         pred_th["high_vib_resid"] = 1.0
         pred_th["low_therm_eff_resid"] = -1.0
-    pred_th["dp_slope15"] = float(np.nanquantile(pd.to_numeric(train_df.get("dP_kPa_slope15", 0.0), errors="coerce").astype(float).values, 0.85))
-    pred_th["vib_slope15"] = float(np.nanquantile(pd.to_numeric(train_df.get("vibration_mm_s_slope15", 0.0), errors="coerce").astype(float).values, 0.85))
+    pred_th["dp_slope15"] = float(
+        np.nanquantile(
+            pd.to_numeric(train_df.get("dP_kPa_slope15", 0.0), errors="coerce")
+            .astype(float)
+            .values,
+            0.85,
+        )
+    )
+    pred_th["vib_slope15"] = float(
+        np.nanquantile(
+            pd.to_numeric(train_df.get("vibration_mm_s_slope15", 0.0), errors="coerce")
+            .astype(float)
+            .values,
+            0.85,
+        )
+    )
 
-    prod_df = train_df.loc[(train_df["phase"] == "production") & (train_df["maintenance_active"].fillna(0).astype(int) == 0)].copy()
-    counts = prod_df["fouling_stage_physical"].value_counts().reindex([0, 1, 2], fill_value=1).astype(float).values
+    prod_df = train_df.loc[
+        (train_df["phase"] == "production")
+        & (train_df["maintenance_active"].fillna(0).astype(int) == 0)
+    ].copy()
+    counts = (
+        prod_df["fouling_stage_physical"]
+        .value_counts()
+        .reindex([0, 1, 2], fill_value=1)
+        .astype(float)
+        .values
+    )
     inv = counts.sum() / np.maximum(counts, 1.0)
     inv = inv / inv.mean()
 
@@ -153,7 +241,9 @@ def fit_feature_artifacts(train_df: pd.DataFrame, cfg: TrainConfig) -> FeatureAr
     foul_neg = float(len(prod_df) - foul_pos)
     clog_pos = float(pd.to_numeric(prod_df.get(clog_col, 0), errors="coerce").fillna(0).sum())
     clog_neg = float(len(prod_df) - clog_pos)
-    actionable_pos = float(pd.to_numeric(prod_df.get(actionable_col, 0), errors="coerce").fillna(0).sum())
+    actionable_pos = float(
+        pd.to_numeric(prod_df.get(actionable_col, 0), errors="coerce").fillna(0).sum()
+    )
     actionable_neg = float(len(prod_df) - actionable_pos)
     foul_pos_weight = foul_neg / max(foul_pos, 1.0)
     clog_pos_weight = clog_neg / max(clog_pos, 1.0)
@@ -175,10 +265,14 @@ def fit_feature_artifacts(train_df: pd.DataFrame, cfg: TrainConfig) -> FeatureAr
     )
 
 
-def estimate_prefix_baseline(asset_df: pd.DataFrame, global_baseline: Mapping[str, float], prefix_rows: int) -> Dict[str, float]:
+def estimate_prefix_baseline(
+    asset_df: pd.DataFrame, global_baseline: Mapping[str, float], prefix_rows: int
+) -> Dict[str, float]:
     """Healthy-baseline estimate for an asset unseen at training time (shrunk toward global)."""
     g = asset_df.sort_values("timestamp").iloc[: max(prefix_rows, 1)].copy()
-    cand = g.loc[(g["phase"] == "production") & (g["maintenance_active"].fillna(0).astype(int) == 0)].copy()
+    cand = g.loc[
+        (g["phase"] == "production") & (g["maintenance_active"].fillna(0).astype(int) == 0)
+    ].copy()
     if len(cand) == 0:
         cand = g.copy()
     base: Dict[str, float] = {}
@@ -193,8 +287,14 @@ def estimate_prefix_baseline(asset_df: pd.DataFrame, global_baseline: Mapping[st
     return base
 
 
-def build_feature_matrix(df: pd.DataFrame, artifacts: FeatureArtifacts, train_assets: Sequence[str], cfg: TrainConfig) -> Tuple[pd.DataFrame, List[str], List[str]]:
-    """Apply the fitted artifacts: z-score numeric features, add residuals + one-hot categoricals."""
+# pylint: disable-next=too-many-locals
+def build_feature_matrix(
+    df: pd.DataFrame, artifacts: FeatureArtifacts, train_assets: Sequence[str], cfg: TrainConfig
+) -> Tuple[pd.DataFrame, List[str], List[str]]:
+    """Apply the fitted artifacts: z-score numeric features, add residuals + one-hot
+    categoricals.
+    """
+    _ = train_assets
     validate_feature_artifacts(artifacts, cfg, require_feature_lists=False)
     out = df.copy()
     full_feature_cols: List[str] = []
@@ -218,7 +318,9 @@ def build_feature_matrix(df: pd.DataFrame, artifacts: FeatureArtifacts, train_as
         med = artifacts.medians[c]
         iqr = artifacts.iqrs[c]
         if not np.isfinite(float(iqr)) or float(iqr) <= 0.0:
-            raise ValueError(f"Feature artifact compatibility check failed: invalid IQR for feature '{c}': {iqr}")
+            raise ValueError(
+                f"Feature artifact compatibility check failed: invalid IQR for feature '{c}': {iqr}"
+            )
         col = pd.to_numeric(out[c], errors="coerce").fillna(med)
         out[f"z_{c}"] = ((col - med) / iqr).astype(np.float32)
         full_feature_cols.append(f"z_{c}")
@@ -235,7 +337,9 @@ def build_feature_matrix(df: pd.DataFrame, artifacts: FeatureArtifacts, train_as
                 base = estimate_prefix_baseline(g, artifacts.global_baseline, prefix_rows)
             b = float(base.get(c, artifacts.global_baseline.get(c, 0.0)))
             vals = pd.to_numeric(g[c], errors="coerce").fillna(b).to_numpy(dtype=float)
-            resid_values[g.index.to_numpy()] = ((vals - b) / artifacts.iqrs.get(c, 1.0)).astype(np.float32)
+            resid_values[g.index.to_numpy()] = ((vals - b) / artifacts.iqrs.get(c, 1.0)).astype(
+                np.float32
+            )
         out[f"resid_{c}"] = resid_values
         resid_feature_names.append(f"resid_{c}")
     full_feature_cols.extend(resid_feature_names)
@@ -249,10 +353,24 @@ def build_feature_matrix(df: pd.DataFrame, artifacts: FeatureArtifacts, train_as
             out[name] = arr[:, i]
             full_feature_cols.append(name)
 
-    add_one_hot(out["phase"].where(out["phase"].isin(PHASE_TO_ID), "production"), PHASE_TO_ID, "phase")
-    add_one_hot(out["milk_type"].where(out["milk_type"].isin(MILK_TO_ID), "none"), MILK_TO_ID, "milk")
-    add_one_hot(out["asset_family"].where(out["asset_family"].isin(FAMILY_TO_ID), "unknown"), FAMILY_TO_ID, "family")
-    add_one_hot(out["last_maintenance_type"].where(out["last_maintenance_type"].isin(LAST_MAINT_TO_ID), "other"), LAST_MAINT_TO_ID, "lastmaint")
+    add_one_hot(
+        out["phase"].where(out["phase"].isin(PHASE_TO_ID), "production"), PHASE_TO_ID, "phase"
+    )
+    add_one_hot(
+        out["milk_type"].where(out["milk_type"].isin(MILK_TO_ID), "none"), MILK_TO_ID, "milk"
+    )
+    add_one_hot(
+        out["asset_family"].where(out["asset_family"].isin(FAMILY_TO_ID), "unknown"),
+        FAMILY_TO_ID,
+        "family",
+    )
+    add_one_hot(
+        out["last_maintenance_type"].where(
+            out["last_maintenance_type"].isin(LAST_MAINT_TO_ID), "other"
+        ),
+        LAST_MAINT_TO_ID,
+        "lastmaint",
+    )
 
     def is_clock_feature(feature_name: str) -> bool:
         raw = feature_name[2:] if feature_name.startswith("z_") else feature_name
@@ -262,12 +380,25 @@ def build_feature_matrix(df: pd.DataFrame, artifacts: FeatureArtifacts, train_as
 
     artifacts.full_feature_names = list(full_feature_cols)
     artifacts.no_clock_feature_names = list(no_clock_feature_cols)
-    validate_feature_artifacts(artifacts, cfg, scenario="full", expected_feature_names=full_feature_cols, require_feature_lists=True)
+    validate_feature_artifacts(
+        artifacts,
+        cfg,
+        scenario="full",
+        expected_feature_names=full_feature_cols,
+        require_feature_lists=True,
+    )
     if cfg.ablate_clocks:
-        validate_feature_artifacts(artifacts, cfg, scenario="no_clock", expected_feature_names=no_clock_feature_cols, require_feature_lists=True)
+        validate_feature_artifacts(
+            artifacts,
+            cfg,
+            scenario="no_clock",
+            expected_feature_names=no_clock_feature_cols,
+            require_feature_lists=True,
+        )
     return out, full_feature_cols, no_clock_feature_cols
 
 
+# pylint: disable-next=too-many-locals,too-many-branches
 def validate_feature_artifacts(
     artifacts: FeatureArtifacts,
     cfg: TrainConfig,
@@ -279,10 +410,15 @@ def validate_feature_artifacts(
     """Validate that persisted feature artifacts are internally consistent before reuse."""
     numeric = list(artifacts.numeric_feature_names)
     if not numeric:
-        raise ValueError("feature_artifacts.numeric_feature_names is empty; feature scaling cannot be reproduced.")
+        raise ValueError(
+            "feature_artifacts.numeric_feature_names is empty; feature scaling cannot be "
+            "reproduced."
+        )
     duplicated_numeric = sorted({name for name in numeric if numeric.count(name) > 1})
     if duplicated_numeric:
-        raise ValueError(f"Duplicated numeric features in feature_artifacts: {duplicated_numeric[:10]}.")
+        raise ValueError(
+            f"Duplicated numeric features in feature_artifacts: {duplicated_numeric[:10]}."
+        )
 
     missing_medians = [name for name in numeric if name not in artifacts.medians]
     missing_iqrs = [name for name in numeric if name not in artifacts.iqrs]
@@ -290,19 +426,29 @@ def validate_feature_artifacts(
     if missing_medians or missing_iqrs or bad_iqrs:
         raise ValueError(
             "Invalid feature scaling artifacts: "
-            f"missing medians={missing_medians[:10]}, missing iqrs={missing_iqrs[:10]}, non-positive iqrs={bad_iqrs[:10]}."
+            f"missing medians={missing_medians[:10]}, missing iqrs={missing_iqrs[:10]}, "
+            f"non-positive iqrs={bad_iqrs[:10]}."
         )
 
-    missing_global_baseline = [name for name in BASELINE_COLS if name not in artifacts.global_baseline]
+    missing_global_baseline = [
+        name for name in BASELINE_COLS if name not in artifacts.global_baseline
+    ]
     if missing_global_baseline:
-        raise ValueError(f"feature_artifacts.global_baseline is missing baseline columns: {missing_global_baseline}.")
+        raise ValueError(
+            "feature_artifacts.global_baseline is missing baseline columns: "
+            f"{missing_global_baseline}."
+        )
     for asset_id, baseline in artifacts.train_asset_baselines.items():
         missing = [name for name in BASELINE_COLS if name not in baseline]
         if missing:
-            raise ValueError(f"Baseline for train asset {asset_id!r} is missing columns: {missing}.")
+            raise ValueError(
+                f"Baseline for train asset {asset_id!r} is missing columns: {missing}."
+            )
 
     if len(artifacts.stage_class_weights) != 3:
-        raise ValueError("stage_class_weights must contain exactly 3 values for stable/incipient/advanced.")
+        raise ValueError(
+            "stage_class_weights must contain exactly 3 values for stable/incipient/advanced."
+        )
     for name, value in {
         "foul_pos_weight": artifacts.foul_pos_weight,
         "clog_pos_weight": artifacts.clog_pos_weight,
@@ -317,9 +463,15 @@ def validate_feature_artifacts(
     full = list(artifacts.full_feature_names)
     no_clock = list(artifacts.no_clock_feature_names)
     if not full or not no_clock:
-        raise ValueError("feature_artifacts must contain non-empty full_feature_names and no_clock_feature_names before reuse.")
+        raise ValueError(
+            "feature_artifacts must contain non-empty full_feature_names and "
+            "no_clock_feature_names before reuse."
+        )
     if sorted(set(full)) != sorted(full) or sorted(set(no_clock)) != sorted(no_clock):
-        raise ValueError("feature_artifacts contains duplicated names in full_feature_names or no_clock_feature_names.")
+        raise ValueError(
+            "feature_artifacts contains duplicated names in full_feature_names or "
+            "no_clock_feature_names."
+        )
     if not set(no_clock).issubset(set(full)):
         raise ValueError("no_clock_feature_names must be a subset of full_feature_names.")
 
@@ -330,7 +482,9 @@ def validate_feature_artifacts(
         if raw in clock_features:
             leaked_clocks.append(feature)
     if leaked_clocks:
-        raise ValueError(f"no_clock_feature_names still contains direct clock features: {leaked_clocks}.")
+        raise ValueError(
+            f"no_clock_feature_names still contains direct clock features: {leaked_clocks}."
+        )
 
     for feature in full:
         if feature.startswith("z_"):
@@ -344,6 +498,7 @@ def validate_feature_artifacts(
         declared = full if scenario == "full" else no_clock
         if expected_feature_names is not None and list(expected_feature_names) != declared:
             raise ValueError(
-                f"Feature list mismatch for scenario {scenario}: expected {len(declared)} persisted features, "
+                f"Feature list mismatch for scenario {scenario}: expected {len(declared)} "
+                "persisted features, "
                 f"received {len(expected_feature_names)}."
             )

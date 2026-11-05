@@ -1,12 +1,16 @@
-"""MLflow helper for Ml10DairyDiseaseVectorDetection — download user-trained classifier from MLflow."""
+"""MLflow helper for Ml10DairyDiseaseVectorDetection.
+
+Downloads the user-trained classifier from MLflow.
+"""
 from __future__ import annotations
 
 import json
 import logging
 import os
+import shutil
+import tempfile
 
 import torch
-import shutil
 from torch import nn
 from torchvision import models
 
@@ -26,7 +30,6 @@ def download_user_classifier_from_mlflow(run_id: str):
     Returns (model, class_names, temp_dir).
     Caller MUST shutil.rmtree(temp_dir) after inference.
     """
-    import tempfile
     tmp = tempfile.mkdtemp(prefix="mlflow_modelo10_")
     try:
         local_path = BaseMLflowTracker(run_id).download_artifacts(tmp, artifact_path="classifier")
@@ -37,7 +40,7 @@ def download_user_classifier_from_mlflow(run_id: str):
         state_dict_path = os.path.join(local_path, CLASSIFIER_FILENAME)
         class_names_path = os.path.join(local_path, CLASS_NAMES_FILENAME)
 
-        with open(class_names_path) as f:
+        with open(class_names_path, encoding="utf-8") as f:
             class_names = json.load(f)
 
         model = models.mobilenet_v3_large(weights=None)
@@ -47,7 +50,9 @@ def download_user_classifier_from_mlflow(run_id: str):
         model.load_state_dict(state_dict)
         model.eval()
 
-        logger.info("Downloaded user classifier from MLflow run_id=%s, classes=%s", run_id, class_names)
+        logger.info(
+            "Downloaded user classifier from MLflow run_id=%s, classes=%s", run_id, class_names
+        )
         return model, class_names, tmp
     except BaseException:
         shutil.rmtree(tmp, ignore_errors=True)
