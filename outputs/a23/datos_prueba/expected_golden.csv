@@ -1,0 +1,9 @@
+case_id,fecha,producto,canal,current_price,esperado_y_pred,atol
+caso_leche_desnatada_discounts,2025-09-01,leche_desnatada,DISCOUNTS,0.8962,0.9113,0.001
+caso_leche_desnatada_hipermercados,2025-09-01,leche_desnatada,HIPERMERCADOS,1.0159,0.9996,0.001
+caso_leche_entera_discounts,2025-09-01,leche_entera,DISCOUNTS,1.0409,1.0433,0.001
+caso_leche_entera_hipermercados,2025-09-01,leche_entera,HIPERMERCADOS,1.1204,1.0987,0.001
+caso_leche_semidesnatada_super_autos,2025-09-01,leche_semidesnatada,SUPER+AUTOS,1.0174,1.0255,0.001
+caso_leche_semidesnatada_tespana,2025-09-01,leche_semidesnatada,T.ESPAÑA,1.0097,1.0168,0.001
+caso_total_leche_liquida_super_autos,2025-09-01,total_leche_liquida,SUPER+AUTOS,1.0257,1.0311,0.001
+caso_total_leche_liquida_tespana,2025-09-01,total_leche_liquida,T.ESPAÑA,1.0222,1.0267,0.001
