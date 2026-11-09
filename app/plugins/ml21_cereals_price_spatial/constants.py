@@ -44,3 +44,20 @@ BENCHMARK_BREAK_DELTA = 0.01
 MAPA_ADMIN_LAG = 3
 
 GEO_RISK_DEFAULT_PROVINCES = {"Cuenca", "Lleida"}
+
+# ── Reentrenamiento: mismo procedimiento que src/training/train.py del equipo de IA ──────────
+# Semilla del original (config/config.py RANDOM_SEED = 42).
+TRAIN_RANDOM_STATE = 42
+# XGBoost de H3: RandomizedSearchCV de 25 combinaciones sobre esta rejilla
+# (train.py::_regression_candidates, candidato "xgb", base de h != 1).
+XGB_H3_BASE_PARAMS = {"reg_lambda": 3.0, "reg_alpha": 0.5}
+XGB_H3_PARAM_DISTRIBUTIONS = {
+    "n_estimators": [250, 350, 450, 600],
+    "learning_rate": [0.03, 0.05, 0.1],
+    "max_depth": [2, 3, 4],
+    "subsample": [0.7, 0.85, 1.0],
+    "colsample_bytree": [0.7, 0.85, 1.0],
+    "reg_lambda": [3.0, 6.0, 10.0],
+    "reg_alpha": [0.5, 1.0, 3.0],
+}
+XGB_H3_N_ITER = 25

@@ -19,10 +19,9 @@ PANEL_COLUMNS = ["date", "provincia", "cereal_predominante", "precio_provincial_
 
 
 class _FastSearch:  # pylint: disable=too-few-public-methods  # GridSearchCV stub
-    """GridSearchCV stand-in: fits the estimator once with few trees (same code path, seconds)."""
+    """Grid/RandomizedSearchCV stand-in: fits the estimator once with few trees (seconds)."""
 
-    def __init__(self, estimator, param_grid, **_kwargs):
-        _ = param_grid
+    def __init__(self, estimator, **_kwargs):
         self.estimator = estimator
         self.best_params_ = {}
         self.best_score_ = 0.0
@@ -49,6 +48,7 @@ def fast_training(monkeypatch):
 
     monkeypatch.setattr(preprocessing, "prepare_train_test", fake_prepare)
     monkeypatch.setattr(sklearn.model_selection, "GridSearchCV", _FastSearch)
+    monkeypatch.setattr(sklearn.model_selection, "RandomizedSearchCV", _FastSearch)
 
 
 @pytest.fixture(name="instance")

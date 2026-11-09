@@ -33,8 +33,12 @@ from app.plugins.ml21_cereals_price_spatial.constants import (
     GEO_RISK_DEFAULT_PROVINCES,
     MODEL_ID,
     TIMING_DELTA,
+    TRAIN_RANDOM_STATE,
     VALID_HORIZONS,
     VERSION,
+    XGB_H3_BASE_PARAMS,
+    XGB_H3_N_ITER,
+    XGB_H3_PARAM_DISTRIBUTIONS,
 )
 from app.plugins.ml21_cereals_price_spatial.explain import (
     extract_feature_importance,
@@ -534,7 +538,7 @@ class Ml21CerealsPriceSpatialPlugin(ModelPluginPort):  # pylint: disable=too-man
         from sklearn.ensemble import ExtraTreesRegressor
         from sklearn.linear_model import LogisticRegression
         from sklearn.metrics import mean_absolute_error, roc_auc_score
-        from sklearn.model_selection import GridSearchCV, TimeSeriesSplit
+        from sklearn.model_selection import GridSearchCV, RandomizedSearchCV, TimeSeriesSplit
         from xgboost import XGBRegressor
 
         # Lazy so tests can monkeypatch preprocessing.prepare_train_test.
@@ -580,8 +584,8 @@ class Ml21CerealsPriceSpatialPlugin(ModelPluginPort):  # pylint: disable=too-man
         all_metrics: dict[str, Any] = {}
         metadata: dict[str, Any] = {
             "run_started_at_utc": datetime.now(timezone.utc).isoformat(),
-            "random_state": 42,
-            "search_type": "grid",
+            "random_state": TRAIN_RANDOM_STATE,
+            "search_type": "grid+randomized",
             "cut_date": "2021-01-01",
             "evidence_bundle_id": uuid.uuid4().hex,
             "selected_models": {},
@@ -596,24 +600,24 @@ class Ml21CerealsPriceSpatialPlugin(ModelPluginPort):  # pylint: disable=too-man
 
                     if task == "regresion":
                         if h == 3:
+                            # Same search as the AI team's train.py (_regression_candidates, xgb):
+                            # RandomizedSearchCV, 25 draws, seed 42, original 7-parameter grid.
                             estimator = XGBRegressor(
                                 objective="reg:squarederror",
-                                random_state=42, n_jobs=-1,
-                                reg_lambda=10.0, reg_alpha=0.5,
+                                random_state=TRAIN_RANDOM_STATE, n_jobs=-1,
+                                **XGB_H3_BASE_PARAMS,
                             )
-                            param_grid = {
-                                "n_estimators": [250, 350],
-                                "learning_rate": [0.03, 0.05],
-                                "max_depth": [2, 3],
-                                "subsample": [0.7, 0.85],
-                            }
-                            search = GridSearchCV(
-                                estimator=estimator, param_grid=param_grid,
+                            search = RandomizedSearchCV(
+                                estimator=estimator,
+                                param_distributions=XGB_H3_PARAM_DISTRIBUTIONS,
+                                n_iter=XGB_H3_N_ITER, random_state=TRAIN_RANDOM_STATE,
                                 cv=cv, scoring="neg_mean_absolute_error",
                                 n_jobs=-1, refit=True, verbose=0,
                             )
                         else:
-                            estimator = ExtraTreesRegressor(random_state=42, n_jobs=-1)
+                            estimator = ExtraTreesRegressor(
+                                random_state=TRAIN_RANDOM_STATE, n_jobs=-1
+                            )
                             param_grid = {
                                 "n_estimators": [300, 500],
                                 "max_depth": [2, 3, 4],
@@ -664,7 +668,12 @@ class Ml21CerealsPriceSpatialPlugin(ModelPluginPort):  # pylint: disable=too-man
                         }
 
                     else:
-                        estimator = LogisticRegression(max_iter=3000, class_weight="balanced")
+                        # random_state: unset in the original, so liblinear's shuffling made every
+                        # retrain differ (test AUC ±0.003 on the same data); fixed to its seed.
+                        estimator = LogisticRegression(
+                            max_iter=3000, class_weight="balanced",
+                            random_state=TRAIN_RANDOM_STATE,
+                        )
                         param_grid = {
                             "C": [0.001, 0.01, 0.1, 1.0, 10.0],
                             "penalty": ["l1", "l2"],
@@ -725,7 +734,7 @@ class Ml21CerealsPriceSpatialPlugin(ModelPluginPort):  # pylint: disable=too-man
                     "model_type": "extra_trees+xgb+logistic",
                     "horizons": "1,2,3",
                     "cut_date": "2021-01-01",
-                    "random_state": "42",
+                    "random_state": str(TRAIN_RANDOM_STATE),
                 })
                 tracker.log_metrics(
                     {

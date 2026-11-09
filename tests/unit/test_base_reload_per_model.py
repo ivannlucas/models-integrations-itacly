@@ -291,11 +291,10 @@ def test_ml18_reloads_the_promoted_base(  # pylint: disable=import-outside-tople
 # ── ml21 ───────────────────────────────────────────────────────────────────────
 
 class _FastSearch:  # pylint: disable=too-few-public-methods
-    """GridSearchCV stand-in: fits the estimator once with few trees / iterations (same code
-    path, seconds instead of minutes on the full delivered panel)."""
+    """Grid/RandomizedSearchCV stand-in: fits the estimator once with few trees / iterations
+    (same code path, seconds instead of minutes on the full delivered panel)."""
 
-    def __init__(self, estimator, param_grid, **_kwargs):
-        _ = param_grid
+    def __init__(self, estimator, **_kwargs):
         self.estimator = estimator
         self.best_params_ = {}
         self.best_score_ = 0.0
@@ -328,6 +327,7 @@ def test_ml21_reloads_the_promoted_base_and_its_new_panel(  # pylint: disable=im
     from app.plugins.ml21_cereals_price_spatial.plugin import Ml21CerealsPriceSpatialPlugin
 
     monkeypatch.setattr(sklearn.model_selection, "GridSearchCV", _FastSearch)
+    monkeypatch.setattr(sklearn.model_selection, "RandomizedSearchCV", _FastSearch)
     container, store = _start_on_v0(monkeypatch, isolated_base_store, ARTIFACT_FOLDER_NAME,
                                     model_loader, Ml21CerealsPriceSpatialPlugin)
     # The delivered panel plus one new month: the promoted base must serve that month.

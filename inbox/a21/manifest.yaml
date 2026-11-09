@@ -468,10 +468,29 @@ known_issues:
   - "ENTRENAMIENTO REQUIERE DATASET COMPLETO: training.required_columns incluye todas las
     columnas del dataset base. El dataset (dataset_entrenamiento_final.csv) ahora SÍ se incluye
     en artifacts — debe estar en data/processed/ para poder reentrenar."
-  - "REENTRENAMIENTO IMPLEMENTADO: train() ejecuta GridSearchCV sobre los mismos modelos del
-    repo original (ExtraTrees para H1/H2 reg, XGBoost para H3 reg, LogisticRegression para clf).
-    Sube artefactos a MLflow. El CSV de entrada debe ser el dataset_entrenamiento_final.csv con
-    las columnas target incluidas."
+  - "REENTRENAMIENTO IMPLEMENTADO: train() repite la búsqueda del repo original sobre la familia
+    ya seleccionada por horizonte (ExtraTrees GridSearchCV para H1/H2 reg, XGBoost
+    RandomizedSearchCV para H3 reg, LogisticRegression GridSearchCV para clf). Sube artefactos a
+    MLflow. El CSV de entrada debe ser el dataset_entrenamiento_final.csv con las columnas target
+    incluidas."
+  - "[RESUELTO 2026-11-09] H3 regresión no podía reproducir el modelo entregado: el plugin usaba
+    GridSearchCV sobre 4 hiperparámetros con reg_lambda/reg_alpha fijos y sin colsample_bytree,
+    así que la configuración entregada (colsample_bytree=0.7) no estaba entre las candidatas y el
+    reentreno elegía otra (lr 0.03, subsample 0.85). Ahora porta la búsqueda del original
+    (train.py::_regression_candidates, xgb): RandomizedSearchCV n_iter=25 random_state=42 sobre
+    los 7 hiperparámetros, base reg_lambda=3.0/reg_alpha=0.5. Reentreno real con el dataset
+    entregado: elige exactamente los hiperparámetros entregados. Su MAE test es 0.0975 (entregado
+    0.1012, Pearson 0.298 vs 0.209): el propio código del equipo de IA ejecutado en este entorno
+    da también 0.0975 con el mismo dataset (md5 idéntico), mismas columnas y xgboost 3.2.0, y no
+    depende del nº de hilos; el artefacto entregado se entrenó en otra máquina y XGBoost con
+    subsample/colsample no es bit-reproducible entre plataformas. H1/H2 reproducen el original
+    bit a bit (CV y MAE test)."
+  - "[RESUELTO 2026-11-09] Clasificación no reproducible entre reentrenos: LogisticRegression con
+    solver liblinear sin random_state (igual que en el original) baraja de forma distinta en cada
+    ejecución; con los mismos datos el AUC test variaba ±0.003 (H2 0.7444-0.7473). Se fija
+    random_state=42 (la semilla del original, config.py RANDOM_SEED). Dos reentrenos dan ahora
+    resultados idénticos; mismos C/penalty elegidos que el entregado y AUC dentro del rango
+    anterior (H1 0.7123, H2 0.7464, H3 0.7538). Diferencia deliberada respecto al original."
   - "FEATURES CON ESPACIOS: prepag1_urea 46, prepag2_paja cereales, prepag2_torta de girasol
     contienen espacios. El encoding one-hot genera columnas con estos espacios — el plugin
     debe preservarlos exactamente."
