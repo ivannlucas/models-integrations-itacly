@@ -97,7 +97,7 @@ resultado es un 500 en *todas* las llamadas reales (pasó en ml21).
 | `plugin.py` | Sí | Clase con los 6 métodos |
 | `predict_dto.py` | Sí | `PredictBatchRequest/Response`, `PredictInlineRequest/Response`, `PredictRequest = Annotated[Union[...], Field(discriminator="mode")]` |
 | `model_loader.py` | Sí | `ArtifactStore(ARTIFACT_FOLDER_NAME)` con carga perezosa (ver Artefactos) |
-| `mlflow_utils.py` | **Sí, siempre** | Descarga y subida reales (plantilla abajo). En modelos sin entrenamiento, un stub documentado |
+| `mlflow_utils.py` | **Sí, siempre** | Carga del modelo reentrenado sobre los helpers de `mlflow_artifacts` (plantilla abajo). En modelos sin entrenamiento, un stub documentado |
 | `train_dto.py` | Si `train()` es real | `TrainRequest` (con `mlflow_run_id` **obligatorio**, salvo en los modelos que promueven su base (ver «Modelos que promueven su base»), donde es opcional) y `TrainResponse` |
 | `training.py` | Si el entrenamiento es largo | Lógica de entrenamiento portada del código original (ml5, ml23) |
 | `preprocessing.py` / `postprocessing.py` | Si aplica | Transformación de entrada y salida |
@@ -135,15 +135,15 @@ sin motivo. Antes de fijar `training.supported`:
   nueva en `artifacts/fixed/<carpeta>/versions/<vN>/` y mueve `current.json`; `POST /rollback`
   vuelve atrás. En el resto, el modelo reentrenado vive solo en su run de MLflow. Diseño:
   `docs/superpowers/specs/2026-10-14-reentreno-actualiza-base-design.md`.
-- ⚠ **El modelo reentrenado se guarda SOLO en MLflow** (directorio temporal →
-  `upload_artifacts` → `rmtree`), salvo en los modelos que promueven su base (ver «Modelos que promueven su base»), que además publican una
+- ⚠ **El modelo reentrenado se guarda SOLO en MLflow** (`upload_model_to_mlflow`: directorio
+  temporal → `upload_artifacts` → borrado), salvo en los modelos que promueven su base (ver «Modelos que promueven su base»), que además publican una
   versión nueva bajo `artifacts/fixed/<carpeta>/versions/<vN>/` (nunca sobrescriben). Nunca se
   escribe en `artifacts/<ARTIFACT_FOLDER_NAME>/` ni en S3 fuera de ese mecanismo, y el ajuste fino parte siempre del modelo base, nunca de un reentrenamiento anterior. En
   ml25, un `train()` antiguo generó el artefacto que acabó sirviéndose como "base", con un
   protocolo distinto del del equipo de IA; ml41 sobrescribía el checkpoint base local y
   ml15/16/3/40/9 dejaban copias `user_*` en local.
-- ⚠ **Si no se puede guardar en MLflow, `/train` falla**: el `except` de la subida hace
-  `raise ModelPersistenceError(...) from exc` (→ 502). Nunca se responde 200 con un aviso: como
+- ⚠ **Si no se puede guardar en MLflow, `/train` falla**: `upload_model_to_mlflow` convierte
+  cualquier fallo de la subida en `ModelPersistenceError` (→ 502). Nunca se responde 200 con un aviso: como
   el modelo solo vive en MLflow, el resultado del entrenamiento se habría perdido sin que la
   plataforma lo supiera. Excepción: salvo en los modelos que promueven su base (ver «Modelos que promueven su base»): un fallo de MLflow se responde 200 con
   `upload_warning` (la base se publica igualmente); solo es 502 si falla publicar la base.
@@ -237,42 +237,57 @@ plataforma. Mientras tanto, documenta la duración esperada del plugin en su man
 
 ## mlflow_utils.py y uso de mlflow_run_id en predict
 
-Plantilla real, con la misma API que usan todos los plugins
-(`app/domain/services/mlflow_tracker.py`):
+La fontanería de MLflow es común y vive fuera del plugin, en
+`app/domain/services/mlflow_artifacts.py`. Ahí están el directorio temporal, la
+descarga/subida, el `None` cuando el run no tiene modelo, la limpieza si algo falla, los mensajes
+de `ModelPersistenceError` y el bloque de MLflow de `stats()`. El plugin solo escribe lo propio
+de su modelo: qué ficheros forman el modelo reentrenado y cómo se reconstruye.
+`mlflow_utils.py` sigue siendo obligatorio y conserva la API pública
+(`download_user_model_from_mlflow`), que es la que usan `plugin.py` y los tests. Plantilla:
 
 ```python
-import logging, os, shutil, tempfile
-from app.domain.services.mlflow_tracker import BaseMLflowTracker, require_user_model
-from app.plugins.<nombre>.constants import ARTIFACT_FOLDER_NAME, MODEL_FILENAME
-
-logger = logging.getLogger(__name__)
+import os
+from app.domain.services.mlflow_artifacts import download_run_artifacts
+from app.domain.services.mlflow_tracker import require_user_model
+from app.plugins.<nombre>.constants import MODEL_FILENAME
 
 
 @require_user_model   # None o error de artefacto al cargar, con run_id → UserModelUnavailableError (→ 422)
 def download_user_model_from_mlflow(run_id: str):
-    """Return (model, ..., temp_dir). Caller MUST shutil.rmtree(temp_dir) in finally."""
-    tmp = tempfile.mkdtemp(prefix="mlflow_<nombre>_")
-    try:
-        local_path = BaseMLflowTracker(run_id).download_artifacts(tmp, artifact_path="model")
-        if not local_path or not os.path.exists(os.path.join(local_path, MODEL_FILENAME)):
-            logger.warning("MLflow run_id=%s sin artefacto completo en 'model'", run_id)
-            shutil.rmtree(tmp, ignore_errors=True)
-            return None
-        model = ...  # reconstruir desde los metadatos descargados (nº de clases, feature_cols, scaler…)
-        return model, tmp
-    except BaseException:   # p. ej. falta un fichero secundario: no dejar el temporal huérfano
-        shutil.rmtree(tmp, ignore_errors=True)
-        raise
+    """Return (model, temp_dir). Caller MUST remove temp_dir (``removing_dir``)."""
+    return download_run_artifacts(run_id, _load, prefix="mlflow_<nombre>_")
 
 
-def upload_artifacts_to_mlflow(artifact_dir: str, mlflow_run_id: str, metrics: dict | None = None):
-    tracker = BaseMLflowTracker(mlflow_run_id)
-    tracker.connect(mlflow_run_id)
-    if metrics:
-        tracker.log_metrics(metrics)
-        tracker.set_tags({"model_id": ARTIFACT_FOLDER_NAME})
-    tracker.upload_artifacts(artifact_dir, artifact_path="model")
+def _load(local_path: str):
+    """Rebuild the retrained model from the downloaded ``model`` folder (None if incomplete)."""
+    if not os.path.exists(os.path.join(local_path, MODEL_FILENAME)):
+        return None
+    return ...  # reconstruir desde los metadatos descargados (nº de clases, feature_cols, scaler…)
 ```
+
+En `plugin.py`:
+
+```python
+from app.domain.services.mlflow_artifacts import (
+    add_mlflow_run_to_stats, removing_dir, require_train_tracker, upload_model_to_mlflow,
+)
+from app.domain.services.plugin_runtime import PluginRuntimeMixin
+
+
+class MiPlugin(PluginRuntimeMixin, ModelPluginPort):   # _require_loaded(), _record(), _runtime_stats()
+    def train(self, *, data_path, mlflow_run_id):
+        tracker = require_train_tracker(mlflow_run_id)   # sin run → ModelPersistenceError
+        ...                                              # entrenar sobre una copia, nunca self._model
+        upload_model_to_mlflow(tracker, lambda d: torch.save(sd, os.path.join(d, MODEL_FILENAME)),
+                               prefix="<nombre>_mlflow_")  # fallo → ModelPersistenceError (502)
+
+    def stats(self, mlflow_run_id=""):
+        base = StatsResponse(..., runtime_stats=self._runtime_stats())
+        return add_mlflow_run_to_stats(base, mlflow_run_id)   # params/metrics del run, best-effort
+```
+
+Referencia completa: `ml35_dairy_ann_cleaning_cost`. Los tests que simulan MLflow parchean
+`app.domain.services.mlflow_artifacts.BaseMLflowTracker`.
 
 ⚠ **`predict_inline`, `predict_batch` y `stats` deben usar `mlflow_run_id`**, no descartarlo
 con `_ = mlflow_run_id`. En ml2, ml4, ml7, ml17 y ml23 se aceptaba y se ignoraba: el usuario
@@ -297,16 +312,14 @@ def _resolve_for_predict(self, mlflow_run_id):
     return download_user_model_from_mlflow(mlflow_run_id)   # (model, temp_dir) o excepción
 
 model, tmp = self._resolve_for_predict(mlflow_run_id)
-try:
+with removing_dir(tmp):           # borra el temporal del modelo del usuario, también si falla
     ...                           # usa `model`, NUNCA asigna a self._model
-finally:
-    if tmp:
-        shutil.rmtree(tmp, ignore_errors=True)
 ```
 
 Si el modelo reentrenado puede tener otro número de clases u otras columnas, la arquitectura se
 reconstruye con los metadatos que se descargan, no con las constantes del modelo base. En
-`stats()`, con `mlflow_run_id` informado, añade `tracker.get_params()` y `get_metrics()` del run.
+`stats()`, con `mlflow_run_id` informado, `add_mlflow_run_to_stats` añade los params y métricas
+del run.
 
 ## Trampas de fidelidad que ya han roto plugins
 
@@ -441,7 +454,7 @@ La correctitud numérica se valida después, en el skill `verification`, contra 
     ARTIFACT_FOLDER_NAME = carpeta, constantes en la cabecera de constants.py
 [ ] Todos los ficheros obligatorios, incluido mlflow_utils.py con descarga/subida reales
 [ ] predict_inline/predict_batch devuelven el DTO tipado (nunca dict)
-[ ] mlflow_run_id usado de verdad en predict/stats, sin mutar self._model, con rmtree en finally
+[ ] mlflow_run_id usado de verdad en predict/stats, sin mutar self._model, con removing_dir(tmp)
 [ ] training.supported decidido con el código real (qué entrena y si es el motor desplegado)
 [ ] Si es entrenable: mlflow_run_id obligatorio, guardado solo en MLflow (salvo modelos que
     promueven su base: opcional, versión nueva en artifacts/fixed/), procedimiento

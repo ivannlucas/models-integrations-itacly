@@ -2,10 +2,9 @@
 from __future__ import annotations
 
 import logging
-import shutil
-import tempfile
 from pathlib import Path
 
+from app.domain.services.mlflow_artifacts import download_run_artifacts
 from app.domain.services.mlflow_tracker import BaseMLflowTracker, require_user_model
 from app.plugins.ml47_dairy_dnsl_pasteurization_fault_detection.constants import (
     ARTIFACT_FOLDER_NAME,
@@ -20,26 +19,22 @@ def download_user_model_from_mlflow(run_id: str):
 
     Devuelve (model, scaler, feature_cols, ts1_mean_train, temp_dir); el llamador borra temp_dir.
     """
-    tmp = tempfile.mkdtemp(prefix="mlflow_m47_")
-    try:
-        local_path = BaseMLflowTracker(run_id).download_artifacts(tmp, artifact_path="model")
-        if not local_path:
-            shutil.rmtree(tmp, ignore_errors=True)
-            return None
+    loaded = download_run_artifacts(run_id, _load, prefix="mlflow_m47_")
+    if loaded is None:
+        return None
+    bundle, tmp = loaded
+    return (*bundle, tmp)
 
-        # pylint: disable-next=import-outside-toplevel
-        from app.plugins.ml47_dairy_dnsl_pasteurization_fault_detection.model_loader import (
-            load_artifacts_from_dir,
-        )
 
-        # Same loader as the base model: same dropout, weights_only=True on the user's state_dict.
-        model, scaler, feature_cols, ts1_mean_train = load_artifacts_from_dir(Path(local_path))
+def _load(local_path: str):
+    """Rebuild (model, scaler, feature_cols, ts1_mean_train) from a downloaded ``model`` folder."""
+    # pylint: disable-next=import-outside-toplevel
+    from app.plugins.ml47_dairy_dnsl_pasteurization_fault_detection.model_loader import (
+        load_artifacts_from_dir,
+    )
 
-        logger.info("Downloaded user model from MLflow run_id=%s", run_id)
-        return model, scaler, feature_cols, ts1_mean_train, tmp
-    except BaseException:
-        shutil.rmtree(tmp, ignore_errors=True)
-        raise
+    # Same loader as the base model: same dropout, weights_only=True on the user's state_dict.
+    return load_artifacts_from_dir(Path(local_path))
 
 
 def upload_artifacts_to_mlflow(

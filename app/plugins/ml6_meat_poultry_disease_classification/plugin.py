@@ -20,20 +20,23 @@ import os
 import shutil
 import tempfile
 import time
-from datetime import datetime, timezone
 from typing import Any
 
 import torch
 
-from app.application.dto.stats_dto import InputField, OutputField, RuntimeStats, StatsResponse
+from app.application.dto.stats_dto import InputField, OutputField, StatsResponse
 from app.domain.ports.model_plugin_port import ModelPluginPort
 from app.domain.services.exceptions import (
     InvalidImageError,
-    ModelNotLoadedError,
     ModelPersistenceError,
     UserModelUnavailableError,
 )
-from app.domain.services.mlflow_tracker import BaseMLflowTracker
+from app.domain.services.mlflow_artifacts import (
+    add_mlflow_run_to_stats,
+    removing_dir,
+    require_train_tracker,
+)
+from app.domain.services.plugin_runtime import PluginRuntimeMixin
 from app.infrastructure.archive import safe_extract_zip
 from app.infrastructure.artifact_store import local_file_path
 from app.plugins.ml6_meat_poultry_disease_classification.constants import (
@@ -106,15 +109,131 @@ def _unwrap_single_dir(path: str) -> str:
     return path
 
 
-class Ml6MeatPoultryDiseaseClassificationPlugin(ModelPluginPort):
+def _read_image_bytes(features: dict) -> tuple[bytes, list[str]]:
+    """Return the raw bytes of the inline image and the feature it came from."""
+    if features.get("image_path"):
+        path = features["image_path"]
+        if os.path.splitext(path)[1].lower() not in IMAGE_EXTENSIONS:
+            raise InvalidImageError(f"Extensión no soportada. Usa {sorted(IMAGE_EXTENSIONS)}")
+        if not os.path.isfile(path):
+            raise InvalidImageError(f"image_path no existe: {path}")
+        with open(path, "rb") as fh:
+            return fh.read(), ["image_path"]
+    if features.get("image_base64"):
+        try:
+            image_bytes = base64.b64decode(features["image_base64"], validate=False)
+        except (binascii.Error, ValueError) as exc:
+            raise InvalidImageError(f"image_base64 no es base64 válido: {exc}") from exc
+        return image_bytes, ["image_base64"]
+    raise InvalidImageError("features debe contener 'image_path' o 'image_base64'")
+
+
+def _list_images(image_dir: str) -> list[str]:
+    """Relative paths of every image under ``image_dir``, sorted."""
+    return sorted(
+        os.path.relpath(os.path.join(root, f), image_dir)
+        for root, _, names in os.walk(image_dir) for f in names
+        if os.path.splitext(f)[1].lower() in IMAGE_EXTENSIONS
+    )
+
+
+def _classify_one(
+    models: dict, device: torch.device, task: str, image_dir: str, rel: str,
+) -> tuple[dict, dict | None]:
+    """Batch row of one image and the ensemble result (``None`` when the image failed)."""
+    try:
+        image = load_image(os.path.join(image_dir, rel))
+        result = run_ensemble(models, to_tensor(image, task).to(device), task)
+    except Exception as exc:  # pylint: disable=broad-exception-caught  # per-image error row
+        return {"filename": os.path.basename(rel), "path": rel, "error": str(exc)}, None
+    row = {"filename": os.path.basename(rel), "path": rel, **result}
+    warnings = input_warnings(image, task)
+    if warnings:
+        row["warnings"] = warnings
+    return row, result
+
+
+def _evaluated_metrics(y_true: list, y_pred: list, votes: dict, task: str, n_rows: int):
+    """Ensemble + per-model metrics when every batch image carried its true class, else None."""
+    evaluated = None
+    if y_true and len(y_true) == n_rows:
+        evaluated = {"ensemble": classification_metrics(y_true, y_pred, task)}
+        for name, model_votes in votes.items():
+            evaluated[name] = classification_metrics(y_true, model_votes, task)
+    return evaluated
+
+
+def _classify_images(models: dict, device: torch.device, task: str, image_dir: str) -> tuple:
+    """Classify every image of ``image_dir``: ``(rows, y_true, y_pred, votes)``.
+
+    ``y_true``/``y_pred``/``votes`` only cover images inside a class-named folder.
+    """
+    rows, y_true, votes = [], [], {name: [] for name in models}
+    y_pred: list[int] = []
+    for rel in _list_images(image_dir):
+        parent = os.path.basename(os.path.dirname(rel))
+        true_idx = class_index_of_folder(parent, task) if parent else None
+        row, result = _classify_one(models, device, task, image_dir, rel)
+        if result is None:
+            rows.append(row)
+            continue
+        if true_idx is not None:
+            row["true_class"] = CLASS_NAMES[task][true_idx]
+            y_true.append(true_idx)
+            y_pred.append(result["predicted_class_index"])
+            for name, cls in result["model_predictions"].items():
+                votes[name].append(CLASS_NAMES[task].index(cls))
+        rows.append(row)
+    return rows, y_true, y_pred, votes
+
+
+def _rng_devices(device: torch.device) -> list[int]:
+    """CUDA devices whose RNG ``torch.random.fork_rng`` must save/restore during train()."""
+    return [device.index or 0] if device.type == "cuda" else []
+
+
+def _epoch_logger(tracker, name: str):
+    """Per-epoch MLflow logger of base model ``name`` (metrics prefixed with its name)."""
+    def _log(epoch, values, _name=name):
+        tracker.log_metrics({f"{_name}_{k}": v for k, v in values.items()}, step=epoch)
+    return _log
+
+
+def _model_report(report: dict, best_val_acc: float, epochs: int) -> dict:
+    """train() report of one base model: its test metrics (no per-class), best val acc, epochs."""
+    return {
+        "test": {k: v for k, v in report.items() if k != "per_class"},
+        "best_val_accuracy": round(best_val_acc, 4), "epochs_run": epochs,
+    }
+
+
+def _upload_ensemble(trained: dict, task: str, mlflow_run_id: str, final_metrics: dict) -> None:
+    """Save ``model/<name>.pt`` + metadata.json of the retrained ensemble to the MLflow run."""
+    upload_dir = tempfile.mkdtemp(prefix="ml6_mlflow_upload_")
+    try:
+        for name, model in trained.items():
+            torch.save(model.state_dict(), os.path.join(upload_dir, MODEL_FILENAMES[name]))
+        metadata_path = os.path.join(upload_dir, MLFLOW_METADATA_FILENAME)
+        with open(metadata_path, "w", encoding="utf-8") as fh:
+            json.dump({"task": task, "class_names": list(CLASS_NAMES[task]),
+                       "model_names": list(TASK_MODELS[task])}, fh)
+        upload_artifacts_to_mlflow(upload_dir, mlflow_run_id, final_metrics)
+    except Exception as exc:
+        logger.error("ml6 train(): MLflow upload failed: %s", exc)
+        raise ModelPersistenceError(
+            f"El ensemble reentrenado no se ha podido guardar en MLflow: {exc}"
+        ) from exc
+    finally:
+        shutil.rmtree(upload_dir, ignore_errors=True)
+
+
+class Ml6MeatPoultryDiseaseClassificationPlugin(PluginRuntimeMixin, ModelPluginPort):
     """Two independent 3-model majority-voting image ensembles (thermal / rgb)."""
 
     def __init__(self) -> None:
-        """Initialize an unloaded plugin with empty runtime counters."""
+        """Initialize an unloaded plugin (runtime counters start at the mixin defaults)."""
         self._ensembles: dict[str, dict[str, Any]] | None = None
         self._device: torch.device | None = None
-        self._predict_count: int = 0
-        self._last_predict_at: str | None = None
 
     # ── lifecycle ──────────────────────────────────────────────────────────
 
@@ -126,14 +245,6 @@ class Ml6MeatPoultryDiseaseClassificationPlugin(ModelPluginPort):
     def is_loaded(self) -> bool:
         """Return True if both ensembles are loaded."""
         return self._ensembles is not None
-
-    def _require_loaded(self) -> None:
-        if self._ensembles is None:
-            raise ModelNotLoadedError("El modelo no está cargado.")
-
-    def _record(self) -> None:
-        self._predict_count += 1
-        self._last_predict_at = datetime.now(tz=timezone.utc).isoformat()
 
     def _resolve_models(
         self, task: str, mlflow_run_id: str,
@@ -153,7 +264,7 @@ class Ml6MeatPoultryDiseaseClassificationPlugin(ModelPluginPort):
 
     # ── predict ────────────────────────────────────────────────────────────
 
-    def predict_inline(  # pylint: disable=too-many-locals
+    def predict_inline(
         self,
         *,
         features: dict,
@@ -163,38 +274,19 @@ class Ml6MeatPoultryDiseaseClassificationPlugin(ModelPluginPort):
     ) -> PredictInlineResponse:
         """Classify one image with the ensemble chosen by ``model_key``."""
         task = _require_task(model_key)
-        if features.get("image_path"):
-            path = features["image_path"]
-            if os.path.splitext(path)[1].lower() not in IMAGE_EXTENSIONS:
-                raise InvalidImageError(f"Extensión no soportada. Usa {sorted(IMAGE_EXTENSIONS)}")
-            if not os.path.isfile(path):
-                raise InvalidImageError(f"image_path no existe: {path}")
-            with open(path, "rb") as fh:
-                image_bytes = fh.read()
-            used = ["image_path"]
-        elif features.get("image_base64"):
-            try:
-                image_bytes = base64.b64decode(features["image_base64"], validate=False)
-            except (binascii.Error, ValueError) as exc:
-                raise InvalidImageError(f"image_base64 no es base64 válido: {exc}") from exc
-            used = ["image_base64"]
-        else:
-            raise InvalidImageError("features debe contener 'image_path' o 'image_base64'")
+        image_bytes, used = _read_image_bytes(features)
         image = decode_image(image_bytes)
 
         models, device, user_tmp = self._resolve_models(task, mlflow_run_id)
-        try:
+        with removing_dir(user_tmp):
             result = run_ensemble(models, to_tensor(image, task).to(device), task)
-        finally:
-            if user_tmp:
-                shutil.rmtree(user_tmp, ignore_errors=True)
         self._record()
         return PredictInlineResponse(
             model_id=MODEL_ID, task=task, threshold=threshold, features_used=used,
             warnings=input_warnings(image, task), **result,
         )
 
-    def predict_batch(  # pylint: disable=too-many-locals
+    def predict_batch(
         self, *, data_path: str, mlflow_run_id: str = "", model_key: str | None = None,
     ) -> PredictBatchResponse:
         """Classify every image of a directory or ZIP (local or s3://).
@@ -206,55 +298,23 @@ class Ml6MeatPoultryDiseaseClassificationPlugin(ModelPluginPort):
         task = _require_task(model_key)
         models, device, user_tmp = self._resolve_models(task, mlflow_run_id)
         extract_dir: str | None = None
-        try:
-            with local_file_path(data_path) as local_path:
-                image_dir = local_path
-                if local_path.lower().endswith(".zip"):
-                    extract_dir = tempfile.mkdtemp(prefix="ml6_batch_")
-                    safe_extract_zip(local_path, extract_dir)
-                    image_dir = _unwrap_single_dir(extract_dir)
-                if not os.path.isdir(image_dir):
-                    raise FileNotFoundError(
-                        f"data_path no es un directorio ni un .zip: {data_path}")
-                files = sorted(
-                    os.path.relpath(os.path.join(root, f), image_dir)
-                    for root, _, names in os.walk(image_dir) for f in names
-                    if os.path.splitext(f)[1].lower() in IMAGE_EXTENSIONS
-                )
-                rows, y_true, votes = [], [], {name: [] for name in models}
-                y_pred: list[int] = []
-                for rel in files:
-                    parent = os.path.basename(os.path.dirname(rel))
-                    true_idx = class_index_of_folder(parent, task) if parent else None
-                    try:
-                        image = load_image(os.path.join(image_dir, rel))
-                        result = run_ensemble(models, to_tensor(image, task).to(device), task)
-                    except Exception as exc:  # pylint: disable=broad-except
-                        rows.append({"filename": os.path.basename(rel), "path": rel,
-                                     "error": str(exc)})
-                        continue
-                    row = {"filename": os.path.basename(rel), "path": rel, **result}
-                    warnings = input_warnings(image, task)
-                    if warnings:
-                        row["warnings"] = warnings
-                    if true_idx is not None:
-                        row["true_class"] = CLASS_NAMES[task][true_idx]
-                        y_true.append(true_idx)
-                        y_pred.append(result["predicted_class_index"])
-                        for name, cls in result["model_predictions"].items():
-                            votes[name].append(CLASS_NAMES[task].index(cls))
-                    rows.append(row)
-        finally:
-            if extract_dir:
-                shutil.rmtree(extract_dir, ignore_errors=True)
-            if user_tmp:
-                shutil.rmtree(user_tmp, ignore_errors=True)
+        with removing_dir(user_tmp):
+            try:
+                with local_file_path(data_path) as local_path:
+                    image_dir = local_path
+                    if local_path.lower().endswith(".zip"):
+                        extract_dir = tempfile.mkdtemp(prefix="ml6_batch_")
+                        safe_extract_zip(local_path, extract_dir)
+                        image_dir = _unwrap_single_dir(extract_dir)
+                    if not os.path.isdir(image_dir):
+                        raise FileNotFoundError(
+                            f"data_path no es un directorio ni un .zip: {data_path}")
+                    rows, *labels = _classify_images(models, device, task, image_dir)
+            finally:
+                if extract_dir:
+                    shutil.rmtree(extract_dir, ignore_errors=True)
 
-        evaluated = None
-        if y_true and len(y_true) == len(rows):
-            evaluated = {"ensemble": classification_metrics(y_true, y_pred, task)}
-            for name, model_votes in votes.items():
-                evaluated[name] = classification_metrics(y_true, model_votes, task)
+        evaluated = _evaluated_metrics(*labels, task, len(rows))
         self._record()
         return PredictBatchResponse(
             model_id=MODEL_ID, task=task, n_images=len(rows), predictions=rows,
@@ -263,7 +323,7 @@ class Ml6MeatPoultryDiseaseClassificationPlugin(ModelPluginPort):
 
     # ── train ──────────────────────────────────────────────────────────────
 
-    def train(  # pylint: disable=too-many-locals
+    def train(
         self, *, data_path: str, mlflow_run_id: str, task: str = "",
     ) -> TrainResponse:
         """Retrain the three base models of ``task`` on a raw dataset and save them to MLflow.
@@ -277,7 +337,7 @@ class Ml6MeatPoultryDiseaseClassificationPlugin(ModelPluginPort):
             raise ValueError(f"task debe ser 'thermal' o 'rgb'; recibido: {task!r}")
         self._require_loaded()
         hyper = TRAIN_HYPERPARAMS[task]
-        tracker = BaseMLflowTracker(mlflow_run_id)
+        tracker = require_train_tracker(mlflow_run_id)
         tracker.log_params({
             "task": task, "base_models": ",".join(TASK_MODELS[task]), "optimizer": "adam",
             "loss": "cross_entropy", "scheduler": "step_lr", "step_size": TRAIN_STEP_SIZE,
@@ -298,32 +358,7 @@ class Ml6MeatPoultryDiseaseClassificationPlugin(ModelPluginPort):
                     raise FileNotFoundError(
                         f"data_path no existe o no es un directorio/.zip: {data_path}")
                 splits = split_dataset(data_root, task)
-                loaders = make_loaders(splits, task, hyper["batch_size"])
-                y_test = [label for _, label in splits["test"]]
-
-                trained, per_model_preds, model_report = {}, {}, {}
-                devices = [self._device.index or 0] if self._device.type == "cuda" else []
-                with torch.random.fork_rng(devices=devices):
-                    torch.manual_seed(TRAIN_SEED)
-                    for name in TASK_MODELS[task]:
-                        model = copy.deepcopy(self._ensembles[task][name]).to(self._device)
-
-                        def _log(epoch, values, _name=name):
-                            tracker.log_metrics(
-                                {f"{_name}_{k}": v for k, v in values.items()}, step=epoch)
-
-                        model, best_val_acc, epochs = train_model(
-                            model, loaders, hyper, self._device, _log)
-                        trained[name] = model
-                        per_model_preds[name] = predict_loader(model, loaders["test"], self._device)
-                        report = classification_metrics(y_test, per_model_preds[name], task)
-                        model_report[name] = {
-                            "test": {k: v for k, v in report.items() if k != "per_class"},
-                            "best_val_accuracy": round(best_val_acc, 4), "epochs_run": epochs,
-                        }
-                        logger.info("ml6 train(%s): %s done (%d epochs, val_acc=%.4f)",
-                                    task, name, epochs, best_val_acc)
-                ens = classification_metrics(y_test, ensemble_predictions(per_model_preds), task)
+                trained, model_report, ens = self._train_ensemble(task, splits, hyper, tracker)
         finally:
             shutil.rmtree(extract_dir, ignore_errors=True)
 
@@ -333,22 +368,7 @@ class Ml6MeatPoultryDiseaseClassificationPlugin(ModelPluginPort):
             "n_train": len(splits["train"]), "n_val": len(splits["val"]),
             "n_test": len(splits["test"]),
         }
-        upload_dir = tempfile.mkdtemp(prefix="ml6_mlflow_upload_")
-        try:
-            for name, model in trained.items():
-                torch.save(model.state_dict(), os.path.join(upload_dir, MODEL_FILENAMES[name]))
-            metadata_path = os.path.join(upload_dir, MLFLOW_METADATA_FILENAME)
-            with open(metadata_path, "w", encoding="utf-8") as fh:
-                json.dump({"task": task, "class_names": list(CLASS_NAMES[task]),
-                           "model_names": list(TASK_MODELS[task])}, fh)
-            upload_artifacts_to_mlflow(upload_dir, mlflow_run_id, final_metrics)
-        except Exception as exc:
-            logger.error("ml6 train(): MLflow upload failed: %s", exc)
-            raise ModelPersistenceError(
-                f"El ensemble reentrenado no se ha podido guardar en MLflow: {exc}"
-            ) from exc
-        finally:
-            shutil.rmtree(upload_dir, ignore_errors=True)
+        _upload_ensemble(trained, task, mlflow_run_id, final_metrics)
 
         return TrainResponse(
             detail=(f"Reentrenamiento del ensemble '{task}' completado (3 modelos base, test "
@@ -360,6 +380,32 @@ class Ml6MeatPoultryDiseaseClassificationPlugin(ModelPluginPort):
             training_time_s=round(time.perf_counter() - t0, 2), mlflow_run_id=mlflow_run_id,
             upload_warning=None,
         )
+
+    def _train_ensemble(self, task: str, splits: dict, hyper: dict, tracker) -> tuple:
+        """Retrain each base model of ``task`` from a copy of the served one.
+
+        Returns ``(trained models, per-model report, ensemble test metrics)``.
+        """
+        loaders = make_loaders(splits, task, hyper["batch_size"])
+        y_test = [label for _, label in splits["test"]]
+
+        trained, per_model_preds, model_report = {}, {}, {}
+        with torch.random.fork_rng(devices=_rng_devices(self._device)):
+            torch.manual_seed(TRAIN_SEED)
+            for name in TASK_MODELS[task]:
+                model = copy.deepcopy(self._ensembles[task][name]).to(self._device)
+                model, best_val_acc, epochs = train_model(
+                    model, loaders, hyper, self._device, _epoch_logger(tracker, name))
+                trained[name] = model
+                per_model_preds[name] = predict_loader(model, loaders["test"], self._device)
+                model_report[name] = _model_report(
+                    classification_metrics(y_test, per_model_preds[name], task),
+                    best_val_acc, epochs,
+                )
+                logger.info("ml6 train(%s): %s done (%d epochs, val_acc=%.4f)",
+                            task, name, epochs, best_val_acc)
+        ens = classification_metrics(y_test, ensemble_predictions(per_model_preds), task)
+        return trained, model_report, ens
 
     # ── stats ──────────────────────────────────────────────────────────────
 
@@ -404,14 +450,6 @@ class Ml6MeatPoultryDiseaseClassificationPlugin(ModelPluginPort):
                             description="Avisos de entrada fuera de distribución"),
             ],
             metrics={"reported_test": REPORTED_TEST_METRICS},
-            runtime_stats=RuntimeStats(total_predictions=self._predict_count, avg_latency_ms=None),
+            runtime_stats=self._runtime_stats(),
         )
-        if mlflow_run_id:
-            try:
-                tracker = BaseMLflowTracker(mlflow_run_id)
-                base.metrics["mlflow"] = {
-                    "params": tracker.get_params(), "metrics": tracker.get_metrics(),
-                }
-            except Exception as exc:  # pylint: disable=broad-except
-                logger.warning("Could not fetch MLflow stats for run_id=%s: %s", mlflow_run_id, exc)
-        return base
+        return add_mlflow_run_to_stats(base, mlflow_run_id)

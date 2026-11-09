@@ -22,7 +22,7 @@ def build_train_kwargs(plugin: Any, request: Any) -> dict[str, Any]:
     return kwargs
 
 
-class TrainModelUseCase:  # pylint: disable=too-few-public-methods
+class TrainModelUseCase:
     """Generic train use case."""
 
     def __init__(self, plugin: ModelPluginPort) -> None:

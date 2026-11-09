@@ -41,7 +41,7 @@ a per-lot greedy fallback is retained only as a defensive guard for non-default 
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, NamedTuple
 
 import numpy as np
 import pandas as pd
@@ -56,6 +56,20 @@ from app.plugins.ml33_cereals_reuse_strategy_optimizer.constants import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+class LotArrays(NamedTuple):
+    """Per-lot inputs of a block (or of a whole dataframe), as aligned arrays."""
+
+    volumes: np.ndarray
+    moistures: np.ndarray
+    subproducts: np.ndarray
+
+    def block(self, start: int, end: int) -> "LotArrays":
+        """The lots ``[start, end)`` of these arrays."""
+        return LotArrays(
+            self.volumes[start:end], self.moistures[start:end], self.subproducts[start:end]
+        )
 
 
 def strategy_emissions(  # pylint: disable=too-many-return-statements
@@ -136,40 +150,25 @@ def _greedy_block(
     return assigned, sources
 
 
-def solve_block(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
-    volumes: np.ndarray,
-    moistures: np.ndarray,
-    subproducts: np.ndarray,
-    capacities: dict[str, float],
-    fallback_strategy: str,
-    logger_: logging.Logger | None = None,
-) -> tuple[list[str], list[str]]:
-    """Solve one capacity-reset block to optimality via MILP.
-
-    Args:
-        volumes: Lot volumes (tons) for the block.
-        moistures: Lot moisture percentages for the block.
-        subproducts: Residue categories for the block.
-        capacities: Remaining capacity per strategy at block start.
-        fallback_strategy: Strategy applied to any lot the MILP cannot place.
-        logger_: Optional logger for infeasibility diagnostics.
-
-    Returns:
-        tuple[list[str], list[str]]: Assigned strategies and per-lot sources.
-    """
-
-    n_lots = len(volumes)
+def _cost_vector(lots: LotArrays) -> np.ndarray:
+    """Cost vector c[i * n_strategies + s] = emissions of lot i under strategy s."""
+    n_lots = len(lots.volumes)
     n_strategies = len(STRATEGY_ORDER)
-    if n_lots == 0:
-        return [], []
-
-    # Cost vector c[i * n_strategies + s] = emissions of lot i under strategy s.
     cost = np.empty(n_lots * n_strategies, dtype=float)
     for i in range(n_lots):
         for s, strategy in enumerate(STRATEGY_ORDER):
             cost[i * n_strategies + s] = strategy_emissions(
-                float(volumes[i]), float(moistures[i]), strategy, str(subproducts[i])
+                float(lots.volumes[i]), float(lots.moistures[i]), strategy, str(lots.subproducts[i])
             )
+    return cost
+
+
+def _block_constraints(
+    volumes: np.ndarray, capacities: dict[str, float]
+) -> list[LinearConstraint]:
+    """Assignment (each lot exactly once) and per-strategy capacity constraints of a block."""
+    n_lots = len(volumes)
+    n_strategies = len(STRATEGY_ORDER)
 
     # Assignment constraints: each lot assigned exactly once.
     assign_matrix = np.zeros((n_lots, n_lots * n_strategies), dtype=float)
@@ -185,10 +184,36 @@ def solve_block(  # pylint: disable=too-many-arguments,too-many-positional-argum
             capacity_matrix[s, i * n_strategies + s] = float(volumes[i])
         capacity_ub[s] = float(capacities.get(strategy, 0.0))
     capacity_constraint = LinearConstraint(capacity_matrix, ub=capacity_ub)
+    return [assignment_constraint, capacity_constraint]
 
+
+def solve_block(
+    lots: LotArrays,
+    capacities: dict[str, float],
+    fallback_strategy: str,
+    logger_: logging.Logger | None = None,
+) -> tuple[list[str], list[str]]:
+    """Solve one capacity-reset block to optimality via MILP.
+
+    Args:
+        lots: Lot volumes (tons), moisture percentages and residue categories of the block.
+        capacities: Remaining capacity per strategy at block start.
+        fallback_strategy: Strategy applied to any lot the MILP cannot place.
+        logger_: Optional logger for infeasibility diagnostics.
+
+    Returns:
+        tuple[list[str], list[str]]: Assigned strategies and per-lot sources.
+    """
+
+    n_lots = len(lots.volumes)
+    n_strategies = len(STRATEGY_ORDER)
+    if n_lots == 0:
+        return [], []
+
+    cost = _cost_vector(lots)
     result = milp(
         c=cost,
-        constraints=[assignment_constraint, capacity_constraint],
+        constraints=_block_constraints(lots.volumes, capacities),
         integrality=np.ones_like(cost),
         bounds=Bounds(lb=0.0, ub=1.0),
         options={"disp": False},
@@ -200,7 +225,9 @@ def solve_block(  # pylint: disable=too-many-arguments,too-many-positional-argum
             "MILP block infeasible or unsolved (%s). Falling back to per-lot greedy.",
             getattr(result, "message", "no message"),
         )
-        return _greedy_block(volumes, moistures, subproducts, capacities, fallback_strategy)
+        return _greedy_block(
+            lots.volumes, lots.moistures, lots.subproducts, capacities, fallback_strategy
+        )
 
     solution = np.asarray(result.x, dtype=float).reshape(n_lots, n_strategies)
     chosen_indices = solution.argmax(axis=1)
@@ -255,7 +282,7 @@ def candidate_breakdown(
     return candidates
 
 
-class ExactEmissionsOptimizer:  # pylint: disable=too-few-public-methods
+class ExactEmissionsOptimizer:
     """Deployed decision engine: exact per-block emissions minimization.
 
     Args:
@@ -278,8 +305,7 @@ class ExactEmissionsOptimizer:  # pylint: disable=too-few-public-methods
         self.logger = logger_ or logger
         self.capacity_fallback_count = 0
 
-    def infer_dataframe(  # pylint: disable=too-many-locals
-            self, dataframe: pd.DataFrame) -> pd.DataFrame:
+    def infer_dataframe(self, dataframe: pd.DataFrame) -> pd.DataFrame:
         """Assign strategies for a full dataframe, block by block.
 
         Args:
@@ -299,9 +325,11 @@ class ExactEmissionsOptimizer:  # pylint: disable=too-few-public-methods
         if missing:
             raise ValueError(f"Missing required columns for inference: {sorted(missing)}")
 
-        volumes = dataframe["generated_volume_tons"].astype(float).to_numpy()
-        moistures = dataframe["moisture_pct"].astype(float).to_numpy()
-        subproducts = dataframe["subproduct_type"].astype(str).to_numpy()
+        lots = LotArrays(
+            dataframe["generated_volume_tons"].astype(float).to_numpy(),
+            dataframe["moisture_pct"].astype(float).to_numpy(),
+            dataframe["subproduct_type"].astype(str).to_numpy(),
+        )
 
         assigned: list[str] = []
         sources: list[str] = []
@@ -309,9 +337,7 @@ class ExactEmissionsOptimizer:  # pylint: disable=too-few-public-methods
         for start in range(0, n_rows, self.lots_per_day):
             end = min(start + self.lots_per_day, n_rows)
             block_assigned, block_sources = solve_block(
-                volumes=volumes[start:end],
-                moistures=moistures[start:end],
-                subproducts=subproducts[start:end],
+                lots=lots.block(start, end),
                 capacities=self.capacities,
                 fallback_strategy=self.fallback_strategy,
                 logger_=self.logger,
@@ -331,13 +357,15 @@ class ExactEmissionsOptimizer:  # pylint: disable=too-few-public-methods
 
         estimated_emissions = [
             strategy_emissions(
-                float(volumes[i]), float(moistures[i]), assigned[i], str(subproducts[i])
+                float(lots.volumes[i]), float(lots.moistures[i]), assigned[i],
+                str(lots.subproducts[i]),
             )
             for i in range(n_rows)
         ]
         candidates = [
             candidate_breakdown(
-                float(volumes[i]), float(moistures[i]), str(subproducts[i]), self.capacities
+                float(lots.volumes[i]), float(lots.moistures[i]), str(lots.subproducts[i]),
+                self.capacities,
             )
             for i in range(n_rows)
         ]

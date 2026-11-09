@@ -200,6 +200,25 @@ def build_clips(data: dict, image_ids: set[int], clip_length: int) -> list[dict]
     return clips
 
 
+def _read_roi(img_path: str, bbox) -> np.ndarray | None:
+    """RGB crop of ``bbox`` ([x, y, w, h]) resized to CROP_SIZE; None if unreadable or empty."""
+    # pylint: disable=no-member  # cv2 is a C extension; pylint cannot see its members
+    img = cv2.imread(img_path)
+    if img is None:
+        return None
+    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    img_h, img_w = img.shape[:2]
+    x, y, w, h = (int(v) for v in bbox)
+    if w <= 0 or h <= 0:
+        return None
+    x, y = max(0, x), max(0, y)
+    x2, y2 = min(img_w, x + w), min(img_h, y + h)
+    if x2 <= x or y2 <= y:
+        return None
+    return cv2.resize(img[y:y2, x:x2], (CROP_SIZE, CROP_SIZE))
+    # pylint: enable=no-member
+
+
 class ClipClassificationDataset(Dataset):
     """Ported from utils/data_utils.py::BehaviorClassificationDataset with BUGFIX #4.
 
@@ -223,7 +242,7 @@ class ClipClassificationDataset(Dataset):
         """Return the number of windowed clips in this split."""
         return len(self.clips)
 
-    def __getitem__(self, idx: int) -> tuple[torch.Tensor, int]:  # pylint: disable=too-many-locals
+    def __getitem__(self, idx: int) -> tuple[torch.Tensor, int]:
         """Load, crop and stack one clip's frames into a ``[C, T, H, W]`` tensor + label."""
         clip_info = self.clips[idx]
         frames: list[np.ndarray] = []
@@ -231,20 +250,9 @@ class ClipClassificationDataset(Dataset):
             img_path = os.path.join(
                 self.raw_frames_dir, clip_info["clip_name"], detection["image_file"]
             )
-            img = cv2.imread(img_path)  # pylint: disable=no-member
-            if img is None:
-                continue
-            img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)  # pylint: disable=no-member
-            img_h, img_w = img.shape[:2]
-            x, y, w, h = (int(v) for v in detection["bbox"])
-            if w <= 0 or h <= 0:
-                continue
-            x, y = max(0, x), max(0, y)
-            x2, y2 = min(img_w, x + w), min(img_h, y + h)
-            if x2 <= x or y2 <= y:
-                continue
-            roi = cv2.resize(img[y:y2, x:x2], (CROP_SIZE, CROP_SIZE))  # pylint: disable=no-member
-            frames.append(roi)
+            roi = _read_roi(img_path, detection["bbox"])
+            if roi is not None:
+                frames.append(roi)
 
         if len(frames) < self.clip_length:
             while len(frames) < self.clip_length:
@@ -270,13 +278,148 @@ class ClipClassificationDataset(Dataset):
         return frames_t, label
 
 
-# pylint: disable-next=too-many-locals,too-many-arguments,too-many-positional-arguments,too-many-statements
+def _balanced_sampler(train_clips: list[dict]) -> WeightedRandomSampler:
+    """Sampler that draws every behaviour class with the same expected frequency."""
+    behavior_counts = Counter(c["behavior"] for c in train_clips)
+    total = len(train_clips)
+    class_weight = {b: total / (len(behavior_counts) * n) for b, n in behavior_counts.items()}
+    sample_weights = [class_weight[c["behavior"]] for c in train_clips]
+    return WeightedRandomSampler(
+        sample_weights, num_samples=len(sample_weights), replacement=True
+    )
+
+
+def _build_loaders(
+    clips: tuple[list[dict], list[dict]], raw_frames_dir: str, clip_length: int, batch_size: int,
+) -> tuple[DataLoader, DataLoader]:
+    """Train loader (class-balanced WeightedRandomSampler) and sequential val loader."""
+    train_clips, val_clips = clips
+    train_ds = ClipClassificationDataset(train_clips, raw_frames_dir, clip_length, is_train=True)
+    val_ds = ClipClassificationDataset(val_clips, raw_frames_dir, clip_length, is_train=False)
+
+    train_batch_size = max(1, min(batch_size, len(train_ds)))
+    val_batch_size = max(1, min(batch_size, len(val_ds)))
+    train_loader = DataLoader(
+        train_ds, batch_size=train_batch_size, sampler=_balanced_sampler(train_clips),
+        num_workers=0,
+    )
+    val_loader = DataLoader(val_ds, batch_size=val_batch_size, shuffle=False, num_workers=0)
+    return train_loader, val_loader
+
+
+def _warmup_cosine(warmup_steps: int, total_steps: int) -> Callable[[int], float]:
+    """LR multiplier: linear warmup over ``warmup_steps``, then cosine decay to 0."""
+
+    def lr_lambda(step: int) -> float:
+        if step < warmup_steps:
+            return step / max(warmup_steps, 1)
+        progress = (step - warmup_steps) / max(total_steps - warmup_steps, 1)
+        # The delivered train_classifier.py builds a tensor with 3.14159; a float with math.pi
+        # is what LambdaLR expects (its own grid_search.py uses np.pi). Relative LR change ≤ 1e-6.
+        return 0.5 * (1.0 + math.cos(math.pi * progress))
+
+    return lr_lambda
+
+
+def _train_epoch(model, train_loader, criterion, opt: tuple, device) -> tuple[float, int, int]:
+    """One training pass; ``opt`` is (optimizer, scheduler). Returns (loss sum, correct, seen)."""
+    optimizer, scheduler = opt
+    model.train()
+    tr_loss, tr_correct, tr_total = 0.0, 0, 0
+    for frames, labels in train_loader:
+        frames = frames.to(device)
+        labels = torch.as_tensor(labels).to(device)
+
+        optimizer.zero_grad()
+        outputs = model(batched_slowfast_pathways(frames))
+        loss = criterion(outputs, labels)
+        loss.backward()
+        optimizer.step()
+        # BUGFIX #1: scheduler.step() once per BATCH — matches lr_lambda's
+        # total_steps = len(train_loader) * epochs. Calling it once per epoch (the
+        # original bug) left the LR stuck in the warmup ramp for the whole run.
+        scheduler.step()
+
+        tr_loss += loss.item()
+        tr_correct += (outputs.argmax(1) == labels).sum().item()
+        tr_total += labels.size(0)
+    return tr_loss, tr_correct, tr_total
+
+
+def _evaluate(model, val_loader, criterion, device) -> tuple[float, int, int]:
+    """One validation pass. Returns (loss sum, correct, seen)."""
+    model.eval()
+    val_loss, val_correct, val_total = 0.0, 0, 0
+    with torch.no_grad():
+        for frames, labels in val_loader:
+            frames = frames.to(device)
+            labels = torch.as_tensor(labels).to(device)
+            outputs = model(batched_slowfast_pathways(frames))
+            loss = criterion(outputs, labels)
+            val_loss += loss.item()
+            val_correct += (outputs.argmax(1) == labels).sum().item()
+            val_total += labels.size(0)
+    return val_loss, val_correct, val_total
+
+
+def _run_epoch(model, loaders: tuple, criterion, opt: tuple, device) -> dict:
+    """Train one epoch, validate, and return that epoch's metrics (same keys as MLflow's)."""
+    train_loader, val_loader = loaders
+    tr_loss, tr_correct, tr_total = _train_epoch(model, train_loader, criterion, opt, device)
+    val_loss, val_correct, val_total = _evaluate(model, val_loader, criterion, device)
+    return {
+        "train_loss": tr_loss / max(len(train_loader), 1),
+        "train_accuracy": 100.0 * tr_correct / max(tr_total, 1),
+        "val_loss": val_loss / max(len(val_loader), 1),
+        "val_accuracy": 100.0 * val_correct / max(val_total, 1),
+        "lr": float(opt[1].get_last_lr()[0]),
+    }
+
+
+def _fit(model, loaders: tuple, device, *, epochs: int, mlflow_log_metrics) -> tuple[float, list]:
+    """AdamW + FocalLoss + warmup/cosine loop keeping the best-val-accuracy weights.
+
+    Loads those weights into ``model`` and returns (best_val_acc, per-epoch history).
+    """
+    criterion = FocalLoss(alpha=FOCAL_LOSS_ALPHA, gamma=FOCAL_LOSS_GAMMA)
+    optimizer = optim.AdamW(model.parameters(), lr=TRAIN_LR, weight_decay=TRAIN_WEIGHT_DECAY)
+    n_batches = len(loaders[0])
+    scheduler = optim.lr_scheduler.LambdaLR(
+        optimizer, _warmup_cosine(n_batches * TRAIN_WARMUP_EPOCHS, n_batches * epochs),
+    )
+
+    best_val_acc = 0.0
+    best_state = None
+    history: list[dict] = []
+
+    for epoch in range(1, epochs + 1):
+        epoch_metrics = _run_epoch(model, loaders, criterion, (optimizer, scheduler), device)
+        history.append({"epoch": epoch, **epoch_metrics})
+        logger.info(
+            "Epoch %d/%d — train_acc=%.2f val_acc=%.2f lr=%.6f",
+            epoch, epochs, epoch_metrics["train_accuracy"], epoch_metrics["val_accuracy"],
+            epoch_metrics["lr"],
+        )
+        if mlflow_log_metrics is not None:
+            mlflow_log_metrics(epoch_metrics, epoch)
+
+        if epoch_metrics["val_accuracy"] >= best_val_acc:
+            best_val_acc = epoch_metrics["val_accuracy"]
+            best_state = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
+
+    if best_state is not None:
+        model.load_state_dict(best_state)
+    return best_val_acc, history
+
+
+# pylint: disable-next=too-many-arguments  # public entry point, keyword-only options
 def train_classifier(
     train_clips: list[dict],
     val_clips: list[dict],
     raw_frames_dir: str,
     clip_length: int,
     device: str,
+    *,
     epochs: int = TRAIN_EPOCHS,
     batch_size: int = TRAIN_BATCH_SIZE,
     mlflow_log_metrics: Callable[[dict, int], None] | None = None,
@@ -298,100 +441,12 @@ def train_classifier(
         )
     torch.manual_seed(TRAIN_SEED)
 
-    train_ds = ClipClassificationDataset(train_clips, raw_frames_dir, clip_length, is_train=True)
-    val_ds = ClipClassificationDataset(val_clips, raw_frames_dir, clip_length, is_train=False)
-
-    behavior_counts = Counter(c["behavior"] for c in train_clips)
-    total = len(train_clips)
-    class_weight = {b: total / (len(behavior_counts) * n) for b, n in behavior_counts.items()}
-    sample_weights = [class_weight[c["behavior"]] for c in train_clips]
-
-    train_batch_size = max(1, min(batch_size, len(train_ds)))
-    val_batch_size = max(1, min(batch_size, len(val_ds)))
-    sampler = WeightedRandomSampler(
-        sample_weights, num_samples=len(sample_weights), replacement=True
-    )
-    train_loader = DataLoader(train_ds, batch_size=train_batch_size, sampler=sampler, num_workers=0)
-    val_loader = DataLoader(val_ds, batch_size=val_batch_size, shuffle=False, num_workers=0)
+    loaders = _build_loaders((train_clips, val_clips), raw_frames_dir, clip_length, batch_size)
 
     model = build_classifier_module(num_classes=len(TRAINING_BEHAVIOR_TO_IDX), device=device)
-    criterion = FocalLoss(alpha=FOCAL_LOSS_ALPHA, gamma=FOCAL_LOSS_GAMMA)
-    optimizer = optim.AdamW(model.parameters(), lr=TRAIN_LR, weight_decay=TRAIN_WEIGHT_DECAY)
-
-    warmup_steps = len(train_loader) * TRAIN_WARMUP_EPOCHS
-    total_steps = len(train_loader) * epochs
-
-    def lr_lambda(step: int) -> float:
-        if step < warmup_steps:
-            return step / max(warmup_steps, 1)
-        progress = (step - warmup_steps) / max(total_steps - warmup_steps, 1)
-        # The delivered train_classifier.py builds a tensor with 3.14159; a float with math.pi
-        # is what LambdaLR expects (its own grid_search.py uses np.pi). Relative LR change ≤ 1e-6.
-        return 0.5 * (1.0 + math.cos(math.pi * progress))
-
-    scheduler = optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
-
-    best_val_acc = 0.0
-    best_state = None
-    history: list[dict] = []
-
-    for epoch in range(1, epochs + 1):
-        model.train()
-        tr_loss, tr_correct, tr_total = 0.0, 0, 0
-        for frames, labels in train_loader:
-            frames = frames.to(device)
-            labels = torch.as_tensor(labels).to(device)
-
-            optimizer.zero_grad()
-            outputs = model(batched_slowfast_pathways(frames))
-            loss = criterion(outputs, labels)
-            loss.backward()
-            optimizer.step()
-            # BUGFIX #1: scheduler.step() once per BATCH — matches lr_lambda's
-            # total_steps = len(train_loader) * epochs. Calling it once per epoch (the
-            # original bug) left the LR stuck in the warmup ramp for the whole run.
-            scheduler.step()
-
-            tr_loss += loss.item()
-            tr_correct += (outputs.argmax(1) == labels).sum().item()
-            tr_total += labels.size(0)
-
-        model.eval()
-        val_loss, val_correct, val_total = 0.0, 0, 0
-        with torch.no_grad():
-            for frames, labels in val_loader:
-                frames = frames.to(device)
-                labels = torch.as_tensor(labels).to(device)
-                outputs = model(batched_slowfast_pathways(frames))
-                loss = criterion(outputs, labels)
-                val_loss += loss.item()
-                val_correct += (outputs.argmax(1) == labels).sum().item()
-                val_total += labels.size(0)
-
-        train_acc = 100.0 * tr_correct / max(tr_total, 1)
-        val_acc = 100.0 * val_correct / max(val_total, 1)
-        lr_now = float(scheduler.get_last_lr()[0])
-        epoch_metrics = {
-            "train_loss": tr_loss / max(len(train_loader), 1),
-            "train_accuracy": train_acc,
-            "val_loss": val_loss / max(len(val_loader), 1),
-            "val_accuracy": val_acc,
-            "lr": lr_now,
-        }
-        history.append({"epoch": epoch, **epoch_metrics})
-        logger.info(
-            "Epoch %d/%d — train_acc=%.2f val_acc=%.2f lr=%.6f",
-            epoch, epochs, train_acc, val_acc, lr_now,
-        )
-        if mlflow_log_metrics is not None:
-            mlflow_log_metrics(epoch_metrics, epoch)
-
-        if val_acc >= best_val_acc:
-            best_val_acc = val_acc
-            best_state = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
-
-    if best_state is not None:
-        model.load_state_dict(best_state)
+    best_val_acc, history = _fit(
+        model, loaders, device, epochs=epochs, mlflow_log_metrics=mlflow_log_metrics
+    )
 
     metrics = {
         "train_clips": len(train_clips),

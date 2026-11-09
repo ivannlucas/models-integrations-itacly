@@ -11,17 +11,15 @@ Accepted for production: GRU test MAPE 9.93% vs. the 20% KPI threshold defined i
 from __future__ import annotations
 
 import logging
-import shutil
 import tempfile
-from datetime import datetime, timezone
 from pathlib import Path
 
 import pandas as pd
 
-from app.application.dto.stats_dto import InputField, OutputField, RuntimeStats, StatsResponse
+from app.application.dto.stats_dto import InputField, OutputField, StatsResponse
 from app.domain.ports.model_plugin_port import ModelPluginPort
-from app.domain.services.exceptions import ModelNotLoadedError
-from app.domain.services.mlflow_tracker import BaseMLflowTracker
+from app.domain.services.mlflow_artifacts import mlflow_run_summary, removing_dir
+from app.domain.services.plugin_runtime import PluginRuntimeMixin
 from app.infrastructure.artifact_store import local_file_path
 from app.infrastructure.base_model_publisher import persist_retrained_bundle
 from app.plugins.ml18_meat_spatial_price_forecast import inference, model_loader, training
@@ -52,16 +50,14 @@ from app.plugins.ml18_meat_spatial_price_forecast.train_dto import TrainResponse
 logger = logging.getLogger(__name__)
 
 
-class Ml18MeatSpatialPriceForecastPlugin(ModelPluginPort):
+class Ml18MeatSpatialPriceForecastPlugin(PluginRuntimeMixin, ModelPluginPort):
     """GRU plugin for the spatial meat price forecast (t+1 month)."""
 
     BASE_ARTIFACT_FOLDER = ARTIFACT_FOLDER_NAME   # every /train publishes the new base model
 
     def __init__(self) -> None:
-        """Initialize an unloaded plugin with empty runtime counters."""
+        """Initialize an unloaded plugin (runtime counters start at the mixin defaults)."""
         self._bundle: dict | None = None
-        self._predict_count: int = 0
-        self._last_predict_at: str | None = None
 
     # ── lifecycle ─────────────────────────────────────────────────────────────
 
@@ -74,24 +70,16 @@ class Ml18MeatSpatialPriceForecastPlugin(ModelPluginPort):
         """Return True once the artifact bundle is loaded."""
         return self._bundle is not None
 
-    def _require_loaded(self) -> None:
-        if not self.is_loaded():
-            raise ModelNotLoadedError("El modelo no está cargado.")
-
     def _resolve_bundle(self, mlflow_run_id: str) -> tuple[dict, str | None]:
         """Return (bundle, temp_dir) as locals — never stored on self (shared across requests).
 
         A run without a loadable model raises UserModelUnavailableError (→ 422): never fall
-        back silently to the base model. The caller must rmtree temp_dir in a finally block.
+        back silently to the base model. The caller must remove temp_dir (``removing_dir``).
         """
         if mlflow_run_id:
             return download_user_model_from_mlflow(mlflow_run_id)
         self._require_loaded()
         return self._bundle, None
-
-    def _record_prediction(self) -> None:
-        self._predict_count += 1
-        self._last_predict_at = datetime.now(tz=timezone.utc).isoformat()
 
     # ── predict_inline ────────────────────────────────────────────────────────
 
@@ -106,12 +94,9 @@ class Ml18MeatSpatialPriceForecastPlugin(ModelPluginPort):
         """Predict next-month PRECIO MEDIO KG for every (CCAA, Producto) group in the panel."""
         _ = model_key, threshold
         bundle, user_tmp = self._resolve_bundle(mlflow_run_id)
-        try:
+        with removing_dir(user_tmp):
             predictions = inference.run_inference(bundle, features["rows"])
-        finally:
-            if user_tmp:
-                shutil.rmtree(user_tmp, ignore_errors=True)
-        self._record_prediction()
+        self._record()
         logger.info(
             "predict_inline done — %d predicciones, count=%d",
             len(predictions), self._predict_count,
@@ -125,14 +110,11 @@ class Ml18MeatSpatialPriceForecastPlugin(ModelPluginPort):
     def predict_batch(self, *, data_path: str, mlflow_run_id: str = "") -> PredictBatchResponse:
         """Predict next-month PRECIO MEDIO KG for every (CCAA, Producto) group in the CSV panel."""
         bundle, user_tmp = self._resolve_bundle(mlflow_run_id)
-        try:
+        with removing_dir(user_tmp):
             with local_file_path(data_path) as local_path:
                 df = pd.read_csv(local_path, sep=";")
             predictions = inference.run_inference(bundle, df.to_dict(orient="records"))
-        finally:
-            if user_tmp:
-                shutil.rmtree(user_tmp, ignore_errors=True)
-        self._record_prediction()
+        self._record()
         logger.info(
             "predict_batch done — %d predicciones, count=%d", len(predictions), self._predict_count,
         )
@@ -160,7 +142,7 @@ class Ml18MeatSpatialPriceForecastPlugin(ModelPluginPort):
         params = {"model": "GRU", "lookback": LOOKBACK, "epochs_max": TRAIN_EPOCHS,
                   "batch_size": TRAIN_BATCH_SIZE, "train_ratio": TRAIN_RATIO,
                   "val_ratio": VAL_RATIO, "seed": TRAIN_SEED}
-        try:
+        with removing_dir(artifact_tmp):
             training.save_training_artifacts(Path(artifact_tmp), result)
             persisted = persist_retrained_bundle(
                 artifact_tmp, artifact_folder=ARTIFACT_FOLDER_NAME, data_path=data_path,
@@ -169,8 +151,6 @@ class Ml18MeatSpatialPriceForecastPlugin(ModelPluginPort):
                     artifact_tmp, mlflow_run_id, metrics=result.metrics, params=params,
                     history=history),
             )
-        finally:
-            shutil.rmtree(artifact_tmp, ignore_errors=True)
 
         return TrainResponse(
             detail="GRU reentrenada desde cero con el procedimiento del equipo de IA",
@@ -186,8 +166,7 @@ class Ml18MeatSpatialPriceForecastPlugin(ModelPluginPort):
     def _metrics_with_run(mlflow_run_id: str) -> dict:
         metrics = dict(METRICS_REPORTED)
         if mlflow_run_id:
-            tracker = BaseMLflowTracker(mlflow_run_id)
-            metrics["mlflow"] = {"params": tracker.get_params(), "metrics": tracker.get_metrics()}
+            metrics["mlflow"] = mlflow_run_summary(mlflow_run_id)
         return metrics
 
     def stats(self, mlflow_run_id: str = "") -> StatsResponse:
@@ -229,8 +208,5 @@ class Ml18MeatSpatialPriceForecastPlugin(ModelPluginPort):
             inputs=inputs,
             outputs=outputs,
             metrics=self._metrics_with_run(mlflow_run_id),
-            runtime_stats=RuntimeStats(
-                total_predictions=self._predict_count,
-                avg_latency_ms=None,
-            ),
+            runtime_stats=self._runtime_stats(),
         )

@@ -1,4 +1,5 @@
 """ml19: /train runs the official pipeline and publishes the new base (spec 2026-10-14)."""
+# pylint: disable=protected-access  # the tests set the plugin's bundle directly
 import ast
 import json
 import pickle
@@ -9,6 +10,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from app.domain.services import mlflow_artifacts
 from app.plugins.ml19_cereals_cost_forecast import mlflow_utils, model_loader, training
 from app.plugins.ml19_cereals_cost_forecast import plugin as plugin_mod
 from app.plugins.ml19_cereals_cost_forecast._vendor import training_core as core
@@ -85,7 +87,7 @@ def test_promoted_bundle_loads_and_predicts_the_latest_row(csv, isolated_base_st
     """A promoted bundle loads from v1 and predicts the latest row."""
     plugin_mod.Ml19CerealsCostForecastPlugin().train(data_path=csv, mlflow_run_id="")
     fresh = plugin_mod.Ml19CerealsCostForecastPlugin()
-    fresh._bundle = model_loader.load_bundle_from_dir(  # pylint: disable=protected-access
+    fresh._bundle = model_loader.load_bundle_from_dir(
         isolated_base_store / ARTIFACT_FOLDER_NAME / "versions" / "v1")
     out = fresh.predict_inline(features={})
     assert out.date_label == pd.to_datetime(_dataset()["date"]).max().strftime("%Y-%m")
@@ -134,10 +136,10 @@ def test_predict_with_a_run_uses_that_runs_bundle(csv, monkeypatch, isolated_bas
     v1 = isolated_base_store / ARTIFACT_FOLDER_NAME / "versions" / "v1"
     tracker = MagicMock()
     tracker.download_artifacts.side_effect = lambda dst, artifact_path: str(v1)
-    monkeypatch.setattr(mlflow_utils, "BaseMLflowTracker", MagicMock(return_value=tracker))
+    monkeypatch.setattr(mlflow_artifacts, "BaseMLflowTracker", MagicMock(return_value=tracker))
     plugin = plugin_mod.Ml19CerealsCostForecastPlugin()
     # never used with a run
-    plugin._bundle = {"marker": "base"}  # pylint: disable=protected-access
+    plugin._bundle = {"marker": "base"}
     out = plugin.predict_inline(features={}, mlflow_run_id="run-x")
     assert out.date_label == pd.to_datetime(_dataset()["date"]).max().strftime("%Y-%m")
 

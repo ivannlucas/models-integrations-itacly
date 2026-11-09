@@ -219,7 +219,71 @@ def regression_metrics(y_true: np.ndarray, y_pred: np.ndarray, prefix: str) -> d
     }
 
 
-def train_gru(  # pylint: disable=too-many-locals
+def _fit_callbacks(tf, on_epoch: Callable[[int, dict], None] | None) -> list:
+    """EarlyStopping on val_loss (+ a per-epoch logs hook when on_epoch is given)."""
+    callbacks = [tf.keras.callbacks.EarlyStopping(
+        monitor="val_loss", patience=EARLY_STOPPING_PATIENCE, restore_best_weights=True,
+    )]
+    if on_epoch is not None:
+        callbacks.append(tf.keras.callbacks.LambdaCallback(
+            on_epoch_end=lambda epoch, logs: on_epoch(
+                epoch, {k: float(v) for k, v in (logs or {}).items()}
+            ),
+        ))
+    return callbacks
+
+
+def _scaled_splits(csv_path: str) -> tuple[StandardScaler, StandardScaler, tuple]:
+    """Features, train-only scalers and the temporal split (train/val/test x, y)."""
+    df = engineer_features(load_training_frame(csv_path))
+    train_end, val_end = temporal_cutoffs(df)
+    x_scaler = fit_scaler_train_only(df, list(FEATURE_COLUMNS), train_end)
+    df[list(FEATURE_COLUMNS)] = x_scaler.transform(df[list(FEATURE_COLUMNS)])
+    y_scaler = fit_scaler_train_only(df, [TARGET_COL], train_end)
+    df[TARGET_SCALED] = y_scaler.transform(df[[TARGET_COL]])
+    if not np.isfinite(df[TARGET_SCALED].to_numpy(dtype=np.float64)).all():
+        raise ValueError("El target escalado contiene NaN/Inf: revisa el precio del CSV.")
+
+    x, y, dates = build_training_sequences(df)
+    return x_scaler, y_scaler, split_by_date(x, y, dates, train_end, val_end)
+
+
+def _split_metrics(model, y_scaler: StandardScaler, splits: tuple) -> dict:
+    """regression_metrics in price units for each (prefix, x, y) split."""
+    metrics: dict = {}
+    for prefix, xs, ys in splits:
+        pred = y_scaler.inverse_transform(model.predict(xs, verbose=0).reshape(-1, 1)).ravel()
+        real = y_scaler.inverse_transform(ys.reshape(-1, 1)).ravel()
+        metrics.update(regression_metrics(real, pred, prefix))
+    return metrics
+
+
+def _fit_and_evaluate(tf, parts: tuple, y_scaler: StandardScaler, *, epochs: int,
+                      on_epoch: Callable[[int, dict], None] | None) -> tuple:
+    """Fit the GRU with early stopping and return (model, per-split metrics + run counters)."""
+    x_train, y_train, x_val, y_val, x_test, y_test = parts
+    logger.info(
+        "ml18 train: X_train=%s X_val=%s X_test=%s", x_train.shape, x_val.shape, x_test.shape
+    )
+
+    model = build_gru_model((x_train.shape[1], x_train.shape[2]))
+    history = model.fit(
+        x_train, y_train, validation_data=(x_val, y_val), epochs=epochs,
+        batch_size=TRAIN_BATCH_SIZE, verbose=0, callbacks=_fit_callbacks(tf, on_epoch),
+    )
+
+    metrics = _split_metrics(model, y_scaler, (
+        ("train", x_train, y_train), ("val", x_val, y_val), ("test", x_test, y_test)
+    ))
+    val_losses = history.history["val_loss"]
+    metrics.update({
+        "n_train": int(len(x_train)), "n_val": int(len(x_val)), "n_test": int(len(x_test)),
+        "epochs_run": len(val_losses), "best_epoch": int(np.argmin(val_losses)) + 1,
+    })
+    return model, metrics
+
+
+def train_gru(
     csv_path: str,
     *,
     epochs: int = TRAIN_EPOCHS,
@@ -232,49 +296,9 @@ def train_gru(  # pylint: disable=too-many-locals
     # no-member below: tf.keras is a lazy loader pylint cannot see.
     tf.keras.utils.set_random_seed(TRAIN_SEED)  # pylint: disable=no-member
 
-    df = engineer_features(load_training_frame(csv_path))
-    train_end, val_end = temporal_cutoffs(df)
-    x_scaler = fit_scaler_train_only(df, list(FEATURE_COLUMNS), train_end)
-    df[list(FEATURE_COLUMNS)] = x_scaler.transform(df[list(FEATURE_COLUMNS)])
-    y_scaler = fit_scaler_train_only(df, [TARGET_COL], train_end)
-    df[TARGET_SCALED] = y_scaler.transform(df[[TARGET_COL]])
-    if not np.isfinite(df[TARGET_SCALED].to_numpy(dtype=np.float64)).all():
-        raise ValueError("El target escalado contiene NaN/Inf: revisa el precio del CSV.")
-
-    x, y, dates = build_training_sequences(df)
-    x_train, y_train, x_val, y_val, x_test, y_test = split_by_date(x, y, dates, train_end, val_end)
-    logger.info(
-        "ml18 train: X_train=%s X_val=%s X_test=%s", x_train.shape, x_val.shape, x_test.shape
-    )
-
-    model = build_gru_model((x_train.shape[1], x_train.shape[2]))
-    callbacks = [tf.keras.callbacks.EarlyStopping(  # pylint: disable=no-member
-        monitor="val_loss", patience=EARLY_STOPPING_PATIENCE, restore_best_weights=True,
-    )]
-    if on_epoch is not None:
-        callbacks.append(tf.keras.callbacks.LambdaCallback(  # pylint: disable=no-member
-            on_epoch_end=lambda epoch, logs: on_epoch(
-                epoch, {k: float(v) for k, v in (logs or {}).items()}
-            ),
-        ))
-    history = model.fit(
-        x_train, y_train, validation_data=(x_val, y_val), epochs=epochs,
-        batch_size=TRAIN_BATCH_SIZE, verbose=0, callbacks=callbacks,
-    )
-
-    metrics: dict = {}
-    for prefix, xs, ys in (
-        ("train", x_train, y_train), ("val", x_val, y_val), ("test", x_test, y_test)
-    ):
-        pred = y_scaler.inverse_transform(model.predict(xs, verbose=0).reshape(-1, 1)).ravel()
-        real = y_scaler.inverse_transform(ys.reshape(-1, 1)).ravel()
-        metrics.update(regression_metrics(real, pred, prefix))
-    val_losses = history.history["val_loss"]
-    metrics.update({
-        "n_train": int(len(x_train)), "n_val": int(len(x_val)), "n_test": int(len(x_test)),
-        "epochs_run": len(val_losses), "best_epoch": int(np.argmin(val_losses)) + 1,
-        "training_time_s": round(time.time() - start, 1),
-    })
+    x_scaler, y_scaler, parts = _scaled_splits(csv_path)
+    model, metrics = _fit_and_evaluate(tf, parts, y_scaler, epochs=epochs, on_epoch=on_epoch)
+    metrics["training_time_s"] = round(time.time() - start, 1)
     logger.info("ml18 training done: %s", metrics)
     return TrainingResult(model, x_scaler, y_scaler, metrics)
 

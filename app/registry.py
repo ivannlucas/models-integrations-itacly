@@ -91,8 +91,6 @@ from app.plugins.ml5_meat_cow_behaviour.predict_dto import (
     PredictResponse as Ml5Cow_Response,
 )
 from app.plugins.ml5_meat_cow_behaviour.train_dto import TrainRequest as Ml5Cow_TrainReq
-# Same shared TrainResponse DTO as ml10, aliased per model for the registry entry.
-from app.application.dto.train_dto import TrainResponse as Ml5Cow_TrainResp  # pylint: disable=reimported
 
 from app.plugins.ml7_cereals_grain_pest_detection.plugin import Ml7CerealsGrainPestDetectionPlugin
 from app.plugins.ml7_cereals_grain_pest_detection.predict_dto import (
@@ -483,7 +481,7 @@ REGISTRY: list[ModelEntry] = [
         predict_response_type=Ml5Cow_Response,
         extra_predict_exceptions=(InvalidVideoError, InvalidImageError, InsufficientFramesError),
         train_request_type=Ml5Cow_TrainReq,
-        train_response_type=Ml5Cow_TrainResp,
+        train_response_type=Ml10Dairy_TrainResp,  # same shared TrainResponse DTO as ml10
     ),
     ModelEntry(
         model_id="ml1-wine-pest-disease-detection",

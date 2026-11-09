@@ -9,22 +9,28 @@ from __future__ import annotations
 
 import logging
 import os
-import shutil
+import random
 import tempfile
-from datetime import datetime, timezone
 from pathlib import Path
+from typing import NamedTuple
 
 import torch
+from PIL import Image
+from torch import nn
+from torch.utils.data import DataLoader, Dataset
 
-from app.application.dto.stats_dto import InputField, OutputField, RuntimeStats, StatsResponse
+from app.application.dto.stats_dto import InputField, OutputField, StatsResponse
 from app.domain.ports.model_plugin_port import ModelPluginPort
-from app.domain.services.exceptions import (
-    InvalidImageError,
-    ModelNotLoadedError,
-    ModelPersistenceError,
+from app.domain.services.exceptions import InvalidImageError, ModelNotLoadedError
+from app.domain.services.mlflow_artifacts import (
+    mlflow_run_summary,
+    removing_dir,
+    require_train_tracker,
+    upload_model_to_mlflow,
 )
-from app.domain.services.mlflow_tracker import BaseMLflowTracker
+from app.domain.services.plugin_runtime import PluginRuntimeMixin
 from app.infrastructure.archive import safe_extract_zip
+from app.infrastructure.artifact_store import local_file_path
 from app.plugins.ml2_fungal_cnn_disease_detection.constants import (
     CLASS_NAMES,
     IMAGE_EXTENSIONS,
@@ -45,6 +51,7 @@ from app.plugins.ml2_fungal_cnn_disease_detection.mlflow_utils import (
     download_user_model_from_mlflow,
 )
 from app.plugins.ml2_fungal_cnn_disease_detection.model_loader import (
+    _safe_device,
     create_model,
     load_model_bundle,
 )
@@ -58,6 +65,7 @@ from app.plugins.ml2_fungal_cnn_disease_detection.predict_dto import (
     PredictInlineResponse,
 )
 from app.plugins.ml2_fungal_cnn_disease_detection.preprocessing import (
+    build_eval_transform,
     build_train_transform,
     image_base64_to_tensor,
     image_path_to_tensor_and_image,
@@ -66,15 +74,278 @@ from app.plugins.ml2_fungal_cnn_disease_detection.train_dto import TrainResponse
 
 logger = logging.getLogger(__name__)
 
+# Hyperparameters logged to the retrain's MLflow run (see constants.py for their origin).
+_TRAIN_PARAMS = {
+    "optimizer": "AdamW",
+    "lr": TRAIN_LR,
+    "weight_decay": TRAIN_WEIGHT_DECAY,
+    "batch_size": TRAIN_BATCH_SIZE,
+    "max_epochs": TRAIN_MAX_EPOCHS,
+    "patience": TRAIN_PATIENCE,
+    "scheduler": (
+        f"ReduceLROnPlateau(factor={TRAIN_SCHEDULER_FACTOR}, "
+        f"patience={TRAIN_SCHEDULER_PATIENCE})"
+    ),
+    "image_size": IMAGE_SIZE,
+    "loss": "CrossEntropyLoss",
+}
 
-class Ml2FungalCnnDiseaseDetectionPlugin(ModelPluginPort):
+
+class _LeafDataset(Dataset):
+    """(image path, class name) samples read as RGB PIL images and transformed."""
+
+    def __init__(self, items: list[tuple[str, str]], transform, class_to_idx: dict[str, int]):
+        self.items = items
+        self.transform = transform
+        self.class_to_idx = class_to_idx
+
+    def __len__(self) -> int:
+        return len(self.items)
+
+    def __getitem__(self, idx: int):
+        path, label = self.items[idx]
+        image = Image.open(path).convert("RGB")
+        return self.transform(image), self.class_to_idx[label]
+
+
+def _collect_class_samples(extract_dir: str) -> dict[str, list[str]]:
+    """Map each class subfolder of the extracted ZIP (sorted by name) to its sorted images."""
+    root = Path(extract_dir)
+    entries = [p for p in root.iterdir() if p.is_dir()]
+    data_root = entries[0] if len(entries) == 1 else root
+
+    class_dirs = sorted(
+        (p for p in data_root.iterdir() if p.is_dir()), key=lambda p: p.name
+    )
+    if len(class_dirs) < 2:
+        raise ValueError(
+            "El ZIP debe contener al menos 2 subcarpetas de clase "
+            "(p.ej. black_rot/, downy_mildew/, healthy/, powdery_mildew/, "
+            "trunk_disease/) con imágenes JPG/PNG/BMP dentro."
+        )
+
+    samples_by_class: dict[str, list[str]] = {}
+    for class_dir in class_dirs:
+        images = sorted(
+            str(p) for p in class_dir.iterdir()
+            if p.is_file() and p.suffix.lower() in IMAGE_EXTENSIONS
+        )
+        if not images:
+            raise ValueError(f"La clase '{class_dir.name}' no tiene ninguna imagen válida.")
+        samples_by_class[class_dir.name] = images
+    return samples_by_class
+
+
+def _split_samples(
+    samples_by_class: dict[str, list[str]],
+) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
+    """Fixed-seed stratified 80/20 split per class (see constants.TRAIN_VAL_SPLIT).
+
+    Every class contributes to both train and val whenever it has >=2 images.
+    """
+    rng = random.Random(TRAIN_SPLIT_SEED)
+    train_samples: list[tuple[str, str]] = []
+    val_samples: list[tuple[str, str]] = []
+    for cls, paths in samples_by_class.items():
+        shuffled = paths[:]
+        rng.shuffle(shuffled)
+        if len(shuffled) >= 2:
+            n_val = max(1, round(len(shuffled) * TRAIN_VAL_SPLIT))
+            n_val = min(n_val, len(shuffled) - 1)
+        else:
+            n_val = 0
+        val_samples += [(p, cls) for p in shuffled[:n_val]]
+        train_samples += [(p, cls) for p in shuffled[n_val:]]
+
+    if not val_samples:
+        raise ValueError(
+            "No hay suficientes imágenes para separar un conjunto de validación "
+            "(se necesitan >=2 imágenes en alguna clase)."
+        )
+    return train_samples, val_samples
+
+
+def _train_one_epoch(model, train_loader, criterion, optimizer, device) -> None:
+    """One optimisation pass over the training split."""
+    model.train()
+    for images, labels in train_loader:
+        images, labels = images.to(device), labels.to(device)
+        optimizer.zero_grad()
+        outputs = model(images)
+        loss = criterion(outputs, labels)
+        loss.backward()
+        optimizer.step()
+
+
+def _validation_loss(model, val_loader, criterion, device) -> float:
+    """Mean validation loss of one epoch."""
+    model.eval()
+    val_running_loss = 0.0
+    val_total = 0
+    with torch.no_grad():
+        for images, labels in val_loader:
+            images, labels = images.to(device), labels.to(device)
+            outputs = model(images)
+            loss = criterion(outputs, labels)
+            val_running_loss += loss.item() * images.size(0)
+            val_total += images.size(0)
+    return val_running_loss / max(val_total, 1)
+
+
+def _fit(model, loaders: tuple[DataLoader, DataLoader], device, tracker) -> tuple[dict, int]:
+    """AdamW + ReduceLROnPlateau training with early stopping on the validation loss.
+
+    Returns (best_state, epochs_run) — same loop as the delivered ``run_training``.
+    """
+    train_loader, val_loader = loaders
+    criterion = nn.CrossEntropyLoss()
+    optimizer = torch.optim.AdamW(
+        model.parameters(), lr=TRAIN_LR, weight_decay=TRAIN_WEIGHT_DECAY
+    )
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer,
+        mode="min",
+        factor=TRAIN_SCHEDULER_FACTOR,
+        patience=TRAIN_SCHEDULER_PATIENCE,
+    )
+
+    best_val_loss = float("inf")
+    best_state = model.state_dict()
+    epochs_no_improve = 0
+    epochs_run = 0
+
+    for epoch in range(TRAIN_MAX_EPOCHS):
+        _train_one_epoch(model, train_loader, criterion, optimizer, device)
+        val_loss = _validation_loss(model, val_loader, criterion, device)
+        scheduler.step(val_loss)
+        epochs_run = epoch + 1
+
+        if tracker.is_connected():
+            tracker.log_metrics({"val_loss": val_loss}, step=epoch)
+
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
+            best_state = {k: v.clone() for k, v in model.state_dict().items()}
+            epochs_no_improve = 0
+        else:
+            epochs_no_improve += 1
+
+        if epochs_no_improve >= TRAIN_PATIENCE:
+            logger.info("Early stopping en epoch %d (ml2 train)", epochs_run)
+            break
+    return best_state, epochs_run
+
+
+def _validation_scores(model, val_loader, device) -> dict[str, float]:
+    """Weighted accuracy/precision/recall/F1 of ``model`` on the validation split."""
+    # pylint: disable-next=import-outside-toplevel  # sklearn is loaded lazily in plugins
+    from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score
+
+    all_preds: list[int] = []
+    all_labels: list[int] = []
+    with torch.no_grad():
+        for images, labels in val_loader:
+            images = images.to(device)
+            outputs = model(images)
+            preds = outputs.argmax(dim=1).cpu().tolist()
+            all_preds.extend(preds)
+            all_labels.extend(labels.tolist())
+
+    return {
+        "accuracy": float(accuracy_score(all_labels, all_preds)),
+        "precision": float(
+            precision_score(all_labels, all_preds, average="weighted", zero_division=0)
+        ),
+        "recall": float(
+            recall_score(all_labels, all_preds, average="weighted", zero_division=0)
+        ),
+        "f1": float(f1_score(all_labels, all_preds, average="weighted", zero_division=0)),
+    }
+
+
+class _TrainOutcome(NamedTuple):
+    """What train() logs, uploads and reports after fitting a LeafCNN."""
+
+    classes: list[str]
+    n_train: int
+    n_val: int
+    best_state: dict
+    epochs_run: int
+    scores: dict[str, float]
+
+
+def _train_on_folders(extract_dir: str, tracker) -> _TrainOutcome:
+    """Split the extracted per-class folders, fit a fresh LeafCNN and score it on val."""
+    samples_by_class = _collect_class_samples(extract_dir)
+    classes = list(samples_by_class)
+    class_to_idx = {cls: i for i, cls in enumerate(classes)}
+    train_samples, val_samples = _split_samples(samples_by_class)
+
+    train_tfm = build_train_transform(IMAGE_SIZE)
+    eval_tfm = build_eval_transform(IMAGE_SIZE)
+
+    device = _safe_device()
+    train_loader = DataLoader(
+        _LeafDataset(train_samples, train_tfm, class_to_idx),
+        batch_size=TRAIN_BATCH_SIZE, shuffle=True, num_workers=0,
+    )
+    val_loader = DataLoader(
+        _LeafDataset(val_samples, eval_tfm, class_to_idx),
+        batch_size=TRAIN_BATCH_SIZE, shuffle=False, num_workers=0,
+    )
+
+    model = create_model(num_classes=len(classes), device=device)
+    best_state, epochs_run = _fit(model, (train_loader, val_loader), device, tracker)
+
+    model.load_state_dict(best_state)
+    model.eval()
+    return _TrainOutcome(
+        classes=classes,
+        n_train=len(train_samples),
+        n_val=len(val_samples),
+        best_state=best_state,
+        epochs_run=epochs_run,
+        scores=_validation_scores(model, val_loader, device),
+    )
+
+
+def _predict_image(bundle: dict, image_path: Path) -> dict:
+    """Classify one batch image and attach its CAM heatmap; errors become the row's ``error``."""
+    model = bundle["model"]
+    try:
+        tensor, image = image_path_to_tensor_and_image(
+            image_path, image_size=bundle["image_size"]
+        )
+        tensor = tensor.to(bundle["device"])
+        with torch.no_grad():
+            logits, feature_map = model(tensor, return_features=True)
+        result = build_inline_response(
+            logits,
+            classes=bundle["classes"],
+            model_id=bundle["model_id"],
+        )
+        result["filename"] = image_path.name
+        class_idx = bundle["classes"].index(result["prediction"])
+        result["heatmap_url"] = compute_and_encode_cam(
+            feature_map, model.classifier.weight, class_idx, image
+        )
+        return result
+    except InvalidImageError as exc:
+        return {"filename": image_path.name, "error": str(exc)}
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        # per-image error capture: one bad image never fails the batch
+        logger.warning(
+            "Unexpected error processing %s: %s", image_path.name, exc
+        )
+        return {"filename": image_path.name, "error": str(exc)}
+
+
+class Ml2FungalCnnDiseaseDetectionPlugin(PluginRuntimeMixin, ModelPluginPort):
     """LeafCNN-based plugin classifying grapevine leaf images into fungal-disease classes."""
 
     def __init__(self) -> None:
-        """Initialize an unloaded plugin with empty runtime counters."""
+        """Initialize an unloaded plugin (runtime counters start at the mixin defaults)."""
         self._bundle: dict | None = None
-        self._predict_count: int = 0
-        self._last_predict_at: str | None = None
 
     def load(self) -> None:
         """Load the LeafCNN checkpoint into memory."""
@@ -117,7 +388,7 @@ class Ml2FungalCnnDiseaseDetectionPlugin(ModelPluginPort):
                 "predict_inline — using user-trained model from MLflow run_id=%s", mlflow_run_id
             )
         bundle, user_temp_dir = self._resolve_bundle(mlflow_run_id)
-        try:
+        with removing_dir(user_temp_dir):
             tensor = image_base64_to_tensor(
                 features["image_base64"], image_size=bundle["image_size"]
             ).to(bundle["device"])
@@ -126,8 +397,7 @@ class Ml2FungalCnnDiseaseDetectionPlugin(ModelPluginPort):
             with torch.no_grad():
                 logits = bundle["model"](tensor)
 
-            self._predict_count += 1
-            self._last_predict_at = datetime.now(tz=timezone.utc).isoformat()
+            self._record()
             logger.info(
                 "predict_inline done — count=%d mlflow=%s", self._predict_count, bool(mlflow_run_id)
             )
@@ -137,11 +407,7 @@ class Ml2FungalCnnDiseaseDetectionPlugin(ModelPluginPort):
                 classes=bundle["classes"],
                 model_id=bundle["model_id"],
             ))
-        finally:
-            if user_temp_dir:
-                shutil.rmtree(user_temp_dir, ignore_errors=True)
 
-    # pylint: disable-next=too-many-locals
     def predict_batch(self, *, data_path: str, mlflow_run_id: str = "") -> PredictBatchResponse:
         """Classify every image inside a ZIP (local path or ``s3://`` URI)."""
         if mlflow_run_id:
@@ -149,61 +415,22 @@ class Ml2FungalCnnDiseaseDetectionPlugin(ModelPluginPort):
                 "predict_batch — using user-trained model from MLflow run_id=%s", mlflow_run_id
             )
         bundle, user_temp_dir = self._resolve_bundle(mlflow_run_id)
-        try:
-            model = bundle["model"]
-            device: torch.device = bundle["device"]
-            image_size: int = bundle["image_size"]
+        with removing_dir(user_temp_dir):
             predictions: list[dict] = []
+            with local_file_path(data_path) as local_data_path, \
+                    tempfile.TemporaryDirectory() as tmp_dir:
+                safe_extract_zip(local_data_path, tmp_dir)
 
-            tmp_zip: str | None = None
-            local_data_path = data_path
-            if data_path.startswith("s3://"):
-                tmp_zip = self._download_zip_from_s3(data_path)
-                local_data_path = tmp_zip
+                image_paths = sorted(
+                    p for p in Path(tmp_dir).rglob("*")
+                    if p.is_file() and p.suffix.lower() in IMAGE_EXTENSIONS
+                )
 
-            try:
-                with tempfile.TemporaryDirectory() as tmp_dir:
-                    safe_extract_zip(local_data_path, tmp_dir)
+                bundle["model"].eval()
+                for image_path in image_paths:
+                    predictions.append(_predict_image(bundle, image_path))
 
-                    image_paths = sorted(
-                        p for p in Path(tmp_dir).rglob("*")
-                        if p.is_file() and p.suffix.lower() in IMAGE_EXTENSIONS
-                    )
-
-                    model.eval()
-                    for image_path in image_paths:
-                        try:
-                            tensor, image = image_path_to_tensor_and_image(
-                                image_path, image_size=image_size
-                            )
-                            tensor = tensor.to(device)
-                            with torch.no_grad():
-                                logits, feature_map = model(tensor, return_features=True)
-                            result = build_inline_response(
-                                logits,
-                                classes=bundle["classes"],
-                                model_id=bundle["model_id"],
-                            )
-                            result["filename"] = image_path.name
-                            class_idx = bundle["classes"].index(result["prediction"])
-                            result["heatmap_url"] = compute_and_encode_cam(
-                                feature_map, model.classifier.weight, class_idx, image
-                            )
-                            predictions.append(result)
-                        except InvalidImageError as exc:
-                            predictions.append({"filename": image_path.name, "error": str(exc)})
-                        except Exception as exc:  # pylint: disable=broad-exception-caught
-                            # per-image error capture: one bad image never fails the batch
-                            logger.warning(
-                                "Unexpected error processing %s: %s", image_path.name, exc
-                            )
-                            predictions.append({"filename": image_path.name, "error": str(exc)})
-            finally:
-                if tmp_zip and os.path.exists(tmp_zip):
-                    os.unlink(tmp_zip)
-
-            self._predict_count += 1
-            self._last_predict_at = datetime.now(tz=timezone.utc).isoformat()
+            self._record()
             logger.info(
                 "predict_batch done — %d predictions count=%d mlflow=%s",
                 len(predictions), self._predict_count, bool(mlflow_run_id),
@@ -212,35 +439,8 @@ class Ml2FungalCnnDiseaseDetectionPlugin(ModelPluginPort):
             return PredictBatchResponse(
                 **build_batch_response(predictions, model_id=bundle["model_id"])
             )
-        finally:
-            if user_temp_dir:
-                shutil.rmtree(user_temp_dir, ignore_errors=True)
 
-    @staticmethod
-    def _download_zip_from_s3(s3_uri: str) -> str:
-        """Download a ZIP from an ``s3://bucket/key`` URI to a temp file and return its path."""
-        import boto3  # pylint: disable=import-outside-toplevel  # optional, loaded lazily
-        from botocore.client import Config as BotoConfig  # pylint: disable=import-outside-toplevel
-
-        without_prefix = s3_uri[5:]
-        bucket, _, s3_key = without_prefix.partition("/")
-        s3 = boto3.client(
-            "s3",
-            endpoint_url=os.environ.get("CUSTOM_S3_ENDPOINT"),
-            aws_access_key_id=os.environ.get("AWS_ACCESS_KEY_ID"),
-            aws_secret_access_key=os.environ.get("AWS_SECRET_ACCESS_KEY"),
-            config=BotoConfig(signature_version="s3v4"),
-            region_name=os.environ.get("CUSTOM_REGION", "us-east-1"),
-        )
-        fd, tmp_zip = tempfile.mkstemp(suffix=".zip")
-        os.close(fd)
-        logger.info("Downloading batch data from s3://%s/%s", bucket, s3_key)
-        s3.download_file(bucket, s3_key, tmp_zip)
-        return tmp_zip
-
-    def train(  # pylint: disable=too-many-locals,too-many-branches,too-many-statements
-        self, *, data_path: str, mlflow_run_id: str,
-    ) -> TrainResponse:
+    def train(self, *, data_path: str, mlflow_run_id: str) -> TrainResponse:
         """Train a fresh LeafCNN from scratch on a user-supplied ZIP of per-class folders.
 
         Replicates ``src/training/train.py:run_training`` from the delivered repository:
@@ -251,252 +451,54 @@ class Ml2FungalCnnDiseaseDetectionPlugin(ModelPluginPort):
         artifact (``leafcnn_best.pth``); predicting with this ``mlflow_run_id`` afterwards is
         what serves it (see ``mlflow_utils.download_user_model_from_mlflow``).
         """
-        # pylint: disable=import-outside-toplevel
-        import random
+        tracker = require_train_tracker(mlflow_run_id)
+        tracker.log_params(_TRAIN_PARAMS)
 
-        from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score
-        from torch import nn
-        from torch.utils.data import DataLoader, Dataset
-
-        from app.plugins.ml2_fungal_cnn_disease_detection.model_loader import (
-            _safe_device,
+        with local_file_path(data_path) as local_data_path:
+            extract_dir = tempfile.mkdtemp(prefix="ml2_train_")
+            with removing_dir(extract_dir):
+                safe_extract_zip(local_data_path, extract_dir)
+                outcome = _train_on_folders(extract_dir, tracker)
+        classes, best_state, epochs_run, scores = (
+            outcome.classes, outcome.best_state, outcome.epochs_run, outcome.scores
         )
-        from app.plugins.ml2_fungal_cnn_disease_detection.preprocessing import (
-            build_eval_transform,
-        )
-        # pylint: enable=import-outside-toplevel
 
-        tracker = BaseMLflowTracker(mlflow_run_id)
-        tracker.log_params({
-            "optimizer": "AdamW",
-            "lr": TRAIN_LR,
-            "weight_decay": TRAIN_WEIGHT_DECAY,
-            "batch_size": TRAIN_BATCH_SIZE,
-            "max_epochs": TRAIN_MAX_EPOCHS,
-            "patience": TRAIN_PATIENCE,
-            "scheduler": (
-                f"ReduceLROnPlateau(factor={TRAIN_SCHEDULER_FACTOR}, "
-                f"patience={TRAIN_SCHEDULER_PATIENCE})"
-            ),
-            "image_size": IMAGE_SIZE,
-            "loss": "CrossEntropyLoss",
+        tracker.log_metrics({
+            **scores,
+            "n_train": outcome.n_train,
+            "n_val": outcome.n_val,
+            "epochs_run": epochs_run,
         })
 
-        tmp_zip: str | None = None
-        local_data_path = data_path
-        if data_path.startswith("s3://"):
-            tmp_zip = self._download_zip_from_s3(data_path)
-            local_data_path = tmp_zip
+        def _write(model_dir: str) -> None:
+            checkpoint = {
+                "model_state_dict": best_state,
+                "classes": classes,
+                "image_size": IMAGE_SIZE,
+                "model_id": MODEL_ID,
+            }
+            torch.save(checkpoint, os.path.join(model_dir, MODEL_FILENAME))
 
-        extract_dir = tempfile.mkdtemp(prefix="ml2_train_")
-        mlflow_tmp: str | None = None
-        upload_warning: str | None = None
-        try:
-            safe_extract_zip(local_data_path, extract_dir)
+        upload_model_to_mlflow(tracker, _write, prefix="ml2_mlflow_")
 
-            root = Path(extract_dir)
-            entries = [p for p in root.iterdir() if p.is_dir()]
-            data_root = entries[0] if len(entries) == 1 else root
+        logger.info(
+            "train() done — accuracy=%.4f f1=%.4f epochs_run=%d classes=%s",
+            scores["accuracy"], scores["f1"], epochs_run, classes,
+        )
 
-            class_dirs = sorted(
-                (p for p in data_root.iterdir() if p.is_dir()), key=lambda p: p.name
-            )
-            if len(class_dirs) < 2:
-                raise ValueError(
-                    "El ZIP debe contener al menos 2 subcarpetas de clase "
-                    "(p.ej. black_rot/, downy_mildew/, healthy/, powdery_mildew/, "
-                    "trunk_disease/) con imágenes JPG/PNG/BMP dentro."
-                )
-            classes = [p.name for p in class_dirs]
-            class_to_idx = {cls: i for i, cls in enumerate(classes)}
-
-            samples_by_class: dict[str, list[str]] = {}
-            for class_dir in class_dirs:
-                images = sorted(
-                    str(p) for p in class_dir.iterdir()
-                    if p.is_file() and p.suffix.lower() in IMAGE_EXTENSIONS
-                )
-                if not images:
-                    raise ValueError(f"La clase '{class_dir.name}' no tiene ninguna imagen válida.")
-                samples_by_class[class_dir.name] = images
-
-            # Fixed-seed stratified 80/20 split per class (see constants.TRAIN_VAL_SPLIT) —
-            # every class contributes to both train and val whenever it has >=2 images.
-            rng = random.Random(TRAIN_SPLIT_SEED)
-            train_samples: list[tuple[str, str]] = []
-            val_samples: list[tuple[str, str]] = []
-            for cls, paths in samples_by_class.items():
-                shuffled = paths[:]
-                rng.shuffle(shuffled)
-                if len(shuffled) >= 2:
-                    n_val = max(1, round(len(shuffled) * TRAIN_VAL_SPLIT))
-                    n_val = min(n_val, len(shuffled) - 1)
-                else:
-                    n_val = 0
-                val_samples += [(p, cls) for p in shuffled[:n_val]]
-                train_samples += [(p, cls) for p in shuffled[n_val:]]
-
-            if not val_samples:
-                raise ValueError(
-                    "No hay suficientes imágenes para separar un conjunto de validación "
-                    "(se necesitan >=2 imágenes en alguna clase)."
-                )
-
-            train_tfm = build_train_transform(IMAGE_SIZE)
-            eval_tfm = build_eval_transform(IMAGE_SIZE)
-
-            class _LeafDataset(Dataset):  # pylint: disable=too-few-public-methods
-                def __init__(self, items: list[tuple[str, str]], transform, training: bool):
-                    self.items = items
-                    self.transform = transform
-                    self.training = training
-
-                def __len__(self) -> int:
-                    return len(self.items)
-
-                def __getitem__(self, idx: int):
-                    from PIL import Image  # pylint: disable=import-outside-toplevel
-                    path, label = self.items[idx]
-                    image = Image.open(path).convert("RGB")
-                    return self.transform(image), class_to_idx[label]
-
-            device = _safe_device()
-            train_loader = DataLoader(
-                _LeafDataset(train_samples, train_tfm, training=True),
-                batch_size=TRAIN_BATCH_SIZE, shuffle=True, num_workers=0,
-            )
-            val_loader = DataLoader(
-                _LeafDataset(val_samples, eval_tfm, training=False),
-                batch_size=TRAIN_BATCH_SIZE, shuffle=False, num_workers=0,
-            )
-
-            model = create_model(num_classes=len(classes), device=device)
-            criterion = nn.CrossEntropyLoss()
-            optimizer = torch.optim.AdamW(
-                model.parameters(), lr=TRAIN_LR, weight_decay=TRAIN_WEIGHT_DECAY
-            )
-            scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-                optimizer,
-                mode="min",
-                factor=TRAIN_SCHEDULER_FACTOR,
-                patience=TRAIN_SCHEDULER_PATIENCE,
-            )
-
-            best_val_loss = float("inf")
-            best_state = model.state_dict()
-            epochs_no_improve = 0
-            epochs_run = 0
-
-            for epoch in range(TRAIN_MAX_EPOCHS):
-                model.train()
-                for images, labels in train_loader:
-                    images, labels = images.to(device), labels.to(device)
-                    optimizer.zero_grad()
-                    outputs = model(images)
-                    loss = criterion(outputs, labels)
-                    loss.backward()
-                    optimizer.step()
-
-                model.eval()
-                val_running_loss = 0.0
-                val_total = 0
-                with torch.no_grad():
-                    for images, labels in val_loader:
-                        images, labels = images.to(device), labels.to(device)
-                        outputs = model(images)
-                        loss = criterion(outputs, labels)
-                        val_running_loss += loss.item() * images.size(0)
-                        val_total += images.size(0)
-                val_loss = val_running_loss / max(val_total, 1)
-                scheduler.step(val_loss)
-                epochs_run = epoch + 1
-
-                if tracker.is_connected():
-                    tracker.log_metrics({"val_loss": val_loss}, step=epoch)
-
-                if val_loss < best_val_loss:
-                    best_val_loss = val_loss
-                    best_state = {k: v.clone() for k, v in model.state_dict().items()}
-                    epochs_no_improve = 0
-                else:
-                    epochs_no_improve += 1
-
-                if epochs_no_improve >= TRAIN_PATIENCE:
-                    logger.info("Early stopping en epoch %d (ml2 train)", epochs_run)
-                    break
-
-            model.load_state_dict(best_state)
-            model.eval()
-
-            all_preds: list[int] = []
-            all_labels: list[int] = []
-            with torch.no_grad():
-                for images, labels in val_loader:
-                    images = images.to(device)
-                    outputs = model(images)
-                    preds = outputs.argmax(dim=1).cpu().tolist()
-                    all_preds.extend(preds)
-                    all_labels.extend(labels.tolist())
-
-            accuracy = float(accuracy_score(all_labels, all_preds))
-            precision = float(
-                precision_score(all_labels, all_preds, average="weighted", zero_division=0)
-            )
-            recall = float(
-                recall_score(all_labels, all_preds, average="weighted", zero_division=0)
-            )
-            f1 = float(f1_score(all_labels, all_preds, average="weighted", zero_division=0))
-
-            tracker.log_metrics({
-                "accuracy": accuracy,
-                "precision": precision,
-                "recall": recall,
-                "f1": f1,
-                "n_train": len(train_samples),
-                "n_val": len(val_samples),
-                "epochs_run": epochs_run,
-            })
-
-            try:
-                mlflow_tmp = tempfile.mkdtemp(prefix="ml2_mlflow_")
-                checkpoint = {
-                    "model_state_dict": best_state,
-                    "classes": classes,
-                    "image_size": IMAGE_SIZE,
-                    "model_id": MODEL_ID,
-                }
-                torch.save(checkpoint, os.path.join(mlflow_tmp, MODEL_FILENAME))
-                tracker.upload_artifacts(mlflow_tmp, artifact_path="model")
-            except Exception as exc:  # pragma: no cover - network/MLflow failure path
-                logger.error("MLflow artifact upload failed: %s", exc)
-                raise ModelPersistenceError(
-                    f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}"
-                ) from exc
-
-            logger.info(
-                "train() done — accuracy=%.4f f1=%.4f epochs_run=%d classes=%s",
-                accuracy, f1, epochs_run, classes,
-            )
-
-            return TrainResponse(
-                detail="Entrenamiento completado",
-                accuracy=round(accuracy, 4),
-                precision=round(precision, 4),
-                recall=round(recall, 4),
-                f1=round(f1, 4),
-                n_train=len(train_samples),
-                n_val=len(val_samples),
-                classes=classes,
-                epochs_run=epochs_run,
-                upload_warning=upload_warning,
-                mlflow_run_id=mlflow_run_id,
-            )
-        finally:
-            shutil.rmtree(extract_dir, ignore_errors=True)
-            if mlflow_tmp:
-                shutil.rmtree(mlflow_tmp, ignore_errors=True)
-            if tmp_zip and os.path.exists(tmp_zip):
-                os.unlink(tmp_zip)
+        return TrainResponse(
+            detail="Entrenamiento completado",
+            accuracy=round(scores["accuracy"], 4),
+            precision=round(scores["precision"], 4),
+            recall=round(scores["recall"], 4),
+            f1=round(scores["f1"], 4),
+            n_train=outcome.n_train,
+            n_val=outcome.n_val,
+            classes=classes,
+            epochs_run=epochs_run,
+            upload_warning=None,
+            mlflow_run_id=mlflow_run_id,
+        )
 
     def stats(self, mlflow_run_id: str = "") -> StatsResponse:
         """Return model metadata and runtime statistics."""
@@ -505,10 +507,10 @@ class Ml2FungalCnnDiseaseDetectionPlugin(ModelPluginPort):
         mlflow_metrics: dict | None = None
         if mlflow_run_id:
             bundle, user_temp_dir = download_user_model_from_mlflow(mlflow_run_id)
-            tracker = BaseMLflowTracker(mlflow_run_id)
-            mlflow_metrics = {"params": tracker.get_params(), "metrics": tracker.get_metrics()}
 
-        try:
+        with removing_dir(user_temp_dir):
+            if mlflow_run_id:
+                mlflow_metrics = mlflow_run_summary(mlflow_run_id)
             model_id_v = bundle["model_id"] if bundle is not None else MODEL_ID
             metrics: dict = {}
             if mlflow_metrics is not None:
@@ -557,11 +559,5 @@ class Ml2FungalCnnDiseaseDetectionPlugin(ModelPluginPort):
                     ),
                 ],
                 metrics=metrics,
-                runtime_stats=RuntimeStats(
-                    total_predictions=self._predict_count,
-                    avg_latency_ms=None,
-                ),
+                runtime_stats=self._runtime_stats(),
             )
-        finally:
-            if user_temp_dir:
-                shutil.rmtree(user_temp_dir, ignore_errors=True)

@@ -14,20 +14,12 @@ from app.plugins.ml1_wine_pest_disease_detection.constants import (
 )
 
 
-def run_inference(  # pylint: disable=too-many-locals
-    bundle: dict, img_rgb: np.ndarray, sensors_aligned: np.ndarray
-) -> dict:
-    """Deep Ensemble soft-voting over the 3 backbones (image -> class, tabular -> risk).
-
-    img_rgb: HxWx3 float32 in [0, 1] (already YOLO-cropped and resized — see preprocessing.py).
-    sensors_aligned: (1, n_sensors) float32, already validated/ordered.
-    """
-    img_batch = np.expand_dims(img_rgb, axis=0)
-    class_mapping = bundle["class_mapping"]
-
+def _ensemble_average(
+    ensemble: dict, img_batch: np.ndarray, sensors_aligned: np.ndarray
+) -> tuple[np.ndarray, np.ndarray]:
+    """Soft-vote: average the class probabilities and the risk of every backbone."""
     sum_probs_clase = None
     sum_preds_riesgo = None
-    ensemble = bundle["ensemble"]
 
     for model in ensemble.values():
         preds = model.predict(
@@ -41,8 +33,20 @@ def run_inference(  # pylint: disable=too-many-locals
             sum_preds_riesgo = sum_preds_riesgo + preds[1]
 
     num_models = len(ensemble)
-    avg_probs = sum_probs_clase / num_models
-    avg_riesgo = sum_preds_riesgo / num_models
+    return sum_probs_clase / num_models, sum_preds_riesgo / num_models
+
+
+def run_inference(
+    bundle: dict, img_rgb: np.ndarray, sensors_aligned: np.ndarray
+) -> dict:
+    """Deep Ensemble soft-voting over the 3 backbones (image -> class, tabular -> risk).
+
+    img_rgb: HxWx3 float32 in [0, 1] (already YOLO-cropped and resized — see preprocessing.py).
+    sensors_aligned: (1, n_sensors) float32, already validated/ordered.
+    """
+    img_batch = np.expand_dims(img_rgb, axis=0)
+    class_mapping = bundle["class_mapping"]
+    avg_probs, avg_riesgo = _ensemble_average(bundle["ensemble"], img_batch, sensors_aligned)
 
     idx_predicho = int(np.argmax(avg_probs[0]))
     confianza = float(avg_probs[0][idx_predicho])

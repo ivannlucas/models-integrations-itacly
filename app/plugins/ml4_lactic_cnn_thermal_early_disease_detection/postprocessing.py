@@ -14,7 +14,20 @@ JPEG_QUALITY = 70
 HEATMAP_ALPHA = 0.4
 
 
-def compute_and_encode_cam(  # pylint: disable=too-many-locals
+def _class_activation_map(
+    feature_map: torch.Tensor, classifier_weight: torch.Tensor, class_idx: int
+) -> np.ndarray:
+    """CAM of ``class_idx``: ReLU of the classifier-weighted sum of the feature maps, in [0, 1]."""
+    weights = classifier_weight[class_idx].detach().cpu().numpy()  # (C,)
+    feat = feature_map[0].detach().cpu().numpy()  # (C, H, W)
+    cam = np.tensordot(weights, feat, axes=([0], [0]))  # (H, W)
+    cam = np.maximum(cam, 0)
+    if cam.max() > 0:
+        cam = cam / cam.max()
+    return cam
+
+
+def compute_and_encode_cam(
     feature_map: torch.Tensor,
     classifier_weight: torch.Tensor,
     class_idx: int,
@@ -28,12 +41,7 @@ def compute_and_encode_cam(  # pylint: disable=too-many-locals
     (Zhou et al., 2016) is exact here and needs no backward pass — same reasoning as
     ml2_fungal_cnn_disease_detection's compute_and_encode_cam.
     """
-    weights = classifier_weight[class_idx].detach().cpu().numpy()  # (C,)
-    feat = feature_map[0].detach().cpu().numpy()  # (C, H, W)
-    cam = np.tensordot(weights, feat, axes=([0], [0]))  # (H, W)
-    cam = np.maximum(cam, 0)
-    if cam.max() > 0:
-        cam = cam / cam.max()
+    cam = _class_activation_map(feature_map, classifier_weight, class_idx)
 
     img = original_image.convert("RGB")
     w, h = img.size
@@ -43,10 +51,11 @@ def compute_and_encode_cam(  # pylint: disable=too-many-locals
         img = img.resize((int(w * scale), int(h * scale)), lanczos)
         w, h = img.size
 
-    cam_resized = cv2.resize(cam, (w, h))  # pylint: disable=no-member  # cv2 C-extension members
-    # cv2 C-extension members are invisible to pylint
-    heatmap = cv2.applyColorMap(np.uint8(255 * cam_resized), cv2.COLORMAP_JET)  # pylint: disable=no-member
-    heatmap = cv2.cvtColor(heatmap, cv2.COLOR_BGR2RGB)  # pylint: disable=no-member  # cv2 C-extension members
+    # pylint: disable=no-member  # cv2 is a C extension; pylint cannot see its members
+    cam_resized = cv2.resize(cam, (w, h))
+    heatmap = cv2.applyColorMap(np.uint8(255 * cam_resized), cv2.COLORMAP_JET)
+    heatmap = cv2.cvtColor(heatmap, cv2.COLOR_BGR2RGB)
+    # pylint: enable=no-member
 
     img_arr = np.array(img).astype(np.float32)
     overlay = (

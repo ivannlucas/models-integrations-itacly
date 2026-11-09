@@ -5,7 +5,6 @@ monthly average retail price of TOTAL LECHE LIQUIDA (EUR per kg or litre, MAPA h
 consumption panel) per Comunidad Autonoma, 1, 3 and 6 months ahead. Every value below is copied
 from the delivered config/config.yaml or the model metadata, never tuned here.
 """
-# pylint: disable=line-too-long  # repo limit is 120 (.flake8), enforced by flake8
 
 MODEL_ID = "ml24-dairy-spatial-price-forecast"
 ARTIFACT_FOLDER_NAME = "ml24_dairy_spatial_price_forecast"
@@ -109,7 +108,9 @@ TRAINING_CFG = {
     "missing_value_strategy": "median",
     "calibrate_ml_blend": True,
     "ml_blend_calibration_months": 12,
-    "ml_alpha_grid": "0,0.05,0.1,0.15,0.2,0.25,0.3,0.35,0.4,0.45,0.5,0.55,0.6,0.65,0.7,0.75,0.8,0.85,0.9,0.95,1",
+    "ml_alpha_grid": (
+        "0,0.05,0.1,0.15,0.2,0.25,0.3,0.35,0.4,0.45,0.5,0.55,0.6,0.65,0.7,0.75,0.8,0.85,0.9,0.95,1"
+    ),
 }
 TRAIN_VALIDATION_YEAR = 2019       # validation_start/end = 2019-01-01 / 2019-12-01
 TRAIN_TEST_YEAR = 2020             # test_start/end = 2020-01-01 / 2020-12-01
@@ -143,13 +144,18 @@ MLFLOW_ARTIFACT_PATH = "model"
 
 # ── Reported metrics (models/metrics/spatial_price_model/metrics.csv, scope=global) ──────────
 METRICS_REPORTED = {
-    "dataset": "test 2020 (target_period_dt 2020-01..2020-12, 17 CCAA x 12 meses = 204 filas/horizonte)",
+    "dataset": (
+        "test 2020 (target_period_dt 2020-01..2020-12, 17 CCAA x 12 meses = 204 filas/horizonte)"
+    ),
     "test": {
-        "h1": {"mae": 0.013005, "smape": 1.870961, "mae_baseline": 0.014319, "smape_baseline": 2.059862,
+        "h1": {"mae": 0.013005, "smape": 1.870961, "mae_baseline": 0.014319,
+               "smape_baseline": 2.059862,
                "accuracy_pct": 98.129},
-        "h3": {"mae": 0.013768, "smape": 1.979459, "mae_baseline": 0.014839, "smape_baseline": 2.132642,
+        "h3": {"mae": 0.013768, "smape": 1.979459, "mae_baseline": 0.014839,
+               "smape_baseline": 2.132642,
                "accuracy_pct": 98.021},
-        "h6": {"mae": 0.014242, "smape": 2.045819, "mae_baseline": 0.015036, "smape_baseline": 2.158799,
+        "h6": {"mae": 0.014242, "smape": 2.045819, "mae_baseline": 0.015036,
+               "smape_baseline": 2.158799,
                "accuracy_pct": 97.954},
     },
     "validation": {

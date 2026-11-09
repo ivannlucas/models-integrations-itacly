@@ -50,7 +50,34 @@ def get_row_from_dataset(
     return row, date_label
 
 
-# pylint: disable-next=too-many-locals
+def _reg_result(art: dict, x) -> dict:
+    """Regression part of one horizon (predict.py: model + optional scaler, LONG/SHORT/FLAT)."""
+    mdl, sc, mname = art["model"], art["scaler"], art["model_name"]
+    x_in = sc.transform(x.reshape(1, -1)) if sc is not None else x.reshape(1, -1)
+    pred_reg = float(mdl.predict(x_in)[0])
+    return {
+        "model_name": mname,
+        "pred": pred_reg,
+        "signal": int(np.sign(pred_reg)) if pred_reg != 0 else 0,
+        "signal_str": "LONG" if pred_reg > 0 else ("SHORT" if pred_reg < 0 else "FLAT"),
+    }
+
+
+def _clf_result(art: dict, x) -> dict:
+    """Classification part of one horizon (predict.py: class, P(up), LONG/SHORT)."""
+    mdl, sc, mname = art["model"], art["scaler"], art["model_name"]
+    x_in = sc.transform(x.reshape(1, -1)) if sc is not None else x.reshape(1, -1)
+    pred_cls = int(mdl.predict(x_in)[0])
+    prob_up = float(mdl.predict_proba(x_in)[0][1])
+    return {
+        "model_name": mname,
+        "prob_up": prob_up,
+        "pred_class": pred_cls,
+        "signal": 1 if pred_cls == 1 else -1,
+        "signal_str": "LONG" if pred_cls == 1 else "SHORT",
+    }
+
+
 def predict_next_month(
     row: pd.Series, artifacts: dict, horizons: list[int] | None = None,
 ) -> dict[int, dict]:
@@ -70,30 +97,10 @@ def predict_next_month(
         h_result: dict = {}
 
         if h in artifacts["reg"]:
-            art = artifacts["reg"][h]
-            mdl, sc, mname = art["model"], art["scaler"], art["model_name"]
-            x_in = sc.transform(x.reshape(1, -1)) if sc is not None else x.reshape(1, -1)
-            pred_reg = float(mdl.predict(x_in)[0])
-            h_result["reg"] = {
-                "model_name": mname,
-                "pred": pred_reg,
-                "signal": int(np.sign(pred_reg)) if pred_reg != 0 else 0,
-                "signal_str": "LONG" if pred_reg > 0 else ("SHORT" if pred_reg < 0 else "FLAT"),
-            }
+            h_result["reg"] = _reg_result(artifacts["reg"][h], x)
 
         if h in artifacts["clf"]:
-            art = artifacts["clf"][h]
-            mdl, sc, mname = art["model"], art["scaler"], art["model_name"]
-            x_in = sc.transform(x.reshape(1, -1)) if sc is not None else x.reshape(1, -1)
-            pred_cls = int(mdl.predict(x_in)[0])
-            prob_up = float(mdl.predict_proba(x_in)[0][1])
-            h_result["clf"] = {
-                "model_name": mname,
-                "prob_up": prob_up,
-                "pred_class": pred_cls,
-                "signal": 1 if pred_cls == 1 else -1,
-                "signal_str": "LONG" if pred_cls == 1 else "SHORT",
-            }
+            h_result["clf"] = _clf_result(artifacts["clf"][h], x)
 
         signals = []
         if "reg" in h_result:

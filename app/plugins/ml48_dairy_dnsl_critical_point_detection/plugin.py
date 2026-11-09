@@ -5,16 +5,16 @@ import logging
 import os
 import shutil
 import tempfile
-from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
 import torch
 
-from app.application.dto.stats_dto import InputField, OutputField, RuntimeStats, StatsResponse
+from app.application.dto.stats_dto import InputField, OutputField, StatsResponse
 from app.domain.ports.model_plugin_port import ModelPluginPort
-from app.domain.services.exceptions import ModelNotLoadedError, ModelPersistenceError
-from app.domain.services.mlflow_tracker import BaseMLflowTracker
+from app.domain.services.exceptions import ModelPersistenceError
+from app.domain.services.mlflow_artifacts import mlflow_run_summary, removing_dir
+from app.domain.services.plugin_runtime import PluginRuntimeMixin
 from app.infrastructure.artifact_store import ARTIFACTS_ROOT, ArtifactStore, local_file_path
 from app.plugins.ml48_dairy_dnsl_critical_point_detection import xai
 from app.plugins.ml48_dairy_dnsl_critical_point_detection.constants import (
@@ -61,8 +61,43 @@ logger = logging.getLogger(__name__)
 _ARTIFACT_DIR = ARTIFACTS_ROOT / ARTIFACT_FOLDER_NAME
 
 
-class Ml48DairyDnslCriticalPointDetectionPlugin(  # pylint: disable=too-many-instance-attributes
-        ModelPluginPort):
+def _inline_frame_from_csv(local_path: str, ts1_mean_train: float, use_dt: bool, cycle_id):
+    """Feature frame of the first cycle of an inline CSV.
+
+    Returns ``(x_df, label, cycle_id)``; ``cycle_id`` is the CSV's own when it has Cycle_ID,
+    else the one given.
+    """
+    x_df, cycle_ids = build_dataframe_from_csv(local_path, ts1_mean_train, use_dt)
+    if cycle_ids is not None and cycle_ids.nunique() > 1:
+        first = cycle_ids.unique()[0]
+        logger.warning(
+            "predict_inline received a CSV with %d distinct Cycle_ID values; "
+            "only Cycle_ID=%s "
+            "is used. Use predict_batch to get a prediction per cycle.",
+            cycle_ids.nunique(), first,
+        )
+        label = f"Cycle_ID={first} (1 of {cycle_ids.nunique()} in file)"
+        cycle_id = int(first)
+        x_df = x_df[cycle_ids == first].drop(columns=["Cycle_ID"], errors="ignore")
+    elif cycle_ids is not None:
+        label = "single-cycle-csv"
+        cycle_id = int(cycle_ids.iloc[0])
+        x_df = x_df.drop(columns=["Cycle_ID"], errors="ignore")
+    else:
+        label = "inline-csv"
+    return x_df, label, cycle_id
+
+
+def _cycle_groups(x_df, cycle_ids) -> list[tuple]:
+    """Split a batch frame into ``(cycle_id, cycle_df)`` groups (one group if single-cycle)."""
+    if cycle_ids is not None and cycle_ids.nunique() > 1:
+        return [(cid, x_df[cycle_ids == cid].drop(columns=["Cycle_ID"], errors="ignore"))
+                for cid in cycle_ids.unique()]
+    cid = cycle_ids.iloc[0] if cycle_ids is not None and len(cycle_ids) else None
+    return [(cid, x_df.drop(columns=["Cycle_ID"], errors="ignore"))]
+
+
+class Ml48DairyDnslCriticalPointDetectionPlugin(PluginRuntimeMixin, ModelPluginPort):
     """Plugin de inferencia, XAI y reentrenamiento del modelo ml48."""
 
     def __init__(self) -> None:
@@ -72,8 +107,6 @@ class Ml48DairyDnslCriticalPointDetectionPlugin(  # pylint: disable=too-many-ins
         self._ts1_mean_train: float = 45.0
         self._shap_background: np.ndarray | None = None
         self._device: torch.device | None = None
-        self._predict_count: int = 0
-        self._last_predict_at: str | None = None
 
     def load(self) -> None:
         bucket = os.environ.get("STORAGE_BUCKET")
@@ -91,14 +124,6 @@ class Ml48DairyDnslCriticalPointDetectionPlugin(  # pylint: disable=too-many-ins
 
     def is_loaded(self) -> bool:
         return self._model is not None
-
-    def _require_loaded(self) -> None:
-        if self._model is None:
-            raise ModelNotLoadedError("El modelo no está cargado.")
-
-    def _record(self) -> None:
-        self._predict_count += 1
-        self._last_predict_at = datetime.now(tz=timezone.utc).isoformat()
 
     def _context(self, mlflow_run_id: str) -> dict:
         """Contexto de inferencia: modelo estándar o modelo del usuario (MLflow).
@@ -128,7 +153,7 @@ class Ml48DairyDnslCriticalPointDetectionPlugin(  # pylint: disable=too-many-ins
     def _digital_twin(flag: bool | None) -> bool:
         return APPLY_DIGITAL_TWIN if flag is None else flag
 
-    def predict_inline(  # pylint: disable=too-many-locals
+    def predict_inline(
         self,
         *,
         data_path: str | None = None,
@@ -139,43 +164,24 @@ class Ml48DairyDnslCriticalPointDetectionPlugin(  # pylint: disable=too-many-ins
     ) -> PredictInlineResponse:
         _ = threshold, model_key
         ctx = self._context(mlflow_run_id)
-        try:
+        with removing_dir(ctx["temp_dir"]):
             use_dt = self._digital_twin(features.get("apply_digital_twin"))
             cycle_id = features.get("Cycle_ID")
 
             if data_path:
                 with local_file_path(data_path) as local_path:
-                    x_df, cycle_ids = build_dataframe_from_csv(
-                        local_path, ctx["ts1_mean_train"], use_dt
+                    x_df, label, cycle_id = _inline_frame_from_csv(
+                        local_path, ctx["ts1_mean_train"], use_dt, cycle_id
                     )
-                if cycle_ids is not None and cycle_ids.nunique() > 1:
-                    first = cycle_ids.unique()[0]
-                    logger.warning(
-                        "predict_inline received a CSV with %d distinct Cycle_ID values; "
-                        "only Cycle_ID=%s "
-                        "is used. Use predict_batch to get a prediction per cycle.",
-                        cycle_ids.nunique(), first,
-                    )
-                    label = f"Cycle_ID={first} (1 of {cycle_ids.nunique()} in file)"
-                    cycle_id = int(first)
-                    x_df = x_df[cycle_ids == first].drop(columns=["Cycle_ID"], errors="ignore")
-                elif cycle_ids is not None:
-                    label = "single-cycle-csv"
-                    cycle_id = int(cycle_ids.iloc[0])
-                    x_df = x_df.drop(columns=["Cycle_ID"], errors="ignore")
-                else:
-                    label = "inline-csv"
             else:
-                sensor_data = {col: features[col] for col in SENSOR_COLUMNS}
                 x_df = build_dataframe_from_sensors(
-                    sensor_data, features.get("Time_Segundos"), cycle_id,
+                    {col: features[col] for col in SENSOR_COLUMNS},
+                    features.get("Time_Segundos"), cycle_id,
                     ctx["ts1_mean_train"], use_dt,
                 )
                 label = f"Cycle_ID={cycle_id}"
 
-            resultados = run_inference(
-                ctx["model"], ctx["scaler"], ctx["feature_cols"], x_df, self._device, label=label
-            )
+            resultados = run_inference(ctx, x_df, self._device, label=label)
             if resultados is None:
                 raise ValueError("Feature columns mismatch during inference")
 
@@ -194,11 +200,8 @@ class Ml48DairyDnslCriticalPointDetectionPlugin(  # pylint: disable=too-many-ins
                 **format_inline_response(MODEL_ID, resultados),
                 xai_result=xai_result, xai_error=xai_error,
             )
-        finally:
-            if ctx["temp_dir"]:
-                shutil.rmtree(ctx["temp_dir"], ignore_errors=True)
 
-    def predict_batch(  # pylint: disable=too-many-arguments,too-many-locals
+    def predict_batch(  # pylint: disable=too-many-arguments
         self,
         *,
         data_path: str,
@@ -209,58 +212,51 @@ class Ml48DairyDnslCriticalPointDetectionPlugin(  # pylint: disable=too-many-ins
         n_samples: int = 50,
     ) -> PredictBatchResponse:
         ctx = self._context(mlflow_run_id)
-        try:
-            use_dt = self._digital_twin(apply_digital_twin)
+        with removing_dir(ctx["temp_dir"]):
             with local_file_path(data_path) as local_path:
                 x_df, cycle_ids = build_dataframe_from_csv(
-                    local_path, ctx["ts1_mean_train"], use_dt
+                    local_path, ctx["ts1_mean_train"], self._digital_twin(apply_digital_twin)
                 )
-
-            if cycle_ids is not None and cycle_ids.nunique() > 1:
-                groups = [(cid, x_df[cycle_ids == cid].drop(columns=["Cycle_ID"], errors="ignore"))
-                          for cid in cycle_ids.unique()]
-            else:
-                cid = cycle_ids.iloc[0] if cycle_ids is not None and len(cycle_ids) else None
-                groups = [(cid, x_df.drop(columns=["Cycle_ID"], errors="ignore"))]
 
             predictions = []
             shap_budget = max(int(n_samples), 0) if include_shap else 0
-            for cid, cycle_df in groups:
-                if cycle_df.empty:
+            for group in _cycle_groups(x_df, cycle_ids):
+                if group[1].empty:
                     continue
-                label = f"Cycle_ID={cid}" if cid is not None else "single-cycle"
-                result = run_inference(
-                    ctx["model"], ctx["scaler"], ctx["feature_cols"], cycle_df, self._device,
-                    label=label,
-                )
-                if not result:
+                row = self._batch_row(ctx, group, include_xai, shap_budget > 0)
+                if row is None:
                     continue
-                row = format_batch_row(result, cid)
-                # XAI por ciclo (contrato de 43/44): xai_result / xai_error en cada fila.
-                # Un fallo de XAI de un ciclo se queda en su fila y no afecta a la prediccion
-                # ni a la XAI del resto del lote.
-                xai_result, xai_error = None, None
-                if include_xai:
-                    with_shap = shap_budget > 0
-                    xai_result, xai_error = xai.explain_cycle(
-                        ctx["model"], result["input_tensor"], result["predicciones"],
-                        result["confianzas"],
-                        ctx["feature_cols"], cycle_id=cid, include_shap=with_shap,
-                        shap_background=ctx["shap_background"],
-                    )
-                    if with_shap:
-                        shap_budget -= 1
-                row["xai_result"] = xai_result
-                row["xai_error"] = xai_error
+                if include_xai and shap_budget > 0:
+                    shap_budget -= 1
                 predictions.append(row)
 
             self._record()
             return PredictBatchResponse(
                 model_id=MODEL_ID, predictions=predictions, output_path=None
             )
-        finally:
-            if ctx["temp_dir"]:
-                shutil.rmtree(ctx["temp_dir"], ignore_errors=True)
+
+    def _batch_row(self, ctx: dict, group: tuple, include_xai: bool, with_shap: bool):
+        """Prediction row (with its XAI) of one ``(cycle_id, cycle_df)`` group, or None."""
+        cid, cycle_df = group
+        label = f"Cycle_ID={cid}" if cid is not None else "single-cycle"
+        result = run_inference(ctx, cycle_df, self._device, label=label)
+        if not result:
+            return None
+        row = format_batch_row(result, cid)
+        # XAI por ciclo (contrato de 43/44): xai_result / xai_error en cada fila.
+        # Un fallo de XAI de un ciclo se queda en su fila y no afecta a la prediccion
+        # ni a la XAI del resto del lote.
+        xai_result, xai_error = None, None
+        if include_xai:
+            xai_result, xai_error = xai.explain_cycle(
+                ctx["model"], result["input_tensor"], result["predicciones"],
+                result["confianzas"],
+                ctx["feature_cols"], cycle_id=cid, include_shap=with_shap,
+                shap_background=ctx["shap_background"],
+            )
+        row["xai_result"] = xai_result
+        row["xai_error"] = xai_error
+        return row
 
     def train(
         self, *, data_path: str, mlflow_run_id: str, mode: str = "fine_tune"
@@ -294,7 +290,7 @@ class Ml48DairyDnslCriticalPointDetectionPlugin(  # pylint: disable=too-many-ins
                     str(temp_dir), mlflow_run_id=mlflow_run_id,
                     metrics={**metrics, "mode_full": float(mode == "full")},
                 )
-            except Exception as exc:  # pylint: disable=broad-exception-caught
+            except Exception as exc:
                 logger.error("MLflow artifact upload failed: %s", exc)
                 raise ModelPersistenceError(
                     f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}"
@@ -366,14 +362,11 @@ class Ml48DairyDnslCriticalPointDetectionPlugin(  # pylint: disable=too-many-ins
             inputs=inputs,
             outputs=outputs,
             metrics=dict(REPORTED_METRICS),
-            runtime_stats=RuntimeStats(total_predictions=self._predict_count, avg_latency_ms=None),
+            runtime_stats=self._runtime_stats(),
         )
         if mlflow_run_id:
             try:
-                tracker = BaseMLflowTracker(mlflow_run_id)
-                base.metrics["mlflow"] = {
-                    "params": tracker.get_params(), "metrics": tracker.get_metrics()
-                }
+                base.metrics["mlflow"] = mlflow_run_summary(mlflow_run_id)
             except Exception as exc:  # pylint: disable=broad-exception-caught  # stats are best-effort
                 logger.warning("MLflow stats fetch failed for run_id=%s: %s", mlflow_run_id, exc)
         return base

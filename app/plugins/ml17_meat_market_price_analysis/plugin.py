@@ -8,19 +8,20 @@ from __future__ import annotations
 
 import logging
 import math
-import shutil
 import tempfile
 import time
 from datetime import datetime, timezone
 from typing import Any
 
+import joblib
 import numpy as np
 import pandas as pd
 
 from app.application.dto.stats_dto import InputField, OutputField, RuntimeStats, StatsResponse
 from app.domain.ports.model_plugin_port import ModelPluginPort
-from app.domain.services.exceptions import ModelNotLoadedError
+from app.domain.services.mlflow_artifacts import add_mlflow_run_to_stats, removing_dir
 from app.domain.services.mlflow_tracker import BaseMLflowTracker
+from app.domain.services.plugin_runtime import PluginRuntimeMixin
 from app.infrastructure.artifact_store import local_file_path
 from app.infrastructure.base_model_publisher import persist_retrained_bundle
 from app.plugins.ml17_meat_market_price_analysis.constants import (
@@ -114,7 +115,99 @@ def _seasonal_from_row(row: dict) -> tuple[float, float]:
     )
 
 
-class Ml17MeatMarketPriceAnalysisPlugin(ModelPluginPort):
+def _read_train_frame(data_path: str) -> pd.DataFrame:
+    """Read the monthly training CSV, check it and sort it by date."""
+    with local_file_path(data_path) as local_path:
+        df = pd.read_csv(local_path)
+
+    missing = [c for c in TRAIN_REQUIRED_COLUMNS if c not in df.columns]
+    if missing:
+        raise ValueError(f"CSV falta columnas requeridas: {missing}")
+    if len(df) < 2:
+        raise ValueError(
+            "Se requieren al menos 2 filas mensuales para entrenar (supervisión "
+            "one-step-ahead t -> t+1)."
+        )
+
+    df = df.copy()
+    df[DATE_COLUMN] = pd.to_datetime(df[DATE_COLUMN])
+    return df.sort_values(DATE_COLUMN).reset_index(drop=True)
+
+
+def _build_ridge_pipeline():
+    """ridge.py::build_ridge_pipeline: SimpleImputer(median) -> StandardScaler -> Ridge."""
+    # pylint: disable=import-outside-toplevel
+    from sklearn.compose import ColumnTransformer
+    from sklearn.impute import SimpleImputer
+    from sklearn.linear_model import Ridge
+    from sklearn.pipeline import Pipeline
+    from sklearn.preprocessing import StandardScaler
+    # pylint: enable=import-outside-toplevel
+
+    numeric_preprocessor = Pipeline(
+        steps=[
+            ("imputer", SimpleImputer(strategy=IMPUTER_STRATEGY)),
+            ("scaler", StandardScaler()),
+        ]
+    )
+    return Pipeline(steps=[
+        (
+            "preprocessor",
+            ColumnTransformer(
+                transformers=[("numeric", numeric_preprocessor, list(FEATURE_COLUMNS))],
+                remainder="drop",
+            ),
+        ),
+        ("model", Ridge(alpha=RIDGE_ALPHA)),
+    ])
+
+
+def _train_metrics(
+    y_train: np.ndarray, y_pred: np.ndarray, *,
+    previous_actual: np.ndarray, train_series: np.ndarray,
+) -> dict:
+    """In-sample MAE/RMSE/n_samples plus MASE, R² and directional accuracy when defined."""
+    mae = float(np.mean(np.abs(y_train - y_pred)))
+    rmse = float(np.sqrt(np.mean((y_train - y_pred) ** 2)))
+
+    diff_scale = float(np.mean(np.abs(np.diff(train_series)))) if len(train_series) > 1 else 0.0
+    mase = (mae / diff_scale) if not np.isclose(diff_scale, 0.0) else None
+
+    denom = float(np.sum((y_train - np.mean(y_train)) ** 2))
+    r2_train = (
+        (1.0 - float(np.sum((y_train - y_pred) ** 2)) / denom)
+        if not np.isclose(denom, 0.0)
+        else None
+    )
+
+    actual_direction = np.sign(y_train - previous_actual)
+    predicted_direction = np.sign(y_pred - previous_actual)
+    valid_mask = (actual_direction != 0) & (predicted_direction != 0)
+    directional_accuracy = (
+        float(np.mean(actual_direction[valid_mask] == predicted_direction[valid_mask]))
+        if np.any(valid_mask) else None
+    )
+
+    return {
+        "mae": mae,
+        "rmse": rmse,
+        "n_samples": len(y_train),
+        **({"mase": mase} if mase is not None else {}),
+        **({"r2_train": r2_train} if r2_train is not None else {}),
+        **(
+            {"directional_accuracy": directional_accuracy}
+            if directional_accuracy is not None
+            else {}
+        ),
+    }
+
+
+def _round4(value: float | None) -> float | None:
+    """Round an optional metric to 4 decimals for the response."""
+    return round(value, 4) if value is not None else None
+
+
+class Ml17MeatMarketPriceAnalysisPlugin(PluginRuntimeMixin, ModelPluginPort):
     """Ridge regression plugin for pork price forecasting (official_v1_4)."""
 
     BASE_ARTIFACT_FOLDER = ARTIFACT_FOLDER_NAME   # every /train publishes the new base model
@@ -134,10 +227,6 @@ class Ml17MeatMarketPriceAnalysisPlugin(ModelPluginPort):
     def is_loaded(self) -> bool:
         """Return True when the Ridge model is ready for inference."""
         return self._model is not None
-
-    def _require_loaded(self) -> None:
-        if self._model is None:
-            raise ModelNotLoadedError("El modelo no está cargado.")
 
     def _build_frame(self, features: dict) -> pd.DataFrame:
         month_sin, month_cos = _seasonal_from_row(features)
@@ -165,10 +254,10 @@ class Ml17MeatMarketPriceAnalysisPlugin(ModelPluginPort):
         }
         return pd.DataFrame([row])[FEATURE_COLUMNS]
 
-    def _record(self, elapsed_ms: float) -> None:
-        self._predict_count += 1
+    def _record(self, elapsed_ms: float = 0.0) -> None:
+        """Count one served prediction (mixin) and accumulate its latency for stats()."""
+        super()._record()
         self._total_latency_ms += elapsed_ms
-        self._last_predict_at = datetime.now(tz=timezone.utc).isoformat()
 
     def _resolve_model(self, mlflow_run_id: str) -> tuple[Any, str | None]:
         """Return (model, temp_dir) to serve this request.
@@ -194,8 +283,7 @@ class Ml17MeatMarketPriceAnalysisPlugin(ModelPluginPort):
         """Predict pork price t+1 from a single feature dict."""
         _ = model_key, threshold
         model, user_temp_dir = self._resolve_model(mlflow_run_id)
-        try:
-
+        with removing_dir(user_temp_dir):
             date_str = features.get("date", "")
             t0 = time.perf_counter()
             x = self._build_frame(features)
@@ -216,47 +304,43 @@ class Ml17MeatMarketPriceAnalysisPlugin(ModelPluginPort):
                 base_date=_iso_date(date_str),
                 xai_feature_values=xai_fv,
             )
-        finally:
-            if user_temp_dir:
-                shutil.rmtree(user_temp_dir, ignore_errors=True)
 
-    # pylint: disable-next=too-many-locals
+    def _predict_batch_row(self, model: Any, idx: int, row_dict: dict) -> dict:
+        """One predict_batch row: its prediction, or its error (a bad row never fails the batch)."""
+        date_val = _find_date(row_dict)
+        try:
+            x = self._build_frame(row_dict)
+            y_pred = float(model.predict(x)[0])
+            return {
+                "row": idx,
+                "date": _iso_date(date_val) if date_val is not None else "",
+                "y_pred": y_pred,
+                "model_id": MODEL_ID,
+                "line": LINE,
+                "xai_feature_values": {
+                    col: float(x.iloc[0][col]) for col in FEATURE_COLUMNS
+                },
+            }
+        except Exception as exc:  # pylint: disable=broad-exception-caught  # per-row guard
+            logger.warning("Error en fila %s: %s", idx, exc)
+            return {
+                "row": idx,
+                "date": _iso_date(date_val) if date_val is not None else "",
+                "error": str(exc),
+            }
+
     def predict_batch(
         self, *, data_path: str, mlflow_run_id: str = ""
     ) -> PredictBatchResponse:
         """Predict pork price t+1 for every row in a CSV."""
         model, user_temp_dir = self._resolve_model(mlflow_run_id)
-        try:
-
+        with removing_dir(user_temp_dir):
             with local_file_path(data_path) as local_path:
                 df = pd.read_csv(local_path)
             predictions: list[dict] = []
             t0 = time.perf_counter()
             for idx, row in df.iterrows():
-                row_dict = row.to_dict()
-                date_val = _find_date(row_dict)
-                try:
-                    x = self._build_frame(row_dict)
-                    y_pred = float(model.predict(x)[0])
-                    predictions.append(
-                        {
-                            "row": int(idx),
-                            "date": _iso_date(date_val) if date_val is not None else "",
-                            "y_pred": y_pred,
-                            "model_id": MODEL_ID,
-                            "line": LINE,
-                            "xai_feature_values": {
-                                col: float(x.iloc[0][col]) for col in FEATURE_COLUMNS
-                            },
-                        }
-                    )
-                except Exception as exc:  # pylint: disable=broad-exception-caught
-                    logger.warning("Error en fila %s: %s", idx, exc)
-                    predictions.append({
-                        "row": int(idx),
-                        "date": _iso_date(date_val) if date_val is not None else "",
-                        "error": str(exc),
-                    })
+                predictions.append(self._predict_batch_row(model, int(idx), row.to_dict()))
             self._record((time.perf_counter() - t0) * 1000)
             logger.info(
                 "predict_batch done — %d rows count=%d mlflow=%s",
@@ -265,11 +349,7 @@ class Ml17MeatMarketPriceAnalysisPlugin(ModelPluginPort):
             return PredictBatchResponse(
                 model_id=MODEL_ID, line=LINE, predictions=predictions, output_path=None
             )
-        finally:
-            if user_temp_dir:
-                shutil.rmtree(user_temp_dir, ignore_errors=True)
 
-    # pylint: disable-next=too-many-locals
     def train(self, *, data_path: str, mlflow_run_id: str) -> TrainResponse:
         """Refit the Ridge pipeline on a user CSV (one-step-ahead t -> t+1 supervision).
 
@@ -281,92 +361,22 @@ class Ml17MeatMarketPriceAnalysisPlugin(ModelPluginPort):
         (persist_retrained_bundle) and, if mlflow_run_id is given, also saved to that run; the
         container then serves the new base.
         """
-        # pylint: disable=import-outside-toplevel
-        from sklearn.compose import ColumnTransformer
-        from sklearn.impute import SimpleImputer
-        from sklearn.linear_model import Ridge
-        from sklearn.pipeline import Pipeline
-        from sklearn.preprocessing import StandardScaler
-        import joblib
-        # pylint: enable=import-outside-toplevel
-
         tracker = BaseMLflowTracker(mlflow_run_id)
 
-        with local_file_path(data_path) as local_path:
-            df = pd.read_csv(local_path)
-
-        missing = [c for c in TRAIN_REQUIRED_COLUMNS if c not in df.columns]
-        if missing:
-            raise ValueError(f"CSV falta columnas requeridas: {missing}")
-        if len(df) < 2:
-            raise ValueError(
-                "Se requieren al menos 2 filas mensuales para entrenar (supervisión "
-                "one-step-ahead t -> t+1)."
-            )
-
-        df = df.copy()
-        df[DATE_COLUMN] = pd.to_datetime(df[DATE_COLUMN])
-        df = df.sort_values(DATE_COLUMN).reset_index(drop=True)
-
+        df = _read_train_frame(data_path)
         x_train = df.iloc[:-1][FEATURE_COLUMNS].copy()
         y_train = df.iloc[1:][TARGET_COLUMN].to_numpy(dtype=float)
-        previous_actual = x_train[TARGET_COLUMN].to_numpy(dtype=float)
-        train_series = df[TARGET_COLUMN].to_numpy(dtype=float)
 
-        numeric_preprocessor = Pipeline(
-            steps=[
-                ("imputer", SimpleImputer(strategy=IMPUTER_STRATEGY)),
-                ("scaler", StandardScaler()),
-            ]
-        )
-        new_model = Pipeline(steps=[
-            (
-                "preprocessor",
-                ColumnTransformer(
-                    transformers=[("numeric", numeric_preprocessor, list(FEATURE_COLUMNS))],
-                    remainder="drop",
-                ),
-            ),
-            ("model", Ridge(alpha=RIDGE_ALPHA)),
-        ])
+        new_model = _build_ridge_pipeline()
         new_model.fit(x_train, y_train)
 
-        y_pred = new_model.predict(x_train)
-        mae = float(np.mean(np.abs(y_train - y_pred)))
-        rmse = float(np.sqrt(np.mean((y_train - y_pred) ** 2)))
-
-        diff_scale = float(np.mean(np.abs(np.diff(train_series)))) if len(train_series) > 1 else 0.0
-        mase = (mae / diff_scale) if not np.isclose(diff_scale, 0.0) else None
-
-        denom = float(np.sum((y_train - np.mean(y_train)) ** 2))
-        r2_train = (
-            (1.0 - float(np.sum((y_train - y_pred) ** 2)) / denom)
-            if not np.isclose(denom, 0.0)
-            else None
+        metrics = _train_metrics(
+            y_train, new_model.predict(x_train),
+            previous_actual=x_train[TARGET_COLUMN].to_numpy(dtype=float),
+            train_series=df[TARGET_COLUMN].to_numpy(dtype=float),
         )
-
-        actual_direction = np.sign(y_train - previous_actual)
-        predicted_direction = np.sign(y_pred - previous_actual)
-        valid_mask = (actual_direction != 0) & (predicted_direction != 0)
-        directional_accuracy = (
-            float(np.mean(actual_direction[valid_mask] == predicted_direction[valid_mask]))
-            if np.any(valid_mask) else None
-        )
-
-        metrics = {
-            "mae": mae,
-            "rmse": rmse,
-            "n_samples": len(x_train),
-            **({"mase": mase} if mase is not None else {}),
-            **({"r2_train": r2_train} if r2_train is not None else {}),
-            **(
-                {"directional_accuracy": directional_accuracy}
-                if directional_accuracy is not None
-                else {}
-            ),
-        }
         bundle_dir = tempfile.mkdtemp(prefix="ml17_train_")
-        try:
+        with removing_dir(bundle_dir):
             joblib.dump(new_model, f"{bundle_dir}/{MODEL_FILENAME}")
 
             def _upload_to_mlflow() -> None:
@@ -382,22 +392,18 @@ class Ml17MeatMarketPriceAnalysisPlugin(ModelPluginPort):
                 bundle_dir, artifact_folder=ARTIFACT_FOLDER_NAME, data_path=data_path,
                 metrics=metrics, mlflow_run_id=mlflow_run_id, upload_to_mlflow=_upload_to_mlflow,
             )
-        finally:
-            shutil.rmtree(bundle_dir, ignore_errors=True)
 
         logger.info(
             "train() done — mae=%.4f rmse=%.4f n=%d mlflow_run_id=%s",
-            mae, rmse, len(x_train), mlflow_run_id,
+            metrics["mae"], metrics["rmse"], len(x_train), mlflow_run_id,
         )
         return TrainResponse(
             detail=f"Reentrenamiento completado — modelo base {persisted.base_version['version']}.",
-            mae=round(mae, 4),
-            rmse=round(rmse, 4),
-            mase=round(mase, 4) if mase is not None else None,
-            r2_train=round(r2_train, 4) if r2_train is not None else None,
-            directional_accuracy=(
-                round(directional_accuracy, 4) if directional_accuracy is not None else None
-            ),
+            mae=round(metrics["mae"], 4),
+            rmse=round(metrics["rmse"], 4),
+            mase=_round4(metrics.get("mase")),
+            r2_train=_round4(metrics.get("r2_train")),
+            directional_accuracy=_round4(metrics.get("directional_accuracy")),
             n_samples=int(len(x_train)),
             upload_warning=persisted.upload_warning,
             base_version=persisted.base_version,
@@ -476,14 +482,4 @@ class Ml17MeatMarketPriceAnalysisPlugin(ModelPluginPort):
                 avg_latency_ms=round(avg, 1) if avg is not None else None,
             ),
         )
-        if mlflow_run_id:
-            try:
-                tracker = BaseMLflowTracker(mlflow_run_id)
-                base.metrics["mlflow"] = {
-                    "params": tracker.get_params(),
-                    "metrics": tracker.get_metrics(),
-                }
-                logger.info("Stats enriched with MLflow data for run_id=%s", mlflow_run_id)
-            except Exception as exc:  # pylint: disable=broad-exception-caught
-                logger.warning("Could not fetch MLflow stats for run_id=%s: %s", mlflow_run_id, exc)
-        return base
+        return add_mlflow_run_to_stats(base, mlflow_run_id)

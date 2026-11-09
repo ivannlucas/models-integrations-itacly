@@ -30,9 +30,19 @@ def _annotated_scale(w: int, h: int) -> tuple[float, float]:
     return 1.0, 1.0
 
 
-def render_annotated_image(  # pylint: disable=too-many-locals
-    image_pil, detections: list[dict[str, Any]]
-) -> str:
+def _draw_detection(draw, d: dict[str, Any], scale_w: float, scale_h: float) -> None:
+    """Draw the (rescaled) bounding box and label of detection *d*."""
+    bbox = d["bbox"]
+    x1 = bbox["x1"] * scale_w
+    y1 = bbox["y1"] * scale_h
+    x2 = bbox["x2"] * scale_w
+    y2 = bbox["y2"] * scale_h
+    color = SPECIES_COLORS.get(d["species"], (255, 0, 0))
+    draw.rectangle([x1, y1, x2, y2], outline=color, width=2)
+    draw.text((x1 + 2, max(y1 - 14, 0)), f"{d['species']} {d['cls_conf']:.2f}", fill=color)
+
+
+def render_annotated_image(image_pil, detections: list[dict[str, Any]]) -> str:
     """Draw detection bounding boxes on *image_pil* and return it as base64 JPEG."""
     img = image_pil.convert("RGB")
 
@@ -46,14 +56,7 @@ def render_annotated_image(  # pylint: disable=too-many-locals
 
     draw = ImageDraw.Draw(img)
     for d in detections:
-        bbox = d["bbox"]
-        x1 = bbox["x1"] * scale_w
-        y1 = bbox["y1"] * scale_h
-        x2 = bbox["x2"] * scale_w
-        y2 = bbox["y2"] * scale_h
-        color = SPECIES_COLORS.get(d["species"], (255, 0, 0))
-        draw.rectangle([x1, y1, x2, y2], outline=color, width=2)
-        draw.text((x1 + 2, max(y1 - 14, 0)), f"{d['species']} {d['cls_conf']:.2f}", fill=color)
+        _draw_detection(draw, d, scale_w, scale_h)
 
     buf = io.BytesIO()
     img.save(buf, format="JPEG", quality=JPEG_QUALITY)

@@ -30,7 +30,7 @@ def safe_device():
     try:
         torch.nn.Conv2d(1, 1, 1).cuda()(torch.zeros(1, 1, 4, 4).cuda())
         return torch.device("cuda")
-    except Exception:  # pylint: disable=broad-exception-caught
+    except Exception:  # pylint: disable=broad-exception-caught  # any CUDA failure → CPU
         logger.warning("CUDA detectada pero no funcional para operaciones de red — usando CPU.")
         return torch.device("cpu")
 

@@ -136,7 +136,18 @@ def _feature_matrix(df: pd.DataFrame) -> pd.DataFrame:
     )
 
 
-def train_model(df: pd.DataFrame, *, alpha: float = ALPHA) -> dict:  # pylint: disable=too-many-locals
+def _test_metrics(model: Pipeline, evaluable: pd.DataFrame) -> tuple[dict, dict]:
+    """(model metrics, persistence-baseline metrics) on the evaluable test rows."""
+    y_true = evaluable[TARGET_COLUMN].to_numpy(dtype=float)
+    y_anchor = evaluable[ANCHOR_COLUMN].to_numpy(dtype=float)
+    y_pred = np.asarray(model.predict(_feature_matrix(evaluable)), dtype=float)
+    return (
+        regression_metrics(y_true, y_pred, y_anchor),
+        regression_metrics(y_true, y_anchor, y_anchor),
+    )
+
+
+def train_model(df: pd.DataFrame, *, alpha: float = ALPHA) -> dict:
     """Fit the deployed Pipeline on the train split and evaluate it on the test split.
 
     Raises ValueError for a CSV without the required columns, or too short to leave training
@@ -175,11 +186,7 @@ def train_model(df: pd.DataFrame, *, alpha: float = ALPHA) -> dict:  # pylint: d
     metrics: dict[str, float | None] = dict.fromkeys(("rmse", "mae", "mape_pct", "r2", "mda_pct"))
     baseline: dict[str, float | None] = dict.fromkeys(("rmse", "mae", "mape_pct", "r2", "mda_pct"))
     if not evaluable.empty:
-        y_true = evaluable[TARGET_COLUMN].to_numpy(dtype=float)
-        y_anchor = evaluable[ANCHOR_COLUMN].to_numpy(dtype=float)
-        y_pred = np.asarray(model.predict(_feature_matrix(evaluable)), dtype=float)
-        metrics = regression_metrics(y_true, y_pred, y_anchor)
-        baseline = regression_metrics(y_true, y_anchor, y_anchor)
+        metrics, baseline = _test_metrics(model, evaluable)
 
     result = {
         "model": model,

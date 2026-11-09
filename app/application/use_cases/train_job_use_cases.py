@@ -113,7 +113,7 @@ class SubmitTrainJobUseCase:
             return record
 
 
-class GetTrainJobUseCase:  # pylint: disable=too-few-public-methods
+class GetTrainJobUseCase:
     """Return a job; a non-terminal job that outlived TRAIN_JOB_MAX_DURATION_S (timeout) or stopped
     heart-beating (lost) is reported, and persisted, as failed."""
 

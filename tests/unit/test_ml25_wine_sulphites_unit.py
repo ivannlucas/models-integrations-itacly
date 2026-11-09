@@ -301,7 +301,7 @@ class TestSelectRecommendation:
 
 # ── model_loader tests ────────────────────────────────────────────────────
 
-class TestLoadArtifacts:  # pylint: disable=too-few-public-methods
+class TestLoadArtifacts:
     """Tests for load_artifacts() with mocked external I/O."""
 
     def test_returns_models_and_metadata(self, tmp_path):
@@ -357,7 +357,7 @@ class TestMl25WineSulphitesPluginDirect:
         assert stats.runtime_stats.total_predictions == 0
         assert stats.runtime_stats.avg_latency_ms is None
 
-    @patch("app.plugins.ml25_wine_sulphites.plugin.BaseMLflowTracker")
+    @patch("app.domain.services.mlflow_artifacts.BaseMLflowTracker")
     @patch("app.plugins.ml25_wine_sulphites.plugin.load_artifacts")
     def test_train_raises_file_not_found_for_missing_path(self, mock_load, _mock_tracker):
         """Verify train() raises FileNotFoundError when the data file does not exist."""

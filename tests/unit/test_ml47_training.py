@@ -5,6 +5,7 @@ Ports of the AI team's two procedures (inbox/a47/codigo):
 ``fine_tune`` = src/fine_tuning/fine_tuner.py (``main.py fine_tune``). The synthetic cycles below
 are small but shaped like the delivered CSVs (Cycle_ID, Time_Segundos, 7 sensors, Target_*).
 """
+# pylint: disable=protected-access  # tests of the plugin/trainer internals
 import shutil
 from pathlib import Path
 
@@ -16,6 +17,7 @@ import torch
 from sklearn.preprocessing import StandardScaler
 
 from app.application.use_cases.train_model_use_case import TrainModelUseCase
+from app.domain.services import mlflow_artifacts
 from app.plugins.ml47_dairy_dnsl_pasteurization_fault_detection import (
     constants,
     mlflow_utils,
@@ -131,7 +133,7 @@ def test_tensors_follow_ascending_cycle_id_like_the_original():
 def test_augmented_copies_keep_the_order_of_their_source_cycles():
     """Augmented copies follow the sorted order of their source cycles."""
     df = _cycles(n_cycles=6)
-    _, ids = trainer._augment_train_cycles(  # pylint: disable=protected-access
+    _, ids = trainer._augment_train_cycles(
         df, np.array([4, 1, 3])
     )
     assert list(ids[3:]) == [6, 7, 8]  # copies of 1, 3, 4 in that order
@@ -267,7 +269,7 @@ def test_use_case_forwards_mode_to_the_plugin():
     """TrainModelUseCase forwards the requested mode to plugin.train()."""
     calls = []
 
-    class Plugin:  # pylint: disable=too-few-public-methods
+    class Plugin:
         """Stub plugin that records the mode it is trained with."""
 
         def train(self, *, data_path, mlflow_run_id, mode="fine_tune"):
@@ -319,6 +321,7 @@ def fixture_plugin_with_mlflow(monkeypatch, tmp_path):
             return str(shutil.copytree(source, Path(dest_dir) / artifact_path))
 
     monkeypatch.setattr(mlflow_utils, "BaseMLflowTracker", FolderTracker)
+    monkeypatch.setattr(mlflow_artifacts, "BaseMLflowTracker", FolderTracker)
     base, scaler, cols = _base_artifacts()
     monkeypatch.setattr(plugin, "load_artifacts_from_dir", lambda path: (base, scaler, cols, 45.0))
     monkeypatch.delenv("STORAGE_BUCKET", raising=False)
@@ -345,7 +348,7 @@ def test_train_registers_a_new_model_in_mlflow_and_predict_uses_it(
                                constants.FEATURE_COLUMNS_FILENAME, constants.TS1_MEAN_FILENAME])
 
     # What predict(mlflow_run_id="run-ft") loads is the retrained model, not the served one…
-    ctx = instance._load_model_for_predict("run-ft")  # pylint: disable=protected-access
+    ctx = instance._load_model_for_predict("run-ft")
     registered = ctx["model"].state_dict()
     assert any(
         not torch.equal(registered[k].cpu(), base_before[k])
@@ -353,8 +356,8 @@ def test_train_registers_a_new_model_in_mlflow_and_predict_uses_it(
         if k.startswith("head_")
     )
     # …while the served model, used without mlflow_run_id, is untouched.
-    assert instance._load_model_for_predict("") is None  # pylint: disable=protected-access
-    served = instance._model.state_dict()  # pylint: disable=protected-access
+    assert instance._load_model_for_predict("") is None
+    served = instance._model.state_dict()
     assert all(torch.equal(served[k].cpu(), v) for k, v in base_before.items())
 
 

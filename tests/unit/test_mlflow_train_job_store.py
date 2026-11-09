@@ -1,4 +1,5 @@
 """MLflowTrainJobStore against a mocked MlflowClient."""
+# pylint: disable=protected-access  # checks the lazily built client state
 from __future__ import annotations
 
 import json
@@ -259,5 +260,5 @@ def test_pickling_drops_the_client():
     """Pickling the store drops the client and keeps the tracking URI."""
     store = MLflowTrainJobStore(tracking_uri="http://mlflow:5000", client=MagicMock())
     clone = pickle.loads(pickle.dumps(store))
-    assert clone._client is None  # pylint: disable=protected-access
-    assert clone._tracking_uri == "http://mlflow:5000"  # pylint: disable=protected-access
+    assert clone._client is None
+    assert clone._tracking_uri == "http://mlflow:5000"

@@ -190,6 +190,26 @@ def _build_synthetic_cereal_csv(n_windows: int, corrupt_test_fold: bool) -> pd.D
     return df
 
 
+def _build_one_window_cycles_csv(cycle_labels):
+    """One SEQ_LENGTH-row cycle per label; non-NORMAL cycles are shifted by +50 on every sensor."""
+    rng = np.random.default_rng(99)
+    frames = []
+    for cycle_idx, label in enumerate(cycle_labels):
+        values = {
+            col: 20.0 + 3.0 * i + rng.normal(0, 0.1, SEQ_LENGTH)
+            for i, col in enumerate(SENSOR_COLUMNS)
+        }
+        if label != "NORMAL":
+            for col in SENSOR_COLUMNS:
+                values[col] += 50.0
+        frame = pd.DataFrame(values)
+        frame["cycle_id"] = f"cycle_{cycle_idx}"
+        frame["timestamp"] = pd.date_range("2026-01-01", periods=SEQ_LENGTH, freq="min")
+        frame["fault_name"] = label
+        frames.append(frame)
+    return pd.concat(frames, ignore_index=True)
+
+
 class TestTrainCheckpointSelectionUsesOnlyValidation:
     """Regression test for the modelo 43-44 audit (Fase 1): the checkpoint selected
     during training must never be influenced by the held-out test set.
@@ -315,7 +335,6 @@ class TestTrainCheckpointSelectionUsesOnlyValidation:
         assert logged_metrics["fallo_precision"] == resp.fallo_precision
         assert logged_metrics["fallo_recall"] == resp.fallo_recall
 
-    # pylint: disable-next=too-many-locals
     def test_decision_threshold_calibration_on_a_mixed_class_validation_fold(self, tmp_path):
         """The single-cycle synthetic CSV above falls back to a row-count split (too
         few cycle_ids) — see test above. This builds 10 minimal one-window cycles
@@ -327,22 +346,7 @@ class TestTrainCheckpointSelectionUsesOnlyValidation:
         single-class sweep)."""
         cycle_labels = ["NORMAL"] * 6 + ["VALVULA_OBSTRUIDA", "NORMAL"] + ["NORMAL"] * 2
 
-        rng = np.random.default_rng(99)
-        frames = []
-        for cycle_idx, label in enumerate(cycle_labels):
-            values = {
-                col: 20.0 + 3.0 * i + rng.normal(0, 0.1, SEQ_LENGTH)
-                for i, col in enumerate(SENSOR_COLUMNS)
-            }
-            if label != "NORMAL":
-                for col in SENSOR_COLUMNS:
-                    values[col] += 50.0
-            frame = pd.DataFrame(values)
-            frame["cycle_id"] = f"cycle_{cycle_idx}"
-            frame["timestamp"] = pd.date_range("2026-01-01", periods=SEQ_LENGTH, freq="min")
-            frame["fault_name"] = label
-            frames.append(frame)
-        df = pd.concat(frames, ignore_index=True)
+        df = _build_one_window_cycles_csv(cycle_labels)
 
         csv_path = tmp_path / "cereal_train_mixed_val.csv"
         df.to_csv(csv_path, index=False)
@@ -426,7 +430,7 @@ class TestValidateSavedArtifact:
 
 # ── Feedback 3 (modelo 43-44, 09/09/2026): labels + XAI-for-every-window ──────────────
 
-class _FakeExplainer:  # pylint: disable=too-few-public-methods
+class _FakeExplainer:
     """Stand-in for DNFLExplainer — records how many windows it was asked to explain."""
 
     def __init__(self, final_report: dict):
@@ -454,9 +458,10 @@ def test_format_batch_predictions_uses_spanish_labels():
     scores = np.array([0.1, 0.9], dtype=np.float32)  # below / above threshold=0.5
 
     predictions = postprocessing.format_batch_predictions(
-        x_arr, scores, cycle_ids=None, threshold=0.5,
-        explainer=None, xai_background=None,
-        X_scaled=x_arr, stats_scaled=stats_scaled,
+        x_arr, scores, threshold=0.5,
+        xai=postprocessing.XaiInputs(
+            explainer=None, background=None, x_scaled=x_arr, stats_scaled=stats_scaled,
+        ),
     )
     assert predictions[0]["predicted_anomaly_label"] == "No Fallo"
     assert predictions[1]["predicted_anomaly_label"] == "Fallo"
@@ -475,10 +480,12 @@ def test_format_batch_predictions_runs_xai_for_every_window_not_only_failures():
     scores = np.array([0.1, 0.9], dtype=np.float32)  # No Fallo / Fallo
 
     predictions = postprocessing.format_batch_predictions(
-        x_arr, scores, cycle_ids=None, threshold=0.5,
-        explainer=explainer,
-        xai_background=np.zeros((4, SEQ_LENGTH, len(SENSOR_COLUMNS)), dtype=np.float32),
-        X_scaled=x_arr, stats_scaled=stats_scaled,
+        x_arr, scores, threshold=0.5,
+        xai=postprocessing.XaiInputs(
+            explainer=explainer,
+            background=np.zeros((4, SEQ_LENGTH, len(SENSOR_COLUMNS)), dtype=np.float32),
+            x_scaled=x_arr, stats_scaled=stats_scaled,
+        ),
     )
     assert explainer.calls == 2, "run_xai must run for both the No Fallo and the Fallo window"
     assert predictions[0]["xai_result"] == final_report

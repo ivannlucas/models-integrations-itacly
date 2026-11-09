@@ -6,13 +6,12 @@ from __future__ import annotations
 
 import logging
 import os
-import shutil
-import tempfile
 
 import joblib
 import numpy as np
 import torch
 
+from app.domain.services.mlflow_artifacts import download_run_artifacts
 from app.domain.services.mlflow_tracker import BaseMLflowTracker, require_user_model
 from app.plugins.ml45_cereals_dnsl_critical_point_detection._vendor.model import (
     ParallelDeepNeuroFuzzyModel,
@@ -34,40 +33,37 @@ def download_user_model_from_mlflow(run_id: str):
     """Download a user fine-tuned m45 model from MLflow.
 
     Returns (model, model_cfg, scaler_x, scaler_num, xai_background, threshold, temp_dir) or None.
-    Caller MUST shutil.rmtree(temp_dir) after inference — use try/finally.
+    Caller MUST remove temp_dir after inference (``removing_dir``).
     """
-    tmp = tempfile.mkdtemp(prefix="mlflow_ml45_")
-    try:
-        local_path = BaseMLflowTracker(run_id).download_artifacts(tmp, artifact_path="model")
-        if not local_path:
-            shutil.rmtree(tmp, ignore_errors=True)
-            return None
+    loaded = download_run_artifacts(run_id, _load, prefix="mlflow_ml45_")
+    if loaded is None:
+        return None
+    bundle, tmp = loaded
+    return (*bundle, tmp)
 
-        checkpoint_path = os.path.join(local_path, MODEL_FILENAME)
-        checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
-        model_cfg = checkpoint["model_cfg"]
 
-        model = ParallelDeepNeuroFuzzyModel(model_cfg)
-        model.load_state_dict(checkpoint["model_state_dict"])
-        model.eval()
+def _load(local_path: str):
+    """Rebuild model, scalers, XAI background and threshold from a downloaded ``model`` folder."""
+    checkpoint_path = os.path.join(local_path, MODEL_FILENAME)
+    checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+    model_cfg = checkpoint["model_cfg"]
 
-        scalers = joblib.load(os.path.join(local_path, SCALER_FILENAME))
+    model = ParallelDeepNeuroFuzzyModel(model_cfg)
+    model.load_state_dict(checkpoint["model_state_dict"])
+    model.eval()
 
-        bg_path = os.path.join(local_path, XAI_BACKGROUND_FILENAME)
-        xai_background = np.load(bg_path) if os.path.exists(bg_path) else None
+    scalers = joblib.load(os.path.join(local_path, SCALER_FILENAME))
 
-        threshold = float(
-            model_cfg.get("training_kwargs", {}).get("threshold", DEFAULT_THRESHOLD)
-        )
+    bg_path = os.path.join(local_path, XAI_BACKGROUND_FILENAME)
+    xai_background = np.load(bg_path) if os.path.exists(bg_path) else None
 
-        logger.info("Downloaded user model from MLflow run_id=%s", run_id)
-        return (
-            model, model_cfg, scalers["scaler_x"], scalers["scaler_num"], xai_background,
-            threshold, tmp,
-        )
-    except BaseException:
-        shutil.rmtree(tmp, ignore_errors=True)
-        raise
+    threshold = float(
+        model_cfg.get("training_kwargs", {}).get("threshold", DEFAULT_THRESHOLD)
+    )
+    return (
+        model, model_cfg, scalers["scaler_x"], scalers["scaler_num"], xai_background,
+        threshold,
+    )
 
 
 def upload_artifacts_to_mlflow(

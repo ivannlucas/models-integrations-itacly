@@ -7,7 +7,7 @@ from app.plugins.ml40_meat_refrigeration_aeration_fault_diagnosis.postprocessing
 )
 
 
-class _FakeScaler:  # pylint: disable=too-few-public-methods
+class _FakeScaler:
     """Stand-in for a fitted sklearn scaler."""
 
     feature_names_in_ = ["sensor_a", "sensor_b"]

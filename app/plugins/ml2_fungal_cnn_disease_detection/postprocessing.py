@@ -16,7 +16,19 @@ JPEG_QUALITY = 70
 HEATMAP_ALPHA = 0.4
 
 
-# pylint: disable-next=too-many-locals
+def _class_activation_map(
+    feature_map: torch.Tensor, classifier_weight: torch.Tensor, class_idx: int
+) -> np.ndarray:
+    """CAM of ``class_idx``: ReLU of the classifier-weighted sum of the feature maps, in [0, 1]."""
+    weights = classifier_weight[class_idx].detach().cpu().numpy()  # (C,)
+    feat = feature_map[0].detach().cpu().numpy()  # (C, H, W)
+    cam = np.tensordot(weights, feat, axes=([0], [0]))  # (H, W)
+    cam = np.maximum(cam, 0)
+    if cam.max() > 0:
+        cam = cam / cam.max()
+    return cam
+
+
 def compute_and_encode_cam(
     feature_map: torch.Tensor,
     classifier_weight: torch.Tensor,
@@ -31,12 +43,7 @@ def compute_and_encode_cam(
     pass: just a weighted sum of that block's feature maps, weighted by the predicted
     class's own classifier row. For this architecture Grad-CAM reduces to the same result.
     """
-    weights = classifier_weight[class_idx].detach().cpu().numpy()  # (C,)
-    feat = feature_map[0].detach().cpu().numpy()  # (C, H, W)
-    cam = np.tensordot(weights, feat, axes=([0], [0]))  # (H, W)
-    cam = np.maximum(cam, 0)
-    if cam.max() > 0:
-        cam = cam / cam.max()
+    cam = _class_activation_map(feature_map, classifier_weight, class_idx)
 
     img = original_image.convert("RGB")
     w, h = img.size

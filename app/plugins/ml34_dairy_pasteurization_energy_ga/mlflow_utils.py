@@ -2,15 +2,13 @@
 from __future__ import annotations
 
 import json
-import logging
 import os
-import shutil
-import tempfile
 
 import joblib
 import torch
 
-from app.domain.services.mlflow_tracker import BaseMLflowTracker, require_user_model
+from app.domain.services.mlflow_artifacts import download_run_artifacts
+from app.domain.services.mlflow_tracker import require_user_model
 from app.plugins.ml34_dairy_pasteurization_energy_ga.constants import (
     MODEL_CONFIG_FILENAME,
     MODEL_FILENAME,
@@ -19,45 +17,40 @@ from app.plugins.ml34_dairy_pasteurization_energy_ga.constants import (
 )
 from app.plugins.ml34_dairy_pasteurization_energy_ga.model_loader import build_model_from_config
 
-logger = logging.getLogger(__name__)
-
 
 @require_user_model
 def download_user_model_from_mlflow(run_id: str):
     """Download a user fine-tuned MLP from MLflow.
 
     Returns (model, scaler_X, scaler_y, config, temp_dir).
-    Caller MUST shutil.rmtree(temp_dir) after inference — use try/finally.
+    Caller MUST remove temp_dir after inference (``removing_dir``).
 
     The architecture is rebuilt dynamically from the downloaded
     model_config.json, so a retrained model with a different topology
     still loads correctly.
     """
-    tmp = tempfile.mkdtemp(prefix="mlflow_ml34_")
-    try:
-        local_path = BaseMLflowTracker(run_id).download_artifacts(tmp, artifact_path="model")
-        if not local_path:
-            shutil.rmtree(tmp, ignore_errors=True)
-            return None
+    loaded = download_run_artifacts(run_id, _load, prefix="mlflow_ml34_")
+    if loaded is None:
+        return None
+    (model, scaler_x, scaler_y, config), tmp = loaded
+    return model, scaler_x, scaler_y, config, tmp
 
-        with open(os.path.join(local_path, MODEL_CONFIG_FILENAME), "r", encoding="utf-8") as f:
-            config = json.load(f)
 
-        model = build_model_from_config(config)
-        model.load_state_dict(
-            torch.load(
-                os.path.join(local_path, MODEL_FILENAME),
-                map_location="cpu",
-                weights_only=True,
-            )
+def _load(local_path: str):
+    """Rebuild the MLP (from its config), its weights and both scalers from ``local_path``."""
+    with open(os.path.join(local_path, MODEL_CONFIG_FILENAME), "r", encoding="utf-8") as f:
+        config = json.load(f)
+
+    model = build_model_from_config(config)
+    model.load_state_dict(
+        torch.load(
+            os.path.join(local_path, MODEL_FILENAME),
+            map_location="cpu",
+            weights_only=True,
         )
-        model.eval()
+    )
+    model.eval()
 
-        scaler_X = joblib.load(os.path.join(local_path, SCALER_X_FILENAME))  # pylint: disable=invalid-name
-        scaler_y = joblib.load(os.path.join(local_path, SCALER_Y_FILENAME))
-
-        logger.info("Downloaded user model from MLflow run_id=%s", run_id)
-        return model, scaler_X, scaler_y, config, tmp
-    except BaseException:
-        shutil.rmtree(tmp, ignore_errors=True)
-        raise
+    scaler_x = joblib.load(os.path.join(local_path, SCALER_X_FILENAME))
+    scaler_y = joblib.load(os.path.join(local_path, SCALER_Y_FILENAME))
+    return model, scaler_x, scaler_y, config

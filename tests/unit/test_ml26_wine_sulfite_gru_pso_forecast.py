@@ -5,6 +5,7 @@ exercise the real plugin helpers (preprocessing, postprocessing, restricted unpi
 on small toy inputs — wiring only; numeric correctness against the golden dataset lives in
 outputs/a26/verification_report.md.
 """
+# pylint: disable=protected-access  # the real-plugin tests inject/inspect the loaded model
 import pickle
 from unittest.mock import MagicMock
 
@@ -12,6 +13,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from app.domain.services import mlflow_artifacts
 from app.domain.services.exceptions import (
     InsufficientSequenceHistoryError,
     ModelNotLoadedError,
@@ -417,7 +419,7 @@ def _real_plugin():
     )
 
     plugin = Ml26WineSulfiteGruPsoForecastPlugin()
-    plugin._model = _tiny_loaded_model()  # pylint: disable=protected-access
+    plugin._model = _tiny_loaded_model()
     return plugin
 
 
@@ -431,7 +433,7 @@ def test_real_plugin_inline_operational_and_feature_window():
     assert resp.lot_id == "LOT-T1" and resp.timestamp_index == 29
     assert resp.model_source == "fixed" and len(resp.xai_feature_values) == 22
     # Same contract as the feature_window path: the model's engineered features, not raw columns.
-    model = plugin._model  # pylint: disable=protected-access
+    model = plugin._model
     assert list(resp.xai_feature_values) == model.feature_names
     assert len(resp.xai_feature_window) == 24
     # pylint: disable-next=unsubscriptable-object,no-member  # pydantic fields
@@ -470,28 +472,26 @@ def test_real_plugin_train_uploads_only_to_mlflow(tmp_path, monkeypatch):
     """train() uploads only to MLflow and leaves the served model untouched."""
     # pylint: disable-next=import-outside-toplevel  # torch-heavy plugin module
     from app.plugins.ml26_wine_sulfite_gru_pso_forecast import model_loader
-    # pylint: disable-next=import-outside-toplevel  # torch-heavy plugin module
-    from app.plugins.ml26_wine_sulfite_gru_pso_forecast import plugin as plugin_mod
 
     local_before = set(
-        model_loader._store.local_dir.rglob("*")  # pylint: disable=protected-access
+        model_loader._store.local_dir.rglob("*")
     )
     tracker = MagicMock()
-    monkeypatch.setattr(plugin_mod, "BaseMLflowTracker", MagicMock(return_value=tracker))
+    monkeypatch.setattr(mlflow_artifacts, "BaseMLflowTracker", MagicMock(return_value=tracker))
     csv = tmp_path / "sequential.csv"
     _sequential_training_frame().to_csv(csv, index=False)
     plugin = _real_plugin()
-    network = plugin._model.network  # pylint: disable=protected-access
+    network = plugin._model.network
     before = {k: v.clone() for k, v in network.state_dict().items()}
     resp = plugin.train(data_path=str(csv), mlflow_run_id="run123")
     assert resp.n_lots_train == 5 and resp.n_windows_val > 0
     tracker.upload_artifacts.assert_called_once()
     assert resp.mlflow_run_id == "run123"
     # nothing written locally
-    store = model_loader._store  # pylint: disable=protected-access
+    store = model_loader._store
     assert set(store.local_dir.rglob("*")) == local_before
     assert resp.upload_warning is None
-    for key, value in plugin._model.network.state_dict().items():  # pylint: disable=protected-access
+    for key, value in plugin._model.network.state_dict().items():
         assert (value == before[key]).all()  # served model untouched
 
 
@@ -541,18 +541,16 @@ def test_mlflow_download_without_artifacts_is_a_422_not_the_base_model(monkeypat
     from app.plugins.ml26_wine_sulfite_gru_pso_forecast import mlflow_utils
 
     tracker = MagicMock(download_artifacts=MagicMock(return_value=""))
-    monkeypatch.setattr(mlflow_utils, "BaseMLflowTracker", MagicMock(return_value=tracker))
+    monkeypatch.setattr(mlflow_artifacts, "BaseMLflowTracker", MagicMock(return_value=tracker))
     with pytest.raises(UserModelUnavailableError, match="missing"):
         mlflow_utils.download_user_model_from_mlflow("missing")
 
 
 def test_real_plugin_train_fails_when_mlflow_upload_fails(tmp_path, monkeypatch):
     """A failed MLflow upload raises ModelPersistenceError."""
-    # pylint: disable-next=import-outside-toplevel  # torch-heavy plugin module
-    from app.plugins.ml26_wine_sulfite_gru_pso_forecast import plugin as plugin_mod
 
     tracker = MagicMock(upload_artifacts=MagicMock(side_effect=ConnectionError("mlflow caído")))
-    monkeypatch.setattr(plugin_mod, "BaseMLflowTracker", MagicMock(return_value=tracker))
+    monkeypatch.setattr(mlflow_artifacts, "BaseMLflowTracker", MagicMock(return_value=tracker))
     csv = tmp_path / "sequential.csv"
     _sequential_training_frame().to_csv(csv, index=False)
     with pytest.raises(ModelPersistenceError, match="mlflow caído"):

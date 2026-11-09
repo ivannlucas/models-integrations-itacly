@@ -5,6 +5,7 @@ delivered data/processed/model_ready_panel.csv it reproduces horizon_6_ridge.pkl
 models/metrics/final_evaluation.json exactly; that test needs inbox/a15/codigo (not committed) and
 is skipped without it. The rest runs on small synthetic panels.
 """
+# pylint: disable=protected-access  # the tests inject the loaded payload
 import json
 import shutil
 from pathlib import Path
@@ -119,7 +120,7 @@ def test_retraining_reproduces_the_delivered_artifact_and_final_evaluation():
 def fixture_instance():
     """ml15 plugin with a stub loaded payload (Ridge, horizon 6)."""
     plugin = plugin_mod.Ml15WineIpiPriceForecastPlugin()
-    plugin._payload = {  # pylint: disable=protected-access
+    plugin._payload = {
         "model": object(), "feature_columns": list(FEATURE_COLUMNS),
         "target_column": TARGET_COLUMN, "anchor_column": ANCHOR_COLUMN, "horizon": 6,
         "model_name": "Ridge",
@@ -241,6 +242,21 @@ def test_missing_reference_csv_is_a_value_error_naming_the_field(
     assert not list(temp_dir.iterdir())
 
 
+def test_reference_copies_are_removed_when_training_fails(
+    instance, tmp_path, monkeypatch, reference_env,
+):
+    """Valid reference CSVs but a training error: the validated temp copies are still removed."""
+    current_prices, current_financial, temp_dir = reference_env
+    monkeypatch.setattr(plugin_mod.training, "train_model",
+                        MagicMock(side_effect=ValueError("panel sin filas de test")))
+    csv = tmp_path / "panel.csv"
+    _panel().to_csv(csv, index=False)
+    with pytest.raises(ValueError, match="panel sin filas de test"):
+        instance.train(data_path=str(csv), reference_prices_path=str(current_prices),
+                       reference_financial_path=str(current_financial))
+    assert not list(temp_dir.iterdir())
+
+
 def test_only_one_reference_csv_is_rejected(instance, tmp_path):
     """Passing only one of the two reference CSVs is rejected."""
     with pytest.raises(ValueError, match="juntos"):
@@ -266,7 +282,7 @@ def test_prediction_metadata_follows_the_original(instance, monkeypatch):
     """y_true, feature_status and feature_notes follow the original predictor.py."""
     _reference(monkeypatch)
     model = MagicMock(predict=MagicMock(return_value=np.array([110.0])))
-    instance._payload["model"] = model  # pylint: disable=protected-access
+    instance._payload["model"] = model
 
     known = instance.predict_inline(features={"origin_date": "2023-12"})
     assert (
@@ -287,7 +303,7 @@ def test_prediction_metadata_follows_the_original(instance, monkeypatch):
 def test_origin_date_wins_over_date_like_the_original(instance, monkeypatch):
     """origin_date takes precedence over date, like the original."""
     _reference(monkeypatch)
-    instance._payload["model"] = MagicMock(  # pylint: disable=protected-access
+    instance._payload["model"] = MagicMock(
         predict=MagicMock(return_value=np.array([110.0]))
     )
     resp = instance.predict_inline(features={"origin_date": "2023-12-01", "date": "2023-08-01"})

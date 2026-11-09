@@ -5,6 +5,7 @@ dataset it reproduces model_comparison.json to 4 decimals and the delivered gru_
 (see outputs/a14/verification_report.md); here a small synthetic weekly series runs the same code
 in seconds.
 """
+# pylint: disable=protected-access  # the tests inject the loaded bundle
 import shutil
 from unittest.mock import MagicMock
 
@@ -13,6 +14,7 @@ import pandas as pd
 import pytest
 from sklearn.preprocessing import StandardScaler
 
+from app.domain.services import mlflow_artifacts
 from app.domain.services.exceptions import UserModelUnavailableError
 from app.infrastructure.artifact_store import ArtifactStore
 from app.plugins.ml14_wine_phyto_price_forecast import (
@@ -55,7 +57,7 @@ def fixture_raw_csv(tmp_path):
 def fixture_instance():
     """The real plugin with only the feature contract loaded (the fixed artifacts live in S3)."""
     plugin = plugin_mod.Ml14WinePhytoPriceForecastPlugin()
-    plugin._bundle = {  # pylint: disable=protected-access
+    plugin._bundle = {
         "feature_columns": _features(),
         "model": object(),
     }
@@ -133,7 +135,8 @@ def test_train_uploads_only_to_mlflow_and_the_model_is_served_by_run(
         )
     )
     monkeypatch.setattr(mlflow_utils, "BaseMLflowTracker", MagicMock(return_value=tracker))
-    local_dir = plugin_mod.model_loader._store.local_dir  # pylint: disable=protected-access
+    monkeypatch.setattr(mlflow_artifacts, "BaseMLflowTracker", MagicMock(return_value=tracker))
+    local_dir = plugin_mod.model_loader._store.local_dir
     before = set(local_dir.rglob("*")) if local_dir.exists() else set()
 
     resp = instance.train(data_path=raw_csv, mlflow_run_id="run-1")
@@ -188,6 +191,6 @@ def test_a_promoted_base_loads_with_its_own_scalers(
 def test_predict_with_a_run_without_model_never_uses_the_base(instance, monkeypatch):
     """A run without a model raises UserModelUnavailableError instead of using the base."""
     tracker = MagicMock(download_artifacts=MagicMock(return_value=""))
-    monkeypatch.setattr(mlflow_utils, "BaseMLflowTracker", MagicMock(return_value=tracker))
+    monkeypatch.setattr(mlflow_artifacts, "BaseMLflowTracker", MagicMock(return_value=tracker))
     with pytest.raises(UserModelUnavailableError, match="run-vacio"):
         instance.predict_inline(features={"rows": []}, mlflow_run_id="run-vacio")

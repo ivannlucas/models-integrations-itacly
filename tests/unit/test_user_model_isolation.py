@@ -1,7 +1,7 @@
 """Concurrency regression tests: a user's retrained model must never leak to other requests.
 
 There is one plugin instance per model, shared by every request, and FastAPI runs ``/predict``
-in a thread pool. ml2, ml4, ml8, ml9, ml17, ml21, ml25, ml30, ml34, ml35 and ml46 used to swap
+in a thread pool. ml2, ml4, ml5, ml8, ml9, ml17, ml21, ml25, ml30, ml34, ml35 and ml46 used to swap
 the user's model into ``self`` for the duration of a request and restore it in ``finally``. Two
 failure modes:
 
@@ -195,7 +195,9 @@ def ml2(monkeypatch, tmp_path):
             """Returns no metrics."""
             return {}
 
-    monkeypatch.setattr(plugin, "BaseMLflowTracker", Tracker)
+    # stats() reads the run through the shared mlflow_artifacts helpers.
+    monkeypatch.setattr("app.domain.services.mlflow_artifacts.BaseMLflowTracker", Tracker)
+    monkeypatch.setattr(plugin, "BaseMLflowTracker", Tracker, raising=False)
     instance = plugin.Ml2FungalCnnDiseaseDetectionPlugin()
     instance.load()
     images = tmp_path / "images.zip"
@@ -727,7 +729,48 @@ def ml1(monkeypatch, tmp_path):
     }
 
 
-CASES = [("ml9", "predict_inline"), ("ml9", "predict_batch"),
+# ── ml5 ───────────────────────────────────────────────────────────────────────
+
+class _FakeClassifier(_FakeModel):
+    """SlowFast stand-in: takes its name from the state_dict it is loaded with."""
+
+    def load_state_dict(self, state_dict):
+        """Adopts the run's name, like loading that run's weights."""
+        self.name = state_dict["name"]
+
+
+@pytest.fixture
+def ml5(monkeypatch):
+    """ml5 plugin with model loading/inference replaced by a Probe; returns (probe, calls).
+
+    ml5 used to put the user's classifier into the shared ``self._bundle`` dict (not an
+    attribute of ``self``), which the structural hygiene check cannot see.
+    """
+    # pylint: disable-next=import-outside-toplevel
+    from app.plugins.ml5_meat_cow_behaviour import plugin
+
+    probe = Probe()
+    monkeypatch.setattr(plugin, "load_model_bundle", lambda: {
+        "classifier": _FakeModel(BASE, probe), "detector": None, "device": "cpu",
+        "idx_to_behavior": {0: "a"}, "behavior_to_idx": {"a": 0},
+    })
+    monkeypatch.setattr(plugin, "download_user_model_from_mlflow",
+                        lambda run_id: ({"name": f"USER-{run_id}"}, tempfile.mkdtemp()))
+    monkeypatch.setattr(plugin, "build_classifier_module",
+                        lambda num_classes, device: _FakeClassifier("pending", probe))
+    monkeypatch.setattr(plugin, "decode_frames_base64", lambda frames: np.zeros((1,)))
+    monkeypatch.setattr(plugin, "prepare_slowfast_tensor", lambda *a, **k: MagicMock())
+    instance = plugin.Ml5MeatCowBehaviourPlugin()
+    instance.load()
+    frames = ["x"] * plugin.CLIP_LENGTH
+    return probe, {
+        "predict_inline": lambda run_id: instance.predict_inline(
+            features={"frames_base64": frames}, mlflow_run_id=run_id),
+    }
+
+
+CASES = [("ml5", "predict_inline"),
+         ("ml9", "predict_inline"), ("ml9", "predict_batch"),
          ("ml2", "predict_inline"), ("ml2", "predict_batch"), ("ml2", "stats")] + [
     (name, method)
     for name in ("ml1", "ml4", "ml6", "ml8", "ml13", "ml14", "ml17", "ml18", "ml21", "ml24",

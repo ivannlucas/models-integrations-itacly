@@ -22,6 +22,7 @@ from app.domain.services.exceptions import (
     UserModelUnavailableError,
 )
 from app.application.use_cases.predict_model_use_case import PredictModelUseCase
+from app.domain.services import mlflow_artifacts
 from app.plugins.ml41_meat_curing_machinery_acoustic_anomaly import (
     mlflow_utils, model_loader, plugin,
 )
@@ -98,8 +99,8 @@ def fixture_runtime(tmp_path, monkeypatch):
                 return ""  # BaseMLflowTracker's answer for a run without artifacts
             return shutil.copytree(remote, Path(destination) / "model")
 
-    monkeypatch.setattr(plugin, "BaseMLflowTracker", Tracker)
-    monkeypatch.setattr(mlflow_utils, "BaseMLflowTracker", Tracker)
+    # train() and download_user_model_from_mlflow() reach MLflow through the shared helpers.
+    monkeypatch.setattr(mlflow_artifacts, "BaseMLflowTracker", Tracker)
     instance = plugin.Ml41MeatCuringMachineryAcousticAnomalyPlugin()
     instance.load()
     downloads.clear()
@@ -211,7 +212,7 @@ def test_train_fails_when_mlflow_upload_fails(runtime, tmp_path, monkeypatch):
         """Simulate an unreachable MLflow server."""
         raise ConnectionError("MLflow unreachable")
 
-    monkeypatch.setattr(plugin.BaseMLflowTracker, "upload_artifacts", unreachable)
+    monkeypatch.setattr(mlflow_artifacts.BaseMLflowTracker, "upload_artifacts", unreachable)
     with pytest.raises(ModelPersistenceError, match="MLflow unreachable"):
         runtime.instance.train(data_path=str(training_zip(tmp_path, True)), mlflow_run_id="run-1")
     assert _md5(runtime.combo_dir / "best.pth") == base_md5

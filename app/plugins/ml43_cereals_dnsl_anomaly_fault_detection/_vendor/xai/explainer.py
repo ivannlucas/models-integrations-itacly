@@ -14,7 +14,7 @@ from .corrective_actions import generate_corrective_actions, DEFAULT_ACTION_CONF
 from .utils import infer_semantic_mf_names_from_centers
 
 
-class DNFLExplainer:  # pylint: disable=too-many-instance-attributes,too-few-public-methods
+class DNFLExplainer:  # pylint: disable=too-many-instance-attributes
     """
     Orquestador principal para explicabilidad XAI.
 

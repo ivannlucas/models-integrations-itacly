@@ -25,24 +25,26 @@ from app.plugins.ml9_cereals_infestation_sequence_classifier.constants import (
 _SORT_COLUMNS = [GROUP_COLUMN, "timestamp_end", "window_index"]
 
 
-def clean_scalar(value: Any) -> Any:  # pylint: disable=too-many-return-statements
+def _is_missing(value: Any) -> bool:
+    """True for NaN/±inf floats, NaT and any other scalar pandas considers missing."""
+    if isinstance(value, float) and not math.isfinite(value):
+        return True
+    return value is pd.NaT or (
+        value is not None and not isinstance(value, (str, bool)) and pd.isna(value)
+    )
+
+
+def clean_scalar(value: Any) -> Any:
     """Convert numpy/pandas scalars into plain JSON-serializable Python values."""
     if isinstance(value, pd.Timestamp):
         return value.isoformat()
     if isinstance(value, np.integer):
         return int(value)
-    if isinstance(value, np.floating):
-        fv = float(value)
-        return None if not math.isfinite(fv) else fv
     if isinstance(value, np.bool_):
         return bool(value)
-    if isinstance(value, float) and not math.isfinite(value):
-        return None
-    if value is pd.NaT or (
-        value is not None and not isinstance(value, (str, bool)) and pd.isna(value)
-    ):
-        return None
-    return value
+    if isinstance(value, np.floating):
+        value = float(value)
+    return None if _is_missing(value) else value
 
 
 def serialize_records(df: pd.DataFrame) -> list[dict[str, Any]]:

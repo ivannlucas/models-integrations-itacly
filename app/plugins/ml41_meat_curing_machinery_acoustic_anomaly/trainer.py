@@ -22,8 +22,9 @@ from app.plugins.ml41_meat_curing_machinery_acoustic_anomaly.constants import TR
 logger = logging.getLogger(__name__)
 
 
-# _LRScheduler kept as base class to mirror the original trainer exactly.
-class CosineWarmupScheduler(optim.lr_scheduler._LRScheduler):  # pylint: disable=protected-access
+# The original subclasses _LRScheduler, which in torch 2.x is an empty alias subclass of the
+# public LRScheduler: same behaviour.
+class CosineWarmupScheduler(optim.lr_scheduler.LRScheduler):
     """Linear warmup followed by cosine annealing — standard for ViT/MAE."""
 
     def __init__(self, optimizer, warmup_epochs: int, max_epochs: int,
@@ -44,12 +45,13 @@ class CosineWarmupScheduler(optim.lr_scheduler._LRScheduler):  # pylint: disable
         return [self.min_lr + (base_lr - self.min_lr) * cosine for base_lr in self.base_lrs]
 
 
-# Same signature as train_one_epoch.
-def _train_one_epoch(  # pylint: disable=too-many-arguments,too-many-positional-arguments
+# Same parameters as train_one_epoch (the last two keyword-only here).
+def _train_one_epoch(  # pylint: disable=too-many-arguments
     model: AudioMAE,
     loader: DataLoader,
     optimizer,
     device,
+    *,
     mask_ratio: float,
     scaler=None,
 ) -> float:
@@ -141,7 +143,8 @@ def fine_tune(
 
     for epoch in range(1, epochs + 1):
         train_loss = _train_one_epoch(
-            model, train_loader, optimizer, device, hyperparams["mask_ratio"], scaler
+            model, train_loader, optimizer, device,
+            mask_ratio=hyperparams["mask_ratio"], scaler=scaler,
         )
         val_loss = _validate(model, val_loader, device, hyperparams["mask_ratio"])
         scheduler.step()
@@ -185,7 +188,14 @@ def compute_threshold_audit_fnr(
     return float(thresholds[valid[0]])
 
 
-# pylint: disable-next=too-many-locals
+def _error_rates(tn, fp, fn, tp) -> tuple[float, float, float]:
+    """(fnr, fpr, recall) from the binary confusion matrix counts (1 = anomalous)."""
+    fnr = float(fn / (fn + tp)) if (fn + tp) else 0.0
+    fpr = float(fp / (fp + tn)) if (fp + tn) else 0.0
+    recall = float(tp / (tp + fn)) if (tp + fn) else 0.0
+    return fnr, fpr, recall
+
+
 def evaluate_against_abnormal(
     normal_maha: np.ndarray,
     abnormal_maha: np.ndarray,
@@ -205,11 +215,9 @@ def evaluate_against_abnormal(
     auc_mse = float(roc_auc_score(y_true, mse_scores))
     threshold = compute_threshold_audit_fnr(normal_maha, abnormal_maha)
 
-    y_pred = (maha_scores >= threshold).astype(int)
-    tn, fp, fn, tp = confusion_matrix(y_true, y_pred).ravel()
-    fnr = float(fn / (fn + tp)) if (fn + tp) else 0.0
-    fpr = float(fp / (fp + tn)) if (fp + tn) else 0.0
-    recall = float(tp / (tp + fn)) if (tp + fn) else 0.0
+    fnr, fpr, recall = _error_rates(
+        *confusion_matrix(y_true, (maha_scores >= threshold).astype(int)).ravel()
+    )
 
     return {
         "auc_mse": auc_mse, "auc_maha": auc_maha, "threshold": threshold,

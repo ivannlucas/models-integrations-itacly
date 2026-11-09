@@ -141,3 +141,34 @@ encontró necesidad de cambios. Entregables nuevos de esta sesión:
 - `inbox/a30/golden_cases_test_selected.csv` (18 filas de `data/splits/test.csv` + predicciones
   esperadas, soporte de los golden_cases del manifest)
 - `outputs/a30/verification_report.md` (este fichero)
+
+## Re-verificación — sensores vacíos (2026-11-09)
+
+El plugin rellenaba con `0.0` los sensores numéricos vacíos (`preprocessing.py::_coerce` en
+batch y `/train`, `build_dataframe_from_features` en inline) antes del preprocesador entregado,
+que los imputa con la mediana de entrenamiento como hace el original. Un 0 no es neutro en estos
+sensores (pH 0 o una canal de 0 kg frente a medianas de 5.74 y 246 kg). Ninguno de los 18 golden
+tenía un sensor vacío, por eso la verificación anterior no lo vio.
+
+Corrección: los numéricos vacíos quedan `NaN` y los imputa el preprocesador.
+
+| Test hold-out (379 filas) | Antes | Ahora | Original (memoria) |
+|---|---|---|---|
+| accuracy | 0.870712 | 0.870712 | 0.8707 |
+| F1 | 0.601626 | 0.601626 | 0.6016 |
+| ROC AUC | 0.711657 | **0.718529** | 0.7185 |
+
+Las 6 filas con un sensor vacío cambian de score (ninguna cambia de clase con umbral 0.5); la
+peor era `OBS0000776`, incidencia real con pH vacío: 0.0000 antes, 0.083688 ahora, igual que
+`src/predict/predictor.py` del equipo de IA (0.0836876). Se añade como golden
+`obs_OBS0000776` (19 golden en total) y `tests/unit/test_ml30_golden.py` ejecuta los 19 por
+`predict_batch` y `predict_inline` contra los artefactos servidos.
+
+`/train` sobre `outputs/a30/datos_prueba/train.csv`: AUC 0.7469 (antes 0.7675). El relleno con 0
+daba al MLP una señal de "falta la lectura" (en ese CSV, 33 % de incidencias con sensor vacío
+frente a 21 %) que el original no usa; se prioriza la fidelidad al procedimiento entregado.
+
+Hallazgo aceptado: en `predict_inline`, el control de escala de `contract.py` ve una sola fila y
+rechaza eventos reales con un valor extremo (~2 % del dataset, p. ej. el golden
+`obs_OBS0001565`). Se mantiene porque la predicción inline está deshabilitada en la plataforma;
+documentado en `known_issues` del manifest.

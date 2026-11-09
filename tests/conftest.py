@@ -3249,7 +3249,7 @@ class _FakeContainer:  # pylint: disable=too-few-public-methods  # attribute hol
         # Sync /train asks it whether an async job of the model is running (never, here).
         self.submit_train_job_use_case = SubmitTrainJobUseCase(
             plugin,
-            plugin._model_id,  # pylint: disable=protected-access
+            plugin._model_id,
             InMemoryJobStore(),
             RecordingExecutor(),
         )

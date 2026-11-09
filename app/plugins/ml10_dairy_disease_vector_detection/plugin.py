@@ -13,8 +13,8 @@ import random
 import shutil
 import tempfile
 import time
+import zipfile
 from pathlib import Path
-from datetime import datetime, timezone
 
 import torch
 from torch import nn
@@ -25,14 +25,17 @@ from torchvision import datasets, models, transforms
 from app.application.dto.stats_dto import InputField, OutputField, RuntimeStats, StatsResponse
 from app.application.dto.train_dto import TrainResponse
 from app.domain.ports.model_plugin_port import ModelPluginPort
-from app.domain.services.exceptions import (
-    InvalidImageError,
-    ModelNotLoadedError,
-    ModelPersistenceError,
+from app.domain.services.exceptions import InvalidImageError
+from app.domain.services.mlflow_artifacts import (
+    add_mlflow_run_to_stats,
+    removing_dir,
+    require_train_tracker,
+    upload_model_to_mlflow,
 )
 from app.domain.services.mlflow_tracker import BaseMLflowTracker
+from app.domain.services.plugin_runtime import PluginRuntimeMixin
 from app.infrastructure.archive import safe_extract_zip
-from app.infrastructure.artifact_store import ArtifactStore
+from app.infrastructure.artifact_store import ArtifactStore, download_s3_file, local_file_path
 from app.plugins.ml10_dairy_disease_vector_detection.model_loader import (
     load_detector_and_classifier,
     safe_device,
@@ -74,6 +77,13 @@ _CLASSES = ["fly", "mos", "tick"]
 # `splits.max_ticks` (create_classification_splits balances ticks before splitting).
 TRAIN_SEED = 42
 MAX_TICKS = 1400
+# config/config.yaml `classifier` section of the delivered code (src/training/trainer.py::
+# train_classifier): Adam(lr, weight_decay), StepLR(10, 0.1), batch 64, 100 epochs, patience 15.
+_CLS_LR = 0.007980063451685896
+_CLS_WEIGHT_DECAY = 0.0003438715138565418
+_CLS_PATIENCE = 15
+_CLS_MAX_EPOCHS = 100
+_CLS_BATCH_SIZE = 64
 
 _store = ArtifactStore(ARTIFACT_FOLDER_NAME)
 
@@ -164,7 +174,19 @@ def _cls_train_epoch(model, loader, optimizer, criterion, device):
     return total_loss / max(total, 1), correct / max(total, 1)
 
 
-def _cls_test_metrics(model, loader, class_names, device) -> dict:  # pylint: disable=too-many-locals
+def _class_metrics(pairs: list[tuple[int, int]], idx: int) -> dict:
+    """Precision/recall/F1/support of class ``idx`` from (true, predicted) pairs."""
+    tp = sum(1 for t, p in pairs if t == idx and p == idx)
+    fp = sum(1 for t, p in pairs if t != idx and p == idx)
+    fn = sum(1 for t, p in pairs if t == idx and p != idx)
+    precision = tp / (tp + fp) if tp + fp else 0.0
+    recall = tp / (tp + fn) if tp + fn else 0.0
+    f1 = 2 * precision * recall / (precision + recall) if precision + recall else 0.0
+    return {"precision": round(precision, 4), "recall": round(recall, 4),
+            "f1": round(f1, 4), "support": sum(1 for t, _ in pairs if t == idx)}
+
+
+def _cls_test_metrics(model, loader, class_names, device) -> dict:
     """Accuracy and per-class precision/recall/F1 on the test split, with the formulas of the
     delivered src/predict/predictor.py (classification_metrics.json)."""
     model.eval()
@@ -174,16 +196,7 @@ def _cls_test_metrics(model, loader, class_names, device) -> dict:  # pylint: di
             preds_all += model(inputs.to(device)).argmax(1).cpu().tolist()
             labels_all += labels.tolist()
     pairs = list(zip(labels_all, preds_all))
-    per_class = {}
-    for idx, name in enumerate(class_names):
-        tp = sum(1 for t, p in pairs if t == idx and p == idx)
-        fp = sum(1 for t, p in pairs if t != idx and p == idx)
-        fn = sum(1 for t, p in pairs if t == idx and p != idx)
-        precision = tp / (tp + fp) if tp + fp else 0.0
-        recall = tp / (tp + fn) if tp + fn else 0.0
-        f1 = 2 * precision * recall / (precision + recall) if precision + recall else 0.0
-        per_class[name] = {"precision": round(precision, 4), "recall": round(recall, 4),
-                           "f1": round(f1, 4), "support": sum(1 for t, _ in pairs if t == idx)}
+    per_class = {name: _class_metrics(pairs, idx) for idx, name in enumerate(class_names)}
     accuracy = sum(1 for t, p in pairs if t == p) / len(pairs) if pairs else 0.0
     return {"test_accuracy": round(accuracy, 4), "test_per_class": per_class}
 
@@ -202,7 +215,179 @@ def _cls_validate(model, loader, criterion, device):
     return total_loss / max(total, 1), correct / max(total, 1)
 
 
-class Ml10DairyDiseaseVectorDetectionPlugin(ModelPluginPort):
+def _download_training_zip(data_path: str) -> tuple[str, str | None]:
+    """Local path of the training ZIP: ``(path, temp file to delete or None)``."""
+    if not data_path.startswith("s3://"):
+        return data_path, None
+    tmp_zip = download_s3_file(data_path)
+    return tmp_zip, tmp_zip
+
+
+def _resolve_splits_root(temp_dir: str) -> Path:
+    """Folder with train/val[/test] of the extracted ZIP (auto-split 70/15/15 if it is flat)."""
+    entries = list(Path(temp_dir).iterdir())
+    data_root = entries[0] if len(entries) == 1 and entries[0].is_dir() else Path(temp_dir)
+
+    has_train_dir = (data_root / "train").is_dir()
+    has_flat_classes = any((data_root / cls).is_dir() for cls in _CLASSES)
+
+    if has_train_dir:
+        return data_root
+    if has_flat_classes:
+        splits_root = _create_splits(data_root, _CLASSES, temp_dir)
+        logger.info("Auto-split 70/15/15 creado en %s", splits_root)
+        return splits_root
+    raise ValueError(
+        "ZIP sin estructura válida. "
+        "Esperado: {fly|mos|tick}/*.jpg o {train|val}/{fly|mos|tick}/*.jpg"
+    )
+
+
+def _load_datasets(splits_root: Path) -> tuple:
+    """ImageFolder datasets ``(train, val, test or None)``; test must have train's classes."""
+    train_tfm, eval_tfm = _cls_transforms(224)
+    train_ds = datasets.ImageFolder(str(splits_root / "train"), train_tfm)
+    val_ds = datasets.ImageFolder(str(splits_root / "val"), eval_tfm)
+    class_names = train_ds.classes
+    # Auto-split always has test/; a pre-split ZIP may bring it or not.
+    test_dir = splits_root / "test"
+    has_test = test_dir.is_dir() and any(p.is_file() for p in test_dir.rglob("*"))
+    test_ds = datasets.ImageFolder(str(test_dir), eval_tfm) if has_test else None
+    if test_ds is not None and test_ds.classes != class_names:
+        raise ValueError(
+            f"Las clases de test {test_ds.classes} no coinciden con las de train "
+            f"{class_names}."
+        )
+    logger.info("Dataset: %d train, %d val, %s test, clases=%s", len(train_ds), len(val_ds),
+                len(test_ds) if test_ds is not None else 0, class_names)
+    return train_ds, val_ds, test_ds
+
+
+def _build_classifier(n_classes: int, device) -> nn.Module:
+    """Pretrained MobileNetV3, frozen backbone, new trainable classifier head."""
+    os.environ.setdefault("TORCH_HOME", "/tmp/.torch")
+    model = models.mobilenet_v3_large(weights="IMAGENET1K_V1")
+    for param in model.parameters():
+        param.requires_grad = False
+    in_features = model.classifier[-1].in_features
+    model.classifier[-1] = nn.Linear(in_features, n_classes)
+    model.to(device)
+    return model
+
+
+def _fit_classifier(model, loaders: tuple, tracker: BaseMLflowTracker, device) -> dict:
+    """Train the head with early stopping on val accuracy.
+
+    Returns ``{"best_acc", "best_state", "epochs_run", "elapsed"}``; the caller restores
+    ``best_state``.
+    """
+    criterion = nn.CrossEntropyLoss()
+    optimizer = optim.Adam(
+        model.classifier.parameters(), lr=_CLS_LR, weight_decay=_CLS_WEIGHT_DECAY
+    )
+    scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.1)
+
+    best_acc = 0.0
+    best_state = None
+    patience_counter = 0
+    epochs_run = 0
+
+    tracker.log_params({
+        "lr": _CLS_LR,
+        "weight_decay": _CLS_WEIGHT_DECAY,
+        "batch_size": _CLS_BATCH_SIZE,
+        "max_epochs": _CLS_MAX_EPOCHS,
+        "patience": _CLS_PATIENCE,
+        "optimizer": "Adam",
+        "scheduler": "StepLR(step_size=10)",
+        "model": "MobileNetV3_Large",
+    })
+
+    t0 = time.perf_counter()
+    for epoch in range(_CLS_MAX_EPOCHS):
+        train_m = _cls_train_epoch(model, loaders[0], optimizer, criterion, device)
+        val_m = _cls_validate(model, loaders[1], criterion, device)
+        scheduler.step()
+        epochs_run += 1
+        tracker.log_metrics({
+            "train_loss": train_m[0],
+            "train_accuracy": train_m[1],
+            "val_loss": val_m[0],
+            "val_accuracy": val_m[1],
+        }, step=epoch)
+        logger.info("Epoch %d | tr_loss=%.4f tr_acc=%.4f val_loss=%.4f val_acc=%.4f",
+                    epoch + 1, train_m[0], train_m[1], val_m[0], val_m[1])
+        if val_m[1] > best_acc:
+            best_acc = val_m[1]
+            best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
+            patience_counter = 0
+        else:
+            patience_counter += 1
+            if patience_counter >= _CLS_PATIENCE:
+                logger.info("Early stopping en epoch %d", epoch + 1)
+                break
+
+    return {"best_acc": best_acc, "best_state": best_state, "epochs_run": epochs_run,
+            "elapsed": time.perf_counter() - t0}
+
+
+def _is_zip_input(local_data_path: str) -> bool:
+    """True for a ZIP batch input, by extension or by content.
+
+    An s3:// input is downloaded to a temp file named after the object key's suffix, so a ZIP
+    uploaded under a key without ".zip" is still recognised by its content.
+    """
+    path = local_data_path.lower()
+    if path.endswith(".csv"):
+        return False
+    return path.endswith(".zip") or zipfile.is_zipfile(local_data_path)
+
+
+def _batch_image_files(local_data_path: str, extract_dir: str | None) -> list[Path]:
+    """Images of a batch input: a CSV with image_path, a ZIP (extracted to extract_dir) or a dir."""
+    if local_data_path.lower().endswith(".csv"):
+        return _image_paths_from_csv(local_data_path)
+    if extract_dir is not None:
+        safe_extract_zip(local_data_path, extract_dir)
+        entries = list(Path(extract_dir).iterdir())
+        image_dir = entries[0] if len(entries) == 1 and entries[0].is_dir() else Path(extract_dir)
+    else:
+        image_dir = Path(local_data_path)
+        if not image_dir.is_dir():
+            raise ValueError(
+                f"data_path debe ser CSV, ZIP o directorio, recibido: {local_data_path}"
+            )
+    return sorted(f for f in image_dir.rglob("*") if f.suffix.lower() in SUPPORTED_EXTENSIONS)
+
+
+def _image_paths_from_csv(csv_path: str) -> list[Path]:
+    """Lee la columna image_path de un CSV y devuelve las rutas como Path."""
+    paths = []
+    with open(csv_path, newline="", encoding="utf-8") as fh:
+        reader = csv.DictReader(fh)
+        for row in reader:
+            ip = row.get("image_path", "").strip()
+            if ip:
+                paths.append(Path(ip))
+    return paths
+
+
+def _load_inline_image(features: dict):
+    """PIL image of an inline request (image_path or image_base64)."""
+    if features.get("image_path"):
+        img_path = features["image_path"]
+        ext = os.path.splitext(img_path)[1].lower()
+        if ext not in SUPPORTED_EXTENSIONS:
+            raise InvalidImageError(
+                f"Extensión no soportada: {ext}. Usa {SUPPORTED_EXTENSIONS}"
+            )
+        return image_path_to_pil(img_path)
+    if features.get("image_base64"):
+        return image_base64_to_pil(features["image_base64"])
+    raise ValueError("features debe contener 'image_path' o 'image_base64'")
+
+
+class Ml10DairyDiseaseVectorDetectionPlugin(PluginRuntimeMixin, ModelPluginPort):
     """Plugin para detección y clasificación de vectores en imágenes de ganado lechero.
     Usa un pipeline de dos etapas: detección con un modelo YOLOv8 y clasificación con MobileNetV3.
     Soporta predicción inline (una imagen) y batch (CSV/ZIP/directorio).
@@ -238,7 +423,20 @@ class Ml10DairyDiseaseVectorDetectionPlugin(ModelPluginPort):
 
     # ── predict_inline ────────────────────────────────────────────────────────
 
-    def predict_inline(  # pylint: disable=too-many-locals
+    def _user_classifier(self, mlflow_run_id: str, tag: str) -> tuple:
+        """``(classifier, class_names, temp_dir)`` of the user's run; all None for the base one."""
+        if not mlflow_run_id:
+            return None, None, None
+        logger.info(
+            " [%s] Loading user-trained classifier from MLflow run_id=%s", tag, mlflow_run_id
+        )
+        loaded = download_user_classifier_from_mlflow(mlflow_run_id)
+        if not loaded:
+            return None, None, None
+        logger.info(" [%s] MLflow classifier loaded successfully", tag)
+        return loaded
+
+    def predict_inline(
         self,
         *,
         features: dict,
@@ -247,46 +445,21 @@ class Ml10DairyDiseaseVectorDetectionPlugin(ModelPluginPort):
         mlflow_run_id: str = "",
     ) -> PredictInlineResponse:
         """Ejecuta inferencia en una sola imagen (base64 o path) y devuelve la predicción."""
-        self._assert_loaded()
-        user_clf = None
-        user_cls_names = None
-        user_temp_dir = None
+        self._require_loaded()
+        user_clf, user_cls_names, user_temp_dir = self._user_classifier(mlflow_run_id, "INLINE")
 
-        if mlflow_run_id:
-            logger.info(
-                " [INLINE] Loading user-trained classifier from MLflow run_id=%s", mlflow_run_id
-            )
-            loaded = download_user_classifier_from_mlflow(mlflow_run_id)
-            if loaded:
-                logger.info(" [INLINE] MLflow classifier loaded successfully")
-                user_clf, user_cls_names, user_temp_dir = loaded
+        # The user model's temp dir is removed also when the image or thresholds are invalid.
+        with removing_dir(user_temp_dir):
+            image_pil = _load_inline_image(features)
 
-        if features.get("image_path"):
-            img_path = features["image_path"]
-            ext = os.path.splitext(img_path)[1].lower()
-            if ext not in SUPPORTED_EXTENSIONS:
-                raise InvalidImageError(
-                    f"Extensión no soportada: {ext}. Usa {SUPPORTED_EXTENSIONS}"
-                )
-            image_pil = image_path_to_pil(img_path)
-        elif features.get("image_base64"):
-            image_pil = image_base64_to_pil(features["image_base64"])
-        else:
-            raise ValueError("features debe contener 'image_path' o 'image_base64'")
+            det_conf = float(features.get("det_conf_thresh", DEFAULT_DET_CONF))
+            cls_conf = float(features.get("cls_conf_thresh", DEFAULT_CLS_CONF))
 
-        det_conf = float(features.get("det_conf_thresh", DEFAULT_DET_CONF))
-        cls_conf = float(features.get("cls_conf_thresh", DEFAULT_CLS_CONF))
-
-        t0 = time.perf_counter()
-
-        try:
+            t0 = time.perf_counter()
             detections = self._run_pipeline(
                 image_pil, det_conf, cls_conf,
                 classifier=user_clf, class_names=user_cls_names,
             )
-        finally:
-            if user_temp_dir:
-                shutil.rmtree(user_temp_dir, ignore_errors=True)
 
         self._update_stats(latency_ms=(time.perf_counter() - t0) * 1000)
 
@@ -305,119 +478,59 @@ class Ml10DairyDiseaseVectorDetectionPlugin(ModelPluginPort):
 
     # ── predict_batch ─────────────────────────────────────────────────────────
 
-    def predict_batch(  # pylint: disable=too-many-locals,too-many-branches,too-many-statements
+    def predict_batch(
         self, *, data_path: str, mlflow_run_id: str = ""
     ) -> PredictBatchResponse:
         """Ejecuta inferencia en batch sobre un CSV/ZIP/directorio de imágenes.
 
         Devuelve las predicciones.
         """
-        self._assert_loaded()
-        user_clf = None
-        user_cls_names = None
-        user_temp_dir = None
+        self._require_loaded()
+        user_clf, user_cls_names, user_temp_dir = self._user_classifier(mlflow_run_id, "BATCH")
 
-        if mlflow_run_id:
-            logger.info(
-                " [BATCH] Loading user-trained classifier from MLflow run_id=%s", mlflow_run_id
+        with removing_dir(user_temp_dir), local_file_path(data_path) as local_data_path:
+            t0 = time.perf_counter()
+            extract_dir = (
+                tempfile.mkdtemp(prefix="ml10_dairy_disease_vector_detection_batch_")
+                if _is_zip_input(local_data_path)
+                else None
             )
-            loaded = download_user_classifier_from_mlflow(mlflow_run_id)
-            if loaded:
-                logger.info(" [BATCH] MLflow classifier loaded successfully")
-                user_clf, user_cls_names, user_temp_dir = loaded
-
-        _tmp_zip: str | None = None
-        local_data_path = data_path
-        if data_path.startswith("s3://"):
-            import boto3  # pylint: disable=import-outside-toplevel
-            from botocore.client import Config as BotoConfig  # pylint: disable=import-outside-toplevel
-            without_prefix = data_path[5:]
-            bucket, _, s3_key = without_prefix.partition("/")
-            s3 = boto3.client(
-                "s3",
-                endpoint_url=os.environ.get("CUSTOM_S3_ENDPOINT"),
-                aws_access_key_id=os.environ.get("AWS_ACCESS_KEY_ID"),
-                aws_secret_access_key=os.environ.get("AWS_SECRET_ACCESS_KEY"),
-                config=BotoConfig(signature_version="s3v4"),
-                region_name=os.environ.get("CUSTOM_REGION", "us-east-1"),
-            )
-            fd, _tmp_zip = tempfile.mkstemp(suffix=".zip")
-            os.close(fd)
-            logger.info("Downloading batch data from s3://%s/%s", bucket, s3_key)
-            s3.download_file(bucket, s3_key, _tmp_zip)
-            local_data_path = _tmp_zip
-
-        temp_dir: str | None = None
-        image_files: list[Path] = []
-        predictions = []
-        temps: list[str] = []
-        t0 = time.perf_counter()
-
-        try:
-            if local_data_path.lower().endswith(".csv"):
-                image_files = self._image_paths_from_csv(local_data_path)
-            elif local_data_path.lower().endswith(".zip"):
-                temp_dir = tempfile.mkdtemp(prefix="ml10_dairy_disease_vector_detection_batch_")
-                safe_extract_zip(local_data_path, temp_dir)
-                entries = list(Path(temp_dir).iterdir())
-                image_dir = (
-                    entries[0] if len(entries) == 1 and entries[0].is_dir() else Path(temp_dir)
-                )
-                image_files = sorted(
-                    f for f in image_dir.rglob("*") if f.suffix.lower() in SUPPORTED_EXTENSIONS
-                )
-            else:
-                image_dir = Path(local_data_path)
-                if not image_dir.is_dir():
-                    raise ValueError(
-                        f"data_path debe ser CSV, ZIP o directorio, recibido: {local_data_path}"
-                    )
-                image_files = sorted(
-                    f for f in image_dir.rglob("*") if f.suffix.lower() in SUPPORTED_EXTENSIONS
-                )
-
-            temps = [d for d in (temp_dir, user_temp_dir) if d]
-
-            if not image_files:
-                for d in temps:
-                    shutil.rmtree(d, ignore_errors=True)
-                raise ValueError(f"No se encontraron imágenes en: {data_path}")
-
-            for img_path in image_files:
-                try:
-                    image_pil = image_path_to_pil(str(img_path))
-                    detections = self._run_pipeline(
-                        image_pil, DEFAULT_DET_CONF, DEFAULT_CLS_CONF,
-                        classifier=user_clf, class_names=user_cls_names,
-                    )
-                    row = build_inline_result(self.MODEL_ID, detections)
-                    row.pop("model_id", None)
-                    row["annotated_image"] = render_annotated_image(image_pil, detections)
-                    # Same per-detection crops predict_inline returns, but only on the first row:
-                    # the platform's explainability panel only ever reads dataSample[0] (see
-                    # runXaiExplain in ws-sources.js), so repeating up to 5 JPEG crops on every
-                    # row would only bloat the batch response. Without it the panel falls back to
-                    # a full-scene Grad-CAM request that carries no image_base64 at all.
-                    if not predictions:
-                        row["heatmap_crops"] = build_heatmap_crops(
-                            image_pil, detections, max_crops=5
-                        )
-                    predictions.append({"filename": img_path.name, **row})
-                except Exception as exc:  # pylint: disable=broad-exception-caught  # per-image error row
-                    logger.warning("Error procesando %s: %s", img_path.name, exc)
-                    predictions.append(
-                        {"filename": img_path.name, "status": "error", "error_message": str(exc)}
-                    )
-        finally:
-            for d in temps:
-                shutil.rmtree(d, ignore_errors=True)
-            if _tmp_zip:
-                os.unlink(_tmp_zip)
+            with removing_dir(extract_dir):
+                image_files = _batch_image_files(local_data_path, extract_dir)
+                if not image_files:
+                    raise ValueError(f"No se encontraron imágenes en: {data_path}")
+                predictions = [
+                    self._predict_file(img_path, user_clf, user_cls_names, first=index == 0)
+                    for index, img_path in enumerate(image_files)
+                ]
 
         self._update_stats(latency_ms=(time.perf_counter() - t0) * 1000)
         return PredictBatchResponse(
             model_id=self.MODEL_ID, predictions=predictions, output_path=None
         )
+
+    def _predict_file(self, img_path: Path, clf, class_names, *, first: bool) -> dict:
+        """Batch row of one image (an error row when it cannot be processed)."""
+        try:
+            image_pil = image_path_to_pil(str(img_path))
+            detections = self._run_pipeline(
+                image_pil, DEFAULT_DET_CONF, DEFAULT_CLS_CONF,
+                classifier=clf, class_names=class_names,
+            )
+            row = build_inline_result(self.MODEL_ID, detections)
+            row.pop("model_id", None)
+            row["annotated_image"] = render_annotated_image(image_pil, detections)
+            # Same per-detection crops predict_inline returns, but only on the first row:
+            # the platform's explainability panel only ever reads dataSample[0] (see
+            # runXaiExplain in ws-sources.js), so repeating up to 5 JPEG crops on every
+            # row would only bloat the batch response. Without it the panel falls back to
+            # a full-scene Grad-CAM request that carries no image_base64 at all.
+            if first:
+                row["heatmap_crops"] = build_heatmap_crops(image_pil, detections, max_crops=5)
+            return {"filename": img_path.name, **row}
+        except Exception as exc:  # pylint: disable=broad-exception-caught  # per-image error row
+            logger.warning("Error procesando %s: %s", img_path.name, exc)
+            return {"filename": img_path.name, "status": "error", "error_message": str(exc)}
 
     # ── get_stats ─────────────────────────────────────────────────────────────
 
@@ -472,20 +585,10 @@ class Ml10DairyDiseaseVectorDetectionPlugin(ModelPluginPort):
                 avg_latency_ms=avg,
             ),
         )
-        if mlflow_run_id:
-            try:
-                tracker = BaseMLflowTracker(mlflow_run_id)
-                base.metrics["mlflow"] = {
-                    "params": tracker.get_params(),
-                    "metrics": tracker.get_metrics(),
-                }
-                logger.info("Stats enriched with MLflow data for run_id=%s", mlflow_run_id)
-            except Exception as exc:  # pylint: disable=broad-exception-caught  # stats stay usable
-                logger.warning("Could not fetch MLflow stats for run_id=%s: %s", mlflow_run_id, exc)
-        return base
+        return add_mlflow_run_to_stats(base, mlflow_run_id)
 
     # ── private helpers ───────────────────────────────────────────────────────
-    def _run_pipeline(  # pylint: disable=too-many-locals
+    def _run_pipeline(
         self, image_pil, det_conf_thresh: float, cls_conf_thresh: float,
         classifier=None, class_names=None,
     ) -> list[dict]:
@@ -514,39 +617,37 @@ class Ml10DairyDiseaseVectorDetectionPlugin(ModelPluginPort):
             return []
 
         detections = []
-        res = results[0]
-        for box in res.boxes:
-            det_conf = float(box.conf[0].item())
-            x1, y1, x2, y2 = map(int, box.xyxy[0])
-            if (x2 - x1) <= 0 or (y2 - y1) <= 0:
-                continue
-
-            tensor = crop_to_tensor(image_pil, x1, y1, x2, y2)
-            species, cls_conf = classify_crop(clf, tensor, cnames, self._device)
-
-            if cls_conf >= cls_conf_thresh:
-                detections.append({
-                    "species": species,
-                    "det_conf": round(det_conf, 4),
-                    "cls_conf": round(cls_conf, 4),
-                    "bbox": {"x1": x1, "y1": y1, "x2": x2, "y2": y2},
-                })
+        for box in results[0].boxes:
+            detection = self._classify_box(image_pil, box, (clf, cnames), cls_conf_thresh)
+            if detection is not None:
+                detections.append(detection)
         return detections
 
-    def _image_paths_from_csv(self, csv_path: str) -> list[Path]:
-        """Lee la columna image_path de un CSV y devuelve las rutas como Path."""
-        paths = []
-        with open(csv_path, newline="", encoding="utf-8") as fh:
-            reader = csv.DictReader(fh)
-            for row in reader:
-                ip = row.get("image_path", "").strip()
-                if ip:
-                    paths.append(Path(ip))
-        return paths
+    def _classify_box(self, image_pil, box, classifier: tuple, cls_conf_thresh: float):
+        """Detection dict of one detector box, or None if empty or below cls_conf_thresh.
 
-    def train(  # pylint: disable=too-many-locals,too-many-branches,too-many-statements
-        self, *, data_path: str, mlflow_run_id: str
-    ) -> TrainResponse:
+        ``classifier`` is ``(model, class_names)``.
+        """
+        det_conf = float(box.conf[0].item())
+        x1, y1, x2, y2 = map(int, box.xyxy[0])
+        if (x2 - x1) <= 0 or (y2 - y1) <= 0:
+            return None
+
+        tensor = crop_to_tensor(image_pil, x1, y1, x2, y2)
+        species, cls_conf = classify_crop(classifier[0], tensor, classifier[1], self._device)
+
+        if cls_conf >= cls_conf_thresh:
+            return {
+                "species": species,
+                "det_conf": round(det_conf, 4),
+                "cls_conf": round(cls_conf, 4),
+                "bbox": {"x1": x1, "y1": y1, "x2": x2, "y2": y2},
+            }
+        return None
+
+    _image_paths_from_csv = staticmethod(_image_paths_from_csv)
+
+    def train(self, *, data_path: str, mlflow_run_id: str) -> TrainResponse:
         """Train the MobileNetV3 classifier from a ZIP.
 
         Accepted ZIP structures:
@@ -556,203 +657,84 @@ class Ml10DairyDiseaseVectorDetectionPlugin(ModelPluginPort):
         best validation accuracy and, when a test split exists, the test metrics of the original
         predictor (accuracy + per-class precision/recall/F1).
         """
-        _tmp_zip: str | None = None
-        local_data_path = data_path
-        if data_path.startswith("s3://"):
-            import boto3  # pylint: disable=import-outside-toplevel
-            from botocore.client import Config as BotoConfig  # pylint: disable=import-outside-toplevel
-            without_prefix = data_path[5:]
-            bucket, _, s3_key = without_prefix.partition("/")
-            s3 = boto3.client(
-                "s3",
-                endpoint_url=os.environ.get("CUSTOM_S3_ENDPOINT"),
-                aws_access_key_id=os.environ.get("AWS_ACCESS_KEY_ID_XAI"),
-                aws_secret_access_key=os.environ.get("AWS_SECRET_ACCESS_KEY_XAI"),
-                config=BotoConfig(signature_version="s3v4"),
-                region_name=os.environ.get("CUSTOM_REGION", "us-east-1"),
-            )
-            fd, _tmp_zip = tempfile.mkstemp(suffix=".zip")
-            os.close(fd)
-            logger.info("Downloading training data from s3://%s/%s", bucket, s3_key)
-            s3.download_file(bucket, s3_key, _tmp_zip)
-            local_data_path = _tmp_zip
+        # The retrained classifier lives only in its own MLflow run (predict with that
+        # mlflow_run_id); the served base classifier and its local artifacts are never replaced.
+        tracker = require_train_tracker(mlflow_run_id)
+        local_data_path, tmp_zip = _download_training_zip(data_path)
 
-        if not local_data_path.lower().endswith(".zip"):
+        if not (local_data_path.lower().endswith(".zip") or zipfile.is_zipfile(local_data_path)):
             raise ValueError("data_path debe ser un fichero .zip")
 
         temp_dir = tempfile.mkdtemp(prefix="ml10_dairy_train_")
         try:
             safe_extract_zip(local_data_path, temp_dir)
+            return self._train_on_splits(_resolve_splits_root(temp_dir), tracker, mlflow_run_id)
+        finally:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            if tmp_zip and os.path.exists(tmp_zip):
+                os.unlink(tmp_zip)
+            gc.collect()
 
-            entries = list(Path(temp_dir).iterdir())
-            data_root = entries[0] if len(entries) == 1 and entries[0].is_dir() else Path(temp_dir)
+    def _train_on_splits(
+        self, splits_root: Path, tracker: BaseMLflowTracker, mlflow_run_id: str
+    ) -> TrainResponse:
+        """Train, evaluate and upload the classifier of a train/val[/test] folder."""
+        train_ds, val_ds, test_ds = _load_datasets(splits_root)
+        class_names = train_ds.classes
+        torch.manual_seed(TRAIN_SEED)  # set_seed(42) of the delivered run_training
 
-            has_train_dir = (data_root / "train").is_dir()
-            has_flat_classes = any((data_root / cls).is_dir() for cls in _CLASSES)
+        loaders = (
+            DataLoader(train_ds, batch_size=_CLS_BATCH_SIZE, shuffle=True, num_workers=0),
+            DataLoader(val_ds, batch_size=_CLS_BATCH_SIZE, shuffle=False, num_workers=0),
+        )
+        model = _build_classifier(len(class_names), self._device)
+        fit = _fit_classifier(model, loaders, tracker, self._device)
+        if fit["best_state"]:
+            model.load_state_dict(fit["best_state"])
 
-            if has_train_dir:
-                splits_root = data_root
-            elif has_flat_classes:
-                splits_root = _create_splits(data_root, _CLASSES, temp_dir)
-                logger.info("Auto-split 70/15/15 creado en %s", splits_root)
-            else:
-                raise ValueError(
-                    "ZIP sin estructura válida. "
-                    "Esperado: {fly|mos|tick}/*.jpg o {train|val}/{fly|mos|tick}/*.jpg"
-                )
+        test_metrics = {}
+        if test_ds is not None:
+            test_loader = DataLoader(
+                test_ds, batch_size=_CLS_BATCH_SIZE, shuffle=False, num_workers=0
+            )
+            test_metrics = _cls_test_metrics(model, test_loader, class_names, self._device)
+            logger.info("Test: accuracy=%.4f", test_metrics["test_accuracy"])
 
-            train_tfm, eval_tfm = _cls_transforms(224)
-            train_ds = datasets.ImageFolder(str(splits_root / "train"), train_tfm)
-            val_ds = datasets.ImageFolder(str(splits_root / "val"), eval_tfm)
-            class_names = train_ds.classes
-            # Auto-split always has test/; a pre-split ZIP may bring it or not.
-            test_dir = splits_root / "test"
-            has_test = test_dir.is_dir() and any(p.is_file() for p in test_dir.rglob("*"))
-            test_ds = datasets.ImageFolder(str(test_dir), eval_tfm) if has_test else None
-            if test_ds is not None and test_ds.classes != class_names:
-                raise ValueError(
-                    f"Las clases de test {test_ds.classes} no coinciden con las de train "
-                    f"{class_names}."
-                )
-            logger.info("Dataset: %d train, %d val, %s test, clases=%s", len(train_ds), len(val_ds),
-                        len(test_ds) if test_ds is not None else 0, class_names)
-            torch.manual_seed(TRAIN_SEED)  # set_seed(42) of the delivered run_training
+        def _write(mlflow_tmp: str) -> None:
+            # Matching artifact_path="classifier", the folder mlflow_utils downloads.
+            torch.save(model.state_dict(), os.path.join(mlflow_tmp, CLASSIFIER_FILENAME))
+            with open(os.path.join(mlflow_tmp, CLASS_NAMES_FILENAME), "w", encoding="utf-8") as fh:
+                json.dump(class_names, fh)
 
-            # Hyperparams below match config/config.yaml's `classifier` section in the original
-            # delivered code exactly (lr, weight_decay, optimizer=Adam, batch_size, epochs,
-            # patience — see src/training/trainer.py::train_classifier /
-            # _get_classification_transforms), not chosen independently.
-            train_loader = DataLoader(train_ds, batch_size=64, shuffle=True, num_workers=0)
-            val_loader = DataLoader(val_ds, batch_size=64, shuffle=False, num_workers=0)
+        upload_model_to_mlflow(
+            tracker, _write, prefix="ml10_dairy_mlflow_", artifact_path="classifier"
+        )
 
-            # Build model: pretrained MobileNetV3, frozen backbone, trainable classifier head
-            os.environ.setdefault("TORCH_HOME", "/tmp/.torch")
-            model = models.mobilenet_v3_large(weights="IMAGENET1K_V1")
-            for param in model.parameters():
-                param.requires_grad = False
-            in_features = model.classifier[-1].in_features
-            model.classifier[-1] = nn.Linear(in_features, len(class_names))
-            model.to(self._device)
+        # ── Log final metrics to MLflow ─────────────────────────────────
+        final_metrics = {
+            "best_val_accuracy": round(fit["best_acc"] * 100, 1),
+            "training_time_min": round(fit["elapsed"] / 60, 1),
+        }
+        if test_metrics:
+            final_metrics["test_accuracy"] = test_metrics["test_accuracy"]
+        tracker.log_metrics(final_metrics)
 
-            lr = 0.007980063451685896
-            weight_decay = 0.0003438715138565418
-            criterion = nn.CrossEntropyLoss()
-            optimizer = optim.Adam(model.classifier.parameters(), lr=lr, weight_decay=weight_decay)
-            scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.1)
-
-            best_acc = 0.0
-            best_state = None
-            patience_cfg = 15
-            patience_counter = 0
-            val_accs: list = []
-
-            # ── MLflow logging ──────────────────────────────────────────────
-            tracker = BaseMLflowTracker(mlflow_run_id)
-            tracker.log_params({
-                "lr": lr,
-                "weight_decay": weight_decay,
-                "batch_size": 64,
-                "max_epochs": 100,
-                "patience": patience_cfg,
-                "optimizer": "Adam",
-                "scheduler": "StepLR(step_size=10)",
-                "model": "MobileNetV3_Large",
-            })
-
-            t0 = time.perf_counter()
-            for epoch in range(100):
-                tr_loss, tr_acc = _cls_train_epoch(
-                    model, train_loader, optimizer, criterion, self._device
-                )
-                val_loss, val_acc = _cls_validate(model, val_loader, criterion, self._device)
-                scheduler.step()
-                val_accs.append(val_acc)
-                tracker.log_metrics({
-                    "train_loss": tr_loss,
-                    "train_accuracy": tr_acc,
-                    "val_loss": val_loss,
-                    "val_accuracy": val_acc,
-                }, step=epoch)
-                logger.info("Epoch %d | tr_loss=%.4f tr_acc=%.4f val_loss=%.4f val_acc=%.4f",
-                            epoch + 1, tr_loss, tr_acc, val_loss, val_acc)
-                if val_acc > best_acc:
-                    best_acc = val_acc
-                    best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
-                    patience_counter = 0
-                else:
-                    patience_counter += 1
-                    if patience_counter >= patience_cfg:
-                        logger.info("Early stopping en epoch %d", epoch + 1)
-                        break
-
-            elapsed = time.perf_counter() - t0
-            if best_state:
-                model.load_state_dict(best_state)
-
-            test_metrics = {}
-            if test_ds is not None:
-                test_loader = DataLoader(test_ds, batch_size=64, shuffle=False, num_workers=0)
-                test_metrics = _cls_test_metrics(model, test_loader, class_names, self._device)
-                logger.info("Test: accuracy=%.4f", test_metrics["test_accuracy"])
-
-            # The retrained classifier lives only in its own MLflow run (predict with that
-            # mlflow_run_id); the served base classifier and its local artifacts are never replaced.
-            # mlflow_run_id is mandatory in TrainRequest, so there is always a run to save into.
-            mlflow_tmp = tempfile.mkdtemp(prefix="ml10_dairy_mlflow_")
-            try:
-                # Save to a temporary dir for MLflow upload (matching artifact_path="classifier")
-                torch.save(model.state_dict(), os.path.join(mlflow_tmp, CLASSIFIER_FILENAME))
-                with open(
-                    os.path.join(mlflow_tmp, CLASS_NAMES_FILENAME), "w", encoding="utf-8"
-                ) as fh:
-                    json.dump(class_names, fh)
-                tracker.upload_artifacts(mlflow_tmp, artifact_path="classifier")
-            except Exception as exc:
-                logger.error("MLflow artifact upload failed: %s", exc)
-                raise ModelPersistenceError(
-                    f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}"
-                ) from exc
-            finally:
-                shutil.rmtree(mlflow_tmp, ignore_errors=True)
-
-            # ── Log final metrics to MLflow ─────────────────────────────────
-            final_metrics = {
-                "best_val_accuracy": round(best_acc * 100, 1),
-                "training_time_min": round(elapsed / 60, 1),
-            }
-            if test_metrics:
-                final_metrics["test_accuracy"] = test_metrics["test_accuracy"]
-            tracker.log_metrics(final_metrics)
-
-            train_metrics = {
+        return TrainResponse(
+            detail="Entrenamiento del clasificador completado",
+            metrics={
                 "train_samples": len(train_ds),
                 "val_samples": len(val_ds),
                 "classes": class_names,
-                "epochs_run": len(val_accs),
-                "best_val_acc": round(best_acc * 100, 1),
+                "epochs_run": fit["epochs_run"],
+                "best_val_acc": round(fit["best_acc"] * 100, 1),
                 "test_samples": len(test_ds) if test_ds is not None else 0,
                 **test_metrics,
-                "time_min": round(elapsed / 60, 1),
-            }
-
-            return TrainResponse(
-                detail="Entrenamiento del clasificador completado",
-                metrics=train_metrics,
-                mlflow_run_id=mlflow_run_id,
-            )
-        finally:
-            shutil.rmtree(temp_dir, ignore_errors=True)
-            if _tmp_zip and os.path.exists(_tmp_zip):
-                os.unlink(_tmp_zip)
-            gc.collect()
-
-    def _assert_loaded(self) -> None:
-        """Lanza un error si el modelo no está cargado."""
-        if not self.is_loaded():
-            raise ModelNotLoadedError("El modelo no está cargado.")
+                "time_min": round(fit["elapsed"] / 60, 1),
+            },
+            mlflow_run_id=mlflow_run_id,
+        )
 
     def _update_stats(self, latency_ms: float = 0.0) -> None:
         """Actualiza las estadísticas de uso del modelo después de una predicción."""
-        self._predict_count += 1
+        self._record()
         self._total_latency_ms += latency_ms
-        self._last_predict_at = datetime.now(tz=timezone.utc).isoformat()

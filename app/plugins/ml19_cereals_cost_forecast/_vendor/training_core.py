@@ -13,7 +13,7 @@ Left out on purpose: the DRNN (experimental, outside the official model ranking;
 makes models.py import torch), the legacy run_walk_forward, the reliability verdicts and the
 report/CSV writers. src.utils.logging.get_logger is replaced by logging.getLogger.
 """
-# pylint: disable=line-too-long,invalid-name  # verbatim vendored code
+# pylint: disable=invalid-name  # verbatim vendored code
 # flake8: noqa
 from __future__ import annotations
 

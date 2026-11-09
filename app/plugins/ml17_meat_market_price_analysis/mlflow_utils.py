@@ -10,12 +10,12 @@ from __future__ import annotations
 
 import logging
 import os
-import shutil
-import tempfile
+from functools import partial
 
 import joblib
 
-from app.domain.services.mlflow_tracker import BaseMLflowTracker, require_user_model
+from app.domain.services.mlflow_artifacts import download_run_artifacts
+from app.domain.services.mlflow_tracker import require_user_model
 from app.plugins.ml17_meat_market_price_analysis.constants import MODEL_FILENAME
 
 logger = logging.getLogger(__name__)
@@ -26,29 +26,19 @@ def download_user_model_from_mlflow(run_id: str):
     """Download a user-retrained Ridge pipeline from MLflow.
 
     Returns (model, temp_dir) or None if the run has no persisted artifact / download fails.
-    Caller MUST shutil.rmtree(temp_dir) after inference — use try/finally.
+    Caller MUST remove temp_dir after inference (``removing_dir``).
     """
     if not run_id:
         return None
-    tmp = tempfile.mkdtemp(prefix="mlflow_ml17_")
-    try:
-        local_path = BaseMLflowTracker(run_id).download_artifacts(tmp, artifact_path="model")
-        if not local_path:
-            logger.warning("No user-trained artifact found in MLflow run_id=%s", run_id)
-            shutil.rmtree(tmp, ignore_errors=True)
-            return None
+    return download_run_artifacts(run_id, partial(_load, run_id=run_id), prefix="mlflow_ml17_")
 
-        model_path = os.path.join(local_path, MODEL_FILENAME)
-        if not os.path.exists(model_path):
-            logger.warning(
-                "MLflow run_id=%s has no %s under artifact_path='model'", run_id, MODEL_FILENAME
-            )
-            shutil.rmtree(tmp, ignore_errors=True)
-            return None
 
-        model = joblib.load(model_path)
-        logger.info("Downloaded user-trained Ridge pipeline from MLflow run_id=%s", run_id)
-        return model, tmp
-    except BaseException:
-        shutil.rmtree(tmp, ignore_errors=True)
-        raise
+def _load(local_path: str, *, run_id: str):
+    """Load the Ridge pipeline from a downloaded ``model`` folder, or None if it is missing."""
+    model_path = os.path.join(local_path, MODEL_FILENAME)
+    if not os.path.exists(model_path):
+        logger.warning(
+            "MLflow run_id=%s has no %s under artifact_path='model'", run_id, MODEL_FILENAME
+        )
+        return None
+    return joblib.load(model_path)

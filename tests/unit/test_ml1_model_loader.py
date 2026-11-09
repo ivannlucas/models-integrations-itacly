@@ -106,7 +106,7 @@ def _missing_joblib(filename):
     return Path(filename)
 
 
-class _NoWeights:  # pylint: disable=too-few-public-methods  # load_weights stub
+class _NoWeights:
     def load_weights(self, _path):
         """Accept any weights path without loading anything."""
         return None
@@ -119,7 +119,7 @@ def test_tabular_only_without_rf_riesgo_raises_data_contract_error():
         inference.run_inference_tabular_only({"rf_riesgo": None}, sensors)
 
 
-class _ConstantRegressor:  # pylint: disable=too-few-public-methods  # predict stub
+class _ConstantRegressor:
     def predict(self, x):
         """Check the input has one row of SENSOR_COLS and return a constant risk."""
         assert x.shape == (1, len(SENSOR_COLS))

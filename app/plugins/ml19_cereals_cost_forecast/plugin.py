@@ -16,15 +16,15 @@ from __future__ import annotations
 import logging
 import shutil
 import tempfile
-from datetime import datetime, timezone
 from pathlib import Path
 
 import pandas as pd
 
-from app.application.dto.stats_dto import InputField, OutputField, RuntimeStats, StatsResponse
+from app.application.dto.stats_dto import InputField, OutputField, StatsResponse
 from app.domain.ports.model_plugin_port import ModelPluginPort
-from app.domain.services.exceptions import DataContractError, ModelNotLoadedError
-from app.domain.services.mlflow_tracker import BaseMLflowTracker
+from app.domain.services.exceptions import DataContractError
+from app.domain.services.mlflow_artifacts import mlflow_run_summary, removing_dir
+from app.domain.services.plugin_runtime import PluginRuntimeMixin
 from app.infrastructure.artifact_store import local_file_path
 from app.infrastructure.base_model_publisher import persist_retrained_bundle
 from app.plugins.ml19_cereals_cost_forecast import inference, model_loader, training
@@ -77,16 +77,43 @@ def _build_horizons(result: dict[int, dict], date_label: str) -> list[HorizonRes
     return horizons
 
 
-class Ml19CerealsCostForecastPlugin(ModelPluginPort):
+def _mlflow_params(result) -> dict:
+    """Params logged to the MLflow run of a retraining (selected models per horizon)."""
+    return {
+        "train_end": result.meta["train_end"],
+        "selection_reg": training.REG_SELECTION_METRIC,
+        "selection_clf": training.CLF_SELECTION_METRIC,
+        "best_reg": ",".join(f"h{h}:{m}" for h, m in result.best_reg.items()),
+        "best_clf": ",".join(f"h{h}:{m}" for h, m in result.best_clf.items()),
+        "n_features": len(result.features),
+        "lasso_alpha": result.lasso_alpha,
+    }
+
+
+def _horizon_train_metrics(result) -> list[HorizonTrainMetrics]:
+    """Walk-forward metrics of the selected regression/classification model per horizon."""
+    horizons = []
+    for h in sorted(set(result.best_reg) & set(result.best_clf)):
+        reg_name, clf_name = result.best_reg[h], result.best_clf[h]
+        reg_m, clf_m = result.reg_results[(reg_name, h)], result.clf_results[(clf_name, h)]
+        horizons.append(HorizonTrainMetrics(
+            horizon=h,
+            reg=SelectedRegMetrics(model_name=reg_name, **{k: float(reg_m[k]) for k in (
+                "corr", "dir_acc", "sharpe", "mae", "rmse", "r2")}),
+            clf=SelectedClfMetrics(model_name=clf_name, **{k: float(clf_m[k]) for k in (
+                "acc", "f1", "auc", "brier", "sharpe")}),
+        ))
+    return horizons
+
+
+class Ml19CerealsCostForecastPlugin(PluginRuntimeMixin, ModelPluginPort):
     """Multi-horizon cereal price signal (regression + classification ensemble)."""
 
     BASE_ARTIFACT_FOLDER = ARTIFACT_FOLDER_NAME   # every /train publishes the new base model
 
     def __init__(self) -> None:
-        """Initialize an unloaded plugin with empty runtime counters."""
+        """Initialize an unloaded plugin (runtime counters start at the mixin defaults)."""
         self._bundle: dict | None = None
-        self._predict_count: int = 0
-        self._last_predict_at: str | None = None
 
     # ── lifecycle ─────────────────────────────────────────────────────────────
 
@@ -102,21 +129,13 @@ class Ml19CerealsCostForecastPlugin(ModelPluginPort):
         """Return True once the fixed bundle is loaded."""
         return self._bundle is not None
 
-    def _require_loaded(self) -> None:
-        if not self.is_loaded():
-            raise ModelNotLoadedError("El modelo no está cargado.")
-
-    def _record_prediction(self) -> None:
-        self._predict_count += 1
-        self._last_predict_at = datetime.now(tz=timezone.utc).isoformat()
-
     def _resolve_bundle(self, mlflow_run_id: str) -> tuple[dict, str | None]:
         """Return (bundle, temp_dir) as locals — never stored on self (shared across requests).
 
         With mlflow_run_id, the retrained bundle of that run (models + its own dataset). A run
         without a loadable model raises UserModelUnavailableError (-> 422): never fall back
-        silently to the base model (repo review finding, PR #20). The caller must rmtree
-        temp_dir in a finally block.
+        silently to the base model (repo review finding, PR #20). The caller must remove
+        temp_dir (``removing_dir``).
         """
         self._require_loaded()
         if mlflow_run_id:
@@ -137,15 +156,12 @@ class Ml19CerealsCostForecastPlugin(ModelPluginPort):
         _ = model_key, threshold
         date_str = features.get("date") if features else None
         bundle, user_tmp = self._resolve_bundle(mlflow_run_id)
-        try:
+        with removing_dir(user_tmp):
             row, date_label = inference.get_row_from_dataset(
                 bundle["dataset"], bundle["features"], date_str
             )
             result = inference.predict_next_month(row, bundle)
-        finally:
-            if user_tmp:
-                shutil.rmtree(user_tmp, ignore_errors=True)
-        self._record_prediction()
+        self._record()
         logger.info("predict_inline done — date_label=%s count=%d", date_label, self._predict_count)
 
         return PredictInlineResponse(
@@ -168,14 +184,11 @@ class Ml19CerealsCostForecastPlugin(ModelPluginPort):
         if "date" not in df.columns:
             raise DataContractError("El CSV de entrada debe traer una columna 'date' (YYYY-MM).")
         bundle, user_tmp = self._resolve_bundle(mlflow_run_id)
-        try:
+        with removing_dir(user_tmp):
             predictions = self._predict_batch_rows(df, bundle)
-        finally:
-            if user_tmp:
-                shutil.rmtree(user_tmp, ignore_errors=True)
 
         n_predictions = sum(1 for p in predictions if p.error is None)
-        self._record_prediction()
+        self._record()
         logger.info(
             "predict_batch done — %d filas, %d predicciones, %d errores",
             len(predictions), n_predictions, len(predictions) - n_predictions,
@@ -226,7 +239,6 @@ class Ml19CerealsCostForecastPlugin(ModelPluginPort):
 
     # ── train (official pipeline; every /train publishes the new base) ───────
 
-    # pylint: disable-next=too-many-locals
     def train(self, *, data_path: str, mlflow_run_id: str = "") -> TrainResponse:
         """Retrain with the AI team's official pipeline on an updated dataset_v7_fe.csv.
 
@@ -244,39 +256,19 @@ class Ml19CerealsCostForecastPlugin(ModelPluginPort):
             except BaseException:
                 shutil.rmtree(bundle_dir, ignore_errors=True)
                 raise
-        try:
+        with removing_dir(str(bundle_dir)):
             result = training.train_multihorizon(df)
             training.save_training_artifacts(bundle_dir, result)
             metrics = training.selected_metrics(result)
-            params = {
-                "train_end": result.meta["train_end"],
-                "selection_reg": training.REG_SELECTION_METRIC,
-                "selection_clf": training.CLF_SELECTION_METRIC,
-                "best_reg": ",".join(f"h{h}:{m}" for h, m in result.best_reg.items()),
-                "best_clf": ",".join(f"h{h}:{m}" for h, m in result.best_clf.items()),
-                "n_features": len(result.features),
-                "lasso_alpha": result.lasso_alpha,
-            }
+            params = _mlflow_params(result)
             persisted = persist_retrained_bundle(
                 bundle_dir, artifact_folder=ARTIFACT_FOLDER_NAME, data_path=data_path,
                 metrics=metrics, mlflow_run_id=mlflow_run_id,
                 upload_to_mlflow=lambda: upload_artifacts_to_mlflow(
                     str(bundle_dir), mlflow_run_id, metrics=metrics, params=params),
             )
-        finally:
-            shutil.rmtree(bundle_dir, ignore_errors=True)
 
-        horizons = []
-        for h in sorted(set(result.best_reg) & set(result.best_clf)):
-            reg_name, clf_name = result.best_reg[h], result.best_clf[h]
-            reg_m, clf_m = result.reg_results[(reg_name, h)], result.clf_results[(clf_name, h)]
-            horizons.append(HorizonTrainMetrics(
-                horizon=h,
-                reg=SelectedRegMetrics(model_name=reg_name, **{k: float(reg_m[k]) for k in (
-                    "corr", "dir_acc", "sharpe", "mae", "rmse", "r2")}),
-                clf=SelectedClfMetrics(model_name=clf_name, **{k: float(clf_m[k]) for k in (
-                    "acc", "f1", "auc", "brier", "sharpe")}),
-            ))
+        horizons = _horizon_train_metrics(result)
         logger.info("ml19 train() done — base %s, %d features, %.1fs",
                     persisted.base_version["version"], len(result.features), result.training_time_s)
         return TrainResponse(
@@ -304,8 +296,7 @@ class Ml19CerealsCostForecastPlugin(ModelPluginPort):
     def _metrics_with_run(mlflow_run_id: str) -> dict:
         metrics = dict(METRICS_REPORTED)
         if mlflow_run_id:
-            tracker = BaseMLflowTracker(mlflow_run_id)
-            metrics["mlflow"] = {"params": tracker.get_params(), "metrics": tracker.get_metrics()}
+            metrics["mlflow"] = mlflow_run_summary(mlflow_run_id)
         return metrics
 
     def stats(self, mlflow_run_id: str = "") -> StatsResponse:
@@ -348,5 +339,5 @@ class Ml19CerealsCostForecastPlugin(ModelPluginPort):
             inputs=inputs,
             outputs=outputs,
             metrics=self._metrics_with_run(mlflow_run_id),
-            runtime_stats=RuntimeStats(total_predictions=self._predict_count, avg_latency_ms=None),
+            runtime_stats=self._runtime_stats(),
         )

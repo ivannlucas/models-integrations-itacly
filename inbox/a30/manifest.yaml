@@ -936,8 +936,67 @@ golden_cases:
     pred_traceability_incident: 1
     pred_score: 0.992749
   ground_truth_target_traceability_incident: 1
+- id: obs_OBS0000776
+  source: dataset_test_split
+  # Único caso con un sensor vacío (sensor_ph): comprueba que se imputa la mediana del
+  # preprocesador como en el original (antes se rellenaba con 0 → score 0.0000).
+  input:
+    row_id: OBS0000776
+    event_uid: EVT-LOT00255-04
+    has_prev_event: 1
+    cold_start_lot: 0
+    stage_order_obs: 4
+    time_since_prev_lot_hours: 3.542075214748056
+    lot_stage_order_delta: 1
+    events_seen_before: 3
+    max_stage_order_seen_before: 3
+    stages_seen_count_before: 3
+    prior_sequence_anomaly_count: 0
+    sensor_temp_c: 3.123
+    sensor_ph: null
+    sensor_weight_kg: 245.401
+    ts_hour: 23
+    ts_dayofweek: 3
+    sensor_temp_c_delta_from_prev: -1.3079999999999998
+    sensor_ph_delta_from_prev: 0
+    sensor_weight_kg_delta_from_prev: 0.193000000000012
+    yield_pct_from_parent: 0.3146251373434413
+    yield_delta_from_expected: 0.0044351373434412
+    stage: envasado
+    prev_stage: procesado
+    plant_line: linea_este
+    operator_shift: N
+    process_route: fresh_cut
+    packaging_type: map
+    trace_unit_type: unidad_envasada
+    prev_trace_unit_type: batch
+    temp_sensor_location: linea_envasado
+    prev_temp_sensor_location: camara_frigorifica
+    ph_measurement_source: inline_probe
+    prev_ph_measurement_source: spot_check
+    cold_room_id: no_cold_room
+    scale_id: bascula_03
+  expected:
+    pred_traceability_incident: 0
+    pred_score: 0.083688
+  ground_truth_target_traceability_incident: 1
 
 known_issues:
+  - "[RESUELTO 2026-11-09] Los sensores numéricos vacíos se rellenaban con 0.0
+     (preprocessing.py::_coerce y build_dataframe_from_features) antes del preprocesador, que
+     imputa la mediana de entrenamiento como el original: pH 0 o una canal de 0 kg en lugar de
+     5.74 / 246 kg. Afectaba a predict_batch, predict_inline y /train. En el test (379 filas) 6
+     filas con un sensor vacío daban otro score (OBS0000776, incidencia real con pH vacío: 0.0000
+     en vez de 0.0837) → AUC 0.7117 en vez de 0.7185 (acc/F1 sin cambio). Ahora los numéricos
+     vacíos quedan NaN y el plugin reproduce exactamente el original en las 379 filas (AUC
+     0.718529). Añadido el golden obs_OBS0000776 (único con sensor vacío; el resto no tenía
+     ninguno, por eso la verificación no lo detectaba)."
+  - "ACEPTADO 2026-11-09: en predict_inline el control de escala de contract.py (mediana de |z|
+     por columna > 10 → DataContractError) ve una sola fila, así que rechaza eventos reales con
+     un valor extremo: ~2 % del dataset (51/2541, 25 de ellos incidencias reales), p. ej. el
+     golden obs_OBS0001565 (1199 h desde el lote anterior). En predict_batch no ocurre (la
+     mediana se calcula sobre muchas filas). Se mantiene así porque la predicción inline está
+     deshabilitada en la plataforma; si se habilita, revisar el control para una sola fila."
   - "Dataset y target 100% sintéticos (generados por reglas internas del simulador, no datos
      reales de planta) — advertido explícitamente en la memoria secc. 10. Las métricas deben
      leerse como validación del pipeline, no como evidencia de generalización a planta real."

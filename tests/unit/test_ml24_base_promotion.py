@@ -5,6 +5,7 @@ The CatBoost training itself is replaced by tiny real models (the full procedure
 test_base_reload_per_model.py against the delivered artifacts): these tests cover what /train
 decides and publishes — split years, series and exogenous handling, MLflow run, errors.
 """
+# pylint: disable=protected-access  # the tests stub the plugin's base bundle and reference
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -14,15 +15,16 @@ import pytest
 pytest.importorskip("catboost")
 
 # Imports below importorskip on purpose: the module is skipped when catboost is missing.
-from catboost import CatBoostRegressor  # noqa: E402  # pylint: disable=wrong-import-position
+# pylint: disable=wrong-import-position
+from catboost import CatBoostRegressor  # noqa: E402
 
-from app.plugins.ml24_dairy_spatial_price_forecast import (  # noqa: E402  # pylint: disable=wrong-import-position
+from app.plugins.ml24_dairy_spatial_price_forecast import (  # noqa: E402
     mlflow_utils,
     preprocessing,
     training,
 )
-from app.plugins.ml24_dairy_spatial_price_forecast import plugin as plugin_mod  # noqa: E402  # pylint: disable=wrong-import-position
-from app.plugins.ml24_dairy_spatial_price_forecast.constants import (  # noqa: E402  # pylint: disable=wrong-import-position
+from app.plugins.ml24_dairy_spatial_price_forecast import plugin as plugin_mod  # noqa: E402
+from app.plugins.ml24_dairy_spatial_price_forecast.constants import (  # noqa: E402
     ARTIFACT_FOLDER_NAME,
     EXOG_MONTHLY_FILENAME,
     HORIZONS,
@@ -32,6 +34,7 @@ from app.plugins.ml24_dairy_spatial_price_forecast.constants import (  # noqa: E
     TARGET_METRIC,
     model_filename,
 )
+# pylint: enable=wrong-import-position
 
 
 def _series(start="2018-01", months=36, ccaa=("CASTILLA Y LEON", "GALICIA")) -> pd.DataFrame:
@@ -94,8 +97,8 @@ def fixture_fake_training(monkeypatch):
 def fixture_instance():
     """ml24 plugin with a stub base bundle and reference (series, weights, exogenous)."""
     plugin = plugin_mod.Ml24DairySpatialPriceForecastPlugin()
-    plugin._bundle = {"marker": "base"}  # pylint: disable=protected-access
-    plugin._reference = {  # pylint: disable=protected-access
+    plugin._bundle = {"marker": "base"}
+    plugin._reference = {
         "series": None, "spatial_weights": "W", "exog": _exog(),
     }
     return plugin
@@ -144,7 +147,7 @@ def test_train_publishes_models_and_the_filtered_series(
     assert not (v1 / EXOG_MONTHLY_FILENAME).exists()           # inherited from the parent version
     assert (
         fake_training["reference"]["exog"]
-        is instance._reference["exog"]  # pylint: disable=protected-access
+        is instance._reference["exog"]
     )
 
 

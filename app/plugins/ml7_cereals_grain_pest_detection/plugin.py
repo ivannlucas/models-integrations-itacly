@@ -11,20 +11,21 @@ import logging
 import shutil
 import tempfile
 import zipfile
-from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
 import yaml
 
-from app.application.dto.stats_dto import InputField, OutputField, RuntimeStats, StatsResponse
+from app.application.dto.stats_dto import InputField, OutputField, StatsResponse
 from app.domain.ports.model_plugin_port import ModelPluginPort
 from app.domain.services.exceptions import (
     InvalidImageError,
     ModelNotLoadedError,
     ModelPersistenceError,
 )
+from app.domain.services.mlflow_artifacts import removing_dir, require_train_tracker
 from app.domain.services.mlflow_tracker import BaseMLflowTracker
+from app.domain.services.plugin_runtime import PluginRuntimeMixin
 from app.infrastructure.archive import safe_extract_zip
 from app.infrastructure.artifact_store import local_file_path
 from app.plugins.ml7_cereals_grain_pest_detection.constants import (
@@ -101,20 +102,41 @@ def _count_images(dataset_yaml: Path, split: str) -> int:
         if not split_dir.is_absolute():
             split_dir = dataset_yaml.parent / split_dir
         return sum(1 for f in split_dir.glob("*") if f.suffix.lower() in IMAGE_EXTENSIONS)
-    except Exception as exc:  # pylint: disable=broad-exception-caught
+    except Exception as exc:  # pylint: disable=broad-exception-caught  # count is best-effort
         logger.warning("Could not count images for split=%s: %s", split, exc)
         return 0
 
 
-class Ml7CerealsGrainPestDetectionPlugin(ModelPluginPort):
+def _validate_best(best_weights: Path, dataset_yaml: Path, device) -> dict[str, float]:
+    """Evaluate the fine-tuned checkpoint on the val split.
+
+    Same as src/training/validation.py::validate_model().
+    """
+    val_model = _load_yolo_from_path(best_weights)
+    val_metrics = val_model.val(
+        data=str(dataset_yaml),
+        split="val",
+        imgsz=IMG_SIZE,
+        batch=TRAIN_BATCH_SIZE,
+        device=device,
+        plots=False,
+        conf=TRAIN_EVAL_CONF,
+    )
+    return {
+        "map50": float(val_metrics.box.map50),
+        "map50_95": float(val_metrics.box.map),
+        "precision": float(val_metrics.box.mp),
+        "recall": float(val_metrics.box.mr),
+    }
+
+
+class Ml7CerealsGrainPestDetectionPlugin(PluginRuntimeMixin, ModelPluginPort):
     """YOLO detector for stored-grain pest species."""
 
     def __init__(self) -> None:
-        """Initialize an unloaded plugin with empty runtime counters."""
+        """Initialize an unloaded plugin (runtime counters start at the mixin defaults)."""
         self._model = None
         self._device = None
-        self._predict_count: int = 0
-        self._last_predict_at: str | None = None
 
     def load(self) -> None:
         """Load the YOLO checkpoint into memory and resolve the inference device."""
@@ -133,11 +155,6 @@ class Ml7CerealsGrainPestDetectionPlugin(ModelPluginPort):
         if self._model is None:
             raise ModelNotLoadedError("El modelo no está cargado.")
         return self._model
-
-    def _record(self) -> None:
-        """Update runtime counters after a prediction."""
-        self._predict_count += 1
-        self._last_predict_at = datetime.now(tz=timezone.utc).isoformat()
 
     def _resolve_model_for_predict(self, mlflow_run_id: str):
         """Return (model, temp_dir_to_cleanup) — the user's MLflow checkpoint if
@@ -162,7 +179,7 @@ class Ml7CerealsGrainPestDetectionPlugin(ModelPluginPort):
         """Detect pests in a single image (path or base64)."""
         _ = model_key
         model, temp_dir = self._resolve_model_for_predict(mlflow_run_id)
-        try:
+        with removing_dir(temp_dir):
             if features.get("image_path"):
                 img_np = image_path_to_numpy(features["image_path"])
                 features_used = ["image_path"]
@@ -185,16 +202,13 @@ class Ml7CerealsGrainPestDetectionPlugin(ModelPluginPort):
                 features_used=features_used,
                 **result,
             )
-        finally:
-            if temp_dir:
-                shutil.rmtree(temp_dir, ignore_errors=True)
 
     def predict_batch(self, *, data_path: str, mlflow_run_id: str = "") -> PredictBatchResponse:
         """Detect pests in every image of a directory or ZIP."""
         model, mlflow_temp_dir = self._resolve_model_for_predict(mlflow_run_id)
         tmp_dir: str | None = None
 
-        try:
+        with removing_dir(mlflow_temp_dir):
             with local_file_path(data_path) as local_data_path:
                 data_p = Path(local_data_path)
 
@@ -237,13 +251,8 @@ class Ml7CerealsGrainPestDetectionPlugin(ModelPluginPort):
                 finally:
                     if tmp_dir is not None:
                         shutil.rmtree(tmp_dir, ignore_errors=True)
-        finally:
-            if mlflow_temp_dir:
-                shutil.rmtree(mlflow_temp_dir, ignore_errors=True)
 
-    def train(  # pylint: disable=too-many-locals
-        self, *, data_path: str, mlflow_run_id: str
-    ) -> TrainResponse:
+    def train(self, *, data_path: str, mlflow_run_id: str) -> TrainResponse:
         """Fine-tune the YOLO detector, faithfully porting
         src/training/train.py::train_model() from inbox/a07/codigo/.
 
@@ -253,12 +262,13 @@ class Ml7CerealsGrainPestDetectionPlugin(ModelPluginPort):
         a temp dir and uploaded to MLflow — the served artifacts/.../best.pt is never
         overwritten (see inbox/a07/manifest.yaml::training).
         """
+        # Without a run the retrained checkpoint would be lost: fail before training.
+        require_train_tracker(mlflow_run_id)
         dataset_yaml = _resolve_dataset_yaml(data_path)
         device = safe_device()
 
         train_project_dir = Path(tempfile.mkdtemp(prefix="ml7_train_"))
         upload_dir = Path(tempfile.mkdtemp(prefix="ml7_train_upload_"))
-        upload_warning = None
         try:
             model = load_yolo()  # fresh instance from the served base checkpoint
             model.train(
@@ -282,39 +292,16 @@ class Ml7CerealsGrainPestDetectionPlugin(ModelPluginPort):
             if not best_weights.exists():
                 raise RuntimeError(f"Entrenamiento finalizado pero no se generó {best_weights}")
 
-            # Evaluate on the val split, same as src/training/validation.py::validate_model()
-            val_model = _load_yolo_from_path(best_weights)
-            val_metrics = val_model.val(
-                data=str(dataset_yaml),
-                split="val",
-                imgsz=IMG_SIZE,
-                batch=TRAIN_BATCH_SIZE,
-                device=device,
-                plots=False,
-                conf=TRAIN_EVAL_CONF,
-            )
-            map50 = float(val_metrics.box.map50)
-            map50_95 = float(val_metrics.box.map)
-            precision = float(val_metrics.box.mp)
-            recall = float(val_metrics.box.mr)
+            val = _validate_best(best_weights, dataset_yaml, device)
             n_images = _count_images(dataset_yaml, "train")
 
             shutil.copy2(best_weights, upload_dir / MODEL_FILENAME)
 
-            if not mlflow_run_id:
-                raise ModelPersistenceError(
-                    "Sin run de MLflow: el modelo reentrenado no se ha guardado."
-                )
             try:
                 upload_artifacts_to_mlflow(
-                    str(upload_dir),
-                    mlflow_run_id,
-                    metrics={
-                        "map50": map50, "map50_95": map50_95,
-                        "precision": precision, "recall": recall, "n_images": n_images,
-                    },
+                    str(upload_dir), mlflow_run_id, metrics={**val, "n_images": n_images},
                 )
-            except Exception as exc:  # pylint: disable=broad-exception-caught
+            except Exception as exc:
                 logger.error("MLflow artifact upload failed: %s", exc)
                 raise ModelPersistenceError(
                     f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}"
@@ -323,16 +310,17 @@ class Ml7CerealsGrainPestDetectionPlugin(ModelPluginPort):
             logger.info(
                 "train() done — map50=%.4f map50_95=%.4f precision=%.4f recall=%.4f "
                 "n_images=%d mlflow=%s",
-                map50, map50_95, precision, recall, n_images, bool(mlflow_run_id),
+                val["map50"], val["map50_95"], val["precision"], val["recall"], n_images,
+                bool(mlflow_run_id),
             )
             return TrainResponse(
                 detail="Fine-tuning completado",
-                map50=round(map50, 4),
-                map50_95=round(map50_95, 4),
-                precision=round(precision, 4),
-                recall=round(recall, 4),
+                map50=round(val["map50"], 4),
+                map50_95=round(val["map50_95"], 4),
+                precision=round(val["precision"], 4),
+                recall=round(val["recall"], 4),
                 n_images=n_images,
-                upload_warning=upload_warning,
+                upload_warning=None,
             )
         finally:
             shutil.rmtree(train_project_dir, ignore_errors=True)
@@ -347,7 +335,7 @@ class Ml7CerealsGrainPestDetectionPlugin(ModelPluginPort):
                 for key in ("map50", "map50_95", "precision", "recall", "n_images"):
                     if key in mlflow_metrics:
                         metrics[key] = mlflow_metrics[key]
-            except Exception as exc:  # pylint: disable=broad-exception-caught
+            except Exception as exc:  # pylint: disable=broad-exception-caught  # stats stay usable
                 logger.warning(
                     "Could not fetch MLflow metrics for run_id=%s: %s", mlflow_run_id, exc
                 )
@@ -386,7 +374,7 @@ class Ml7CerealsGrainPestDetectionPlugin(ModelPluginPort):
                             description="Imagen con cajas, base64 JPEG"),
             ],
             metrics=metrics,
-            runtime_stats=RuntimeStats(total_predictions=self._predict_count, avg_latency_ms=None),
+            runtime_stats=self._runtime_stats(),
         )
 
 

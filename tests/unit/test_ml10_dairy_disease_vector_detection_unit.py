@@ -329,20 +329,20 @@ class TestMl10DairyDiseaseVectorDetectionPluginDirect:
         assert plugin._last_predict_at is not None
 
     @patch(_LOAD_PATCH)
-    def test_assert_loaded_raises_when_not_loaded(self, mock_load):
-        """Verify _assert_loaded raises ModelNotLoadedError when not loaded."""
+    def test_require_loaded_raises_when_not_loaded(self, mock_load):
+        """Verify _require_loaded raises ModelNotLoadedError when not loaded."""
         _ = mock_load
         plugin = Ml10DairyDiseaseVectorDetectionPlugin()
         with pytest.raises(ModelNotLoadedError):
-            plugin._assert_loaded()
+            plugin._require_loaded()
 
     @patch(_LOAD_PATCH)
-    def test_assert_loaded_passes_when_loaded(self, mock_load):
-        """Verify _assert_loaded does not raise after load()."""
+    def test_require_loaded_passes_when_loaded(self, mock_load):
+        """Verify _require_loaded does not raise after load()."""
         mock_load.return_value = (MagicMock(), MagicMock(), ["fly", "mos", "tick"])
         plugin = Ml10DairyDiseaseVectorDetectionPlugin()
         plugin.load()
-        plugin._assert_loaded()  # should not raise
+        plugin._require_loaded()  # should not raise
 
     def test_image_paths_from_csv(self):
         """Verify _image_paths_from_csv extracts paths from a CSV."""
@@ -495,6 +495,17 @@ class TestPredictInlineWithMocks:
         mock_detector = MagicMock()
         mock_detector.predict.return_value = [mock_box_container]
         return mock_detector
+
+    def test_invalid_image_with_user_model_removes_its_temp_dir(self, tmp_path):
+        """An invalid image after the user's classifier was downloaded still removes its dir."""
+        plugin, user_dir = self._make_plugin(), tmp_path / "user_classifier"
+        user_dir.mkdir()
+        download = _LOAD_PATCH.replace("load_detector_and_classifier",
+                                       "download_user_classifier_from_mlflow")
+        with patch(download, return_value=(MagicMock(), ["fly"], str(user_dir))):
+            with pytest.raises(InvalidImageError):
+                plugin.predict_inline(features={"image_path": "f.gif"}, mlflow_run_id="r1")
+        assert not user_dir.exists()
 
     def test_predict_inline_with_base64(self):
         """Verify predict_inline works with a base64-encoded image."""
@@ -837,6 +848,11 @@ class TestPredictBatchZip:
                 result = plugin.predict_batch(data_path=str(zip_path))
                 assert result.model_id == "ml10-dairy-disease-vector-detection"
                 assert len(result.predictions) == 2
+
+                # Same ZIP without ".zip" (s3:// key with no extension): detected by content.
+                no_ext = Path(tmp) / "dataset"
+                no_ext.write_bytes(zip_path.read_bytes())
+                assert len(plugin.predict_batch(data_path=str(no_ext)).predictions) == 2
 
     def test_predict_batch_zip_no_images_raises(self):
         """Verify predict_batch raises ValueError when ZIP has no image files."""

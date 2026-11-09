@@ -6,7 +6,6 @@ ml_alpha, and the model is a native CatBoost .cbm (no scaler, no pickle). The de
 inside the manifest/metadata (models\\artifacts\\...\\h1\\...) are not used: the artifact folder is
 flat and files are resolved by name with ArtifactStore.path() (lazy S3 download per file).
 """
-# pylint: disable=line-too-long  # repo limit is 120 (.flake8), enforced by flake8
 from __future__ import annotations
 
 import json

@@ -14,6 +14,7 @@ import pandas as pd
 import pytest
 from sklearn.preprocessing import StandardScaler
 
+from app.domain.services import mlflow_artifacts
 from app.domain.services.exceptions import ModelPersistenceError, UserModelUnavailableError
 from app.domain.services.mlflow_tracker import require_user_model
 from app.plugins.ml15_wine_ipi_price_forecast import mlflow_utils as ml15_mlflow_utils
@@ -179,7 +180,7 @@ def test_ml15_predict_fails_instead_of_serving_base_model(ml15, monkeypatch):
     """ml15 predict with a run without model fails rather than serving the base."""
     _, mlflow_utils, instance, data = ml15
 
-    class EmptyRunTracker:  # pylint: disable=too-few-public-methods
+    class EmptyRunTracker:
         """MLflow tracker stand-in for a run that has no model artifacts."""
 
         def __init__(self, run_id):
@@ -189,7 +190,8 @@ def test_ml15_predict_fails_instead_of_serving_base_model(ml15, monkeypatch):
             """Return '' like BaseMLflowTracker does for a run without artifacts."""
             return ""  # what BaseMLflowTracker returns for a run without model / MLflow down
 
-    monkeypatch.setattr(mlflow_utils, "BaseMLflowTracker", EmptyRunTracker)
+    monkeypatch.setattr(mlflow_artifacts, "BaseMLflowTracker", EmptyRunTracker)
+    monkeypatch.setattr(mlflow_utils, "BaseMLflowTracker", EmptyRunTracker, raising=False)
     with pytest.raises(UserModelUnavailableError, match="run-1"):
         instance.predict_batch(data_path=data, mlflow_run_id="run-1")
 

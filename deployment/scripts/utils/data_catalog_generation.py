@@ -19,8 +19,7 @@ from ui import log_message  # pylint: disable=import-error  # sibling script mod
 PROMPT_FILENAME = "data_catalog_generation.txt"
 
 
-def main():  # pylint: disable=too-many-locals,too-many-statements
-    """Parse CLI args and write a data catalog JSON for every selected file."""
+def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Generates data catalog entries for a file or directory.",
         formatter_class=argparse.RawTextHelpFormatter
@@ -32,7 +31,32 @@ def main():  # pylint: disable=too-many-locals,too-many-statements
     parser.add_argument("--output-dir", type=str, default="docs/catalog",
                         help="Directory to save the generated JSON files.")
 
-    args = parser.parse_args()
+    return parser.parse_args()
+
+
+def _save_result(result: dict, filepath: Path, root_path: Path, output_dir: str) -> None:
+    """Write *result* as JSON under *output_dir*, mirroring *filepath* relative to *root_path*."""
+    # Usamos resolve() para asegurar que relative_to funcione
+    relative_path = filepath.resolve().relative_to(root_path)
+
+    # Preparar la ruta de salida
+    output_filepath = Path(output_dir).resolve() / relative_path
+    output_filepath = output_filepath.with_suffix('.json')
+
+    # Convertimos el dict resultante a un string JSON
+    try:
+        output_content = json.dumps(result, indent=2, ensure_ascii=False)
+    except TypeError as e:
+        log_message(f"Could not serialize result to JSON for {filepath}: {e}", "ERROR")
+        return
+
+    # Función de guardado
+    save_output_file(output_filepath, output_content)
+
+
+def main():
+    """Parse CLI args and write a data catalog JSON for every selected file."""
+    args = _parse_args()
 
     log_message("STARTING DATA CATALOG GENERATOR", "HEADER")
 
@@ -102,22 +126,7 @@ def main():  # pylint: disable=too-many-locals,too-many-statements
             )
             continue
 
-        # Usamos resolve() para asegurar que relative_to funcione
-        relative_path = filepath.resolve().relative_to(root_path)
-
-        # Preparar la ruta de salida
-        output_filepath = Path(args.output_dir).resolve() / relative_path
-        output_filepath = output_filepath.with_suffix('.json')
-
-        # Convertimos el dict resultante a un string JSON
-        try:
-            output_content = json.dumps(result, indent=2, ensure_ascii=False)
-        except TypeError as e:
-            log_message(f"Could not serialize result to JSON for {filepath}: {e}", "ERROR")
-            continue
-
-        # Función de guardado
-        save_output_file(output_filepath, output_content)
+        _save_result(result, filepath, root_path, args.output_dir)
 
     log_message("DATA CATALOG PROCESS FINISHED", "HEADER")
 

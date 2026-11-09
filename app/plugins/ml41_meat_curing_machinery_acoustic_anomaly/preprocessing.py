@@ -26,9 +26,10 @@ from app.plugins.ml41_meat_curing_machinery_acoustic_anomaly.constants import (
 )
 
 
-# pylint: disable-next=too-many-arguments,too-many-positional-arguments
+# pylint: disable-next=too-many-arguments  # the original's STFT parameters, all defaulted
 def wav_to_logmel(
     wav_path: str,
+    *,
     sr: int = AUDIO_SR,
     n_mels: int = N_MELS,
     win_length: int = WIN_LENGTH,

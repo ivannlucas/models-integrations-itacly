@@ -33,7 +33,7 @@ def _to_jsonable(value: Any) -> Any:
     return value
 
 
-class PredictModelUseCase:  # pylint: disable=too-few-public-methods
+class PredictModelUseCase:
     """Generic predict use case.
 
     Works with any plugin that implements ModelPluginPort. The plugin returns

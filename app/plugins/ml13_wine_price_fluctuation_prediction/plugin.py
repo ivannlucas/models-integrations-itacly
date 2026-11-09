@@ -13,18 +13,17 @@ import copy
 import json
 import logging
 import math
-import shutil
 import tempfile
-from datetime import datetime, timezone
 
 import joblib
 import numpy as np
 import pandas as pd
 
-from app.application.dto.stats_dto import InputField, OutputField, RuntimeStats, StatsResponse
+from app.application.dto.stats_dto import InputField, OutputField, StatsResponse
 from app.domain.ports.model_plugin_port import ModelPluginPort
-from app.domain.services.exceptions import ModelNotLoadedError
+from app.domain.services.mlflow_artifacts import add_mlflow_run_to_stats, removing_dir
 from app.domain.services.mlflow_tracker import BaseMLflowTracker
+from app.domain.services.plugin_runtime import PluginRuntimeMixin
 from app.infrastructure.artifact_store import local_file_path
 from app.infrastructure.base_model_publisher import persist_retrained_bundle
 from app.plugins.ml13_wine_price_fluctuation_prediction import model_loader, preprocessing, training
@@ -83,7 +82,38 @@ def _week_or_none(value) -> int | None:
     return None if value is None else int(value)
 
 
-class Ml13WinePriceFluctuationPredictionPlugin(ModelPluginPort):
+def _read_train_prices(data_path: str) -> pd.DataFrame:
+    """Read the raw weekly training CSV, check its columns and return the clean price series."""
+    with local_file_path(data_path) as local_path:
+        df = pd.read_csv(local_path)
+
+    cols = set(df.columns)
+    has_time_key = {CAMPAIGN_COLUMN, WEEK_COLUMN} <= cols or BULLETIN_COLUMN in cols
+    has_price = bool(cols.intersection(PRICE_COLUMN_CANDIDATES))
+    if not (has_time_key and has_price):
+        raise ValueError(
+            "El CSV de entrenamiento necesita 'campaign'+'week' (o 'bulletin') y una "
+            f"columna de precio {PRICE_COLUMN_CANDIDATES}. "
+            f"Columnas recibidas: {list(df.columns)}"
+        )
+    return preprocessing.clean_and_index_data(preprocessing.normalize_time_keys(df))
+
+
+def _flat_train_metrics(result: dict) -> dict:
+    """Hold-out, walk-forward CV and Smart Score metrics of a retrain, flattened for MLflow."""
+    return {
+        **{f"test_{k}": v for k, v in result["test_metrics"].items()},
+        **{
+            f"cv_{name}_{k}": v
+            for name, m in result["cv"]["metrics"].items() for k, v in m.items()
+        },
+        **{f"smart_score_{k}": v for k, v in result["cv"]["scores"].items()},
+        "n_trainval": result["n_trainval"],
+        "n_test": result["n_test"],
+    }
+
+
+class Ml13WinePriceFluctuationPredictionPlugin(PluginRuntimeMixin, ModelPluginPort):
     """Price-rise alert (>2.5% over the next 4 weeks) for bulk red wine — LogisticRegression."""
 
     BASE_ARTIFACT_FOLDER = ARTIFACT_FOLDER_NAME   # every /train publishes the new base model
@@ -91,8 +121,6 @@ class Ml13WinePriceFluctuationPredictionPlugin(ModelPluginPort):
     def __init__(self) -> None:
         """Initialize an unloaded plugin with empty runtime counters."""
         self._bundle: dict | None = None
-        self._predict_count: int = 0
-        self._last_predict_at: str | None = None
 
     # ── lifecycle ─────────────────────────────────────────────────────────────
 
@@ -105,17 +133,9 @@ class Ml13WinePriceFluctuationPredictionPlugin(ModelPluginPort):
         """Return True once the fixed bundle is loaded."""
         return self._bundle is not None
 
-    def _require_loaded(self) -> None:
-        if not self.is_loaded():
-            raise ModelNotLoadedError("El modelo no está cargado.")
-
-    def _record_prediction(self) -> None:
-        self._predict_count += 1
-        self._last_predict_at = datetime.now(tz=timezone.utc).isoformat()
-
     def _resolve_bundle(self, mlflow_run_id: str) -> tuple[dict, str | None]:
         """Return (bundle, temp_dir). temp_dir is set only for an MLflow user bundle and the caller
-        must shutil.rmtree it in a finally block. A run without a loadable model raises
+        must remove it (``removing_dir``). A run without a loadable model raises
         UserModelUnavailableError (→ 422): never fall back silently to the base model."""
         if mlflow_run_id:
             logger.info("Using user-retrained model from MLflow run_id=%s", mlflow_run_id)
@@ -138,7 +158,7 @@ class Ml13WinePriceFluctuationPredictionPlugin(ModelPluginPort):
         """Score every week of a raw weekly price CSV (one output row per input row)."""
         self._require_loaded()
         bundle, user_tmp = self._resolve_bundle(mlflow_run_id)
-        try:
+        with removing_dir(user_tmp):
             with local_file_path(data_path) as local_path:
                 df = pd.read_csv(local_path)
             _, df_out = self._score(df, bundle)
@@ -152,7 +172,7 @@ class Ml13WinePriceFluctuationPredictionPlugin(ModelPluginPort):
                 rec["alerta_subida"] = None if proba is None else int(proba >= DECISION_THRESHOLD)
                 records.append(rec)
             n_pred = int(df_out["pred_proba_up"].notna().sum())
-            self._record_prediction()
+            self._record()
             logger.info(
                 "predict_batch done — %d filas, %d predicciones, mlflow=%s",
                 len(records), n_pred, bool(mlflow_run_id),
@@ -166,9 +186,6 @@ class Ml13WinePriceFluctuationPredictionPlugin(ModelPluginPort):
                 decision_threshold=DECISION_THRESHOLD,
                 output_path=None,
             )
-        finally:
-            if user_tmp:
-                shutil.rmtree(user_tmp, ignore_errors=True)
 
     # ── predict_inline ────────────────────────────────────────────────────────
 
@@ -185,14 +202,14 @@ class Ml13WinePriceFluctuationPredictionPlugin(ModelPluginPort):
         self._require_loaded()
         decision_threshold = DECISION_THRESHOLD if threshold is None else float(threshold)
         bundle, user_tmp = self._resolve_bundle(mlflow_run_id)
-        try:
+        with removing_dir(user_tmp):
             df = pd.DataFrame(features["rows"])
             df_features, df_out = self._score(df, bundle)
             last_fecha = df_features.index[-1]
             last = df_features.iloc[-1]
             out_row = df_out.loc[[last_fecha]].iloc[-1]
             proba = float(last["pred_proba_up"])
-            self._record_prediction()
+            self._record()
             logger.info(
                 "predict_inline done — fecha=%s proba=%.4f count=%d",
                 last_fecha.date(), proba, self._predict_count,
@@ -214,13 +231,10 @@ class Ml13WinePriceFluctuationPredictionPlugin(ModelPluginPort):
                 model_type=bundle["model_type"],
                 xai_feature_values={c: float(last[c]) for c in FEATURE_COLUMNS},
             )
-        finally:
-            if user_tmp:
-                shutil.rmtree(user_tmp, ignore_errors=True)
 
     # ── train (original procedure, from scratch) ──────────────────────────────
 
-    def train(self, *, data_path: str, mlflow_run_id: str) -> TrainResponse:  # pylint: disable=too-many-locals
+    def train(self, *, data_path: str, mlflow_run_id: str) -> TrainResponse:
         """Retrain with the AI team's original procedure on a raw weekly price CSV.
 
         Walk-forward CV (LogReg vs XGBoost) -> Smart Score selection -> final fit on train+val ->
@@ -230,39 +244,17 @@ class Ml13WinePriceFluctuationPredictionPlugin(ModelPluginPort):
         failed MLflow upload is only an upload_warning, a failed publish is ModelPersistenceError.
         """
         self._require_loaded()
-        with local_file_path(data_path) as local_path:
-            df = pd.read_csv(local_path)
-
-        cols = set(df.columns)
-        has_time_key = {CAMPAIGN_COLUMN, WEEK_COLUMN} <= cols or BULLETIN_COLUMN in cols
-        has_price = bool(cols.intersection(PRICE_COLUMN_CANDIDATES))
-        if not (has_time_key and has_price):
-            raise ValueError(
-                "El CSV de entrenamiento necesita 'campaign'+'week' (o 'bulletin') y una "
-                f"columna de precio {PRICE_COLUMN_CANDIDATES}. "
-                f"Columnas recibidas: {list(df.columns)}"
-            )
-        df_price = preprocessing.clean_and_index_data(preprocessing.normalize_time_keys(df))
-        result = training.train_models(df_price)
+        result = training.train_models(_read_train_prices(data_path))
 
         model_config = {"model_type": result["model_type"]}
         schema = copy.deepcopy(self._bundle["schema"])
         schema["feature_columns"] = FEATURE_COLUMNS
         schema.setdefault("scaler", {})["fitted_on"] = "train+validation set (user retrain)"
 
-        cv_m = result["cv"]["metrics"]
-        scores = result["cv"]["scores"]
-        test_m = result["test_metrics"]
         tracker = BaseMLflowTracker(mlflow_run_id)
-        metrics = {
-            **{f"test_{k}": v for k, v in test_m.items()},
-            **{f"cv_{name}_{k}": v for name, m in cv_m.items() for k, v in m.items()},
-            **{f"smart_score_{k}": v for k, v in scores.items()},
-            "n_trainval": result["n_trainval"],
-            "n_test": result["n_test"],
-        }
+        metrics = _flat_train_metrics(result)
         bundle_dir = tempfile.mkdtemp(prefix="ml13_train_")
-        try:
+        with removing_dir(bundle_dir):
             joblib.dump(result["model"], f"{bundle_dir}/{MODEL_FILENAME}")
             joblib.dump(result["scaler"], f"{bundle_dir}/{SCALER_FILENAME}")
             with open(f"{bundle_dir}/{FEATURE_SCHEMA_FILENAME}", "w", encoding="utf-8") as fh:
@@ -288,9 +280,10 @@ class Ml13WinePriceFluctuationPredictionPlugin(ModelPluginPort):
                 bundle_dir, artifact_folder=ARTIFACT_FOLDER_NAME, data_path=data_path,
                 metrics=metrics, mlflow_run_id=mlflow_run_id, upload_to_mlflow=_upload_to_mlflow,
             )
-        finally:
-            shutil.rmtree(bundle_dir, ignore_errors=True)
 
+        cv_m = result["cv"]["metrics"]
+        scores = result["cv"]["scores"]
+        test_m = result["test_metrics"]
         return TrainResponse(
             detail=(
                 "Reentrenamiento completado (procedimiento original; modelo seleccionado: "
@@ -380,15 +373,6 @@ class Ml13WinePriceFluctuationPredictionPlugin(ModelPluginPort):
                 "decision_threshold": DECISION_THRESHOLD,
                 "min_history_weeks": MIN_INFERENCE_WEEKS,
             },
-            runtime_stats=RuntimeStats(total_predictions=self._predict_count, avg_latency_ms=None),
+            runtime_stats=self._runtime_stats(),
         )
-        if mlflow_run_id:
-            try:
-                tracker = BaseMLflowTracker(mlflow_run_id)
-                base.metrics["mlflow"] = {
-                    "params": tracker.get_params(), "metrics": tracker.get_metrics(),
-                }
-                logger.info("Stats enriched with MLflow data for run_id=%s", mlflow_run_id)
-            except Exception as exc:  # pylint: disable=broad-exception-caught
-                logger.warning("Could not fetch MLflow stats for run_id=%s: %s", mlflow_run_id, exc)
-        return base
+        return add_mlflow_run_to_stats(base, mlflow_run_id)

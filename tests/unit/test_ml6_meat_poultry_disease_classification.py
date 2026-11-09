@@ -4,6 +4,8 @@ The endpoint tests use FakePlugin (wiring only). The last tests run the plugin's
 functions (majority vote, split, folder mapping) against the AI team's behaviour; numerical
 correctness is in outputs/a06/verification_report.md.
 """
+# The train() tests set and inspect the plugin's served ensembles directly.
+# pylint: disable=protected-access
 import os
 
 import pytest
@@ -234,15 +236,19 @@ def fixture_ml6_train_stubbed(monkeypatch, tmp_path):
         plugin as ml6,
     )
 
-    class _Tiny(torch.nn.Module):  # pylint: disable=abstract-method  # forward never called
+    class _Tiny(torch.nn.Module):
         def __init__(self):
             super().__init__()
             self.head = torch.nn.Linear(2, 2)
 
+        def forward(self, x):
+            """Never called (training is stubbed); defined so the module is complete."""
+            return self.head(x)
+
     instance = ml6.Ml6MeatPoultryDiseaseClassificationPlugin()
     base = {name: _Tiny() for name in ("densenet121", "efficientnet_v2s", "resnet50")}
-    instance._ensembles = {"thermal": base, "rgb": {}}  # pylint: disable=protected-access
-    instance._device = torch.device("cpu")  # pylint: disable=protected-access
+    instance._ensembles = {"thermal": base, "rgb": {}}
+    instance._device = torch.device("cpu")
     splits = {"train": [("a", 0)] * 3, "val": [("b", 1)], "test": [("c", 0), ("d", 1)]}
     monkeypatch.setattr(ml6, "split_dataset", lambda root, task: splits)
     monkeypatch.setattr(ml6, "make_loaders", lambda splits, task, bs: {"test": None})
@@ -259,7 +265,7 @@ def fixture_ml6_train_stubbed(monkeypatch, tmp_path):
         def log_metrics(self, metrics, step=0):
             """Ignore the metrics."""
 
-    monkeypatch.setattr(ml6, "BaseMLflowTracker", _Tracker)
+    monkeypatch.setattr("app.domain.services.mlflow_artifacts.BaseMLflowTracker", _Tracker)
     (tmp_path / "data").mkdir()
     return ml6, instance, base, str(tmp_path / "data")
 
@@ -285,8 +291,8 @@ def test_real_train_uploads_ensemble_and_never_touches_served_models(
     ]
     assert uploaded["run"] == "run-9" and resp.mlflow_run_id == "run-9"
     assert resp.accuracy == 1.0 and (resp.n_train, resp.n_val, resp.n_test) == (3, 1, 2)
-    assert instance._ensembles["thermal"] is not None  # pylint: disable=protected-access
-    served = instance._ensembles["thermal"]  # pylint: disable=protected-access
+    assert instance._ensembles["thermal"] is not None
+    served = instance._ensembles["thermal"]
     assert all(served[n] is m for n, m in base.items())  # served models untouched
 
 

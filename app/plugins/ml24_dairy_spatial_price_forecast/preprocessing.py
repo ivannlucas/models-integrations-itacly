@@ -5,7 +5,6 @@ original validates it with src/training/spatial_price_model.py::validate_inferen
 re-reads the whole CSV per run; the plugin validates once and keeps only the five products the
 panels use. That filter is exact: build_product_panel keeps those products and nothing else.
 """
-# pylint: disable=line-too-long  # repo limit is 120 (.flake8), enforced by flake8
 from __future__ import annotations
 
 import re
@@ -52,9 +51,13 @@ def validate_series(series: pd.DataFrame) -> pd.DataFrame:
     missing_products = [p for p in MODEL_PRODUCTS if p not in available]
     if missing_products:
         problems.append(f"faltan los productos requeridos {missing_products}")
-    anchor_rows = series[(series["producto"] == ANCHOR_PRODUCT) & (series["metrica"] == TARGET_METRIC)]
+    anchor_rows = series[
+        (series["producto"] == ANCHOR_PRODUCT) & (series["metrica"] == TARGET_METRIC)
+    ]
     if ANCHOR_PRODUCT in available and anchor_rows.empty:
-        problems.append(f"el producto ancla '{ANCHOR_PRODUCT}' no tiene la métrica '{TARGET_METRIC}'")
+        problems.append(
+            f"el producto ancla '{ANCHOR_PRODUCT}' no tiene la métrica '{TARGET_METRIC}'"
+        )
     if problems:
         raise SeriesContractError(_contract_message("; ".join(problems)))
     return series[series["producto"].isin(MODEL_PRODUCTS)].reset_index(drop=True)
@@ -65,8 +68,11 @@ def read_series_csv(path: str) -> pd.DataFrame:
     file is ~340 MB, of which the five products are a small fraction)."""
     try:
         header = pd.read_csv(path, nrows=0)
-    except (FileNotFoundError, pd.errors.EmptyDataError, pd.errors.ParserError, UnicodeDecodeError) as exc:
-        raise SeriesContractError(f"No se puede leer la serie '{path}': {type(exc).__name__}: {exc}") from exc
+    except (FileNotFoundError, pd.errors.EmptyDataError, pd.errors.ParserError,
+            UnicodeDecodeError) as exc:
+        raise SeriesContractError(
+            f"No se puede leer la serie '{path}': {type(exc).__name__}: {exc}"
+        ) from exc
     missing_cols = [c for c in SERIES_REQUIRED_COLUMNS if c not in header.columns]
     if missing_cols:
         raise SeriesContractError(_contract_message(f"faltan columnas obligatorias {missing_cols}"))
@@ -85,7 +91,9 @@ def read_series_csv(path: str) -> pd.DataFrame:
     if missing_products:
         problems.append(f"faltan los productos requeridos {missing_products}")
     if ANCHOR_PRODUCT in products_seen and not anchor_has_target:
-        problems.append(f"el producto ancla '{ANCHOR_PRODUCT}' no tiene la métrica '{TARGET_METRIC}'")
+        problems.append(
+            f"el producto ancla '{ANCHOR_PRODUCT}' no tiene la métrica '{TARGET_METRIC}'"
+        )
     if problems:
         raise SeriesContractError(_contract_message("; ".join(problems)))
     return series
@@ -97,7 +105,9 @@ def truncate_series(series: pd.DataFrame, as_of_period: str | None) -> pd.DataFr
     if not as_of_period:
         return series
     if not _AS_OF_RE.match(as_of_period):
-        raise SeriesContractError(f"as_of_period debe tener formato 'YYYY-MM', no '{as_of_period}'.")
+        raise SeriesContractError(
+            f"as_of_period debe tener formato 'YYYY-MM', no '{as_of_period}'."
+        )
     year, month = (int(part) for part in as_of_period.split("-"))
     anio = series["anio"].astype(int)
     mes = series["mes"].astype(int)
@@ -124,7 +134,8 @@ def resolve_ccaa(requested: list[str] | None) -> list[str] | None:
     if unknown:
         valid = ", ".join(code for code, name in CCAA_CODE_TO_NAME.items() if name != SPAIN_NAME)
         raise UnknownCcaaError(
-            f"CCAA no reconocida(s) o no servida(s) por el modelo: {unknown}. Códigos válidos: {valid} "
+            f"CCAA no reconocida(s) o no servida(s) por el modelo: {unknown}. Códigos válidos: "
+            f"{valid} "
             "(o el nombre oficial de la columna ccaa). T.ESPANA/ESP no se predice: los paneles "
             "oficiales usan include_spain=false."
         )
@@ -146,7 +157,8 @@ def ccaa_with_insufficient_history(anchor_panel: pd.DataFrame, target_col: str) 
         available = prices.reindex(window)
         if available.isna().any():
             reasons[str(ccaa)] = (
-                f"faltan {int(available.isna().sum())} de los {MIN_HISTORY_MONTHS} precios mensuales "
+                f"faltan {int(available.isna().sum())} de los {MIN_HISTORY_MONTHS} precios "
+                f"mensuales "
                 f"del producto ancla hasta {last.strftime('%Y-%m')}"
             )
     return reasons
@@ -161,8 +173,11 @@ def read_exog_csv(path: str, current_columns: list[str]) -> pd.DataFrame:
     """
     try:
         exog = pd.read_csv(path, low_memory=False)
-    except (FileNotFoundError, pd.errors.EmptyDataError, pd.errors.ParserError, UnicodeDecodeError) as exc:
-        raise ValueError(f"exog_path: no se puede leer '{path}': {type(exc).__name__}: {exc}") from exc
+    except (FileNotFoundError, pd.errors.EmptyDataError, pd.errors.ParserError,
+            UnicodeDecodeError) as exc:
+        raise ValueError(
+            f"exog_path: no se puede leer '{path}': {type(exc).__name__}: {exc}"
+        ) from exc
     missing = [c for c in current_columns if c not in exog.columns]
     if missing:
         shown = missing[:10] + (["..."] if len(missing) > 10 else [])
@@ -172,5 +187,7 @@ def read_exog_csv(path: str, current_columns: list[str]) -> pd.DataFrame:
         )
     exog["period_dt"] = pd.to_datetime(exog["period_dt"], errors="coerce")
     if exog["period_dt"].isna().any():
-        raise ValueError("exog_path: la columna period_dt tiene valores vacíos o que no son fechas.")
+        raise ValueError(
+            "exog_path: la columna period_dt tiene valores vacíos o que no son fechas."
+        )
     return exog

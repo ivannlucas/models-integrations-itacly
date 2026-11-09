@@ -33,7 +33,7 @@ class FakeS3:
         assert name == "list_objects_v2"
         fake = self
 
-        class _Paginator:  # pylint: disable=too-few-public-methods
+        class _Paginator:
             def paginate(
                 self, Bucket: str, Prefix: str,  # noqa: N803  # pylint: disable=invalid-name
             ):  # boto3 names

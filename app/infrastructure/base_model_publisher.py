@@ -76,7 +76,7 @@ def persist_retrained_bundle(  # pylint: disable=too-many-arguments
     if mlflow_run_id and upload_to_mlflow is not None:
         try:
             upload_to_mlflow()
-        except Exception as exc:  # pylint: disable=broad-exception-caught
+        except Exception as exc:  # pylint: disable=broad-exception-caught  # becomes a warning
             logger.error("MLflow upload failed for run %s: %s", mlflow_run_id, exc)
             upload_warning = (
                 f"El modelo no se ha podido guardar en el run de MLflow {mlflow_run_id} "
@@ -88,7 +88,7 @@ def persist_retrained_bundle(  # pylint: disable=too-many-arguments
             "data_path": data_path,
             "metrics": _json_safe(metrics),
         })
-    except Exception as exc:  # pylint: disable=broad-exception-caught
+    except Exception as exc:
         logger.error("Publishing the new base of '%s' failed: %s", artifact_folder, exc)
         raise ModelPersistenceError(
             f"El modelo reentrenado no se ha podido publicar como modelo base: {exc}"

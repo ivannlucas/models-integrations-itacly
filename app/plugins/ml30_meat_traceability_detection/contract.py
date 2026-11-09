@@ -33,7 +33,7 @@ def check_data_contract(
     """Return (errors, warnings) for ``df`` (already coerced) against ``preprocessor``.
 
     ``present_columns`` are the columns of the raw CSV/payload, so a column that was absent
-    (and got a default value from _coerce) is reported as missing, not as a scale problem.
+    (and is imputed by the preprocessor) is reported as missing, not as a scale problem.
     """
     present = set(present_columns)
     unknown_cols: list[str] = []
@@ -60,7 +60,9 @@ def check_data_contract(
 
     for col in NUMERIC_FEATURES:
         if col not in present:
-            warnings.append(f"Falta la columna '{col}'; se usará un valor por defecto.")
+            warnings.append(
+                f"Falta la columna '{col}'; se imputará con la mediana de entrenamiento."
+            )
             continue
         series = pd.to_numeric(df[col], errors="coerce").dropna()
         if series.empty:

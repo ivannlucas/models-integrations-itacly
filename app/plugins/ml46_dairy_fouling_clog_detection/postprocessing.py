@@ -21,17 +21,20 @@ from app.plugins.ml46_dairy_fouling_clog_detection._vendor.evaluation import (
 from app.plugins.ml46_dairy_fouling_clog_detection._vendor.model_arch import PredictiveTCN
 
 
-# pylint: disable-next=too-many-arguments,too-many-positional-arguments
 def run_inference(
     model: PredictiveTCN,
-    sequences: dict[str, AssetSequence],
-    feature_indices: list[int],
-    asset_ids: list[str],
+    prepared: tuple,
     train_cfg: TrainConfig,
+    *,
     batch_size: int = 256,
     stride: int | None = None,
 ) -> pd.DataFrame:
-    """Score every valid window for *asset_ids* and return one row per window (no true_* labels)."""
+    """Score every valid window and return one row per window (no true_* labels).
+
+    ``prepared`` = (sequences, feature_indices, asset_ids) as returned by
+    ``preprocessing.prepare_sequences``.
+    """
+    sequences, feature_indices, asset_ids = prepared
     dataset = WindowDataset(sequences, asset_ids, feature_indices, train_cfg, stride=stride)
     loader = DataLoader(
         dataset,
@@ -43,16 +46,15 @@ def run_inference(
     return _run_loader(model, loader, sequences, train_cfg)
 
 
-# pylint: disable-next=too-many-arguments,too-many-positional-arguments
 def run_inference_single_window(
     model: PredictiveTCN,
     sequences: dict[str, AssetSequence],
     feature_indices: list[int],
     train_cfg: TrainConfig,
-    sequence_id: str,
-    end_idx: int,
+    window: tuple[str, int],
 ) -> pd.DataFrame:
-    """Score exactly one (sequence_id, end_idx) window — used by predict_inline."""
+    """Score exactly one ``window`` = (sequence_id, end_idx) — used by predict_inline."""
+    sequence_id, end_idx = window
     seq = sequences[sequence_id]
     start_idx = end_idx - train_cfg.seq_len + 1
     x = seq.x[start_idx:end_idx + 1][:, feature_indices]
@@ -64,7 +66,87 @@ def run_inference_single_window(
     return _run_loader(model, [batch], sequences, train_cfg)
 
 
-# pylint: disable-next=too-many-locals
+def _batch_outputs(pred: dict, train_cfg: TrainConfig) -> dict[str, np.ndarray]:
+    """Probabilities and de-scaled regression outputs of one batch of TCN predictions."""
+    return {
+        "p_stage": torch.softmax(pred["stage_logits"], dim=-1).cpu().numpy(),
+        "p_foul_h": torch.sigmoid(pred["foul_h_logit"]).cpu().numpy(),
+        "p_actionable_foul_h": torch.sigmoid(pred["actionable_foul_h_logit"]).cpu().numpy(),
+        "p_clog_h": torch.sigmoid(pred["clog_h_logit"]).cpu().numpy(),
+        "pred_sev": (pred["severity_scaled"].cpu().numpy() / train_cfg.severity_scale()).clip(
+            min=0.0
+        ),
+        "pred_ttf_foul": np.expm1(
+            np.clip(
+                pred["tte_foul_log"].cpu().numpy(), 0.0, np.log1p(train_cfg.tte_fouling_cap_min)
+            )
+        ),
+        "pred_ttf_clog": np.expm1(
+            np.clip(
+                pred["tte_clog_log"].cpu().numpy(), 0.0, np.log1p(train_cfg.tte_clog_cap_min)
+            )
+        ),
+        "pred_ttu": np.expm1(
+            np.clip(pred["ttu_log"].cpu().numpy(), 0.0, np.log1p(train_cfg.ttu_cap_min))
+        ),
+    }
+
+
+def _meta_float(meta: pd.Series, key: str) -> float:
+    """``meta[key]`` as float, NaN when missing."""
+    return float(meta[key]) if pd.notna(meta[key]) else float("nan")
+
+
+def _window_row(
+    seq: AssetSequence, sequence_id: str, meta: pd.Series, out: dict, train_cfg: TrainConfig
+) -> dict:
+    """Response row of one window; ``out`` holds that window's entries of _batch_outputs()."""
+    pred_stage = int(np.argmax(out["p_stage"]))
+    return {
+        "asset_id": seq.asset_id,
+        "sequence_id": sequence_id,
+        "timestamp": meta["timestamp"],
+        "phase": meta["phase"],
+        "maintenance_active": (
+            int(meta["maintenance_active"])
+            if pd.notna(meta["maintenance_active"])
+            else 0
+        ),
+        "pred_severity": float(out["pred_sev"]),
+        "pred_stage": pred_stage,
+        "pred_stage_name": ["stable", "incipient", "advanced"][pred_stage],
+        "p_stage0": float(out["p_stage"][0]),
+        "p_stage1": float(out["p_stage"][1]),
+        "p_stage2": float(out["p_stage"][2]),
+        "p_foul_h": float(out["p_foul_h"]),
+        "p_watch_fouling": float(out["p_foul_h"]),
+        "p_actionable_foul_h": float(out["p_actionable_foul_h"]),
+        "p_actionable_fouling": float(out["p_actionable_foul_h"]),
+        "p_clog_h": float(out["p_clog_h"]),
+        "pred_tte_foul_min": float(
+            np.clip(out["pred_ttf_foul"], 0.0, train_cfg.tte_fouling_cap_min)
+        ),
+        "pred_tte_clog_min": float(
+            np.clip(out["pred_ttf_clog"], 0.0, train_cfg.tte_clog_cap_min)
+        ),
+        "pred_ttu_min": float(np.clip(out["pred_ttu"], 0.0, train_cfg.ttu_cap_min)),
+        "flow_kg_s": _meta_float(meta, "flow_kg_s"),
+        "dP_kPa": _meta_float(meta, "dP_kPa"),
+        "vibration_mm_s": _meta_float(meta, "vibration_mm_s"),
+        "thermal_eff_proxy": _meta_float(meta, "thermal_eff_proxy"),
+        "heat_proxy": _meta_float(meta, "heat_proxy"),
+        "resid_flow_kg_s": _meta_float(meta, "resid_flow_kg_s"),
+        "resid_dP_kPa": _meta_float(meta, "resid_dP_kPa"),
+        "resid_vibration_mm_s": _meta_float(meta, "resid_vibration_mm_s"),
+        "resid_thermal_eff_proxy": _meta_float(meta, "resid_thermal_eff_proxy"),
+        "dP_kPa_slope15": _meta_float(meta, "dP_kPa_slope15"),
+        "vibration_mm_s_slope15": _meta_float(meta, "vibration_mm_s_slope15"),
+        "milk_type": str(meta["milk_type"]),
+        "asset_family": str(meta["asset_family"]),
+        "fault_type": str(meta["fault_type"]),
+    }
+
+
 def _run_loader(
     model: PredictiveTCN, loader: Any, sequences: dict[str, AssetSequence], train_cfg: TrainConfig
 ) -> pd.DataFrame:
@@ -73,119 +155,16 @@ def _run_loader(
     with torch.no_grad():
         for batch in loader:
             x = batch["x"].to(train_cfg.device)
-            pred = model(x)
-            p_stage = torch.softmax(pred["stage_logits"], dim=-1).cpu().numpy()
-            p_foul_h = torch.sigmoid(pred["foul_h_logit"]).cpu().numpy()
-            p_actionable_foul_h = torch.sigmoid(pred["actionable_foul_h_logit"]).cpu().numpy()
-            p_clog_h = torch.sigmoid(pred["clog_h_logit"]).cpu().numpy()
-            pred_sev = (pred["severity_scaled"].cpu().numpy() / train_cfg.severity_scale()).clip(
-                min=0.0
-            )
-            pred_ttf_foul = np.expm1(
-                np.clip(
-                    pred["tte_foul_log"].cpu().numpy(), 0.0, np.log1p(train_cfg.tte_fouling_cap_min)
-                )
-            )
-            pred_ttf_clog = np.expm1(
-                np.clip(
-                    pred["tte_clog_log"].cpu().numpy(), 0.0, np.log1p(train_cfg.tte_clog_cap_min)
-                )
-            )
-            pred_ttu = np.expm1(
-                np.clip(pred["ttu_log"].cpu().numpy(), 0.0, np.log1p(train_cfg.ttu_cap_min))
-            )
+            out = _batch_outputs(model(x), train_cfg)
 
             for i, sequence_id in enumerate(batch["sequence_id"]):
                 end_idx = int(batch["end_idx"][i])
                 seq = sequences[sequence_id]
-                meta = seq.meta.iloc[end_idx]
-                pred_stage = int(np.argmax(p_stage[i]))
                 rows.append(
-                    {
-                        "asset_id": seq.asset_id,
-                        "sequence_id": sequence_id,
-                        "timestamp": meta["timestamp"],
-                        "phase": meta["phase"],
-                        "maintenance_active": (
-                            int(meta["maintenance_active"])
-                            if pd.notna(meta["maintenance_active"])
-                            else 0
-                        ),
-                        "pred_severity": float(pred_sev[i]),
-                        "pred_stage": pred_stage,
-                        "pred_stage_name": ["stable", "incipient", "advanced"][pred_stage],
-                        "p_stage0": float(p_stage[i, 0]),
-                        "p_stage1": float(p_stage[i, 1]),
-                        "p_stage2": float(p_stage[i, 2]),
-                        "p_foul_h": float(p_foul_h[i]),
-                        "p_watch_fouling": float(p_foul_h[i]),
-                        "p_actionable_foul_h": float(p_actionable_foul_h[i]),
-                        "p_actionable_fouling": float(p_actionable_foul_h[i]),
-                        "p_clog_h": float(p_clog_h[i]),
-                        "pred_tte_foul_min": float(
-                            np.clip(pred_ttf_foul[i], 0.0, train_cfg.tte_fouling_cap_min)
-                        ),
-                        "pred_tte_clog_min": float(
-                            np.clip(pred_ttf_clog[i], 0.0, train_cfg.tte_clog_cap_min)
-                        ),
-                        "pred_ttu_min": float(np.clip(pred_ttu[i], 0.0, train_cfg.ttu_cap_min)),
-                        "flow_kg_s": (
-                            float(meta["flow_kg_s"])
-                            if pd.notna(meta["flow_kg_s"])
-                            else float("nan")
-                        ),
-                        "dP_kPa": (
-                            float(meta["dP_kPa"]) if pd.notna(meta["dP_kPa"]) else float("nan")
-                        ),
-                        "vibration_mm_s": (
-                            float(meta["vibration_mm_s"])
-                            if pd.notna(meta["vibration_mm_s"])
-                            else float("nan")
-                        ),
-                        "thermal_eff_proxy": (
-                            float(meta["thermal_eff_proxy"])
-                            if pd.notna(meta["thermal_eff_proxy"])
-                            else float("nan")
-                        ),
-                        "heat_proxy": (
-                            float(meta["heat_proxy"])
-                            if pd.notna(meta["heat_proxy"])
-                            else float("nan")
-                        ),
-                        "resid_flow_kg_s": (
-                            float(meta["resid_flow_kg_s"])
-                            if pd.notna(meta["resid_flow_kg_s"])
-                            else float("nan")
-                        ),
-                        "resid_dP_kPa": (
-                            float(meta["resid_dP_kPa"])
-                            if pd.notna(meta["resid_dP_kPa"])
-                            else float("nan")
-                        ),
-                        "resid_vibration_mm_s": (
-                            float(meta["resid_vibration_mm_s"])
-                            if pd.notna(meta["resid_vibration_mm_s"])
-                            else float("nan")
-                        ),
-                        "resid_thermal_eff_proxy": (
-                            float(meta["resid_thermal_eff_proxy"])
-                            if pd.notna(meta["resid_thermal_eff_proxy"])
-                            else float("nan")
-                        ),
-                        "dP_kPa_slope15": (
-                            float(meta["dP_kPa_slope15"])
-                            if pd.notna(meta["dP_kPa_slope15"])
-                            else float("nan")
-                        ),
-                        "vibration_mm_s_slope15": (
-                            float(meta["vibration_mm_s_slope15"])
-                            if pd.notna(meta["vibration_mm_s_slope15"])
-                            else float("nan")
-                        ),
-                        "milk_type": str(meta["milk_type"]),
-                        "asset_family": str(meta["asset_family"]),
-                        "fault_type": str(meta["fault_type"]),
-                    }
+                    _window_row(
+                        seq, sequence_id, seq.meta.iloc[end_idx],
+                        {k: v[i] for k, v in out.items()}, train_cfg,
+                    )
                 )
     return (
         pd.DataFrame(rows)

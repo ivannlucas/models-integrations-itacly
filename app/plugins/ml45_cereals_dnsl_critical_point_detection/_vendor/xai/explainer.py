@@ -29,7 +29,7 @@ from app.plugins.ml45_cereals_dnsl_critical_point_detection._vendor.xai.utils im
 )
 
 
-class DNFLExplainer:  # pylint: disable=too-many-instance-attributes,too-few-public-methods
+class DNFLExplainer:  # pylint: disable=too-many-instance-attributes
     """
     Orquestador principal para explicabilidad XAI.
 

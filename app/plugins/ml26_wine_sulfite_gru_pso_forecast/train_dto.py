@@ -1,5 +1,4 @@
 """Pydantic DTOs for the ml26 (wine sulfite GRU-PSO) /train endpoint."""
-# pylint: disable=too-few-public-methods  # Pydantic DTOs carry no behaviour
 
 from typing import Optional
 

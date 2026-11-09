@@ -12,6 +12,19 @@ from collections import deque
 import numpy as np
 
 
+def _intersection_area(bbox1: list[float], bbox2: list[float]) -> float:
+    """Area of the overlap of two ``[x1, y1, x2, y2]`` boxes (0 when they do not overlap)."""
+    x1_min, y1_min, x1_max, y1_max = bbox1
+    x2_min, y2_min, x2_max, y2_max = bbox2
+
+    inter_xmin = max(x1_min, x2_min)
+    inter_ymin = max(y1_min, y2_min)
+    inter_xmax = min(x1_max, x2_max)
+    inter_ymax = min(y1_max, y2_max)
+
+    return max(0, inter_xmax - inter_xmin) * max(0, inter_ymax - inter_ymin)
+
+
 class KalmanFilter:
     """Simple Kalman filter for bounding-box tracking."""
 
@@ -129,17 +142,12 @@ class ByteTracker:
         self.frame_id = 0
 
     @staticmethod
-    def iou(bbox1: list[float], bbox2: list[float]) -> float:  # pylint: disable=too-many-locals
+    def iou(bbox1: list[float], bbox2: list[float]) -> float:
         """Return the intersection-over-union of two ``[x1, y1, x2, y2]`` boxes."""
         x1_min, y1_min, x1_max, y1_max = bbox1
         x2_min, y2_min, x2_max, y2_max = bbox2
 
-        inter_xmin = max(x1_min, x2_min)
-        inter_ymin = max(y1_min, y2_min)
-        inter_xmax = min(x1_max, x2_max)
-        inter_ymax = min(y1_max, y2_max)
-
-        inter_area = max(0, inter_xmax - inter_xmin) * max(0, inter_ymax - inter_ymin)
+        inter_area = _intersection_area(bbox1, bbox2)
         area1 = (x1_max - x1_min) * (y1_max - y1_min)
         area2 = (x2_max - x2_min) * (y2_max - y2_min)
         union_area = area1 + area2 - inter_area

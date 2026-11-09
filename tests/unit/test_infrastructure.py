@@ -43,19 +43,21 @@ class FakeModelPlugin(ModelPluginPort):
         """Return True if the model is loaded."""
         return self._loaded
 
-    def predict_batch(self, *, data_path):  # pylint: disable=arguments-differ  # minimal fake
+    def predict_batch(self, *, data_path, mlflow_run_id=""):
         """Return a fake batch prediction dict."""
+        _ = data_path, mlflow_run_id
         return {"model_id": "test", "predictions": [], "output_path": None}
 
-    def predict_inline(  # pylint: disable=arguments-differ  # minimal fake
-        self, *, data_path=None, features, model_key=None, threshold=None
+    def predict_inline(
+        self, *, data_path=None, features, model_key=None, threshold=None, mlflow_run_id=""
     ):
         """Return a fake inline prediction dict."""
-        _ = data_path, features, model_key, threshold
+        _ = data_path, features, model_key, threshold, mlflow_run_id
         return {"model_id": "test", "prediction": "test", "confidence": 1.0}
 
-    def stats(self):  # pylint: disable=arguments-differ  # minimal fake
+    def stats(self, mlflow_run_id=""):
         """Return a fake StatsResponse."""
+        _ = mlflow_run_id
         return StatsResponse(
             model_name="test",
             version="0.0.0",
@@ -68,8 +70,9 @@ class FakeModelPlugin(ModelPluginPort):
             runtime_stats=RuntimeStats(total_predictions=0, avg_latency_ms=None),
         )
 
-    def train(self, *, data_path):  # pylint: disable=arguments-differ  # minimal fake
+    def train(self, *, data_path, mlflow_run_id):
         """Raise TrainingNotSupportedError."""
+        _ = data_path, mlflow_run_id
         raise TrainingNotSupportedError("Not supported")
 
 
@@ -144,7 +147,7 @@ class TestModelRuntimeService:
 
 # ── Router factory exception edge cases ───────────────────────────────────
 
-class TestRouterFactoryEdgeCases:  # pylint: disable=too-few-public-methods
+class TestRouterFactoryEdgeCases:
     """Tests the exception-mapping paths in router_factory.py."""
 
     @pytest.mark.usefixtures("app")
@@ -157,22 +160,20 @@ class TestRouterFactoryEdgeCases:  # pylint: disable=too-few-public-methods
         assert resp.status_code == 422
 
 
-class TestTrainModelUseCase:  # pylint: disable=too-few-public-methods
-    """Tests for TrainModelUseCase error path."""
+class TestTrainModelUseCase:
+    """Tests for TrainModelUseCase."""
 
-    def test_extra_params_triggers_else_branch(self):
-        """Verify TrainModelUseCase.execute else-branch raises when request has no .pop()."""
-        class ExtraRequest(BaseModel):
-            """Test request with extra params for else-branch coverage."""
+    def test_plugin_train_error_propagates(self):
+        """A plugin that cannot train raises TrainingNotSupportedError through the use case."""
+        class Request(BaseModel):
+            """Train request with an extra field the fake plugin's train() does not declare."""
             data_path: str = ""
+            mlflow_run_id: str = ""
             extra_param: str = "value"
 
-        plugin = FakeModelPlugin()
-        use_case = TrainModelUseCase(plugin)
-        request = ExtraRequest(data_path="/some/path", extra_param="extra")
-        with pytest.raises((AttributeError, TypeError)):
-            # The else branch tries request.pop() on a Pydantic model (no .pop)
-            use_case.execute(request)
+        use_case = TrainModelUseCase(FakeModelPlugin())
+        with pytest.raises(TrainingNotSupportedError, match="Not supported"):
+            use_case.execute(Request(data_path="/some/path", mlflow_run_id="run-1"))
 
 
 # ── ArtifactStore local ops tests ─────────────────────────────────────────

@@ -41,13 +41,16 @@ def build_explainer(model, stats_columns: list[str], model_cfg: dict) -> DNFLExp
     )
 
 
-def explain_window(  # pylint: disable=too-many-arguments,too-many-positional-arguments
+_XAI_RANDOM_STATE = 42
+
+
+def explain_window(
     explainer: DNFLExplainer,
+    *,
     x_window: np.ndarray,
     s_stats: np.ndarray,
     xai_background: np.ndarray,
     threshold: float,
-    random_state: int = 42,
 ) -> dict:
     """Explain a single window and return the flat row dict used by predict_batch/predict_inline."""
     if xai_background is None:
@@ -62,7 +65,7 @@ def explain_window(  # pylint: disable=too-many-arguments,too-many-positional-ar
         background_windows=xai_background,
         anomaly_threshold=threshold,
         n_background=XAI_N_BACKGROUND,
-        random_state=random_state,
+        random_state=_XAI_RANDOM_STATE,
         top_rules=XAI_TOP_RULES,
         top_variables=XAI_TOP_VARIABLES,
     )
@@ -90,19 +93,15 @@ def explain_window(  # pylint: disable=too-many-arguments,too-many-positional-ar
     return row
 
 
-def build_predictions(  # pylint: disable=too-many-arguments,too-many-positional-arguments
-    model,
-    sequences_scaled: np.ndarray,
-    stats_scaled: np.ndarray,
-    stats_columns: list[str],
-    timestamp_windows: list,
-    entity_ids: list,
-    xai_background: np.ndarray,
-    threshold: float,
-    model_cfg: dict,
-) -> list[dict]:
-    """Explain every window and return one row per window (predict_batch)."""
-    explainer = build_explainer(model, stats_columns, model_cfg)
+def build_predictions(ctx: dict, windows: tuple) -> list[dict]:
+    """Explain every window and return one row per window (predict_batch).
+
+    ``ctx`` holds model, model_cfg, xai_background and threshold; ``windows`` is
+    (sequences_scaled, stats_scaled, stats_columns, timestamp_windows, entity_ids).
+    """
+    sequences_scaled, stats_scaled, stats_columns, timestamp_windows, entity_ids = windows
+    xai_background, threshold = ctx["xai_background"], ctx["threshold"]
+    explainer = build_explainer(ctx["model"], stats_columns, ctx["model_cfg"])
 
     predictions: list[dict] = []
     for idx, x_window in enumerate(sequences_scaled):
@@ -121,7 +120,7 @@ def build_predictions(  # pylint: disable=too-many-arguments,too-many-positional
                 "timestamp_end": str(timestamp_windows[idx][1]),
                 **row,
             }
-        except Exception as exc:  # pylint: disable=broad-exception-caught
+        except Exception as exc:  # pylint: disable=broad-exception-caught  # per-window error row
             logger.warning("Error en ventana %s: %s", idx + 1, exc)
             row = {"window_index": idx + 1, "error": str(exc)}
         predictions.append(row)

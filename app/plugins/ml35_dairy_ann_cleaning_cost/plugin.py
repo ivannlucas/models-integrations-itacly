@@ -3,22 +3,22 @@ from __future__ import annotations
 
 import logging
 import os
-import shutil
-from datetime import datetime, timezone
 from typing import Any
 
 import numpy as np
 import pandas as pd
 import torch
 
-from app.application.dto.stats_dto import InputField, OutputField, RuntimeStats, StatsResponse
+from app.application.dto.stats_dto import InputField, OutputField, StatsResponse
 from app.domain.ports.model_plugin_port import ModelPluginPort
-from app.domain.services.exceptions import (
-    ModelNotLoadedError,
-    ModelPersistenceError,
-    PuConstraintViolationError,
+from app.domain.services.exceptions import PuConstraintViolationError
+from app.domain.services.mlflow_artifacts import (
+    add_mlflow_run_to_stats,
+    removing_dir,
+    require_train_tracker,
+    upload_model_to_mlflow,
 )
-from app.domain.services.mlflow_tracker import BaseMLflowTracker
+from app.domain.services.plugin_runtime import PluginRuntimeMixin
 from app.infrastructure.artifact_store import local_file_path
 from app.plugins.ml35_dairy_ann_cleaning_cost.constants import (
     BASELINE_FLUJO,
@@ -101,15 +101,37 @@ def _build_df(  # pylint: disable=too-many-arguments,too-many-positional-argumen
     ]], columns=FEATURES)
 
 
-class Ml35DairyAnnCleaningCostPlugin(ModelPluginPort):
+def _load_train_frame(data_path: str) -> pd.DataFrame:
+    """Read the training CSV, derive the optional temperatures and check the required columns."""
+    with local_file_path(data_path) as local_path:
+        df = pd.read_csv(local_path)
+    if "temp_proceso_leche" not in df.columns and "temp_setpoint_leche" in df.columns:
+        df["temp_proceso_leche"] = df["temp_setpoint_leche"]
+    if "temp_agua_servicio" not in df.columns and "temp_proceso_leche" in df.columns:
+        df["temp_agua_servicio"] = df["temp_proceso_leche"] + 10.0
+
+    missing = [c for c in FEATURES + [TARGET_COL] if c not in df.columns]
+    if missing:
+        raise ValueError(f"CSV falta columnas requeridas: {missing}")
+    return df
+
+
+def _mae_r2(y_real: np.ndarray, y_pred: np.ndarray) -> tuple[float, float]:
+    """MAE and R² of the fine-tuned model on its training data (in litres)."""
+    mae = float(np.mean(np.abs(y_real - y_pred)))
+    ss_res = np.sum((y_real - y_pred) ** 2)
+    ss_tot = np.sum((y_real - np.mean(y_real)) ** 2)
+    r2 = float(1 - ss_res / ss_tot) if ss_tot else 0.0
+    return mae, r2
+
+
+class Ml35DairyAnnCleaningCostPlugin(PluginRuntimeMixin, ModelPluginPort):
     """ANN regressor + pygad GA optimizer for pasteurization water consumption."""
 
     def __init__(self) -> None:
         self._model: Any = None
         self._scaler_X: Any = None  # pylint: disable=invalid-name  # mirrors the delivered scaler_X
         self._scaler_y: Any = None
-        self._predict_count: int = 0
-        self._last_predict_at: str | None = None
 
     def load(self) -> None:
         self._model, self._scaler_X, self._scaler_y = load_artifacts()
@@ -117,14 +139,6 @@ class Ml35DairyAnnCleaningCostPlugin(ModelPluginPort):
 
     def is_loaded(self) -> bool:
         return self._model is not None
-
-    def _require_loaded(self) -> None:
-        if self._model is None:
-            raise ModelNotLoadedError("El modelo no está cargado.")
-
-    def _record(self) -> None:
-        self._predict_count += 1
-        self._last_predict_at = datetime.now(tz=timezone.utc).isoformat()
 
     # ── predict_inline ────────────────────────────────────────────────────────
 
@@ -154,16 +168,13 @@ class Ml35DairyAnnCleaningCostPlugin(ModelPluginPort):
         if mlflow_run_id:
             logger.info("predict_inline — using user model from MLflow run_id=%s", mlflow_run_id)
         ctx, user_temp_dir = self._resolve_model(mlflow_run_id)
-        try:
+        with removing_dir(user_temp_dir):
             if model_key == "optimize":
                 result = self._run_optimize(features, ctx)
             else:
                 result = self._run_predict(features, ctx)
             self._record()
             return result
-        finally:
-            if user_temp_dir:
-                shutil.rmtree(user_temp_dir, ignore_errors=True)
 
     def _run_predict(self, features: dict, ctx: tuple) -> PredictInlineResponse:
         """ANN single-sample inference with PU validation."""
@@ -273,7 +284,7 @@ class Ml35DairyAnnCleaningCostPlugin(ModelPluginPort):
         if mlflow_run_id:
             logger.info("predict_batch — using user model from MLflow run_id=%s", mlflow_run_id)
         ctx, user_temp_dir = self._resolve_model(mlflow_run_id)
-        try:
+        with removing_dir(user_temp_dir):
             with local_file_path(data_path) as local_path:
                 df = pd.read_csv(local_path)
             predictions: list[dict] = []
@@ -301,46 +312,56 @@ class Ml35DairyAnnCleaningCostPlugin(ModelPluginPort):
             return PredictBatchResponse(
                 model_id=MODEL_ID, predictions=predictions, output_path=None
             )
-        finally:
-            if user_temp_dir:
-                shutil.rmtree(user_temp_dir, ignore_errors=True)
 
     # ── train ─────────────────────────────────────────────────────────────────
 
-    def train(  # pylint: disable=too-many-locals,too-many-statements
-        self, *, data_path: str, mlflow_run_id: str
-    ) -> TrainResponse:
+    def train(self, *, data_path: str, mlflow_run_id: str) -> TrainResponse:
         """Fine-tune the ANN on user-labeled data (consumo_agua_l target required)."""
-        import tempfile  # pylint: disable=import-outside-toplevel
         import joblib  # pylint: disable=import-outside-toplevel
-        from torch import nn  # pylint: disable=import-outside-toplevel
-        from torch import optim  # pylint: disable=import-outside-toplevel
 
         epochs = 100
         lr = 0.001
 
-        if mlflow_run_id:
-            tracker: BaseMLflowTracker | None = BaseMLflowTracker(mlflow_run_id)
-            tracker.log_params({"epochs": epochs, "lr": lr, "optimizer": "Adam"})
-        else:
-            tracker = None
+        # The retrained model lives only in its own MLflow run (predict with that
+        # mlflow_run_id); the served base model and its local artifacts are never replaced.
+        tracker = require_train_tracker(mlflow_run_id)
+        tracker.log_params({"epochs": epochs, "lr": lr, "optimizer": "Adam"})
 
-        with local_file_path(data_path) as local_path:
-            df = pd.read_csv(local_path)
-        if "temp_proceso_leche" not in df.columns and "temp_setpoint_leche" in df.columns:
-            df["temp_proceso_leche"] = df["temp_setpoint_leche"]
-        if "temp_agua_servicio" not in df.columns and "temp_proceso_leche" in df.columns:
-            df["temp_agua_servicio"] = df["temp_proceso_leche"] + 10.0
-
-        missing = [c for c in FEATURES + [TARGET_COL] if c not in df.columns]
-        if missing:
-            raise ValueError(f"CSV falta columnas requeridas: {missing}")
-
+        df = _load_train_frame(data_path)
         self._require_loaded()
         x_scaled = self._scaler_X.transform(df[FEATURES])
         y_scaled = self._scaler_y.transform(df[[TARGET_COL]])
+        fine_model = self._fine_tune(x_scaled, y_scaled, epochs=epochs, lr=lr)
 
-        # Clone weights into a new model instance to avoid mutating the live model
+        with torch.no_grad():
+            y_pred_scaled = fine_model(torch.FloatTensor(x_scaled)).numpy()
+        mae, r2 = _mae_r2(df[[TARGET_COL]].values, self._scaler_y.inverse_transform(y_pred_scaled))
+
+        tracker.log_metrics({"mae": mae, "r2": r2, "n_samples": len(df)})
+
+        def _write(model_dir: str) -> None:
+            torch.save(fine_model.state_dict(), os.path.join(model_dir, MODEL_FILENAME))
+            joblib.dump(self._scaler_X, os.path.join(model_dir, SCALER_X_FILENAME))
+            joblib.dump(self._scaler_y, os.path.join(model_dir, SCALER_Y_FILENAME))
+
+        upload_model_to_mlflow(tracker, _write, prefix="ml35_mlflow_")
+
+        logger.info(
+            "train() done — mae=%.2f r2=%.4f n=%d mlflow=%s", mae, r2, len(df), bool(mlflow_run_id)
+        )
+        return TrainResponse(
+            detail="Fine-tuning completado",
+            mae=round(mae, 2),
+            r2=round(r2, 4),
+            n_samples=int(len(df)),
+            upload_warning=None,
+        )
+
+    def _fine_tune(self, x_scaled, y_scaled, *, epochs: int, lr: float) -> PasteurizationANN:
+        """Fine-tune a copy of the served ANN (never the live model) with Adam + MSE."""
+        from torch import nn  # pylint: disable=import-outside-toplevel
+        from torch import optim  # pylint: disable=import-outside-toplevel
+
         fine_model = PasteurizationANN(input_size=len(FEATURES))
         fine_model.load_state_dict(self._model.state_dict())
         fine_model.train()
@@ -356,47 +377,7 @@ class Ml35DairyAnnCleaningCostPlugin(ModelPluginPort):
             optimizer.step()
 
         fine_model.eval()
-        with torch.no_grad():
-            y_pred_scaled = fine_model(x_tensor).numpy()
-        y_pred = self._scaler_y.inverse_transform(y_pred_scaled)
-        y_real = df[[TARGET_COL]].values
-        mae = float(np.mean(np.abs(y_real - y_pred)))
-        ss_res = np.sum((y_real - y_pred) ** 2)
-        ss_tot = np.sum((y_real - np.mean(y_real)) ** 2)
-        r2 = float(1 - ss_res / ss_tot) if ss_tot else 0.0
-
-        # The retrained model lives only in its own MLflow run (predict with that
-        # mlflow_run_id); the served base model and its local artifacts are never replaced.
-        upload_warning = None
-        if not tracker:
-            raise ModelPersistenceError(
-                "Sin run de MLflow: el modelo reentrenado no se ha guardado."
-            )
-        if tracker:
-            tracker.log_metrics({"mae": mae, "r2": r2, "n_samples": len(df)})
-            try:
-                mlflow_tmp = tempfile.mkdtemp(prefix="ml35_mlflow_")
-                torch.save(fine_model.state_dict(), os.path.join(mlflow_tmp, MODEL_FILENAME))
-                joblib.dump(self._scaler_X, os.path.join(mlflow_tmp, SCALER_X_FILENAME))
-                joblib.dump(self._scaler_y, os.path.join(mlflow_tmp, SCALER_Y_FILENAME))
-                tracker.upload_artifacts(mlflow_tmp, artifact_path="model")
-                shutil.rmtree(mlflow_tmp, ignore_errors=True)
-            except Exception as exc:  # pylint: disable=broad-exception-caught
-                logger.error("MLflow artifact upload failed: %s", exc)
-                raise ModelPersistenceError(
-                    f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}"
-                ) from exc
-
-        logger.info(
-            "train() done — mae=%.2f r2=%.4f n=%d mlflow=%s", mae, r2, len(df), bool(mlflow_run_id)
-        )
-        return TrainResponse(
-            detail="Fine-tuning completado",
-            mae=round(mae, 2),
-            r2=round(r2, 4),
-            n_samples=int(len(df)),
-            upload_warning=upload_warning,
-        )
+        return fine_model
 
     # ── stats ─────────────────────────────────────────────────────────────────
 
@@ -494,19 +475,6 @@ class Ml35DairyAnnCleaningCostPlugin(ModelPluginPort):
                 "n_test": 750,
                 "split": "70/15/15",
             },
-            runtime_stats=RuntimeStats(
-                total_predictions=self._predict_count,
-                avg_latency_ms=None,
-            ),
+            runtime_stats=self._runtime_stats(),
         )
-        if mlflow_run_id:
-            try:
-                tracker = BaseMLflowTracker(mlflow_run_id)
-                base.metrics["mlflow"] = {
-                    "params": tracker.get_params(),
-                    "metrics": tracker.get_metrics(),
-                }
-                logger.info("Stats enriched with MLflow data for run_id=%s", mlflow_run_id)
-            except Exception as exc:  # pylint: disable=broad-exception-caught
-                logger.warning("Could not fetch MLflow stats for run_id=%s: %s", mlflow_run_id, exc)
-        return base
+        return add_mlflow_run_to_stats(base, mlflow_run_id)

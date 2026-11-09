@@ -18,6 +18,7 @@ import tempfile
 
 import pytest
 
+from app.domain.services import mlflow_artifacts
 from app.domain.services.exceptions import UserModelUnavailableError
 
 PLUGINS_DIR = pathlib.Path(__file__).resolve().parents[2] / "app" / "plugins"
@@ -113,10 +114,11 @@ def _download_helpers():
     """Yields a pytest param per ``download_*`` function of each trainable plugin's mlflow_utils."""
     for path in sorted(PLUGINS_DIR.glob("*/mlflow_utils.py")):
         module = importlib.import_module(f"app.plugins.{path.parent.name}.mlflow_utils")
-        if not hasattr(module, "BaseMLflowTracker"):
-            continue  # non-trainable plugins (ml28/ml31/ml33) never touch MLflow
         for name, fn in inspect.getmembers(module, inspect.isfunction):
-            if name.startswith("download_") and fn.__module__ == module.__name__:
+            # Only the require_user_model-wrapped helpers fetch from MLflow; the non-trainable
+            # plugins (ml28/ml31/ml33) keep an undecorated no-op.
+            if (name.startswith("download_") and fn.__module__ == module.__name__
+                    and hasattr(fn, "__wrapped__")):
                 yield pytest.param(module, name, id=f"{path.parent.name}.{name}")
 
 
@@ -136,7 +138,7 @@ def test_download_cleans_temp_dir_when_run_has_no_model(
         created.append(path)
         return path
 
-    class EmptyRunTracker:  # pylint: disable=too-few-public-methods
+    class EmptyRunTracker:
         """BaseMLflowTracker stand-in whose run never holds a usable model."""
 
         def __init__(self, run_id=""):
@@ -149,7 +151,9 @@ def test_download_cleans_temp_dir_when_run_has_no_model(
             return dest_dir if empty_artifact else ""
 
     monkeypatch.setattr(tempfile, "mkdtemp", tracking_mkdtemp)
-    monkeypatch.setattr(module, "BaseMLflowTracker", EmptyRunTracker)
+    # Helpers download through the shared mlflow_artifacts; a few still use the tracker directly.
+    monkeypatch.setattr(mlflow_artifacts, "BaseMLflowTracker", EmptyRunTracker)
+    monkeypatch.setattr(module, "BaseMLflowTracker", EmptyRunTracker, raising=False)
 
     with pytest.raises(UserModelUnavailableError):
         getattr(module, func_name)("run-without-model")

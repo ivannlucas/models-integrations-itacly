@@ -277,7 +277,23 @@ def _write_json_catalog(catalog_data: Dict[str, Dict[str, Any]], filename: str) 
         sys.exit(1)
 
 
-def generate_markdown_catalog(  # pylint: disable=too-many-locals
+def _lineage_row(col: Dict[str, Any]) -> str:
+    """Markdown table row of one column of the schema lineage."""
+    col_name = col.get('column', 'N/A')
+    col_type = col.get('inferred_type', 'N/A')
+    # Escapar el carácter '|' si aparece en la lógica
+    col_description = str(col.get('description', 'N/A')).replace("|", "\\|")
+    col_logic = str(col.get('transformation_logic', 'N/A')).replace("|", "\\|")
+    col_sources = col.get('source_columns', [])
+    col_source_str = f"`{', '.join(col_sources)}`" if col_sources else "N/A"
+
+    return (
+        f"| `{col_name}` | {col_type} | {col_description} | {col_logic} "
+        f"| {col_source_str} |"
+    )
+
+
+def generate_markdown_catalog(
         catalog_data: Dict[str, Dict[str, Any]], output_filename: str) -> None:
     """
     Genera un archivo Markdown a partir del catálogo maestro.
@@ -327,18 +343,7 @@ def generate_markdown_catalog(  # pylint: disable=too-many-locals
             md_content.append("| :--- | :--- | :--- | :--- | :--- |")
 
             for col in schema_lineage:
-                col_name = col.get('column', 'N/A')
-                col_type = col.get('inferred_type', 'N/A')
-                # Escapar el carácter '|' si aparece en la lógica
-                col_description = str(col.get('description', 'N/A')).replace("|", "\\|")
-                col_logic = str(col.get('transformation_logic', 'N/A')).replace("|", "\\|")
-                col_sources = col.get('source_columns', [])
-                col_source_str = f"`{', '.join(col_sources)}`" if col_sources else "N/A"
-
-                md_content.append(
-                    f"| `{col_name}` | {col_type} | {col_description} | {col_logic} "
-                    f"| {col_source_str} |"
-                )
+                md_content.append(_lineage_row(col))
         else:
             md_content.append("_No hay linaje de columnas definido._")
 

@@ -1,5 +1,4 @@
 """Pydantic request/response DTOs for the ml26 (wine sulfite GRU-PSO, 72 h) /predict endpoint."""
-# pylint: disable=too-few-public-methods  # Pydantic DTOs carry no behaviour
 
 from typing import Annotated, Any, Literal, Optional, Union
 

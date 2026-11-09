@@ -87,7 +87,7 @@ def _build_rule_antecedents(  # pylint: disable=too-many-arguments,too-many-posi
     return ants[:max_antecedents_per_rule]
 
 
-class FuzzyExplainer:  # pylint: disable=too-few-public-methods
+class FuzzyExplainer:
     """Generador de explicaciones fuzzy."""
 
     def __init__(

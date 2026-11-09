@@ -1,5 +1,5 @@
-"""Vendored verbatim from inbox/a45/codigo/src/training/loss.py — used only by trainer.py
-(fine-tuning), same composite loss the original DNF model was trained with.
+"""Vendored verbatim from inbox/a45/codigo/src/training/loss.py — used by plugin.py::train(),
+same composite loss the original DNF model was trained with.
 """
 from __future__ import annotations
 

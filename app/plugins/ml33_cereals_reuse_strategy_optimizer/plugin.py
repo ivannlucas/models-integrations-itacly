@@ -22,14 +22,14 @@ inbox manifest's known_issues) is intentionally not exposed by this plugin.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
 from typing import Any
 
 import pandas as pd
 
-from app.application.dto.stats_dto import InputField, OutputField, RuntimeStats, StatsResponse
+from app.application.dto.stats_dto import InputField, OutputField, StatsResponse
 from app.domain.ports.model_plugin_port import ModelPluginPort
-from app.domain.services.exceptions import ModelNotLoadedError, TrainingNotSupportedError
+from app.domain.services.exceptions import TrainingNotSupportedError
+from app.domain.services.plugin_runtime import PluginRuntimeMixin
 from app.infrastructure.artifact_store import local_file_path
 from app.plugins.ml33_cereals_reuse_strategy_optimizer.constants import (
     DEFAULT_ANIMAL_FEED_CAPACITY_T,
@@ -59,13 +59,11 @@ from app.plugins.ml33_cereals_reuse_strategy_optimizer.predict_dto import (
 logger = logging.getLogger(__name__)
 
 
-class Ml33CerealsReuseStrategyOptimizerPlugin(ModelPluginPort):
+class Ml33CerealsReuseStrategyOptimizerPlugin(PluginRuntimeMixin, ModelPluginPort):
     """Deterministic MILP optimizer for cereal reuse-strategy assignment."""
 
     def __init__(self) -> None:
         self._loaded = False
-        self._predict_count: int = 0
-        self._last_predict_at: str | None = None
 
     def load(self) -> None:
         self._loaded = load_artifacts()
@@ -73,14 +71,6 @@ class Ml33CerealsReuseStrategyOptimizerPlugin(ModelPluginPort):
 
     def is_loaded(self) -> bool:
         return self._loaded
-
-    def _require_loaded(self) -> None:
-        if not self.is_loaded():
-            raise ModelNotLoadedError("El modelo no está cargado.")
-
-    def _record(self) -> None:
-        self._predict_count += 1
-        self._last_predict_at = datetime.now(tz=timezone.utc).isoformat()
 
     @staticmethod
     def _build_engine(features: dict) -> ExactEmissionsOptimizer:
@@ -291,8 +281,5 @@ class Ml33CerealsReuseStrategyOptimizerPlugin(ModelPluginPort):
                     "baseline sintético, no operación real."
                 ),
             },
-            runtime_stats=RuntimeStats(
-                total_predictions=self._predict_count,
-                avg_latency_ms=None,
-            ),
+            runtime_stats=self._runtime_stats(),
         )

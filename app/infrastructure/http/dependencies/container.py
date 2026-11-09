@@ -27,7 +27,7 @@ from app.infrastructure.train_jobs.process_executor import ProcessTrainExecutor
 logger = logging.getLogger(__name__)
 
 
-class _PromotingTrainUseCase:  # pylint: disable=too-few-public-methods  # use-case interface: execute()
+class _PromotingTrainUseCase:
     """/train of a model that promotes its base: train, publish, reload (ModelContainer.train)."""
 
     def __init__(self, container: "ModelContainer") -> None:
@@ -49,7 +49,7 @@ class ModelContainer:  # pylint: disable=too-many-instance-attributes  # DI wiri
     def __init__(self, plugin: ModelPluginPort, model_id: str = "") -> None:
         """Recibe el plugin concreto y crea los casos de uso."""
         folder = getattr(type(plugin), "BASE_ARTIFACT_FOLDER", None)
-        self._base_store = base_model_publisher._store_for(folder) if folder else None  # pylint: disable=protected-access
+        self._base_store = base_model_publisher._store_for(folder) if folder else None
         self._lock = threading.Lock()
         # Version of the instance being served; the global pointer can be ahead of it
         # while train() publishes and before the fresh instance is swapped in.
@@ -102,7 +102,7 @@ class ModelContainer:  # pylint: disable=too-many-instance-attributes  # DI wiri
         cannot mask the error that triggered the restore."""
         try:
             self._base_store.set_active_version(previous)
-        except Exception:  # pylint: disable=broad-exception-caught
+        except Exception:  # pylint: disable=broad-exception-caught  # never masks the cause
             logger.exception("Could not restore the base pointer to %s", previous)
 
     def _reload_or_restore(self, previous: str) -> None:
@@ -112,7 +112,7 @@ class ModelContainer:  # pylint: disable=too-many-instance-attributes  # DI wiri
         try:
             fresh = type(self._plugin)()
             fresh.load()
-        except Exception as exc:  # pylint: disable=broad-exception-caught
+        except Exception as exc:
             self._restore_pointer(previous)
             logger.exception("Base version %s of %s does not load; back to %s",
                              failed, type(self._plugin).__name__, previous)

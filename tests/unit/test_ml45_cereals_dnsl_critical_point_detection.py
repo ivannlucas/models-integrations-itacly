@@ -144,7 +144,7 @@ def test_train_requires_mlflow_run_id(client):
 
 # ── Feedback (modelo 43-44-45 audit, points 2/3/6): dedup + artifact validation ──────────
 
-class _FakeExplainerReport:  # pylint: disable=too-few-public-methods
+class _FakeExplainerReport:
     """Stand-in for DNFLExplainer.explain() — explain_window() only reads these two keys."""
 
     def __init__(self, anomaly_probability: float, final_report: dict):

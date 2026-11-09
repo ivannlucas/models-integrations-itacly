@@ -89,7 +89,7 @@ def _set_temporal_explainer_seed(random_state: int) -> None:
         torch.cuda.manual_seed_all(int(random_state))
 
 
-class TemporalExplainer:  # pylint: disable=too-few-public-methods
+class TemporalExplainer:
     """Generador de explicaciones temporales con SHAP."""
 
     def __init__(self, model, feature_names: Optional[List[str]] = None):

@@ -21,8 +21,10 @@ from sklearn.preprocessing import StandardScaler
 
 from app.application.dto.stats_dto import InputField, OutputField, RuntimeStats, StatsResponse
 from app.domain.ports.model_plugin_port import ModelPluginPort
-from app.domain.services.exceptions import ModelNotLoadedError, ModelPersistenceError
+from app.domain.services.exceptions import ModelPersistenceError
+from app.domain.services.mlflow_artifacts import removing_dir
 from app.domain.services.mlflow_tracker import BaseMLflowTracker
+from app.domain.services.plugin_runtime import PluginRuntimeMixin
 from app.infrastructure.artifact_store import local_file_path
 from app.plugins.ml45_cereals_dnsl_critical_point_detection._vendor.loss import DNFLoss
 from app.plugins.ml45_cereals_dnsl_critical_point_detection._vendor.model import (
@@ -112,15 +114,334 @@ def _validate_saved_artifact(path: Path, loader) -> None:
         )
     try:
         loader(path)
-    except Exception as exc:  # pylint: disable=broad-exception-caught
+    except Exception as exc:
         raise ValueError(
             f"El artefacto de entrenamiento '{path.name}' quedó corrupto tras guardarse "
             f"({exc}) — entrenamiento abortado, no se subió nada a MLflow."
         ) from exc
 
 
+def _load_train_splits(data_path: str) -> dict:
+    """Read the labeled CSV, split it by whole cycle_id and build raw windows per split.
+
+    Returns ``{"train"|"val"|"test": (x_raw, stats_df, y)}``.
+    """
+    with local_file_path(data_path) as local_path:
+        df = pd.read_csv(local_path)
+    df.columns = df.columns.str.lower()
+
+    if TARGET_COLUMN not in df.columns:
+        raise ValueError(
+            f"CSV falta columna objetivo '{TARGET_COLUMN}'. Requerida para entrenamiento."
+        )
+
+    # Split RAW rows by whole cycle_id (never by row/window count) — see
+    # _vendor/preprocess.py::split_train_val_test_by_id. A window is a sliding
+    # SEQUENCE_LENGTH-row slice within a single cycle, so splitting whole cycles
+    # first and windowing each split independently guarantees no window straddles
+    # two splits, and reproduces the real repo's train_pct/val_pct/test_pct exactly.
+    raw_splits, _ = split_train_val_test_by_id(
+        df, id_col=ID_COLUMN, target_column=TARGET_COLUMN,
+        val_size=TRAIN_EXTERNAL_VAL_PCT / 100.0, test_size=TRAIN_EXTERNAL_TEST_PCT / 100.0,
+        normal_tokens=NORMAL_TOKENS,
+    )
+
+    splits = {}
+    for name in ("train", "val", "test"):
+        x_raw, stats_df, _, _, _, y_seq = build_raw_windows_from_dataframe(
+            raw_splits[name], require_target=True,
+        )
+        splits[name] = (x_raw, stats_df, y_seq)
+    n_train, n_val, n_test = (splits[k][0].shape[0] for k in ("train", "val", "test"))
+    if n_train + n_val + n_test < 10:
+        raise ValueError(
+            f"Muy pocas secuencias para entrenar: {n_train + n_val + n_test}. "
+            f"Se necesitan al menos 10 ventanas de {SEQUENCE_LENGTH} filas en total."
+        )
+    if n_train == 0 or n_val == 0 or n_test == 0:
+        raise ValueError(
+            f"El split train/val/test por cycle_id dejó una partición vacía "
+            f"(train={n_train}, val={n_val}, test={n_test}) — sube un CSV con más "
+            f"ciclos distintos."
+        )
+    return splits
+
+
+def _scale_splits(splits: dict) -> tuple[dict, dict]:
+    """Fit fresh sequence/stats scalers on train and apply them to every split.
+
+    Returns ``({"train"|"val"|"test": (x_scaled, stats_scaled)},
+    {"scaler_x": …, "scaler_num": …})``.
+    """
+    x_train_raw, x_val_raw, x_test_raw = (splits[k][0] for k in ("train", "val", "test"))
+    n_feat = x_train_raw.shape[-1]
+
+    scaler_x = StandardScaler()
+    x_train = scaler_x.fit_transform(
+        x_train_raw.reshape(-1, n_feat)
+    ).reshape(x_train_raw.shape).astype(np.float32)
+    x_val = scaler_x.transform(
+        x_val_raw.reshape(-1, n_feat)
+    ).reshape(x_val_raw.shape).astype(np.float32)
+    x_test = scaler_x.transform(
+        x_test_raw.reshape(-1, n_feat)
+    ).reshape(x_test_raw.shape).astype(np.float32)
+
+    scaler_num = StandardScaler()
+    s_train = scaler_num.fit_transform(splits["train"][1].values).astype(np.float32)
+    s_val = scaler_num.transform(splits["val"][1].values).astype(np.float32)
+    s_test = scaler_num.transform(splits["test"][1].values).astype(np.float32)
+    scaled = {"train": (x_train, s_train), "val": (x_val, s_val), "test": (x_test, s_test)}
+    return scaled, {"scaler_x": scaler_x, "scaler_num": scaler_num}
+
+
+def _inline_windows(data_path: str | None, features: dict, ctx: dict) -> tuple:
+    """Scaled windows for predict_inline, from a CSV or from the per-sensor arrays.
+
+    Returns ``(sequences, stats, stats_cols, ts_windows)``.
+    """
+    if data_path:
+        with local_file_path(data_path) as local_path:
+            sequences, stats, stats_cols, ts_windows, _, _ = build_windows_from_csv(
+                local_path, ctx["scaler_x"], ctx["scaler_num"], require_target=False,
+            )
+    else:
+        sensor_arrays = {col: features[col] for col in SENSOR_COLUMNS}
+        (
+            sequences, stats, stats_cols, ts_windows, _, _
+        ) = build_windows_from_sensor_arrays(
+            sensor_arrays,
+            features["timestamp"],
+            features.get("cycle_id"),
+            ctx["scaler_x"],
+            ctx["scaler_num"],
+        )
+    return sequences, stats, stats_cols, ts_windows
+
+
+def _forward_step(model, criterion, x_batch, s_batch, y_batch):
+    """Training loss of one batch (DNFLoss over the model's outputs)."""
+    out = model(x_batch, s_batch)
+    anomaly_score = torch.nan_to_num(
+        out["anomaly_score"], nan=0.0, posinf=20.0, neginf=-20.0
+    )
+    rule_activations = out["rule_activations"]
+    loss, _ = criterion(
+        anomaly_score=anomaly_score,
+        logit_anomaly_dl=out["logit_anomaly_dl"],
+        logit_anomaly_fuzzy=out["logit_anomaly_fuzzy"],
+        rule_activations=rule_activations,
+        alpha_probs=out["alpha_probs"],
+        y_anomaly=y_batch,
+    )
+    return loss
+
+
+def _evaluate_val(model, x_val_t, s_val_t, y_val_arr):
+    """Full forward pass over the validation split — returns the rich metric
+    dict monitor_score() needs (anomaly_f1, fuzzy_f1, dead_rules_ratio,
+    alpha_entropy_mean, rule_corr_mean), plus raw probabilities."""
+    model.eval()
+    with torch.no_grad():
+        out_v = model(x_val_t, s_val_t)
+        probs = torch.sigmoid(out_v["anomaly_score"]).view(-1).numpy()
+        preds = (probs >= 0.5).astype(int)
+        fuzzy_probs = torch.sigmoid(out_v["logit_anomaly_fuzzy"]).view(-1).numpy()
+        fuzzy_preds = (fuzzy_probs >= 0.5).astype(int)
+        rule_activations = out_v["rule_activations"]
+        rule_activation_mean = rule_activations.mean(dim=0).numpy()
+        dead_rules = int((rule_activation_mean < 1e-4).sum())
+        dead_rules_ratio = float(dead_rules / max(len(rule_activation_mean), 1))
+        val_out = {
+            "anomaly_f1": f1_score(y_val_arr, preds, zero_division=0),
+            "fuzzy_f1": f1_score(y_val_arr, fuzzy_preds, zero_division=0),
+            "dead_rules_ratio": dead_rules_ratio,
+            "alpha_entropy_mean": alpha_entropy_mean(out_v["alpha_probs"]),
+            "rule_corr_mean": rule_corr_mean(rule_activations),
+        }
+    return val_out, probs
+
+
+def _train_epoch(model, criterion, optimizer, train_t: tuple) -> None:
+    """One pass over the training windows (``train_t`` = x, stats, y tensors)."""
+    x_t, s_t, y_t = train_t
+    n_train = x_t.shape[0]
+    model.train()
+    # shuffle_train=False in the real config — batches iterate in the same
+    # fixed (unshuffled) order every epoch.
+    for start in range(0, n_train, TRAIN_BATCH_SIZE):
+        end = start + TRAIN_BATCH_SIZE
+        optimizer.zero_grad(set_to_none=True)
+        loss = _forward_step(model, criterion, x_t[start:end], s_t[start:end], y_t[start:end])
+        if not torch.isfinite(loss):
+            continue
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), TRAIN_GRAD_CLIP)
+        optimizer.step()
+
+
+def _fit(model, criterion, train_t: tuple, val_t: tuple) -> tuple[dict, int]:
+    """Adam + CosineAnnealingLR with warmup and early stopping on monitor_score().
+
+    ``train_t`` = (x, stats, y) tensors; ``val_t`` = (x, stats) tensors + int labels.
+    Returns the best state_dict (or the last one if no epoch improved) and the number
+    of epochs run.
+    """
+    optimizer = torch.optim.Adam(
+        model.parameters(), lr=TRAIN_LR, weight_decay=TRAIN_WEIGHT_DECAY
+    )
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, T_max=TRAIN_SCHEDULER_T_MAX, eta_min=TRAIN_SCHEDULER_ETA_MIN,
+    )
+
+    best_score = -np.inf
+    best_state = None
+    epochs_without_improve = 0
+    epochs_run = 0
+
+    for epoch in range(TRAIN_NUM_EPOCHS):
+        _train_epoch(model, criterion, optimizer, train_t)
+
+        epochs_run = epoch + 1
+        val_out, _ = _evaluate_val(model, *val_t)
+        score = monitor_score(val_out)
+        scheduler.step()
+
+        logger.info(
+            "Epoch %d/%d — val_anomaly_f1=%.4f val_fuzzy_f1=%.4f monitor_score=%.4f lr=%.2e",
+            epoch + 1, TRAIN_NUM_EPOCHS, val_out["anomaly_f1"], val_out["fuzzy_f1"],
+            score, optimizer.param_groups[0]["lr"],
+        )
+
+        improved = score > (best_score + TRAIN_MIN_DELTA)
+        if improved:
+            best_score = score
+            best_state = {k: v.clone() for k, v in model.state_dict().items()}
+        if epoch < TRAIN_WARMUP_EPOCHS:
+            continue
+        epochs_without_improve = 0 if improved else epochs_without_improve + 1
+        if epochs_without_improve >= TRAIN_PATIENCE:
+            logger.info(
+                "Early stopping en epoch %d (patience=%d).", epoch + 1, TRAIN_PATIENCE
+            )
+            break
+
+    if best_state is None:
+        best_state = model.state_dict()
+    return best_state, epochs_run
+
+
+def _train_and_calibrate(model_cfg: dict, splits: dict, scaled: dict) -> tuple:
+    """Build and train the model, keep its best checkpoint and calibrate the threshold.
+
+    Writes the calibrated threshold into ``model_cfg["training_kwargs"]["threshold"]``.
+    Returns ``(model, best_state, calibrated_threshold, epochs_run)``.
+    """
+    model = ParallelDeepNeuroFuzzyModel(model_cfg)
+
+    y_train = splits["train"][2]
+    pos_weight = compute_class_weights(y_train)
+    criterion = DNFLoss(anomaly_pos_weight=pos_weight, **DNF_LOSS_KWARGS)
+    y_val_arr = splits["val"][2].astype(int)
+    val_t = (torch.from_numpy(scaled["val"][0]), torch.from_numpy(scaled["val"][1]), y_val_arr)
+    best_state, epochs_run = _fit(
+        model,
+        criterion,
+        (
+            torch.from_numpy(scaled["train"][0]),
+            torch.from_numpy(scaled["train"][1]),
+            torch.from_numpy(y_train.astype(np.float32)),
+        ),
+        val_t,
+    )
+    model.load_state_dict(best_state)
+
+    # Threshold calibration — 101-point uniform grid search over [0, 1] on the
+    # VALIDATION split (never test), matching the real repo's
+    # optimize_threshold_by_f1 exactly so a threshold trained here is comparable
+    # to one trained locally on the same data.
+    _, val_probs = _evaluate_val(model, *val_t)
+    threshold_metrics = optimize_threshold_by_f1(
+        y_true=y_val_arr, prob_anomaly=val_probs, n_points=TRAIN_THRESHOLD_SEARCH_POINTS,
+    )
+    calibrated_threshold = float(threshold_metrics["best_threshold"])
+    logger.info(
+        "Calibrated decision_threshold=%.4f (val F1-optimal, 101-point grid)",
+        calibrated_threshold,
+    )
+    # download_user_model_from_mlflow() reads the per-run threshold from exactly
+    # this key (model_cfg["training_kwargs"]["threshold"]) — this is the ONLY place
+    # that value is set; without it, every retrain's checkpoint kept propagating
+    # the served model's original threshold, which is the bug this whole rewrite
+    # exists to fix.
+    model_cfg.setdefault("training_kwargs", {})["threshold"] = calibrated_threshold
+    return model, best_state, calibrated_threshold, epochs_run
+
+
+def _test_metrics(model, test_xs: tuple, y_test, calibrated_threshold: float) -> dict:
+    """Final evaluation on the held-out test split with the selected checkpoint/threshold."""
+    x_test, s_test = test_xs
+    # Final test evaluation — the ONLY time the test split is used, on the
+    # checkpoint and threshold already selected above (never used to choose either).
+    model.eval()
+    with torch.no_grad():
+        out_t = model(torch.from_numpy(x_test), torch.from_numpy(s_test))
+        test_probs = torch.sigmoid(out_t["anomaly_score"]).view(-1).numpy()
+    test_preds = (test_probs >= calibrated_threshold).astype(int)
+    y_test_arr = y_test.astype(int)
+
+    return {
+        "accuracy": float(accuracy_score(y_test_arr, test_preds)),
+        "f1": float(f1_score(y_test_arr, test_preds, zero_division=0)),
+        "precision": float(precision_score(y_test_arr, test_preds, zero_division=0)),
+        "recall": float(recall_score(y_test_arr, test_preds, zero_division=0)),
+        "f1_macro": float(
+            f1_score(y_test_arr, test_preds, labels=[0, 1], average="macro", zero_division=0)
+        ),
+        "recall_macro": float(
+            recall_score(y_test_arr, test_preds, labels=[0, 1], average="macro", zero_division=0)
+        ),
+        "auc": (
+            float(roc_auc_score(y_test_arr, test_probs))
+            if len(np.unique(y_test_arr)) > 1 else float("nan")
+        ),
+    }
+
+
+def _train_response(
+    test: dict, calibrated_threshold: float, counts: dict, run_info: tuple
+) -> TrainResponse:
+    """Build the TrainResponse; ``run_info`` = (epochs_run, mlflow_run_id)."""
+    epochs_run, new_run_id = run_info
+    test_auc = test["auc"]
+    split_val_pct = TRAIN_EXTERNAL_VAL_PCT
+    split_test_pct = TRAIN_EXTERNAL_TEST_PCT
+    split_train_pct = 100.0 - split_val_pct - split_test_pct
+
+    return TrainResponse(
+        detail="Entrenamiento completado",
+        accuracy=round(test["accuracy"], 4),
+        fallo_auc=round(test_auc, 4) if not math.isnan(test_auc) else test_auc,
+        fallo_precision=round(test["precision"], 4),
+        fallo_recall=round(test["recall"], 4),
+        macro_f1=round(test["f1_macro"], 4),
+        macro_recall=round(test["recall_macro"], 4),
+        decision_threshold=round(calibrated_threshold, 4),
+        n_windows_train=int(counts["n_windows_train"]),
+        n_windows_val=int(counts["n_windows_val"]),
+        n_windows_test=int(counts["n_windows_test"]),
+        n_windows_total=int(sum(counts.values())),
+        split_train_pct=round(split_train_pct, 1),
+        split_val_pct=round(split_val_pct, 1),
+        split_test_pct=round(split_test_pct, 1),
+        n_epochs=epochs_run,
+        mlflow_run_id=new_run_id,
+        upload_warning=None,
+    )
+
+
 class Ml45CerealsDnslCriticalPointDetectionPlugin(  # pylint: disable=too-many-instance-attributes
-    ModelPluginPort
+    PluginRuntimeMixin, ModelPluginPort
 ):
     """Deep Neuro-Fuzzy (LSTM+attention || fuzzy TSK rules) grain-dryer fault detector.
 
@@ -137,8 +458,6 @@ class Ml45CerealsDnslCriticalPointDetectionPlugin(  # pylint: disable=too-many-i
         self._scaler_num = None
         self._xai_background = None
         self._threshold: float = 0.73
-        self._predict_count: int = 0
-        self._last_predict_at: str | None = None
         self._total_latency_ms: float = 0.0
 
     def load(self) -> None:
@@ -157,10 +476,6 @@ class Ml45CerealsDnslCriticalPointDetectionPlugin(  # pylint: disable=too-many-i
 
     def is_loaded(self) -> bool:
         return self._model is not None
-
-    def _require_loaded(self) -> None:
-        if self._model is None:
-            raise ModelNotLoadedError("El modelo no está cargado.")
 
     def _record(self, latency_ms: float = 0.0) -> None:
         self._predict_count += 1
@@ -186,7 +501,19 @@ class Ml45CerealsDnslCriticalPointDetectionPlugin(  # pylint: disable=too-many-i
             "temp_dir": temp_dir,
         }
 
-    def predict_inline(  # pylint: disable=too-many-locals
+    def _served_ctx(self) -> dict:
+        """Model/scalers/threshold of the served (base) checkpoint."""
+        return {
+            "model": self._model,
+            "model_cfg": self._model_cfg,
+            "scaler_x": self._scaler_x,
+            "scaler_num": self._scaler_num,
+            "xai_background": self._xai_background,
+            "threshold": self._threshold,
+            "temp_dir": None,
+        }
+
+    def predict_inline(
         self,
         *,
         data_path: str | None = None,
@@ -197,33 +524,10 @@ class Ml45CerealsDnslCriticalPointDetectionPlugin(  # pylint: disable=too-many-i
     ) -> PredictInlineResponse:
         _ = model_key, threshold
         mlflow_ctx = self._load_model_for_predict(mlflow_run_id)
-        ctx = mlflow_ctx or {
-            "model": self._model,
-            "model_cfg": self._model_cfg,
-            "scaler_x": self._scaler_x,
-            "scaler_num": self._scaler_num,
-            "xai_background": self._xai_background,
-            "threshold": self._threshold,
-            "temp_dir": None,
-        }
-        try:
+        ctx = mlflow_ctx or self._served_ctx()
+        with removing_dir(mlflow_ctx["temp_dir"] if mlflow_ctx else None):
             t0 = time.perf_counter()
-            if data_path:
-                with local_file_path(data_path) as local_path:
-                    sequences, stats, stats_cols, ts_windows, _, _ = build_windows_from_csv(
-                        local_path, ctx["scaler_x"], ctx["scaler_num"], require_target=False,
-                    )
-            else:
-                sensor_arrays = {col: features[col] for col in SENSOR_COLUMNS}
-                (
-                    sequences, stats, stats_cols, ts_windows, _, _
-                ) = build_windows_from_sensor_arrays(
-                    sensor_arrays,
-                    features["timestamp"],
-                    features.get("cycle_id"),
-                    ctx["scaler_x"],
-                    ctx["scaler_num"],
-                )
+            sequences, stats, stats_cols, ts_windows = _inline_windows(data_path, features, ctx)
 
             if len(sequences) > 1:
                 logger.warning(
@@ -248,22 +552,11 @@ class Ml45CerealsDnslCriticalPointDetectionPlugin(  # pylint: disable=too-many-i
                 timestamp_end=str(ts_windows[0][1]),
                 **row,
             )
-        finally:
-            if mlflow_ctx and mlflow_ctx["temp_dir"]:
-                shutil.rmtree(mlflow_ctx["temp_dir"], ignore_errors=True)
 
     def predict_batch(self, *, data_path: str, mlflow_run_id: str = "") -> PredictBatchResponse:
         mlflow_ctx = self._load_model_for_predict(mlflow_run_id)
-        ctx = mlflow_ctx or {
-            "model": self._model,
-            "model_cfg": self._model_cfg,
-            "scaler_x": self._scaler_x,
-            "scaler_num": self._scaler_num,
-            "xai_background": self._xai_background,
-            "threshold": self._threshold,
-            "temp_dir": None,
-        }
-        try:
+        ctx = mlflow_ctx or self._served_ctx()
+        with removing_dir(mlflow_ctx["temp_dir"] if mlflow_ctx else None):
             t0 = time.perf_counter()
             with local_file_path(data_path) as local_path:
                 sequences, stats, stats_cols, ts_windows, entity_ids, _ = build_windows_from_csv(
@@ -271,25 +564,14 @@ class Ml45CerealsDnslCriticalPointDetectionPlugin(  # pylint: disable=too-many-i
                 )
 
             predictions = build_predictions(
-                ctx["model"],
-                sequences,
-                stats,
-                stats_cols,
-                ts_windows,
-                entity_ids,
-                ctx["xai_background"],
-                ctx["threshold"],
-                ctx["model_cfg"],
+                ctx, (sequences, stats, stats_cols, ts_windows, entity_ids)
             )
             self._record((time.perf_counter() - t0) * 1000)
             return PredictBatchResponse(
                 model_id=MODEL_ID, predictions=predictions, output_path=None
             )
-        finally:
-            if mlflow_ctx and mlflow_ctx["temp_dir"]:
-                shutil.rmtree(mlflow_ctx["temp_dir"], ignore_errors=True)
 
-    def train(  # pylint: disable=too-many-locals,too-many-branches,too-many-statements
+    def train(
         self, *, data_path: str, mlflow_run_id: str
     ) -> TrainResponse:
         """Train a fresh model from a labeled CSV and upload it to MLflow.
@@ -320,232 +602,62 @@ class Ml45CerealsDnslCriticalPointDetectionPlugin(  # pylint: disable=too-many-i
         """
         self._require_loaded()
         logger.info("Starting ml45 training from %s", data_path)
-        with local_file_path(data_path) as local_path:
-            df = pd.read_csv(local_path)
-        df.columns = df.columns.str.lower()
-
-        if TARGET_COLUMN not in df.columns:
-            raise ValueError(
-                f"CSV falta columna objetivo '{TARGET_COLUMN}'. Requerida para entrenamiento."
-            )
-
-        # Split RAW rows by whole cycle_id (never by row/window count) — see
-        # _vendor/preprocess.py::split_train_val_test_by_id. A window is a sliding
-        # SEQUENCE_LENGTH-row slice within a single cycle, so splitting whole cycles
-        # first and windowing each split independently guarantees no window straddles
-        # two splits, and reproduces the real repo's train_pct/val_pct/test_pct exactly.
-        raw_splits, _ = split_train_val_test_by_id(
-            df, id_col=ID_COLUMN, target_column=TARGET_COLUMN,
-            val_size=TRAIN_EXTERNAL_VAL_PCT / 100.0, test_size=TRAIN_EXTERNAL_TEST_PCT / 100.0,
-            normal_tokens=NORMAL_TOKENS,
-        )
-
-        x_train_raw, stats_train_df, _, _, _, y_train = build_raw_windows_from_dataframe(
-            raw_splits["train"], require_target=True,
-        )
-        x_val_raw, stats_val_df, _, _, _, y_val = build_raw_windows_from_dataframe(
-            raw_splits["val"], require_target=True,
-        )
-        x_test_raw, stats_test_df, _, _, _, y_test = build_raw_windows_from_dataframe(
-            raw_splits["test"], require_target=True,
-        )
-        n_train, n_val, n_test = x_train_raw.shape[0], x_val_raw.shape[0], x_test_raw.shape[0]
-        if n_train + n_val + n_test < 10:
-            raise ValueError(
-                f"Muy pocas secuencias para entrenar: {n_train + n_val + n_test}. "
-                f"Se necesitan al menos 10 ventanas de {SEQUENCE_LENGTH} filas en total."
-            )
-        if n_train == 0 or n_val == 0 or n_test == 0:
-            raise ValueError(
-                f"El split train/val/test por cycle_id dejó una partición vacía "
-                f"(train={n_train}, val={n_val}, test={n_test}) — sube un CSV con más "
-                f"ciclos distintos."
-            )
-        n_windows = n_train + n_val + n_test
-        n_feat = x_train_raw.shape[-1]
-
-        scaler_x = StandardScaler()
-        x_train = scaler_x.fit_transform(
-            x_train_raw.reshape(-1, n_feat)
-        ).reshape(x_train_raw.shape).astype(np.float32)
-        x_val = scaler_x.transform(
-            x_val_raw.reshape(-1, n_feat)
-        ).reshape(x_val_raw.shape).astype(np.float32)
-        x_test = scaler_x.transform(
-            x_test_raw.reshape(-1, n_feat)
-        ).reshape(x_test_raw.shape).astype(np.float32)
-
-        scaler_num = StandardScaler()
-        s_train = scaler_num.fit_transform(stats_train_df.values).astype(np.float32)
-        s_val = scaler_num.transform(stats_val_df.values).astype(np.float32)
-        s_test = scaler_num.transform(stats_test_df.values).astype(np.float32)
+        splits = _load_train_splits(data_path)
+        counts = {
+            "n_windows_train": splits["train"][0].shape[0],
+            "n_windows_val": splits["val"][0].shape[0],
+            "n_windows_test": splits["test"][0].shape[0],
+        }
+        scaled, scalers = _scale_splits(splits)
 
         model_cfg = copy.deepcopy(self._model_cfg)
-        model = ParallelDeepNeuroFuzzyModel(model_cfg)
-
-        pos_weight = compute_class_weights(y_train)
-        criterion = DNFLoss(anomaly_pos_weight=pos_weight, **DNF_LOSS_KWARGS)
-        optimizer = torch.optim.Adam(
-            model.parameters(), lr=TRAIN_LR, weight_decay=TRAIN_WEIGHT_DECAY
-        )
-        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-            optimizer, T_max=TRAIN_SCHEDULER_T_MAX, eta_min=TRAIN_SCHEDULER_ETA_MIN,
+        model, best_state, calibrated_threshold, epochs_run = _train_and_calibrate(
+            model_cfg, splits, scaled
         )
 
-        x_t = torch.from_numpy(x_train)
-        s_t = torch.from_numpy(s_train)
-        y_t = torch.from_numpy(y_train.astype(np.float32))
-        x_val_t = torch.from_numpy(x_val)
-        s_val_t = torch.from_numpy(s_val)
-        y_val_arr = y_val.astype(int)
-
-        def _forward_step(x_batch, s_batch, y_batch):
-            out = model(x_batch, s_batch)
-            anomaly_score = torch.nan_to_num(
-                out["anomaly_score"], nan=0.0, posinf=20.0, neginf=-20.0
-            )
-            rule_activations = out["rule_activations"]
-            loss, _ = criterion(
-                anomaly_score=anomaly_score,
-                logit_anomaly_dl=out["logit_anomaly_dl"],
-                logit_anomaly_fuzzy=out["logit_anomaly_fuzzy"],
-                rule_activations=rule_activations,
-                alpha_probs=out["alpha_probs"],
-                y_anomaly=y_batch,
-            )
-            return loss
-
-        def _evaluate_val():
-            """Full forward pass over the validation split — returns the rich metric
-            dict monitor_score() needs (anomaly_f1, fuzzy_f1, dead_rules_ratio,
-            alpha_entropy_mean, rule_corr_mean), plus raw probabilities."""
-            model.eval()
-            with torch.no_grad():
-                out_v = model(x_val_t, s_val_t)
-                probs = torch.sigmoid(out_v["anomaly_score"]).view(-1).numpy()
-                preds = (probs >= 0.5).astype(int)
-                fuzzy_probs = torch.sigmoid(out_v["logit_anomaly_fuzzy"]).view(-1).numpy()
-                fuzzy_preds = (fuzzy_probs >= 0.5).astype(int)
-                rule_activations = out_v["rule_activations"]
-                rule_activation_mean = rule_activations.mean(dim=0).numpy()
-                dead_rules = int((rule_activation_mean < 1e-4).sum())
-                dead_rules_ratio = float(dead_rules / max(len(rule_activation_mean), 1))
-                val_out = {
-                    "anomaly_f1": f1_score(y_val_arr, preds, zero_division=0),
-                    "fuzzy_f1": f1_score(y_val_arr, fuzzy_preds, zero_division=0),
-                    "dead_rules_ratio": dead_rules_ratio,
-                    "alpha_entropy_mean": alpha_entropy_mean(out_v["alpha_probs"]),
-                    "rule_corr_mean": rule_corr_mean(rule_activations),
-                }
-            return val_out, probs
-
-        best_score = -np.inf
-        best_state = None
-        epochs_without_improve = 0
-        epochs_run = 0
-
-        for epoch in range(TRAIN_NUM_EPOCHS):
-            model.train()
-            # shuffle_train=False in the real config — batches iterate in the same
-            # fixed (unshuffled) order every epoch.
-            for start in range(0, n_train, TRAIN_BATCH_SIZE):
-                end = start + TRAIN_BATCH_SIZE
-                optimizer.zero_grad(set_to_none=True)
-                loss = _forward_step(x_t[start:end], s_t[start:end], y_t[start:end])
-                if not torch.isfinite(loss):
-                    continue
-                loss.backward()
-                torch.nn.utils.clip_grad_norm_(model.parameters(), TRAIN_GRAD_CLIP)
-                optimizer.step()
-
-            epochs_run = epoch + 1
-            val_out, _ = _evaluate_val()
-            score = monitor_score(val_out)
-            scheduler.step()
-
-            logger.info(
-                "Epoch %d/%d — val_anomaly_f1=%.4f val_fuzzy_f1=%.4f monitor_score=%.4f lr=%.2e",
-                epoch + 1, TRAIN_NUM_EPOCHS, val_out["anomaly_f1"], val_out["fuzzy_f1"],
-                score, optimizer.param_groups[0]["lr"],
-            )
-
-            improved = score > (best_score + TRAIN_MIN_DELTA)
-            if epoch < TRAIN_WARMUP_EPOCHS:
-                if improved:
-                    best_score = score
-                    best_state = {k: v.clone() for k, v in model.state_dict().items()}
-            else:
-                if improved:
-                    best_score = score
-                    best_state = {k: v.clone() for k, v in model.state_dict().items()}
-                    epochs_without_improve = 0
-                else:
-                    epochs_without_improve += 1
-                if epochs_without_improve >= TRAIN_PATIENCE:
-                    logger.info(
-                        "Early stopping en epoch %d (patience=%d).", epoch + 1, TRAIN_PATIENCE
-                    )
-                    break
-
-        if best_state is None:
-            best_state = model.state_dict()
-        model.load_state_dict(best_state)
-
-        # Threshold calibration — 101-point uniform grid search over [0, 1] on the
-        # VALIDATION split (never test), matching the real repo's
-        # optimize_threshold_by_f1 exactly so a threshold trained here is comparable
-        # to one trained locally on the same data.
-        _, val_probs = _evaluate_val()
-        threshold_metrics = optimize_threshold_by_f1(
-            y_true=y_val_arr, prob_anomaly=val_probs, n_points=TRAIN_THRESHOLD_SEARCH_POINTS,
-        )
-        calibrated_threshold = float(threshold_metrics["best_threshold"])
-        logger.info(
-            "Calibrated decision_threshold=%.4f (val F1-optimal, 101-point grid)",
-            calibrated_threshold,
-        )
-        # download_user_model_from_mlflow() reads the per-run threshold from exactly
-        # this key (model_cfg["training_kwargs"]["threshold"]) — this is the ONLY place
-        # that value is set; without it, every retrain's checkpoint kept propagating
-        # the served model's original threshold, which is the bug this whole rewrite
-        # exists to fix.
-        model_cfg.setdefault("training_kwargs", {})["threshold"] = calibrated_threshold
-
-        # Final test evaluation — the ONLY time the test split is used, on the
-        # checkpoint and threshold already selected above (never used to choose either).
-        model.eval()
-        with torch.no_grad():
-            out_t = model(torch.from_numpy(x_test), torch.from_numpy(s_test))
-            test_probs = torch.sigmoid(out_t["anomaly_score"]).view(-1).numpy()
-        test_preds = (test_probs >= calibrated_threshold).astype(int)
-        y_test_arr = y_test.astype(int)
-
-        test_accuracy = float(accuracy_score(y_test_arr, test_preds))
-        test_f1 = float(f1_score(y_test_arr, test_preds, zero_division=0))
-        test_precision = float(precision_score(y_test_arr, test_preds, zero_division=0))
-        test_recall = float(recall_score(y_test_arr, test_preds, zero_division=0))
-        test_f1_macro = float(
-            f1_score(y_test_arr, test_preds, labels=[0, 1], average="macro", zero_division=0)
-        )
-        test_recall_macro = float(
-            recall_score(y_test_arr, test_preds, labels=[0, 1], average="macro", zero_division=0)
-        )
-        test_auc = (
-            float(roc_auc_score(y_test_arr, test_probs))
-            if len(np.unique(y_test_arr)) > 1 else float("nan")
-        )
-
+        test = _test_metrics(model, scaled["test"], splits["test"][2], calibrated_threshold)
         logger.info(
             "Final test evaluation — test_f1=%.4f test_f1_macro=%.4f test_recall_macro=%.4f "
             "(n_train=%d, n_val=%d, n_test=%d)",
-            test_f1, test_f1_macro, test_recall_macro, n_train, n_val, n_test,
+            test["f1"], test["f1_macro"], test["recall_macro"],
+            counts["n_windows_train"], counts["n_windows_val"], counts["n_windows_test"],
         )
 
+        # Key names unified with ml43_cereals_dnsl_anomaly_fault_detection and with both
+        # real training repos' own results.json (modelo 43-45 audit, metrics
+        # unification) — these ARE the final display names now, so stats() no longer
+        # needs a separate legacy-key alias map: it just copies these straight through.
+        # Also fixes the "Price fluctuation classifier" card bug (ws-models.js's
+        # customEvalHtml duck-types on bare accuracy+f1 keys, which TrainResponse used
+        # to expose).
+        loggable_metrics = {
+            "accuracy": test["accuracy"],
+            "fallo_auc": test["auc"],
+            "fallo_precision": test["precision"],
+            "fallo_recall": test["recall"],
+            "macro_f1": test["f1_macro"],
+            "macro_recall": test["recall_macro"],
+            "decision_threshold": round(calibrated_threshold, 4),
+            **counts,
+        }
+        new_run_id = self._save_and_upload(
+            {"model_state_dict": best_state, "model_cfg": model_cfg},
+            scalers,
+            loggable_metrics,
+            mlflow_run_id,
+        )
+        return _train_response(test, calibrated_threshold, counts, (epochs_run, new_run_id))
+
+    def _save_and_upload(
+        self, checkpoint: dict, scalers: dict, metrics: dict, mlflow_run_id: str
+    ) -> str:
+        """Write and validate the retrained bundle, then upload it with its metrics to MLflow.
+
+        A corrupt/empty local artifact raises ``ValueError`` before any upload; an upload
+        failure becomes ``ModelPersistenceError``. Returns the run_id used.
+        """
         temp_dir = Path(tempfile.mkdtemp(prefix="m45_train_"))
-        upload_warning = None
-        new_run_id: str | None = None
         try:
-            checkpoint = {"model_state_dict": best_state, "model_cfg": model_cfg}
             torch.save(checkpoint, temp_dir / MODEL_FILENAME)
             _validate_saved_artifact(
                 temp_dir / MODEL_FILENAME, lambda p: torch.load(p, weights_only=False)
@@ -556,9 +668,7 @@ class Ml45CerealsDnslCriticalPointDetectionPlugin(  # pylint: disable=too-many-i
             # previously only the checkpoint was uploaded, so a predict call that DID pass a
             # freshly-trained mlflow_run_id would still fail (joblib.load on a scaler.pkl that
             # was never uploaded).
-            joblib.dump(
-                {"scaler_x": scaler_x, "scaler_num": scaler_num}, temp_dir / SCALER_FILENAME
-            )
+            joblib.dump(scalers, temp_dir / SCALER_FILENAME)
             _validate_saved_artifact(temp_dir / SCALER_FILENAME, joblib.load)
 
             if self._xai_background is not None:
@@ -566,36 +676,19 @@ class Ml45CerealsDnslCriticalPointDetectionPlugin(  # pylint: disable=too-many-i
                 _validate_saved_artifact(temp_dir / XAI_BACKGROUND_FILENAME, np.load)
 
             try:
-                # Key names unified with ml43_cereals_dnsl_anomaly_fault_detection and with both
-                # real training repos' own results.json (modelo 43-45 audit, metrics
-                # unification) — these ARE the final display names now, so stats() no longer
-                # needs a separate legacy-key alias map: it just copies these straight through.
-                # Also fixes the "Price fluctuation classifier" card bug (ws-models.js's
-                # customEvalHtml duck-types on bare accuracy+f1 keys, which TrainResponse used
-                # to expose).
-                loggable_metrics = {
-                    "accuracy": test_accuracy,
-                    "fallo_auc": test_auc,
-                    "fallo_precision": test_precision,
-                    "fallo_recall": test_recall,
-                    "macro_f1": test_f1_macro,
-                    "macro_recall": test_recall_macro,
-                    "decision_threshold": round(calibrated_threshold, 4),
-                    "n_windows_train": n_train, "n_windows_val": n_val, "n_windows_test": n_test,
-                }
                 # MLflow rejects NaN/Inf metric values (auc is NaN when the held-out eval
                 # split happens to contain only one class) — log only finite numbers so a
                 # small/unbalanced retrain CSV can't turn "training succeeded, upload failed"
                 # into an opaque MLflow client error.
                 loggable_metrics = {
-                    k: v for k, v in loggable_metrics.items()
+                    k: v for k, v in metrics.items()
                     if isinstance(v, (int, float)) and not isinstance(v, bool) and np.isfinite(v)
                 }
                 new_run_id = upload_artifacts_to_mlflow(
                     str(temp_dir), mlflow_run_id=mlflow_run_id, metrics=loggable_metrics,
                 )
                 logger.info("Training complete. MLflow run_id=%s", new_run_id)
-            except Exception as exc:  # pylint: disable=broad-exception-caught
+            except Exception as exc:
                 logger.error(
                     "MLflow artifact upload failed (model trained but not persisted): %s", exc
                 )
@@ -604,31 +697,7 @@ class Ml45CerealsDnslCriticalPointDetectionPlugin(  # pylint: disable=too-many-i
                 ) from exc
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
-
-        split_val_pct = TRAIN_EXTERNAL_VAL_PCT
-        split_test_pct = TRAIN_EXTERNAL_TEST_PCT
-        split_train_pct = 100.0 - split_val_pct - split_test_pct
-
-        return TrainResponse(
-            detail="Entrenamiento completado",
-            accuracy=round(test_accuracy, 4),
-            fallo_auc=round(test_auc, 4) if not math.isnan(test_auc) else test_auc,
-            fallo_precision=round(test_precision, 4),
-            fallo_recall=round(test_recall, 4),
-            macro_f1=round(test_f1_macro, 4),
-            macro_recall=round(test_recall_macro, 4),
-            decision_threshold=round(calibrated_threshold, 4),
-            n_windows_train=int(n_train),
-            n_windows_val=int(n_val),
-            n_windows_test=int(n_test),
-            n_windows_total=int(n_windows),
-            split_train_pct=round(split_train_pct, 1),
-            split_val_pct=round(split_val_pct, 1),
-            split_test_pct=round(split_test_pct, 1),
-            n_epochs=epochs_run,
-            mlflow_run_id=new_run_id,
-            upload_warning=upload_warning,
-        )
+        return new_run_id
 
     def stats(self, mlflow_run_id: str = "") -> StatsResponse:
         inputs = [

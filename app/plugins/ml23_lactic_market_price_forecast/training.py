@@ -127,36 +127,56 @@ def build_sequences_by_group(
     return np.array(x_all), np.array(y_all)
 
 
-# pylint: disable-next=too-many-locals
+def _bridged_group(
+    history_df: pd.DataFrame, key: tuple, target_grp: pd.DataFrame, seq_len: int,
+) -> tuple[pd.DataFrame, int]:
+    """The group's last seq_len-1 history rows + its target rows, and the bridge length."""
+    prod, canal = key
+    history_grp = history_df[
+        (history_df["producto"] == prod) & (history_df["canal"] == canal)
+    ].sort_values("fecha")
+    target_grp = target_grp.sort_values("fecha")
+    bridge = history_grp.tail(seq_len - 1)
+    return pd.concat([bridge, target_grp], ignore_index=True), len(bridge)
+
+
+def _bridged_windows(
+    combined: pd.DataFrame, n_bridge: int, feature_cols: list[str],
+    seq_len: int, scaler: StandardScaler,
+) -> tuple[list, list, list]:
+    """Windows of the combined frame whose target row is past the bridge (x, y, current price)."""
+    x_all, y_all, cp_all = [], [], []
+    x_raw = combined[feature_cols].values
+    y_raw = combined[TARGET_COL].values
+    cp_raw = combined[CURRENT_PRICE_COL].values
+    x_scaled = scaler.transform(x_raw)
+    for i in range(len(x_scaled) - seq_len + 1):
+        target_idx = i + seq_len - 1
+        if target_idx >= n_bridge:
+            x_all.append(x_scaled[i: i + seq_len])
+            y_all.append(y_raw[target_idx])
+            cp_all.append(cp_raw[target_idx])
+    return x_all, y_all, cp_all
+
+
 def build_eval_sequences_with_bridge(
     history_df: pd.DataFrame, target_df: pd.DataFrame, feature_cols: list[str],
     seq_len: int, scaler: StandardScaler,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Build evaluation sequences bridged from history (ported verbatim)."""
     x_all, y_all, cp_all = [], [], []
-    for (prod, canal), target_grp in target_df.groupby(["producto", "canal"]):
-        history_grp = history_df[
-            (history_df["producto"] == prod) & (history_df["canal"] == canal)
-        ].sort_values("fecha")
-        target_grp = target_grp.sort_values("fecha")
-        bridge = history_grp.tail(seq_len - 1)
-        combined = pd.concat([bridge, target_grp], ignore_index=True)
+    for key, target_grp in target_df.groupby(["producto", "canal"]):
+        combined, n_bridge = _bridged_group(history_df, key, target_grp, seq_len)
         if len(combined) < seq_len:
             continue
-        x_raw = combined[feature_cols].values
-        y_raw = combined[TARGET_COL].values
-        cp_raw = combined[CURRENT_PRICE_COL].values
-        x_scaled = scaler.transform(x_raw)
-        for i in range(len(x_scaled) - seq_len + 1):
-            target_idx = i + seq_len - 1
-            if target_idx >= len(bridge):
-                x_all.append(x_scaled[i: i + seq_len])
-                y_all.append(y_raw[target_idx])
-                cp_all.append(cp_raw[target_idx])
+        xs, ys, cps = _bridged_windows(combined, n_bridge, feature_cols, seq_len, scaler)
+        x_all.extend(xs)
+        y_all.extend(ys)
+        cp_all.extend(cps)
     return np.array(x_all), np.array(y_all), np.array(cp_all)
 
 
-def prepare_rnn_split_with_test(  # pylint: disable=too-many-locals
+def prepare_rnn_split_with_test(
     train_df: pd.DataFrame,
     val_df: pd.DataFrame,
     test_df: pd.DataFrame,
@@ -222,7 +242,7 @@ def calc_direction_metrics(
     return {"direction_acc_pct": round(direction_acc, 1)}
 
 
-def train_rnn(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
+def train_rnn(  # pylint: disable=too-many-arguments,too-many-locals
     model: nn.Module, train_x: np.ndarray, train_y: np.ndarray,
     val_x: np.ndarray, val_y: np.ndarray,
     *, epochs: int, batch_size: int, lr: float, patience: int, device: torch.device,

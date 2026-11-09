@@ -136,7 +136,7 @@ def test_tail_or_pad_truncates_long_series():
 def test_build_window_tensor_shape_and_dtype():
     """build_window_tensor returns a (1, WINDOW_SIZE, n_features) tensor, the last date and
     the window."""
-    class _Scaler:  # pylint: disable=too-few-public-methods
+    class _Scaler:
         def transform(self, df):
             """Identity scaling to float32."""
             return df.values.astype(np.float32)
@@ -155,7 +155,7 @@ def test_build_window_tensor_sorts_before_windowing_when_rows_arrive_out_of_orde
     """Regression: rows must be sorted by Fecha BEFORE taking the last WINDOW_SIZE, not
     after — otherwise an out-of-chronological-order input (e.g. a batch CSV exported
     without an explicit ORDER BY) silently windows on the wrong 168 hours."""
-    class _Scaler:  # pylint: disable=too-few-public-methods
+    class _Scaler:
         def transform(self, df):
             """Identity scaling to float32."""
             return df.values.astype(np.float32)

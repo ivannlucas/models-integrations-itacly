@@ -3,7 +3,6 @@
 Port of ga_model_pipeline._build_feature_matrix_for_individual.
 """
 
-# pylint: disable=invalid-name
 from __future__ import annotations
 
 import numpy as np

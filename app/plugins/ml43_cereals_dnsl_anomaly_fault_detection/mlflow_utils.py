@@ -8,12 +8,11 @@ from __future__ import annotations
 import logging
 import os
 import pickle
-import shutil
-import tempfile
 
 import numpy as np
 import torch
 
+from app.domain.services.mlflow_artifacts import download_run_artifacts
 from app.domain.services.mlflow_tracker import BaseMLflowTracker, require_user_model
 from app.plugins.ml43_cereals_dnsl_anomaly_fault_detection.constants import (
     ARTIFACT_FOLDER_NAME,
@@ -35,47 +34,43 @@ def download_user_model_from_mlflow(run_id: str):
     """Download a user-trained model bundle from MLflow.
 
     Returns (model, model_cfg, scaler_x, scaler_num, xai_background, explainer, temp_dir),
-    or None if the run has no artifacts. Caller MUST shutil.rmtree(temp_dir) after
-    inference — use try/finally.
+    or None if the run has no artifacts. Caller MUST remove temp_dir after inference
+    (``removing_dir``).
     """
-    tmp = tempfile.mkdtemp(prefix="mlflow_ml43_cereals_")
-    try:
-        local_path = BaseMLflowTracker(run_id).download_artifacts(tmp, artifact_path="model")
-        if not local_path:
-            shutil.rmtree(tmp, ignore_errors=True)
-            return None
+    loaded = download_run_artifacts(run_id, _load, prefix="mlflow_ml43_cereals_")
+    if loaded is None:
+        return None
+    bundle, tmp = loaded
+    return (*bundle, tmp)
 
-        checkpoint = torch.load(
-            os.path.join(local_path, MODEL_FILENAME), map_location="cpu", weights_only=False,
-        )
-        model_cfg = checkpoint["model_cfg"]
-        model = build_model(model_cfg)
-        model.load_state_dict(checkpoint["model_state_dict"])
-        model.eval()
 
-        with open(os.path.join(local_path, SCALER_FILENAME), "rb") as f:
-            scaler_dict = pickle.load(f)
+def _load(local_path: str):
+    """Rebuild model, scalers, XAI background and explainer from a downloaded ``model`` folder."""
+    checkpoint = torch.load(
+        os.path.join(local_path, MODEL_FILENAME), map_location="cpu", weights_only=False,
+    )
+    model_cfg = checkpoint["model_cfg"]
+    model = build_model(model_cfg)
+    model.load_state_dict(checkpoint["model_state_dict"])
+    model.eval()
 
-        xai_background = None
-        bg_path = os.path.join(local_path, XAI_BACKGROUND_FILENAME)
-        if os.path.exists(bg_path):
-            xai_background = np.load(bg_path)
+    with open(os.path.join(local_path, SCALER_FILENAME), "rb") as f:
+        scaler_dict = pickle.load(f)
 
-        explainer = build_explainer(model, model_cfg)
+    xai_background = None
+    bg_path = os.path.join(local_path, XAI_BACKGROUND_FILENAME)
+    if os.path.exists(bg_path):
+        xai_background = np.load(bg_path)
 
-        logger.info("Downloaded user model from MLflow run_id=%s", run_id)
-        return (
-            model,
-            model_cfg,
-            scaler_dict.get("scaler_x"),
-            scaler_dict.get("scaler_num"),
-            xai_background,
-            explainer,
-            tmp,
-        )
-    except BaseException:
-        shutil.rmtree(tmp, ignore_errors=True)
-        raise
+    explainer = build_explainer(model, model_cfg)
+    return (
+        model,
+        model_cfg,
+        scaler_dict.get("scaler_x"),
+        scaler_dict.get("scaler_num"),
+        xai_background,
+        explainer,
+    )
 
 
 def get_calibrated_threshold(run_id: str, default: float) -> float:

@@ -1,4 +1,5 @@
 """ml16: every /train publishes the retrained bundle as the new base (spec 2026-10-14)."""
+# pylint: disable=protected-access  # the tests inject the loaded models
 import json
 from unittest.mock import MagicMock
 
@@ -35,9 +36,9 @@ def fixture_instance(monkeypatch):
         "n_train": 40, "n_test": 12,
     })
     plugin = plugin_mod.Ml16MeatRawMaterialPriceAlertPlugin()
-    plugin._models = {t: object() for t in TARGETS}       # pylint: disable=protected-access
-    plugin._scalers = {t: object() for t in TARGETS}      # pylint: disable=protected-access
-    plugin._train_config = {"horizon": 4}                 # pylint: disable=protected-access
+    plugin._models = {t: object() for t in TARGETS}
+    plugin._scalers = {t: object() for t in TARGETS}
+    plugin._train_config = {"horizon": 4}
     return plugin
 
 

@@ -16,3 +16,8 @@ jobs=0
 # Cada plugin es independiente por diseño (1 modelo = 1 plugin autocontenido): el código
 # repetido entre plugins hermanos es intencionado.
 disable=duplicate-code
+
+[DESIGN]
+# Hexagonal: los casos de uso exponen un único execute() y los dobles de test un solo método;
+# con el mínimo por defecto (2) cada uno necesitaba un disable en línea.
+min-public-methods=1

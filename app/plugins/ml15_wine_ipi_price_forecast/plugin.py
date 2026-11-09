@@ -22,13 +22,12 @@ from typing import Any
 import joblib
 import pandas as pd
 
-from app.application.dto.stats_dto import InputField, OutputField, RuntimeStats, StatsResponse
+from app.application.dto.stats_dto import InputField, OutputField, StatsResponse
 from app.domain.ports.model_plugin_port import ModelPluginPort
-from app.domain.services.exceptions import (
-    MissingRequiredFeatureError,
-    ModelNotLoadedError,
-)
+from app.domain.services.exceptions import MissingRequiredFeatureError
+from app.domain.services.mlflow_artifacts import add_mlflow_run_to_stats, removing_dir
 from app.domain.services.mlflow_tracker import BaseMLflowTracker
+from app.domain.services.plugin_runtime import PluginRuntimeMixin
 from app.infrastructure.artifact_store import local_file_path
 from app.infrastructure.base_model_publisher import persist_retrained_bundle
 from app.plugins.ml15_wine_ipi_price_forecast import history, model_loader, preprocessing, training
@@ -54,7 +53,60 @@ from app.plugins.ml15_wine_ipi_price_forecast.train_dto import TrainResponse
 logger = logging.getLogger(__name__)
 
 
-class Ml15WineIpiPriceForecastPlugin(ModelPluginPort):
+def _derived_row_meta(date: pd.Timestamp, derived_row: pd.Series, horizon: int) -> dict:
+    """Origin/target dates and feature status of one derived simple-history row."""
+    origin_date, target_date = preprocessing.resolve_origin_target_dates(
+        {"date": date.strftime("%Y-%m-%d")}, horizon,
+    )
+    status, notes = history.feature_status([note for _, note in derived_row["_notes"]])
+    return {
+        "origin_date": origin_date, "target_date": target_date,
+        "feature_status": status, "feature_notes": notes,
+    }
+
+
+def _check_reference_copy(field: str, path: str, current: pd.DataFrame, copy_path: str) -> None:
+    """Copy a reference CSV to copy_path and check it carries the current history's columns."""
+    try:
+        with local_file_path(path) as local_path:
+            shutil.copyfile(local_path, copy_path)
+        frame = history.load_monthly_csv(copy_path)
+    except Exception as exc:
+        raise ValueError(
+            f"{field}: no se puede leer como histórico mensual ({exc})."
+        ) from exc
+    missing = [col for col in current.columns if col not in frame.columns]
+    if missing:
+        raise ValueError(
+            f"{field}: faltan las columnas del histórico vigente {missing}."
+        )
+
+
+def _train_warning(mlflow_warning: str | None, *, renewed: bool) -> str | None:
+    """The train() upload_warning: MLflow failure and/or inherited reference histories."""
+    warnings = [mlflow_warning] if mlflow_warning else []
+    if not renewed:
+        warnings.append(
+            "No se han renovado los históricos exógenos de referencia (reference_prices_path / "
+            "reference_financial_path): el modelo base nuevo hereda los de la versión anterior."
+        )
+    return " ".join(warnings) or None
+
+
+def _read_csv(path: str) -> pd.DataFrame:
+    """Read a CSV given as a local or s3:// path."""
+    with local_file_path(path) as local_path:
+        return pd.read_csv(local_path)
+
+
+def _write_bundle(bundle_dir: str, payload: dict, references: list[tuple[str, str]]) -> None:
+    """Write the retrained payload and the validated reference CSV copies (canonical names)."""
+    joblib.dump(payload, f"{bundle_dir}/{MODEL_FILENAME}")
+    for copy_path, filename in references:
+        shutil.copyfile(copy_path, f"{bundle_dir}/{filename}")
+
+
+class Ml15WineIpiPriceForecastPlugin(PluginRuntimeMixin, ModelPluginPort):
     """Ridge regression plugin for the national phytosanitary price index (t+6)."""
 
     BASE_ARTIFACT_FOLDER = ARTIFACT_FOLDER_NAME   # every /train publishes the new base model
@@ -62,8 +114,6 @@ class Ml15WineIpiPriceForecastPlugin(ModelPluginPort):
     def __init__(self) -> None:
         """Initialize an unloaded plugin with empty runtime counters."""
         self._payload: dict | None = None
-        self._predict_count: int = 0
-        self._last_predict_at: str | None = None
 
     # ── lifecycle ─────────────────────────────────────────────────────────────
 
@@ -75,14 +125,6 @@ class Ml15WineIpiPriceForecastPlugin(ModelPluginPort):
     def is_loaded(self) -> bool:
         """Return True once the artifact payload is loaded."""
         return self._payload is not None
-
-    def _require_loaded(self) -> None:
-        if not self.is_loaded():
-            raise ModelNotLoadedError("El modelo no está cargado.")
-
-    def _record_prediction(self) -> None:
-        self._predict_count += 1
-        self._last_predict_at = datetime.now(tz=timezone.utc).isoformat()
 
     def _resolve_payload(self, mlflow_run_id: str) -> tuple[dict, str | None]:
         """Return (payload, temp_dir_to_cleanup). temp_dir is None for the fixed artifact."""
@@ -137,9 +179,9 @@ class Ml15WineIpiPriceForecastPlugin(ModelPluginPort):
         _ = model_key, threshold
         self._require_loaded()
         payload, tmp = self._resolve_payload(mlflow_run_id)
-        try:
+        with removing_dir(tmp):
             r = self._predict_row(payload, features)
-            self._record_prediction()
+            self._record()
             logger.info(
                 "predict_inline done — origin_date=%s y_pred=%.4f count=%d",
                 r["origin_date"], r["y_pred"], self._predict_count,
@@ -159,9 +201,6 @@ class Ml15WineIpiPriceForecastPlugin(ModelPluginPort):
                     col: float(r["X"].iloc[0][col]) for col in r["feature_columns"]
                 },
             )
-        finally:
-            if tmp:
-                shutil.rmtree(tmp, ignore_errors=True)
 
     # ── predict_batch ─────────────────────────────────────────────────────────
 
@@ -215,22 +254,24 @@ class Ml15WineIpiPriceForecastPlugin(ModelPluginPort):
         valid_idx = [i for i, d in enumerate(dates) if d is not None]
         if valid_idx:
             self._fill_batch_predictions(
-                payload, dates, valid_idx, prices_df, financial_df, predictions
+                payload, dates, valid_idx,
+                reference=(prices_df, financial_df), predictions=predictions,
             )
         return predictions
 
     @staticmethod
-    def _fill_batch_predictions(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
-        payload: dict, dates: list[pd.Timestamp], valid_idx: list[int],
-        prices_df: pd.DataFrame, financial_df: pd.DataFrame, predictions: list,
+    def _fill_batch_predictions(
+        payload: dict, dates: list[pd.Timestamp], valid_idx: list[int], *,
+        reference: tuple[pd.DataFrame, pd.DataFrame], predictions: list,
     ) -> None:
-        """Derive features + predict for every valid_idx row, writing into predictions in place."""
+        """Derive features + predict for every valid_idx row, writing into predictions in place.
+
+        reference is the (prices_df, financial_df) history the features are derived from.
+        """
         feature_columns = list(payload["feature_columns"])
         horizon = int(payload["horizon"])
         try:
-            derived = history.derive_feature_rows(
-                [dates[i] for i in valid_idx], prices_df, financial_df
-            )
+            derived = history.derive_feature_rows([dates[i] for i in valid_idx], *reference)
             y_pred = payload["model"].predict(derived[feature_columns])
         except ValueError as exc:
             for row_idx in valid_idx:
@@ -239,22 +280,17 @@ class Ml15WineIpiPriceForecastPlugin(ModelPluginPort):
 
         anchor_column = str(payload["anchor_column"])
         for pos, row_idx in enumerate(valid_idx):
-            origin_date, target_date = preprocessing.resolve_origin_target_dates(
-                {"date": dates[row_idx].strftime("%Y-%m-%d")}, horizon,
-            )
-            status, notes = history.feature_status(
-                [note for _, note in derived.iloc[pos]["_notes"]]
-            )
+            meta = _derived_row_meta(dates[row_idx], derived.iloc[pos], horizon)
             predictions[row_idx] = {
                 "row": row_idx,
-                "origin_date": origin_date,
-                "target_date": target_date,
+                "origin_date": meta["origin_date"],
+                "target_date": meta["target_date"],
                 "horizon": horizon,
                 "y_pred": float(y_pred[pos]),
                 "y_anchor": float(derived.iloc[pos][anchor_column]),
                 "y_true": derived.iloc[pos]["y_true"],
-                "feature_status": status,
-                "feature_notes": notes,
+                "feature_status": meta["feature_status"],
+                "feature_notes": meta["feature_notes"],
                 "model_id": MODEL_ID,
             }
 
@@ -268,7 +304,7 @@ class Ml15WineIpiPriceForecastPlugin(ModelPluginPort):
         """
         self._require_loaded()
         payload, tmp = self._resolve_payload(mlflow_run_id)
-        try:
+        with removing_dir(tmp):
             with local_file_path(data_path) as local_path:
                 df = pd.read_csv(local_path)
 
@@ -296,7 +332,7 @@ class Ml15WineIpiPriceForecastPlugin(ModelPluginPort):
                         logger.warning("Error en fila %s: %s", idx, exc)
                         predictions.append({"row": int(idx), "error": str(exc)})
 
-            self._record_prediction()
+            self._record()
             logger.info(
                 "predict_batch done — %d filas, mlflow=%s", len(predictions), bool(mlflow_run_id),
             )
@@ -304,14 +340,11 @@ class Ml15WineIpiPriceForecastPlugin(ModelPluginPort):
                 model_id=MODEL_ID, predictions=predictions, n_predictions=len(predictions),
                 output_path=None,
             )
-        finally:
-            if tmp:
-                shutil.rmtree(tmp, ignore_errors=True)
 
     # ── train (retraining with the original procedure) ────────────────────────
 
     @staticmethod
-    def _validated_reference_csvs(  # pylint: disable=too-many-locals
+    def _validated_reference_csvs(
         prices_path: str, financial_path: str
     ) -> list[tuple[str, str]]:
         """Check the optional reference CSVs against the current ones' columns, before training.
@@ -343,19 +376,7 @@ class Ml15WineIpiPriceForecastPlugin(ModelPluginPort):
                 os.close(fd)
                 # registered first so the cleanup below sees it
                 checked.append((copy_path, filename))
-                try:
-                    with local_file_path(path) as local_path:
-                        shutil.copyfile(local_path, copy_path)
-                    frame = history.load_monthly_csv(copy_path)
-                except Exception as exc:  # pylint: disable=broad-exception-caught
-                    raise ValueError(
-                        f"{field}: no se puede leer como histórico mensual ({exc})."
-                    ) from exc
-                missing = [col for col in current.columns if col not in frame.columns]
-                if missing:
-                    raise ValueError(
-                        f"{field}: faltan las columnas del histórico vigente {missing}."
-                    )
+                _check_reference_copy(field, path, current, copy_path)
         except BaseException:
             for copy_path, _ in checked:
                 if os.path.exists(copy_path):
@@ -363,7 +384,7 @@ class Ml15WineIpiPriceForecastPlugin(ModelPluginPort):
             raise
         return checked
 
-    def train(  # pylint: disable=too-many-locals
+    def train(
         self, *, data_path: str, mlflow_run_id: str = "",
         reference_prices_path: str = "", reference_financial_path: str = "",
     ) -> TrainResponse:
@@ -379,52 +400,42 @@ class Ml15WineIpiPriceForecastPlugin(ModelPluginPort):
         """
         self._require_loaded()
         references = self._validated_reference_csvs(reference_prices_path, reference_financial_path)
-        with local_file_path(data_path) as local_path:
-            df = pd.read_csv(local_path)
-
-        result = training.train_model(df)
-        model = result["model"]
-        metrics = result["metrics"]
-
-        new_payload = dict(self._payload)
-        new_payload.update({
-            "model": model,
-            "model_params": {"alpha": ALPHA},
-            "trained_at": datetime.now(tz=timezone.utc).isoformat(),
-            "n_training_rows": result["n_train"],
-            "train_end_date": str(result["train_end_date"].date()),
-            "training_origin_start": str(result["train_origin_start"].date()),
-            "training_origin_end": str(result["train_origin_end"].date()),
-        })
-
-        tracker = BaseMLflowTracker(mlflow_run_id)
-        bundle_dir = tempfile.mkdtemp(prefix="ml15_train_")
+        # The reference copies are removed whatever happens next (bad CSV, training error…).
         try:
-            joblib.dump(new_payload, f"{bundle_dir}/{MODEL_FILENAME}")
-            for copy_path, filename in references:
-                shutil.copyfile(copy_path, f"{bundle_dir}/{filename}")
+            result = training.train_model(_read_csv(data_path))
+            metrics = result["metrics"]
 
-            def _upload_to_mlflow() -> None:
-                tracker.log_params({"model_kind": "ridge", "alpha": ALPHA})
-                tracker.log_metrics({k: v for k, v in metrics.items() if v is not None})
-                tracker.upload_artifacts(bundle_dir, artifact_path="model")
+            new_payload = dict(self._payload)
+            new_payload.update({
+                "model": result["model"],
+                "model_params": {"alpha": ALPHA},
+                "trained_at": datetime.now(tz=timezone.utc).isoformat(),
+                "n_training_rows": result["n_train"],
+                "train_end_date": str(result["train_end_date"].date()),
+                "training_origin_start": str(result["train_origin_start"].date()),
+                "training_origin_end": str(result["train_origin_end"].date()),
+            })
 
-            persisted = persist_retrained_bundle(
-                bundle_dir, artifact_folder=ARTIFACT_FOLDER_NAME, data_path=data_path,
-                metrics=metrics, mlflow_run_id=mlflow_run_id, upload_to_mlflow=_upload_to_mlflow,
-            )
+            tracker = BaseMLflowTracker(mlflow_run_id)
+            bundle_dir = tempfile.mkdtemp(prefix="ml15_train_")
+            with removing_dir(bundle_dir):
+                _write_bundle(bundle_dir, new_payload, references)
+
+                def _upload_to_mlflow() -> None:
+                    tracker.log_params({"model_kind": "ridge", "alpha": ALPHA})
+                    tracker.log_metrics({k: v for k, v in metrics.items() if v is not None})
+                    tracker.upload_artifacts(bundle_dir, artifact_path="model")
+
+                persisted = persist_retrained_bundle(
+                    bundle_dir, artifact_folder=ARTIFACT_FOLDER_NAME, data_path=data_path,
+                    metrics=metrics, mlflow_run_id=mlflow_run_id,
+                    upload_to_mlflow=_upload_to_mlflow,
+                )
         finally:
-            shutil.rmtree(bundle_dir, ignore_errors=True)
-            for copy_path, _ in references:
-                os.unlink(copy_path)
+            for reference in references:
+                os.unlink(reference[0])
 
-        warnings = [persisted.upload_warning] if persisted.upload_warning else []
-        if not references:
-            warnings.append(
-                "No se han renovado los históricos exógenos de referencia (reference_prices_path / "
-                "reference_financial_path): el modelo base nuevo hereda los de la versión anterior."
-            )
-        upload_warning = " ".join(warnings) or None
+        upload_warning = _train_warning(persisted.upload_warning, renewed=bool(references))
 
         logger.info(
             "ml15 train() done — n_train=%d n_test=%d rmse=%s mlflow_run_id=%s",
@@ -569,18 +580,6 @@ class Ml15WineIpiPriceForecastPlugin(ModelPluginPort):
             inputs=inputs,
             outputs=outputs,
             metrics={**METRICS_REPORTED, "feature_columns": feature_columns},
-            runtime_stats=RuntimeStats(
-                total_predictions=self._predict_count,
-                avg_latency_ms=None,
-            ),
+            runtime_stats=self._runtime_stats(),
         )
-        if mlflow_run_id:
-            try:
-                tracker = BaseMLflowTracker(mlflow_run_id)
-                base.metrics["mlflow"] = {
-                    "params": tracker.get_params(), "metrics": tracker.get_metrics(),
-                }
-                logger.info("Stats enriched with MLflow data for run_id=%s", mlflow_run_id)
-            except Exception as exc:  # pylint: disable=broad-exception-caught
-                logger.warning("Could not fetch MLflow stats for run_id=%s: %s", mlflow_run_id, exc)
-        return base
+        return add_mlflow_run_to_stats(base, mlflow_run_id)

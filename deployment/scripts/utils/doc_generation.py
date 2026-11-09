@@ -6,6 +6,7 @@ import argparse
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any, NamedTuple
 
 from confluence import (  # pylint: disable=import-error  # sibling script module
     get_confluence_client, create_or_update_confluence_page, ensure_page_hierarchy_exists,
@@ -23,8 +24,13 @@ from ui import log_message  # pylint: disable=import-error  # sibling script mod
 PROMPT_FILENAME = "doc_generation.txt"
 
 
-def main():  # pylint: disable=too-many-locals,too-many-branches,too-many-statements
-    """Parse CLI args and generate the documentation for every selected file."""
+class _Confluence(NamedTuple):
+    """Confluence client plus the cache of parent page ids per folder hierarchy."""
+    client: Any
+    hierarchy_cache: dict
+
+
+def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "Generates documentation for a file or directory, preserving the folder structure."
@@ -51,10 +57,82 @@ def main():  # pylint: disable=too-many-locals,too-many-branches,too-many-statem
     parser.add_argument("--parent-id", type=str, default=None,
                         help="Confluence parent page ID.")
 
-    args = parser.parse_args()
+    return parser.parse_args()
 
-    log_message("STARTING DOCUMENTATION GENERATOR", "HEADER")
 
+def _save_locally(args, filepath: Path, relative_path: Path, result: dict, documentation) -> None:
+    # --- Guardado Local ---
+    output_filepath = Path(args.output_dir).resolve() / relative_path
+    output_filepath = output_filepath.with_suffix('.md')
+
+    # Función de guardado
+    save_output_file(output_filepath, documentation)
+
+    # --- Lógica de Subprocesos para ciertos tipos de ficheros
+    if args.extra_docs:
+        file_type = result.get("classification")
+        if file_type in ("ModelInference_API", "WebService_General"):
+            log_message(f"{file_type} file detected, generating Swagger...", "INFO")
+            subprocess.run(
+                f"python ./deployment/scripts/utils/swagger_generation.py {filepath} "
+                f"--output {args.swagger_output}",
+                shell=True, text=True, check=False)
+
+        elif file_type == "DataPipeline_ETL":
+            log_message(f"{file_type} file detected, generating Data Catalog...", "INFO")
+            subprocess.run(
+                f"python ./deployment/scripts/utils/data_catalog_generation.py {filepath} "
+                f"--output-dir {args.output_dir}/catalog",
+                shell=True, text=True, check=False)
+        else:
+            log_message(f"No extra documentation needed for {file_type} files", "INFO")
+
+
+def _upload_to_confluence(
+    args, confluence: _Confluence, filepath: Path, relative_path: Path, documentation
+) -> None:
+    # --- Lógica de escritura en Confluence ---
+    hierarchy_parts = tuple(relative_path.parts[:-1])
+    page_title = relative_path.stem
+    document_parent_id = args.parent_id
+
+    if hierarchy_parts:
+        if hierarchy_parts in confluence.hierarchy_cache:
+            document_parent_id = confluence.hierarchy_cache[hierarchy_parts]
+            log_message(f"Using cached parent ID for hierarchy {hierarchy_parts}.", "INFO")
+        else:
+            final_parent_id = ensure_page_hierarchy_exists(
+                client=confluence.client,
+                space_key=args.space,
+                hierarchy=list(hierarchy_parts),
+                base_parent_id=args.parent_id
+            )
+
+            if final_parent_id:
+                confluence.hierarchy_cache[hierarchy_parts] = final_parent_id
+                document_parent_id = final_parent_id
+            else:
+                log_message(
+                    f"Could not ensure parent hierarchy for {filepath}. "
+                    "Skipping upload.",
+                    "ERROR",
+                )
+                return
+
+    try:
+        create_or_update_confluence_page(
+            client=confluence.client,
+            space_key=args.space,
+            title=page_title,
+            body=documentation,
+            parent_id=document_parent_id
+        )
+    except Exception as e:  # pylint: disable=broad-exception-caught  # keep going with next file
+        log_message(f"Skipping upload for {page_title} due to an error: {e}", "WARNING")
+
+
+def _init_or_exit(args) -> tuple[Any, str, _Confluence]:
+    """Return the AI model, its instructions and the Confluence client (None if unused)."""
     # Inicialización de modelo
     model = setup_generative_model()
     if not model:
@@ -77,6 +155,39 @@ def main():  # pylint: disable=too-many-locals,too-many-branches,too-many-statem
         if not confluence_client:
             log_message("Could not establish a connection with Confluence. Exiting.", "ERROR")
             sys.exit(1)
+    return model, agent_instructions, _Confluence(confluence_client, {})  # {}: caché
+
+
+def _publish(args, confluence: _Confluence, filepath: Path, root_path: Path, result) -> None:
+    """Save or upload the documentation the AI generated for *filepath*."""
+    if not result or not isinstance(result, dict):
+        log_message(
+            f"Skipping file {filepath} due to processing error or invalid format.",
+            "WARNING",
+        )
+        return
+
+    documentation = result.get("documentation")
+    if not documentation:
+        log_message(f"No documentation was generated for {filepath}.", "WARNING")
+        return
+
+    # Usamos resolve() para asegurar que relative_to funcione
+    relative_path = filepath.resolve().relative_to(root_path)
+
+    if not args.confluence:
+        _save_locally(args, filepath, relative_path, result, documentation)
+    else:
+        _upload_to_confluence(args, confluence, filepath, relative_path, documentation)
+
+
+def main():
+    """Parse CLI args and generate the documentation for every selected file."""
+    args = _parse_args()
+
+    log_message("STARTING DOCUMENTATION GENERATOR", "HEADER")
+
+    model, agent_instructions, confluence = _init_or_exit(args)
 
     # Obtención de archivos
     files_to_process = get_files_to_process(args.path)
@@ -87,8 +198,6 @@ def main():  # pylint: disable=too-many-locals,too-many-branches,too-many-statem
     root_path = determine_root_path(files_to_process)
 
     log_message(f"{len(files_to_process)} file(s) will be processed.", "INFO")
-
-    hierarchy_cache = {}  # Caché para Confluence
 
     total_tokens_used = 0
     consumption_total = 0
@@ -127,87 +236,7 @@ def main():  # pylint: disable=too-many-locals,too-many-branches,too-many-statem
             "INFO",
         )
 
-        if not result or not isinstance(result, dict):
-            log_message(
-                f"Skipping file {filepath} due to processing error or invalid format.",
-                "WARNING",
-            )
-            continue
-
-        documentation = result.get("documentation")
-        if not documentation:
-            log_message(f"No documentation was generated for {filepath}.", "WARNING")
-            continue
-
-        # Usamos resolve() para asegurar que relative_to funcione
-        relative_path = filepath.resolve().relative_to(root_path)
-
-        if not args.confluence:
-            # --- Guardado Local ---
-            output_filepath = Path(args.output_dir).resolve() / relative_path
-            output_filepath = output_filepath.with_suffix('.md')
-
-            # Función de guardado
-            save_output_file(output_filepath, documentation)
-
-            # --- Lógica de Subprocesos para ciertos tipos de ficheros
-            if args.extra_docs:
-                file_type = result.get("classification")
-                if file_type in ("ModelInference_API", "WebService_General"):
-                    log_message(f"{file_type} file detected, generating Swagger...", "INFO")
-                    subprocess.run(
-                        f"python ./deployment/scripts/utils/swagger_generation.py {filepath} "
-                        f"--output {args.swagger_output}",
-                        shell=True, text=True, check=False)
-
-                elif file_type == "DataPipeline_ETL":
-                    log_message(f"{file_type} file detected, generating Data Catalog...", "INFO")
-                    subprocess.run(
-                        f"python ./deployment/scripts/utils/data_catalog_generation.py {filepath} "
-                        f"--output-dir {args.output_dir}/catalog",
-                        shell=True, text=True, check=False)
-                else:
-                    log_message(f"No extra documentation needed for {file_type} files", "INFO")
-
-        else:
-            # --- Lógica de escritura en Confluence ---
-            hierarchy_parts = tuple(relative_path.parts[:-1])
-            page_title = relative_path.stem
-            document_parent_id = args.parent_id
-
-            if hierarchy_parts:
-                if hierarchy_parts in hierarchy_cache:
-                    document_parent_id = hierarchy_cache[hierarchy_parts]
-                    log_message(f"Using cached parent ID for hierarchy {hierarchy_parts}.", "INFO")
-                else:
-                    final_parent_id = ensure_page_hierarchy_exists(
-                        client=confluence_client,
-                        space_key=args.space,
-                        hierarchy=list(hierarchy_parts),
-                        base_parent_id=args.parent_id
-                    )
-
-                    if final_parent_id:
-                        hierarchy_cache[hierarchy_parts] = final_parent_id
-                        document_parent_id = final_parent_id
-                    else:
-                        log_message(
-                            f"Could not ensure parent hierarchy for {filepath}. "
-                            "Skipping upload.",
-                            "ERROR",
-                        )
-                        continue
-
-            try:
-                create_or_update_confluence_page(
-                    client=confluence_client,
-                    space_key=args.space,
-                    title=page_title,
-                    body=documentation,
-                    parent_id=document_parent_id
-                )
-            except Exception as e:  # pylint: disable=broad-exception-caught  # keep going with next file
-                log_message(f"Skipping upload for {page_title} due to an error: {e}", "WARNING")
+        _publish(args, confluence, filepath, root_path, result)
 
     log_message("DOCUMENTATION PROCESS FINISHED", "HEADER")
 

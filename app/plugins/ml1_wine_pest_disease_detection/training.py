@@ -44,12 +44,8 @@ class TabularTrainResult:  # pylint: disable=too-many-instance-attributes  # pla
     n_test: int
 
 
-def train_tabular_experts(df: pd.DataFrame) -> TabularTrainResult:  # pylint: disable=too-many-locals
-    """Validate the input CSV and fit fresh RandomForest classifier/regressor instances.
-
-    Never mutates any already-loaded model — always builds brand-new sklearn estimators, so a
-    concurrent /predict against the base artifact is unaffected while this runs.
-    """
+def _validate_training_frame(df: pd.DataFrame) -> None:
+    """Reject a CSV without the required columns, with unknown labels or with < 10 rows."""
     missing = [c for c in REQUIRED_COLUMNS if c not in df.columns]
     if missing:
         raise ValueError(f"Faltan columnas obligatorias en el CSV de entrenamiento: {missing}")
@@ -65,6 +61,15 @@ def train_tabular_experts(df: pd.DataFrame) -> TabularTrainResult:  # pylint: di
             f"Se necesitan al menos 10 filas para separar un holdout de test del "
             f"{TRAIN_TEST_SIZE:.0%} (recibidas: {len(df)})."
         )
+
+
+def train_tabular_experts(df: pd.DataFrame) -> TabularTrainResult:
+    """Validate the input CSV and fit fresh RandomForest classifier/regressor instances.
+
+    Never mutates any already-loaded model — always builds brand-new sklearn estimators, so a
+    concurrent /predict against the base artifact is unaffected while this runs.
+    """
+    _validate_training_frame(df)
 
     name_to_id = {name: i for i, name in enumerate(CLASSES)}
     x_full = df[list(SENSOR_COLS)].copy()

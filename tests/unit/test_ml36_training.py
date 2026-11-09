@@ -16,6 +16,7 @@ import pandas as pd
 import pytest
 
 from app.domain.services.exceptions import ModelPersistenceError
+from app.domain.services import mlflow_artifacts
 from app.plugins.ml36_dairy_dnl_co2_emissions_optimizer import plugin as plugin_mod
 from app.plugins.ml36_dairy_dnl_co2_emissions_optimizer import training
 from app.plugins.ml36_dairy_dnl_co2_emissions_optimizer.constants import (
@@ -158,7 +159,7 @@ def test_train_uploads_the_new_model_and_its_scalers_to_mlflow(instance, monkeyp
     tracker.upload_artifacts.side_effect = (
         lambda d, artifact_path: shutil.copytree(d, store / artifact_path)
     )
-    monkeypatch.setattr(plugin_mod, "BaseMLflowTracker", MagicMock(return_value=tracker))
+    monkeypatch.setattr(mlflow_artifacts, "BaseMLflowTracker", MagicMock(return_value=tracker))
 
     resp = instance.train(data_path=str(csv), mlflow_run_id="run-1")
     # 12 cycles -> 8/2/2
@@ -175,6 +176,6 @@ def test_train_fails_when_mlflow_upload_fails(instance, monkeypatch, tmp_path):
     csv = tmp_path / "cycles.csv"
     _cycles().to_csv(csv, index=False)
     tracker = MagicMock(upload_artifacts=MagicMock(side_effect=ConnectionError("mlflow caído")))
-    monkeypatch.setattr(plugin_mod, "BaseMLflowTracker", MagicMock(return_value=tracker))
+    monkeypatch.setattr(mlflow_artifacts, "BaseMLflowTracker", MagicMock(return_value=tracker))
     with pytest.raises(ModelPersistenceError, match="mlflow caído"):
         instance.train(data_path=str(csv), mlflow_run_id="run-1")

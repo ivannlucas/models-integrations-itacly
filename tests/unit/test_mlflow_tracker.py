@@ -12,9 +12,11 @@ from app.domain.services.mlflow_tracker import BaseMLflowTracker
 class TestBaseMLflowTrackerEmptyRunId:
     """Empty run_id should produce no-ops, never touch mlflow."""
 
+    tracker: BaseMLflowTracker  # set by setup_method before each test
+
     def setup_method(self) -> None:
         """Create a tracker without run_id."""
-        self.tracker = BaseMLflowTracker(run_id="")  # pylint: disable=attribute-defined-outside-init
+        self.tracker = BaseMLflowTracker(run_id="")
 
     def test_is_connected_false(self) -> None:
         """The tracker reports itself as not connected."""
@@ -63,9 +65,11 @@ class TestBaseMLflowTrackerConnected:
 
     RUN_ID = "test-run-123"
 
+    tracker: BaseMLflowTracker  # set by setup_method before each test
+
     def setup_method(self) -> None:
         """Create a tracker bound to RUN_ID."""
-        self.tracker = BaseMLflowTracker(run_id=self.RUN_ID)  # pylint: disable=attribute-defined-outside-init
+        self.tracker = BaseMLflowTracker(run_id=self.RUN_ID)
 
     @patch("app.domain.services.mlflow_tracker.BaseMLflowTracker._build_client")
     def test_is_connected_true(self, mock_build: MagicMock) -> None:

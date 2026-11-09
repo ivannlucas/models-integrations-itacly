@@ -19,11 +19,12 @@ PredictBatchRequest`, devuelve 422).
 ## Resultados comprobados en local (2026-11-04)
 
 - **Golden (18 filas):** clase idéntica y score con diferencia máx. 1.6e-8.
-- **Test (379 filas):** acc 0.8707 y F1 0.6016, como la memoria, pero **AUC 0.7117 frente a 0.7185**
-  del original. Causa: en 6 filas con un sensor numérico vacío el plugin
-  (`preprocessing.py::_coerce`) rellena con `0.0` antes del preprocesador, mientras que el original
-  deja `NaN` y el preprocesador imputa la mediana. Con el `NaN` respetado, las 379 filas coinciden
-  exactamente (AUC 0.718529). Pendiente de corregir en el plugin; el golden no lo detectaba porque
-  ninguno de sus 18 casos tiene sensores vacíos.
-- **Train:** ~4 s, 1428/358 filas, acc 0.8436, F1 0.5942, AUC 0.7675 (igual que `verification_report.md`;
-  el mismo relleno con 0 afecta también al reentreno).
+- **Test (379 filas):** acc 0.8707, F1 0.6016 y AUC 0.7185, idénticos a la memoria. Hasta el
+  2026-11-09 el AUC salía 0.7117: el plugin rellenaba con `0.0` los sensores numéricos vacíos
+  (6 filas del test) antes del preprocesador, en vez de dejar que imputara la mediana como el
+  original. Corregido; ver `verification_report.md`.
+- **Train:** ~5 s, 1428/358 filas, acc 0.8324, F1 0.5833, AUC 0.7469. Con el relleno con 0
+  anterior salía acc 0.8436 / F1 0.5942 / AUC 0.7675: el 0 (pH 0, 0 kg) delataba al MLP que
+  faltaba la lectura, y en este CSV las filas con un sensor vacío tienen más incidencias (33 %
+  frente a 21 %). El original no usa esa señal (calcula `miss_sensor_any` pero no es feature) e
+  imputa la mediana, que es lo que hace ahora el plugin.

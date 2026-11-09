@@ -18,7 +18,7 @@ from app.plugins.ml21_cereals_price_spatial.constants import ARTIFACT_FOLDER_NAM
 PANEL_COLUMNS = ["date", "provincia", "cereal_predominante", "precio_provincial_lag_1", "x1"]
 
 
-class _FastSearch:  # pylint: disable=too-few-public-methods  # GridSearchCV stub
+class _FastSearch:
     """Grid/RandomizedSearchCV stand-in: fits the estimator once with few trees (seconds)."""
 
     def __init__(self, estimator, **_kwargs):
@@ -37,7 +37,7 @@ class _FastSearch:  # pylint: disable=too-few-public-methods  # GridSearchCV stu
 
 @pytest.fixture
 def fast_training(monkeypatch):
-    """Replace the train/test split with random data and GridSearchCV with _FastSearch."""
+    """Replace the train/test split with random data and both searches with _FastSearch."""
     rng = np.random.default_rng(0)
 
     def fake_prepare(df, h, task):
@@ -132,7 +132,7 @@ def test_mlflow_run_upload_excludes_the_training_csv(instance, tmp_path,
     """The MLflow run gets models and metadata but not the CSV, which stays in the base."""
     seen = {}
 
-    def capture(directory, artifact_path=None):  # pylint: disable=unused-argument
+    def capture(directory, **_kwargs):  # called as upload_artifacts(dir, artifact_path="model")
         copy = tmp_path / "uploaded"
         shutil.copytree(directory, copy)
         seen["files"] = set(os.listdir(copy))

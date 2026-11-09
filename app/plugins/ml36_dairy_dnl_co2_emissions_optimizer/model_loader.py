@@ -28,9 +28,10 @@ class DynamicMLP(nn.Module):
     (state_dict keys ``net.*``) loads without remapping.
     """
 
-    # pylint: disable-next=too-many-arguments,too-many-positional-arguments
+    # pylint: disable-next=too-many-arguments  # mirrors the delivered model's constructor
     def __init__(
         self,
+        *,
         input_size: int,
         output_size: int,
         num_layers: int,
@@ -92,10 +93,10 @@ def load_artifacts():
     )
     model.eval()
 
-    scaler_X = joblib.load(_store.path(SCALER_X_FILENAME))  # pylint: disable=invalid-name
-    scaler_Y = joblib.load(_store.path(SCALER_Y_FILENAME))  # pylint: disable=invalid-name
+    scaler_x = joblib.load(_store.path(SCALER_X_FILENAME))
+    scaler_y = joblib.load(_store.path(SCALER_Y_FILENAME))
     policy = load_policy()
 
     logger.info("ml36 artifacts loaded — DynamicMLP(%s layers x %s) + scalers + policy",
                 config["num_layers"], config["neurons"])
-    return model, scaler_X, scaler_Y, config, policy
+    return model, scaler_x, scaler_y, config, policy

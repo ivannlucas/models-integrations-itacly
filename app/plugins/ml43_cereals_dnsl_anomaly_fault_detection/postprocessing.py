@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, NamedTuple
 
 import numpy as np
 import torch
@@ -16,24 +16,27 @@ from app.plugins.ml43_cereals_dnsl_anomaly_fault_detection.constants import SENS
 logger = logging.getLogger(__name__)
 
 
-def scale_sequences(
-    X_arr: np.ndarray,  # pylint: disable=invalid-name  # public kwarg name
-    scaler_x,
-) -> np.ndarray:
+class XaiInputs(NamedTuple):
+    """What run_xai needs for a batch: explainer, background and the scaled model inputs."""
+
+    explainer: Any
+    background: np.ndarray | None
+    x_scaled: np.ndarray
+    stats_scaled: np.ndarray
+
+
+def scale_sequences(x_arr: np.ndarray, scaler_x) -> np.ndarray:
     """Scale raw sequences [N,T,F] with the fitted StandardScaler, if any."""
-    n_feat = X_arr.shape[-1]
+    n_feat = x_arr.shape[-1]
     if scaler_x is None:
-        return X_arr.astype(np.float32)
-    return scaler_x.transform(X_arr.reshape(-1, n_feat)).reshape(X_arr.shape).astype(np.float32)
+        return x_arr.astype(np.float32)
+    return scaler_x.transform(x_arr.reshape(-1, n_feat)).reshape(x_arr.shape).astype(np.float32)
 
 
-def compute_scaled_stats(
-    X_arr: np.ndarray,  # pylint: disable=invalid-name  # public kwarg name
-    scaler_num,
-) -> np.ndarray:
+def compute_scaled_stats(x_arr: np.ndarray, scaler_num) -> np.ndarray:
     """Compute per-window statistics for the fuzzy branch and scale them, if a scaler exists."""
     df_stats = stats_windows(
-        X_arr, feature_names=SENSOR_COLUMNS, stats_creation=STATS_CREATION, ddof=0
+        x_arr, feature_names=SENSOR_COLUMNS, stats_creation=STATS_CREATION, ddof=0
     )
     if scaler_num is None:
         return df_stats.values.astype(np.float32)
@@ -42,12 +45,12 @@ def compute_scaled_stats(
 
 def run_model(
     model,
-    X_scaled: np.ndarray,  # pylint: disable=invalid-name  # public kwarg name
+    x_scaled: np.ndarray,
     stats_scaled: np.ndarray,
     batch_size: int = 64,
 ) -> np.ndarray:
     """Run the DNF model over scaled sequences/stats and return anomaly probabilities [N]."""
-    x_tensor = torch.from_numpy(X_scaled)
+    x_tensor = torch.from_numpy(x_scaled)
     s_tensor = torch.from_numpy(stats_scaled)
     n_windows = x_tensor.shape[0]
 
@@ -82,7 +85,7 @@ def run_xai(
             anomaly_threshold=threshold,
         )
         return result["final_report"], None
-    except Exception as exc:  # pylint: disable=broad-exception-caught
+    except Exception as exc:  # pylint: disable=broad-exception-caught  # per-window best-effort XAI
         logger.warning("XAI failed for window: %s", exc)
         return None, str(exc)
 
@@ -92,31 +95,36 @@ def _stringify_timestamp(value: Any) -> str | None:
     return None if value is None else str(value)
 
 
-def format_batch_predictions(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
-    X_arr: np.ndarray,  # pylint: disable=invalid-name  # public kwarg name
+def _window_meta(windows: tuple, i: int) -> tuple:
+    """(cycle_id, timestamp_init, timestamp_end) of window ``i``; None for what is unknown."""
+    cycle_ids, window_timestamps = windows
+    cycle_id = cycle_ids[i] if cycle_ids else None
+    ts_init, ts_end = (None, None)
+    if window_timestamps is not None and i < len(window_timestamps):
+        ts_init, ts_end = window_timestamps[i]
+    return cycle_id, ts_init, ts_end
+
+
+def format_batch_predictions(
+    x_arr: np.ndarray,
     scores: np.ndarray,
-    cycle_ids: list | None,
     threshold: float,
-    explainer,
-    xai_background,
-    X_scaled: np.ndarray,  # pylint: disable=invalid-name  # public kwarg name
-    stats_scaled: np.ndarray,
-    window_timestamps: list | None = None,
+    xai: XaiInputs,
+    windows: tuple = (None, None),
 ) -> list[dict[str, Any]]:
-    """Build the per-window prediction records for a batch response, with XAI on anomalies."""
+    """Build the per-window prediction records for a batch response, with XAI on anomalies.
+
+    ``windows`` = (cycle_ids, window_timestamps), either of them None when unknown.
+    """
     predictions: list[dict[str, Any]] = []
     for i, score in enumerate(scores):
-        is_anomaly = bool(score >= threshold)
         # Feedback 3 (modelo 43-44, 09/09/2026): label was hardcoded in English —
         # ml45_cereals_dnsl_critical_point_detection/postprocessing.py already uses the
         # Spanish "Fallo"/"No Fallo" pair, mirrored here for consistency across models.
-        label = "Fallo" if is_anomaly else "No Fallo"
-        cycle_id = cycle_ids[i] if cycle_ids else None
-        ts_init, ts_end = (None, None)
-        if window_timestamps is not None and i < len(window_timestamps):
-            ts_init, ts_end = window_timestamps[i]
+        label = "Fallo" if bool(score >= threshold) else "No Fallo"
+        cycle_id, ts_init, ts_end = _window_meta(windows, i)
 
-        xai_values = {col: float(np.mean(X_arr[i, :, j])) for j, col in enumerate(SENSOR_COLUMNS)}
+        xai_values = {col: float(np.mean(x_arr[i, :, j])) for j, col in enumerate(SENSOR_COLUMNS)}
 
         # Feedback 3 (modelo 43-44 audit): XAI used to run only for anomalous windows
         # (is_anomaly), leaving every "No Fallo" row's XAI columns empty — not a failure,
@@ -125,7 +133,7 @@ def format_batch_predictions(  # pylint: disable=too-many-arguments,too-many-pos
         # señales, Alerta no confirmada, Anomalía confirmada), so it must run for every
         # window, not just the ones over the binary decision threshold.
         xai_result, xai_error = run_xai(
-            explainer, xai_background, X_scaled[i], stats_scaled[i], threshold,
+            xai.explainer, xai.background, xai.x_scaled[i], xai.stats_scaled[i], threshold,
         )
 
         predictions.append({

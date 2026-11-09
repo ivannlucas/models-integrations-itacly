@@ -26,17 +26,19 @@ def build_input_tensor(scaler, feature_cols, x_df, label: str = ""):
     return tensor, n_samples
 
 
-def run_inference(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
-        model, scaler, feature_cols, x_df, device, label: str = "") -> dict | None:
-    """Predice las 4 cabezas de un ciclo: clases, confianzas, n_samples y tensor de entrada."""
-    built = build_input_tensor(scaler, feature_cols, x_df, label=label)
+def run_inference(ctx: dict, x_df, device, label: str = "") -> dict | None:
+    """Predice las 4 cabezas de un ciclo: clases, confianzas, n_samples y tensor de entrada.
+
+    ``ctx`` aporta ``model``, ``scaler`` y ``feature_cols``.
+    """
+    built = build_input_tensor(ctx["scaler"], ctx["feature_cols"], x_df, label=label)
     if built is None:
         return None
     cpu_tensor, n_samples = built
     input_tensor = cpu_tensor.to(device)
 
     with torch.no_grad():
-        p_foul, p_valv, p_bomb, p_acum = model(input_tensor)
+        p_foul, p_valv, p_bomb, p_acum = ctx["model"](input_tensor)
         probs = [torch.softmax(p, dim=1) for p in [p_foul, p_valv, p_bomb, p_acum]]
         preds = [p.argmax(1).item() for p in probs]
         confidences = [p.max(1).values.item() for p in probs]

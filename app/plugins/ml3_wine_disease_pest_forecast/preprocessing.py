@@ -8,9 +8,6 @@ from __future__ import annotations
 
 import pandas as pd
 
-# X / X_tensor son los nombres del código entregado (predictor.py).
-# pylint: disable=invalid-name
-
 from app.plugins.ml3_wine_disease_pest_forecast.constants import (
     DATE_COLUMN,
     MODEL_FEATURES,
@@ -57,8 +54,9 @@ def build_window_tensor(
 ) -> tuple:
     """Build the (1, window, n_features) scaled tensor for a single series' last window.
 
-    Returns (X_tensor, last_fecha, window_df). ``window_df`` is the post-feature-engineering
-    window, used to snapshot the last raw row for the XAI service.
+    Returns (x_tensor, last_fecha, window_df); ``x_tensor`` is ``X_tensor`` in the delivered
+    predictor.py. ``window_df`` is the post-feature-engineering window, used to snapshot the
+    last raw row for the XAI service.
     """
     feats = model_features or MODEL_FEATURES
     if date_column in series_df.columns:
@@ -67,10 +65,10 @@ def build_window_tensor(
 
     window_df = apply_feature_engineering(series_df, date_column=date_column)
 
-    X = scaler.transform(window_df[feats])
-    X_tensor = X.reshape(1, window_size, len(feats))
+    x_scaled = scaler.transform(window_df[feats])
+    x_tensor = x_scaled.reshape(1, window_size, len(feats))
     last_fecha = window_df[date_column].iloc[-1] if date_column in window_df.columns else None
-    return X_tensor, last_fecha, window_df
+    return x_tensor, last_fecha, window_df
 
 
 def prepare_series_groups(

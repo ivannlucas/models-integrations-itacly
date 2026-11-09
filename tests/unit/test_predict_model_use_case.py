@@ -7,6 +7,8 @@ JSON-encoding step, with ``PydanticSerializationError: Unable to serialize unkno
 ``PredictModelUseCase.execute()`` now normalizes every plugin's response before returning
 it, so this is tested once here instead of per-plugin.
 """
+# Exact type checks on purpose: np.float64 subclasses float, so isinstance would hide the leak.
+# pylint: disable=unidiomatic-typecheck
 from __future__ import annotations
 
 import json
@@ -71,8 +73,8 @@ def test_execute_batch_normalizes_numpy_types_for_ml45():
 
     row = result.predictions[0]
     # Exact type on purpose: np.float64 subclasses float, so isinstance would hide the leak.
-    assert type(row["cycle_id"]) is int  # pylint: disable=unidiomatic-typecheck
-    assert type(row["anomaly_probability"]) is float  # pylint: disable=unidiomatic-typecheck
+    assert type(row["cycle_id"]) is int
+    assert type(row["anomaly_probability"]) is float
     # The real bug only ever surfaced here — at JSON-encoding time.
     json.dumps(result.model_dump(mode="json"))
 
@@ -88,7 +90,7 @@ def test_execute_batch_normalizes_numpy_types_for_ml28():
 
     row = result.predictions[0]
     # Exact type on purpose: np.float64 subclasses float, so isinstance would hide the leak.
-    assert type(row["purchase_trigger_flag"]) is int  # pylint: disable=unidiomatic-typecheck
-    assert type(row["order_quantity_tons"]) is float  # pylint: disable=unidiomatic-typecheck
-    assert type(result.summary["row_count"]) is int  # pylint: disable=unidiomatic-typecheck
+    assert type(row["purchase_trigger_flag"]) is int
+    assert type(row["order_quantity_tons"]) is float
+    assert type(result.summary["row_count"]) is int
     json.dumps(result.model_dump(mode="json"))

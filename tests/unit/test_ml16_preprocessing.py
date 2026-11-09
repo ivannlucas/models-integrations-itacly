@@ -75,7 +75,7 @@ def test_prepare_inference_input_missing_required_column_raises_value_error():
         prepare_inference_input(df, train_config, scalers={})
 
 
-class _FakeModel:  # pylint: disable=too-few-public-methods
+class _FakeModel:
     """Stand-in for a fitted XGBoost/LogReg classifier."""
 
     def __init__(self, probas):

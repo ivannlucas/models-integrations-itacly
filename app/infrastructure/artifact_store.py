@@ -105,6 +105,41 @@ def _is_directory_marker(obj: dict, objects: list[dict]) -> bool:
     return any(other["Key"].startswith(prefix) for other in objects)
 
 
+def _list_remote_files(s3, bucket: str, remote_prefix: str, version: str) -> list[dict]:
+    """Return the S3 objects of *version* under *remote_prefix*, without folder markers."""
+    # Collect all remote objects under the version prefix
+    paginator = s3.get_paginator("list_objects_v2")
+    objects = [
+        obj
+        for page in paginator.paginate(Bucket=bucket, Prefix=remote_prefix)
+        for obj in page.get("Contents", [])
+    ]
+    if version == BASE_VERSION:
+        # v0 lives at the model root, next to current.json and versions/: those are not its
+        # files.
+        objects = [
+            obj for obj in objects
+            if obj["Key"][len(remote_prefix):].split("/", 1)[0] not in _RESERVED_TOP_LEVEL
+        ]
+    return [obj for obj in objects if not _is_directory_marker(obj, objects)]
+
+
+def _pending_downloads(
+    remote_files: list[dict], remote_prefix: str, local_dir: Path
+) -> list[tuple[str, Path]]:
+    """Return ``(key, local_path)`` for the remote files missing or changed locally."""
+    # Filter to only files that need downloading
+    pending = []
+    for obj in remote_files:
+        relative_path = obj["Key"][len(remote_prefix):]
+        local_path = local_dir / relative_path
+        if _file_needs_download(local_path, obj["Size"]):
+            pending.append((obj["Key"], local_path))
+        else:
+            logger.info("Skipping (unchanged): %s", relative_path)
+    return pending
+
+
 def download_s3_file(s3_uri: str) -> str:
     """Download an ``s3://bucket/key`` object to a local temp file and return its path."""
     without_prefix = s3_uri[len("s3://"):]
@@ -386,7 +421,7 @@ class ArtifactStore:
 
     # ── S3 download ───────────────────────────────────────────────────────────
 
-    def _download_all(self) -> None:  # pylint: disable=too-many-locals
+    def _download_all(self) -> None:
         """Download all files of the active version from S3, skipping unchanged ones."""
         try:
             from tqdm import tqdm  # type: ignore[import]  # pylint: disable=import-outside-toplevel
@@ -400,21 +435,7 @@ class ArtifactStore:
         local_dir = self._version_dir(version)
         local_dir.mkdir(parents=True, exist_ok=True)
 
-        # Collect all remote objects under the version prefix
-        paginator = s3.get_paginator("list_objects_v2")
-        objects = [
-            obj
-            for page in paginator.paginate(Bucket=bucket, Prefix=remote_prefix)
-            for obj in page.get("Contents", [])
-        ]
-        if version == BASE_VERSION:
-            # v0 lives at the model root, next to current.json and versions/: those are not its
-            # files.
-            objects = [
-                obj for obj in objects
-                if obj["Key"][len(remote_prefix):].split("/", 1)[0] not in _RESERVED_TOP_LEVEL
-            ]
-        remote_files = [obj for obj in objects if not _is_directory_marker(obj, objects)]
+        remote_files = _list_remote_files(s3, bucket, remote_prefix, version)
 
         if not remote_files:
             logger.warning(
@@ -422,15 +443,7 @@ class ArtifactStore:
             )
             return
 
-        # Filter to only files that need downloading
-        pending = []
-        for obj in remote_files:
-            relative_path = obj["Key"][len(remote_prefix):]
-            local_path = local_dir / relative_path
-            if _file_needs_download(local_path, obj["Size"]):
-                pending.append((obj["Key"], local_path))
-            else:
-                logger.info("Skipping (unchanged): %s", relative_path)
+        pending = _pending_downloads(remote_files, remote_prefix, local_dir)
 
         if not pending:
             logger.info("All artifact files are up-to-date. No download needed.")

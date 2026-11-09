@@ -31,7 +31,6 @@ Plugin adaptations, all deliberate:
   diagnostics of the original repo and do not change the artifacts.
 """
 
-# pylint: disable=line-too-long  # repo limit is 120 (.flake8), enforced by flake8
 from __future__ import annotations
 
 import json
@@ -126,22 +125,58 @@ def validate_training_frame(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-# pylint: disable-next=too-many-locals
-def train_multihorizon(df: pd.DataFrame) -> TrainingResult:
-    """run_multihorizon_training with the default horizons and selection metrics."""
-    started = time.perf_counter()
-    df = validate_training_frame(df)
-    reg_horizons, clf_horizons = core.REG_HORIZONS, core.CLF_HORIZONS
-    all_horizons = sorted(set(reg_horizons) | set(clf_horizons))
-    train_end = core.TRAIN_END
+def _walk_forward_reg(
+    df: pd.DataFrame, features: list[str], horizons, train_end, reg_models: dict
+) -> dict:
+    """Step 5 of train.py: walk-forward regression of every model on every REG horizon."""
+    reg_results: dict[tuple[str, int], dict] = {}
+    for h in horizons:
+        target_col = f"ret_{h}m"
+        for mname, factory in reg_models.items():
+            y_te, preds, dates = core.walk_forward_regression(
+                df, features, target_col, train_end, factory
+            )
+            if len(y_te) == 0:
+                continue
+            metrics = core.eval_regression(y_te, preds, f"{mname}_h{h}m")
+            metrics.update(y_test=y_te, preds=preds, dates=dates)
+            reg_results[(mname, h)] = metrics
+    return reg_results
 
-    # -- 1. rows without target only serve inference
-    df = df.dropna(subset=[core.TARGET_REG]).reset_index(drop=True)
-    df[core.TARGET_CLF] = df[core.TARGET_CLF].astype(int)
 
-    # -- 2. multi-horizon targets
-    df = core.build_multihorizon_targets(df, all_horizons)
+def _walk_forward_clf(df: pd.DataFrame, features: list[str], horizons, train_end) -> dict:
+    """Step 6 of train.py: walk-forward classification of every model on every CLF horizon."""
+    clf_results: dict[tuple[str, int], dict] = {}
+    for h in horizons:
+        target_col = f"dir_{h}m"
+        for mname, factory in CLF_FACTORIES.items():
+            y_te, preds, probs, dates = core.walk_forward_classification(
+                df, features, target_col, train_end, factory
+            )
+            if len(y_te) == 0:
+                continue
+            metrics = core.eval_classification(y_te, preds, probs, f"{mname}_h{h}m")
+            metrics.update(y_test=y_te, dates=dates)
+            clf_results[(mname, h)] = metrics
+    return clf_results
 
+
+def _best_per_horizon(results: dict, models, horizons, metric: str, task: str) -> dict[int, str]:
+    """Step 7 of train.py: the delivered _select_best_model per horizon with results."""
+    select = core._select_best_model  # pylint: disable=protected-access  # vendored, verbatim
+    return {
+        h: select(
+            {m: results[(m, h)] for m in models if (m, h) in results},
+            metric,
+            task,
+        )
+        for h in horizons
+        if any((m, h) in results for m in models)
+    }
+
+
+def _features_and_lasso_alpha(df: pd.DataFrame, reg_horizons, train_end) -> tuple[list[str], float]:
+    """Steps 3-4 of train.py: STRICT feature selection and the Lasso alpha, both on train."""
     # -- 3. STRICT feature selection on train, shared by every horizon
     ref_target = f"ret_{min(reg_horizons)}m"
     df_ref = df.dropna(subset=[ref_target]).copy()
@@ -164,55 +199,38 @@ def train_multihorizon(df: pd.DataFrame) -> TrainingResult:
     train_df = df_ref_clean[df_ref_clean["date"] <= train_end]
     lasso_alpha = core.best_lasso_alpha(StandardScaler().fit_transform(train_df[features].values),
                                         train_df[ref_target].values)
+    return features, lasso_alpha
+
+
+def train_multihorizon(df: pd.DataFrame) -> TrainingResult:
+    """run_multihorizon_training with the default horizons and selection metrics."""
+    started = time.perf_counter()
+    df = validate_training_frame(df)
+    reg_horizons, clf_horizons = core.REG_HORIZONS, core.CLF_HORIZONS
+    all_horizons = sorted(set(reg_horizons) | set(clf_horizons))
+    train_end = core.TRAIN_END
+
+    # -- 1. rows without target only serve inference
+    df = df.dropna(subset=[core.TARGET_REG]).reset_index(drop=True)
+    df[core.TARGET_CLF] = df[core.TARGET_CLF].astype(int)
+
+    # -- 2. multi-horizon targets
+    df = core.build_multihorizon_targets(df, all_horizons)
+
+    features, lasso_alpha = _features_and_lasso_alpha(df, reg_horizons, train_end)
 
     # -- 5. walk-forward regression
     reg_models = _reg_factories(lasso_alpha)
-    reg_results: dict[tuple[str, int], dict] = {}
-    for h in reg_horizons:
-        target_col = f"ret_{h}m"
-        for mname, factory in reg_models.items():
-            y_te, preds, dates = core.walk_forward_regression(
-                df, features, target_col, train_end, factory
-            )
-            if len(y_te) == 0:
-                continue
-            metrics = core.eval_regression(y_te, preds, f"{mname}_h{h}m")
-            metrics.update(y_test=y_te, preds=preds, dates=dates)
-            reg_results[(mname, h)] = metrics
+    reg_results = _walk_forward_reg(df, features, reg_horizons, train_end, reg_models)
 
     # -- 6. walk-forward classification
-    clf_results: dict[tuple[str, int], dict] = {}
-    for h in clf_horizons:
-        target_col = f"dir_{h}m"
-        for mname, factory in CLF_FACTORIES.items():
-            y_te, preds, probs, dates = core.walk_forward_classification(
-                df, features, target_col, train_end, factory
-            )
-            if len(y_te) == 0:
-                continue
-            metrics = core.eval_classification(y_te, preds, probs, f"{mname}_h{h}m")
-            metrics.update(y_test=y_te, dates=dates)
-            clf_results[(mname, h)] = metrics
+    clf_results = _walk_forward_clf(df, features, clf_horizons, train_end)
 
     # -- 7. best model per horizon and task
-    best_reg = {
-        h: core._select_best_model(  # pylint: disable=protected-access
-            {m: reg_results[(m, h)] for m in reg_models if (m, h) in reg_results},
-            REG_SELECTION_METRIC,
-            "reg",
-        )
-        for h in reg_horizons
-        if any((m, h) in reg_results for m in reg_models)
-    }
-    best_clf = {
-        h: core._select_best_model(  # pylint: disable=protected-access
-            {m: clf_results[(m, h)] for m in CLF_FACTORIES if (m, h) in clf_results},
-            CLF_SELECTION_METRIC,
-            "clf",
-        )
-        for h in clf_horizons
-        if any((m, h) in clf_results for m in CLF_FACTORIES)
-    }
+    best_reg = _best_per_horizon(reg_results, reg_models, reg_horizons, REG_SELECTION_METRIC, "reg")
+    best_clf = _best_per_horizon(
+        clf_results, CLF_FACTORIES, clf_horizons, CLF_SELECTION_METRIC, "clf"
+    )
 
     result = TrainingResult(
         features=features, lasso_alpha=lasso_alpha, best_reg=best_reg, best_clf=best_clf,

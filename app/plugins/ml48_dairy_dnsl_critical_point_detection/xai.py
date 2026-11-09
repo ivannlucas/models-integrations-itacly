@@ -124,7 +124,7 @@ def _get_target_layer(model, layer_name: str):
     return module
 
 
-def compute_gradcam(  # pylint: disable=too-many-locals
+def compute_gradcam(
         model, input_tensor, target_head: int = 0, target_class: int | None = None,
         target_layer_name: str = GRADCAM_LAYER):
     """Grad-CAM temporal (1, n_sensors, T) -> (cam (T,) en [0,1], predicción)."""
@@ -162,13 +162,12 @@ def compute_gradcam(  # pylint: disable=too-many-locals
         handle_fwd.remove()
         handle_bwd.remove()
 
-    prediction = {
+    return cam, {
         "head": HEAD_NAMES[target_head],
         "predicted_class": target_class,
         "class_name": CLASS_NAMES[target_class],
         "confidence": confidence,
     }
-    return cam, prediction
 
 
 def compute_gradcam_all_heads(model, input_tensor, target_layer_name: str = GRADCAM_LAYER):
@@ -211,7 +210,7 @@ class _HeadWrapper(torch.nn.Module):
         return self.model(x)[self.target_head]
 
 
-def compute_shap_values(  # pylint: disable=too-many-locals
+def compute_shap_values(
         model, x_background, x_explain, feature_cols, target_head: int = 0) -> dict:
     """|SHAP| medio por canal agrupado por sensor base y normalizado (suma = 1)."""
     # import perezoso: dependencia pesada, solo necesaria si se pide SHAP
@@ -230,7 +229,11 @@ def compute_shap_values(  # pylint: disable=too-many-locals
         all_shap = np.abs(raw)
 
     channel_importance = np.asarray(all_shap.mean(axis=(0, 2))).flatten()
+    return _sensor_importance(channel_importance, feature_cols)
 
+
+def _sensor_importance(channel_importance: np.ndarray, feature_cols) -> dict[str, float]:
+    """Sum the channel importances per base sensor and normalise them (sum = 1)."""
     sensor_importance: dict[str, float] = {}
     for i, col in enumerate(feature_cols):
         for sensor in SENSOR_COLUMNS:
@@ -338,9 +341,30 @@ def generate_maintenance_recommendations(
     return recommendations
 
 
-def build_local_report(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
+def _critical_window(cam) -> tuple:
+    """(inicio_s, fin_s, intensidad) del pico Grad-CAM más intenso; (None, None, 0.0) si no hay."""
+    peaks = find_temporal_peaks(cam)
+    if not peaks:
+        return None, None, 0.0
+    start, end, intensity = max(peaks, key=lambda p: p[2])
+    return (
+        round(start / SAMPLING_RATE_HZ, 1),
+        round((end + 1) / SAMPLING_RATE_HZ, 1),
+        round(intensity, 4),
+    )
+
+
+def _top_sensor(shap_all: dict | None, head: str) -> tuple:
+    """(sensor más relevante, su importancia SHAP) de ``head``; (None, None) sin SHAP."""
+    if shap_all and shap_all.get(head):
+        top_sensor = max(shap_all[head], key=shap_all[head].get)
+        return top_sensor, round(shap_all[head][top_sensor], 4)
+    return None, None
+
+
+def build_local_report(  # pylint: disable=too-many-arguments
         predictions, confidences, gradcam_results, shap_all: dict | None,
-        cycle_id=None, include_cam: bool = False) -> list[dict]:
+        *, cycle_id=None, include_cam: bool = False) -> list[dict]:
     """Informe local por componente (equivalente a xai_report_cycle.csv).
 
     Sin SHAP: ``sensor_mas_relevante`` / ``importancia_sensor`` = None y el riesgo se calcula sin el
@@ -354,31 +378,16 @@ def build_local_report(  # pylint: disable=too-many-arguments,too-many-positiona
 
     rows = []
     for i, head in enumerate(HEAD_NAMES):
-        cam = gradcam_results[i]["cam"]
-        peaks = find_temporal_peaks(cam)
-        if peaks:
-            start, end, intensity = max(peaks, key=lambda p: p[2])
-            win = (
-                round(start / SAMPLING_RATE_HZ, 1),
-                round((end + 1) / SAMPLING_RATE_HZ, 1),
-                round(intensity, 4),
-            )
-        else:
-            win = (None, None, 0.0)
-
-        top_sensor = top_importance = None
-        if shap_all and shap_all.get(head):
-            top_sensor = max(shap_all[head], key=shap_all[head].get)
-            top_importance = round(shap_all[head][top_sensor], 4)
-
+        win = _critical_window(gradcam_results[i]["cam"])
+        top = _top_sensor(shap_all, head)
         rec = recs[head]
         row = {
             "cycle_id": cycle_id,
             "componente": head,
             "prediccion": CLASS_NAMES[predictions[i]],
             "confianza": round(confidences[i], 4),
-            "sensor_mas_relevante": top_sensor,
-            "importancia_sensor": top_importance,
+            "sensor_mas_relevante": top[0],
+            "importancia_sensor": top[1],
             "ventana_critica_inicio_s": win[0],
             "ventana_critica_fin_s": win[1],
             "intensidad_ventana": win[2],
@@ -390,7 +399,7 @@ def build_local_report(  # pylint: disable=too-many-arguments,too-many-positiona
             "riesgo_incluye_shap": shap_all is not None,
         }
         if include_cam:
-            row["gradcam_cam"] = [round(float(v), 4) for v in cam]
+            row["gradcam_cam"] = [round(float(v), 4) for v in gradcam_results[i]["cam"]]
         rows.append(row)
     return rows
 
@@ -446,8 +455,22 @@ def build_xai_result(local_rows: list[dict]) -> dict:
     return result
 
 
-def explain_cycle(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
-        model, input_tensor, predictions, confidences, feature_cols, cycle_id=None,
+def _cycle_shap(model, tensor, shap_background, feature_cols) -> dict:
+    """SHAP de las 4 cabezas para un ciclo (usa el propio ciclo si no hay background)."""
+    if shap_background is None:
+        logger.warning(
+            "No packaged SHAP background; using the cycle itself as background "
+            "(degenerate)"
+        )
+        background = tensor.detach().cpu()
+    else:
+        background = torch.as_tensor(shap_background, dtype=torch.float32)
+    seed_xai()
+    return compute_shap_all_heads(model, background, tensor, feature_cols)
+
+
+def explain_cycle(  # pylint: disable=too-many-arguments
+        model, input_tensor, predictions, confidences, feature_cols, *, cycle_id=None,
         include_shap: bool = False, shap_background=None, include_cam: bool = False):
     """XAI de un ciclo -> ``(xai_result, xai_error)``.
 
@@ -462,21 +485,12 @@ def explain_cycle(  # pylint: disable=too-many-arguments,too-many-positional-arg
             gradcam = compute_gradcam_all_heads(model, tensor)
             shap_all = None
             if include_shap:
-                if shap_background is None:
-                    logger.warning(
-                        "No packaged SHAP background; using the cycle itself as background "
-                        "(degenerate)"
-                    )
-                    background = tensor.detach().cpu()
-                else:
-                    background = torch.as_tensor(shap_background, dtype=torch.float32)
-                seed_xai()
-                shap_all = compute_shap_all_heads(model, background, tensor, feature_cols)
+                shap_all = _cycle_shap(model, tensor, shap_background, feature_cols)
         rows = build_local_report(
             predictions, confidences, gradcam, shap_all, cycle_id=cycle_id,
             include_cam=include_cam,
         )
         return build_xai_result(rows), None
-    except Exception as exc:  # pylint: disable=broad-exception-caught
+    except Exception as exc:  # pylint: disable=broad-exception-caught  # never breaks the cycle
         logger.warning("XAI failed for cycle %s: %s", cycle_id, exc)
         return None, str(exc)

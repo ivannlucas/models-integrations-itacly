@@ -156,9 +156,9 @@ def invoke_model(model: genai.GenerativeModel, prompt: str, is_json_output: bool
         return None
 
 
-def process_file_with_ia(  # pylint: disable=too-many-arguments,too-many-positional-arguments
+def process_file_with_ia(  # pylint: disable=too-many-arguments
         model: Any, agent_instructions: str, code_content: str,
-        filepath: str, language: str = "python",
+        filepath: str, *, language: str = "python",
         is_json_output: bool = True,
 ) -> tuple[Optional[Dict[str, Any] | str], int, float]:
     """

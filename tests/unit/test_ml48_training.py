@@ -5,6 +5,7 @@ preprocess.py), so ml48's trainer is the ml47 port: ``full`` = ``main.py train``
 ``fine_tune`` = ``main.py fine_tune``. On top of ml47, the retrained model carries its own SHAP
 background. The synthetic cycles below are small but shaped like the delivered CSVs.
 """
+# pylint: disable=protected-access  # tests of the plugin/trainer internals
 import json
 import shutil
 from pathlib import Path
@@ -15,6 +16,7 @@ import pytest
 import torch
 from sklearn.preprocessing import StandardScaler
 
+from app.domain.services import mlflow_artifacts
 from app.plugins.ml48_dairy_dnsl_critical_point_detection import (
     constants,
     mlflow_utils,
@@ -117,7 +119,7 @@ def test_augmentation_noise_is_the_originals_global_numpy_stream():
     # default_rng differs.
     df = _cycles(n_cycles=6)
     np.random.seed(42)
-    augmented, ids = trainer._augment_train_cycles(  # pylint: disable=protected-access
+    augmented, ids = trainer._augment_train_cycles(
         df, np.array([4, 1, 3])
     )
     assert list(ids[3:]) == [6, 7, 8]  # copies of 1, 3, 4, ascending like the original + 50000
@@ -249,6 +251,7 @@ def fixture_plugin_with_mlflow(monkeypatch, tmp_path):
             return str(shutil.copytree(source, Path(dest_dir) / artifact_path))
 
     monkeypatch.setattr(mlflow_utils, "BaseMLflowTracker", FolderTracker)
+    monkeypatch.setattr(mlflow_artifacts, "BaseMLflowTracker", FolderTracker)
     base, scaler, cols = _base_artifacts()
     monkeypatch.setattr(plugin, "load_artifacts_from_dir", lambda path: (base, scaler, cols, 45.0))
     monkeypatch.setattr(plugin, "load_shap_background", lambda path: None)
@@ -281,7 +284,7 @@ def test_train_registers_a_new_model_in_mlflow_and_predict_uses_it(
     meta = json.loads(meta_path.read_text())
     assert len(meta["cycle_ids"]) == response.n_test
 
-    ctx = instance._context("run-ft")  # pylint: disable=protected-access
+    ctx = instance._context("run-ft")
     try:
         registered = ctx["model"].state_dict()
         assert any(
@@ -292,7 +295,7 @@ def test_train_registers_a_new_model_in_mlflow_and_predict_uses_it(
         assert ctx["shap_background"].shape == (response.n_test, 28, 600)
     finally:
         shutil.rmtree(ctx["temp_dir"], ignore_errors=True)
-    served = instance._model.state_dict()  # pylint: disable=protected-access
+    served = instance._model.state_dict()
     assert all(torch.equal(served[k].cpu(), v) for k, v in base_before.items())
 
 

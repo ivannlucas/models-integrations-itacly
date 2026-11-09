@@ -4,7 +4,6 @@ Kept inside the plugin instead of app/domain/services/exceptions.py because this
 scoped to not modify app/domain (same approach as ml26); they can be promoted to the domain
 module in a later refactor.
 """
-# pylint: disable=line-too-long  # repo limit is 120 (.flake8), enforced by flake8
 
 
 class SeriesContractError(ValueError):

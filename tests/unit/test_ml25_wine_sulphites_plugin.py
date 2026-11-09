@@ -115,7 +115,7 @@ _WINE_COLUMNS = (
 _WINE_ROW = "7.0,0.27,0.36,20.7,0.045,{free},170,1.001,3.0,0.45,8.8"
 
 
-class _FakeBound:  # pylint: disable=too-few-public-methods
+class _FakeBound:
     """Bound SO2 model returning a constant 90 mg/L (in the log1p space the plugin decodes)."""
 
     def predict(self, rows):
@@ -123,7 +123,7 @@ class _FakeBound:  # pylint: disable=too-few-public-methods
         return np.log1p(np.full(len(rows), 90.0))
 
 
-class _FakeQuality:  # pylint: disable=too-few-public-methods
+class _FakeQuality:
     """Quality model rising gently along the simulated doses, so there is a real optimum."""
 
     def predict(self, rows):

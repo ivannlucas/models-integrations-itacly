@@ -14,18 +14,8 @@ from app.plugins.ml18_meat_spatial_price_forecast.preprocessing import (
 )
 
 
-def run_inference(bundle: dict, rows: list[dict]) -> list[dict]:  # pylint: disable=too-many-locals
-    """Derive the modeling panel from raw rows and predict next-month price per group.
-
-    Returns a list of {"CCAA", "Producto", "Fecha", "predicted_price", "xai_feature_values"} —
-    one per (CCAA, Producto) group with enough historical rows (see build_sequences).
-    xai_feature_values are the unscaled FEATURE_COLUMNS of the window's most recent month and
-    xai_feature_window the whole unscaled LOOKBACK-month window the GRU scored — the input the
-    explainability service explains.
-    """
-    panel = build_modeling_panel(rows)
-    entries = build_sequences(panel)
-
+def _predict_prices(bundle: dict, entries: list[dict]) -> np.ndarray:
+    """Scale the stacked windows with the frozen x scaler, run the GRU, unscale the prices."""
     x_scaler = bundle["x_scaler"]
     y_scaler = bundle["y_scaler"]
     model = bundle["model"]
@@ -37,7 +27,21 @@ def run_inference(bundle: dict, rows: list[dict]) -> list[dict]:  # pylint: disa
     windows_scaled = flat_scaled.reshape(n_samples, lookback, n_features).astype(np.float32)
 
     y_pred_scaled = model.predict(windows_scaled, verbose=0).ravel()
-    y_pred = y_scaler.inverse_transform(y_pred_scaled.reshape(-1, 1)).ravel()
+    return y_scaler.inverse_transform(y_pred_scaled.reshape(-1, 1)).ravel()
+
+
+def run_inference(bundle: dict, rows: list[dict]) -> list[dict]:
+    """Derive the modeling panel from raw rows and predict next-month price per group.
+
+    Returns a list of {"CCAA", "Producto", "Fecha", "predicted_price", "xai_feature_values"} —
+    one per (CCAA, Producto) group with enough historical rows (see build_sequences).
+    xai_feature_values are the unscaled FEATURE_COLUMNS of the window's most recent month and
+    xai_feature_window the whole unscaled LOOKBACK-month window the GRU scored — the input the
+    explainability service explains.
+    """
+    panel = build_modeling_panel(rows)
+    entries = build_sequences(panel)
+    y_pred = _predict_prices(bundle, entries)
 
     return [
         {

@@ -10,22 +10,28 @@ import csv
 import logging
 import shutil
 import tempfile
-from datetime import datetime, timezone
+from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import torch
 
-from app.application.dto.stats_dto import InputField, OutputField, RuntimeStats, StatsResponse
+from app.application.dto.stats_dto import InputField, OutputField, StatsResponse
 from app.domain.ports.model_plugin_port import ModelPluginPort
 from app.domain.services.exceptions import (
     InvalidAudioError,
     ModelNotLoadedError,
-    ModelPersistenceError,
     UnsupportedMachineConfigurationError,
     UserModelUnavailableError,
 )
-from app.domain.services.mlflow_tracker import BaseMLflowTracker
+from app.domain.services.mlflow_artifacts import (
+    add_mlflow_run_to_stats,
+    removing_dir,
+    require_train_tracker,
+    upload_dir_to_mlflow,
+)
+from app.domain.services.plugin_runtime import PluginRuntimeMixin
 from app.infrastructure.archive import safe_extract_zip
 from app.infrastructure.artifact_store import local_file_path
 from app.plugins.ml41_meat_curing_machinery_acoustic_anomaly.constants import (
@@ -82,18 +88,137 @@ from app.plugins.ml41_meat_curing_machinery_acoustic_anomaly.trainer import (
     fine_tune,
 )
 
+if TYPE_CHECKING:
+    from app.domain.services.mlflow_tracker import BaseMLflowTracker
+
 logger = logging.getLogger(__name__)
 
 
-class Ml41MeatCuringMachineryAcousticAnomalyPlugin(ModelPluginPort):
+@dataclass
+class _FittedCombination:
+    """A combination freshly trained with the original procedure, before evaluation/staging."""
+
+    model: Any
+    device: torch.device
+    norm: tuple[float, float]  # (norm_mean, norm_std) of the train split
+    train_data: np.ndarray
+    val_data: np.ndarray
+    best_val_loss: float
+    maha: tuple  # (maha_mean, maha_inv_cov, maha_pca)
+
+
+def _split_normal_clips(combo: tuple, hyperparams: dict) -> tuple:
+    """Load the normal clips of ``combo`` and split/normalize them as the original.
+
+    preprocess.py::process_machine_id: RandomState(split_seed=42) permutation, first
+    int(0.8 * n) clips to train, the rest to val. Normalization stats come from the train
+    split (MIMIIDataset). Returns ``(train_data, val_data, (norm_mean, norm_std))``.
+    """
+    machine, machine_id, snr, combo_root = combo
+    normal_wavs = sorted((combo_root / "normal").glob("*.wav"))
+    if not normal_wavs:
+        raise ValueError(f"No .wav files under {combo_root / 'normal'}")
+
+    specs = np.stack([wav_to_logmel(str(p)) for p in normal_wavs], axis=0)  # (N,1,mels,frames)
+
+    # pylint: disable-next=no-member  # legacy RandomState, as the original
+    idx = np.random.RandomState(TRAINING_SPLIT_SEED).permutation(len(specs))
+    cut = int(TRAINING_SPLIT_RATIO * len(specs))
+    train_raw, val_raw = specs[idx[:cut]], specs[idx[cut:]]
+    if len(val_raw) == 0 or len(train_raw) < hyperparams["batch_size"]:
+        raise ValueError(
+            f"{machine}/{machine_id}/{snr}: {len(specs)} clips normales no bastan. "
+            f"El split 80/20 deja {len(train_raw)} de entrenamiento y {len(val_raw)} de "
+            "validación, y el original "
+            f"descarta el último lote incompleto (drop_last): hacen falta al menos "
+            f"{hyperparams['batch_size']} clips de entrenamiento y 1 de validación."
+        )
+
+    norm_mean, norm_std = float(train_raw.mean()), float(train_raw.std())
+    return (
+        normalize_logmel(train_raw, norm_mean, norm_std),
+        normalize_logmel(val_raw, norm_mean, norm_std),
+        (norm_mean, norm_std),
+    )
+
+
+def _fit_maha(model, train_data: np.ndarray, device, machine: str) -> tuple:
+    """Recalibrate Mahalanobis stats on the (fine-tuned) normal training embeddings."""
+    model.eval()
+    embeddings = []
+    for i in range(len(train_data)):
+        spec = torch.from_numpy(train_data[i:i + 1]).float()
+        embeddings.append(get_cls_embedding_single(model, spec, device))
+    embeddings = np.stack(embeddings, axis=0)
+    pca_components_n = ARCHITECTURE_BY_MACHINE[machine]["pca_components"]
+    return fit_mahalanobis(embeddings, n_pca=pca_components_n)
+
+
+def _scores(fitted: _FittedCombination, data: np.ndarray) -> tuple[list, list]:
+    """(mse scores, Mahalanobis scores) of every normalized clip in ``data``."""
+    mse_scores, maha_scores = [], []
+    for i in range(len(data)):
+        spec = torch.from_numpy(data[i:i + 1]).float()
+        mse, maha = run_inference_single(fitted.model, spec, fitted.device), mahalanobis_score(
+            get_cls_embedding_single(fitted.model, spec, fitted.device), *fitted.maha
+        )
+        mse_scores.append(mse)
+        maha_scores.append(maha)
+    return mse_scores, maha_scores
+
+
+def _score_abnormal(fitted: _FittedCombination, combo_root: Path) -> tuple[dict, int] | None:
+    """Evaluate against the combination's abnormal clips, if any: (metrics, n_abnormal)."""
+    abnormal_dir = combo_root / "abnormal"
+    if not (abnormal_dir.is_dir() and any(abnormal_dir.glob("*.wav"))):
+        return None
+    abnormal_wavs = sorted(abnormal_dir.glob("*.wav"))
+    abn_specs = np.stack([wav_to_logmel(str(p)) for p in abnormal_wavs], axis=0)
+    abn_specs_norm = normalize_logmel(abn_specs, *fitted.norm)
+
+    normal_mse, normal_maha = _scores(fitted, fitted.val_data)
+    abnormal_mse, abnormal_maha = _scores(fitted, abn_specs_norm)
+
+    eval_metrics = evaluate_against_abnormal(
+        np.array(normal_maha), np.array(abnormal_maha),
+        np.array(normal_mse), np.array(abnormal_mse),
+    )
+    return eval_metrics, len(abnormal_wavs)
+
+
+def _stage_combination(
+    combo_upload_dir: Path, combo: tuple, fitted: _FittedCombination, threshold: float | None
+) -> None:
+    """Write best.pth + maha_stats.npz of a retrained combination for the MLflow upload."""
+    machine, machine_id, snr, _combo_root = combo
+    combo_upload_dir.mkdir(parents=True, exist_ok=True)
+    norm_mean, norm_std = fitted.norm
+    maha_mean, maha_inv_cov, maha_pca = fitted.maha
+    checkpoint_out = {
+        "model_state_dict": fitted.model.state_dict(),
+        "norm_mean": norm_mean, "norm_std": norm_std,
+        "machine": machine, "machine_id": machine_id, "snr": snr,
+        # Explicit None means retrained but uncalibrated. Only legacy checkpoints
+        # without this key may use the original benchmark thresholds.
+        "threshold": threshold,
+    }
+    torch.save(checkpoint_out, combo_upload_dir / CHECKPOINT_FILENAME)
+    np.savez(
+        combo_upload_dir / MAHA_STATS_FILENAME,
+        mean=maha_mean, inv_cov=maha_inv_cov,
+        pca_mean=maha_pca[0] if maha_pca else np.zeros(0, dtype=np.float32),
+        pca_v=maha_pca[1] if maha_pca else np.zeros((0, 0), dtype=np.float32),
+        has_pca=np.array(maha_pca is not None),
+    )
+
+
+class Ml41MeatCuringMachineryAcousticAnomalyPlugin(PluginRuntimeMixin, ModelPluginPort):
     """Acoustic anomaly detection on curing machinery (AudioMAE + Mahalanobis score)."""
 
     def __init__(self) -> None:
         self._device: torch.device | None = None
         self._cache: CheckpointCache | None = None
         self._ready: bool = False
-        self._predict_count: int = 0
-        self._last_predict_at: str | None = None
 
     # ── lifecycle ────────────────────────────────────────────────────────────
 
@@ -116,10 +241,6 @@ class Ml41MeatCuringMachineryAcousticAnomalyPlugin(ModelPluginPort):
     def _require_loaded(self) -> None:
         if not self._ready:
             raise ModelNotLoadedError("El modelo no está cargado (no hay checkpoints disponibles).")
-
-    def _record(self) -> None:
-        self._predict_count += 1
-        self._last_predict_at = datetime.now(tz=timezone.utc).isoformat()
 
     # ── scoring ──────────────────────────────────────────────────────────────
 
@@ -192,9 +313,8 @@ class Ml41MeatCuringMachineryAcousticAnomalyPlugin(ModelPluginPort):
     ) -> PredictInlineResponse:
         _ = model_key  # not used: (machine, machine_id, snr) already select the combination
         machine, machine_id, snr = features["machine"], features["machine_id"], features["snr"]
-        temp_dir = None
-        try:
-            loaded, temp_dir = self._resolve_combination(machine, machine_id, snr, mlflow_run_id)
+        loaded, temp_dir = self._resolve_combination(machine, machine_id, snr, mlflow_run_id)
+        with removing_dir(temp_dir):
             threshold_used = self._prediction_threshold(loaded, threshold)
             spec_raw = audio_base64_to_logmel(features["audio_base64"])
             mse_score, maha = self._score_spectrogram(loaded, spec_raw)
@@ -204,13 +324,9 @@ class Ml41MeatCuringMachineryAcousticAnomalyPlugin(ModelPluginPort):
                 model_id=MODEL_ID, machine=machine, machine_id=machine_id, snr=snr,
                 mse_score=mse_score, maha_score=maha, threshold=threshold_used,
             ))
-        finally:
-            if temp_dir:
-                shutil.rmtree(temp_dir, ignore_errors=True)
 
     # ── predict_batch ────────────────────────────────────────────────────────
 
-    # pylint: disable-next=too-many-locals
     def predict_batch(
         self, *, data_path: str, mlflow_run_id: str = "", threshold: float | None = None,
     ) -> PredictBatchResponse:
@@ -230,37 +346,40 @@ class Ml41MeatCuringMachineryAcousticAnomalyPlugin(ModelPluginPort):
 
                 for row in rows:
                     filename = row["filename"]
-                    machine, machine_id, snr = row["machine"], row["machine_id"], row["snr"]
-                    temp_dir = None
                     try:
-                        wav_path = manifest_path.parent / filename
-                        if not wav_path.exists():
-                            raise InvalidAudioError(f"Referenced WAV not found in ZIP: {filename}")
-                        loaded, temp_dir = self._resolve_combination(
-                            machine, machine_id, snr, mlflow_run_id
-                        )
-                        threshold_used = self._prediction_threshold(loaded, threshold)
-                        spec_raw = wav_to_logmel(str(wav_path))
-                        mse_score, maha = self._score_spectrogram(loaded, spec_raw)
-                        result = build_inline_result(
-                            model_id=MODEL_ID, machine=machine, machine_id=machine_id, snr=snr,
-                            mse_score=mse_score, maha_score=maha, threshold=threshold_used,
-                        )
-                        result["filename"] = filename
-                        predictions.append(result)
+                        predictions.append(self._predict_manifest_row(
+                            row, manifest_path.parent, mlflow_run_id, threshold
+                        ))
                     except Exception as exc:  # pylint: disable=broad-exception-caught  # per-row error
                         logger.warning("Error processing %s: %s", filename, exc)
                         predictions.append({"filename": filename, "error": str(exc)})
-                    finally:
-                        if temp_dir:
-                            shutil.rmtree(temp_dir, ignore_errors=True)
 
         self._record()
         return PredictBatchResponse(model_id=MODEL_ID, predictions=predictions, output_path=None)
 
+    def _predict_manifest_row(
+        self, row: dict, base_dir: Path, mlflow_run_id: str, threshold: float | None
+    ) -> dict:
+        """Score one manifest.csv row of predict_batch (its WAV lives under ``base_dir``)."""
+        filename = row["filename"]
+        machine, machine_id, snr = row["machine"], row["machine_id"], row["snr"]
+        wav_path = base_dir / filename
+        if not wav_path.exists():
+            raise InvalidAudioError(f"Referenced WAV not found in ZIP: {filename}")
+        loaded, temp_dir = self._resolve_combination(machine, machine_id, snr, mlflow_run_id)
+        with removing_dir(temp_dir):
+            threshold_used = self._prediction_threshold(loaded, threshold)
+            mse_score, maha = self._score_spectrogram(loaded, wav_to_logmel(str(wav_path)))
+            return {
+                **build_inline_result(
+                    model_id=MODEL_ID, machine=machine, machine_id=machine_id, snr=snr,
+                    mse_score=mse_score, maha_score=maha, threshold=threshold_used,
+                ),
+                "filename": filename,
+            }
+
     # ── train ────────────────────────────────────────────────────────────────
 
-    # pylint: disable-next=too-many-locals
     def train(self, *, data_path: str, mlflow_run_id: str) -> TrainResponse:
         """Retrain every (machine, machine_id, snr) combination
         found under data_path's {snr}_{machine}/{machine_id}/{normal,abnormal}/*.wav layout.
@@ -276,9 +395,8 @@ class Ml41MeatCuringMachineryAcousticAnomalyPlugin(ModelPluginPort):
         mlflow_run_id). The served base checkpoints, their local copy and the in-memory
         cache are never mutated nor overwritten.
         """
-        tracker = BaseMLflowTracker(mlflow_run_id) if mlflow_run_id else None
+        tracker = require_train_tracker(mlflow_run_id)
         per_combination: list[CombinationTrainMetrics] = []
-        upload_warning: str | None = None
 
         with local_file_path(data_path) as local_zip:
             extract_dir = Path(tempfile.mkdtemp(prefix="ml41_train_"))
@@ -293,23 +411,12 @@ class Ml41MeatCuringMachineryAcousticAnomalyPlugin(ModelPluginPort):
                         "{snr}_{machine}/{machine_id}/normal/*.wav"
                     )
 
-                for machine, machine_id, snr, combo_root in combos_found:
-                    metrics = self._train_one_combination(
-                        machine, machine_id, snr, combo_root, tracker, staging_dir,
+                for combo in combos_found:
+                    per_combination.append(
+                        self._train_one_combination(combo, tracker, staging_dir)
                     )
-                    per_combination.append(metrics)
 
-                if not tracker:
-                    raise ModelPersistenceError(
-                        "Sin run de MLflow: el modelo reentrenado no se ha guardado."
-                    )
-                try:
-                    tracker.upload_artifacts(str(staging_dir), artifact_path="model")
-                except Exception as exc:  # pylint: disable=broad-exception-caught
-                    logger.error("MLflow artifact upload failed: %s", exc)
-                    raise ModelPersistenceError(
-                        f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}"
-                    ) from exc
+                upload_dir_to_mlflow(tracker, str(staging_dir))
             finally:
                 shutil.rmtree(extract_dir, ignore_errors=True)
                 shutil.rmtree(staging_dir, ignore_errors=True)
@@ -317,7 +424,7 @@ class Ml41MeatCuringMachineryAcousticAnomalyPlugin(ModelPluginPort):
         return TrainResponse(
             detail=f"Entrenamiento completado para {len(per_combination)} combinación(es)",
             per_combination=per_combination,
-            upload_warning=upload_warning,
+            upload_warning=None,
         )
 
     @staticmethod
@@ -339,39 +446,50 @@ class Ml41MeatCuringMachineryAcousticAnomalyPlugin(ModelPluginPort):
                     found.append((matched_machine, machine_id_dir.name, snr_part, machine_id_dir))
         return found
 
-    # pylint: disable-next=too-many-arguments,too-many-positional-arguments,too-many-locals
-    def _train_one_combination(  # pylint: disable=too-many-statements  # mirrors run_training
-        self, machine: str, machine_id: str, snr: str, combo_root: Path,
-        tracker: BaseMLflowTracker | None, staging_dir: Path,
+    def _train_one_combination(
+        self, combo: tuple, tracker: BaseMLflowTracker, staging_dir: Path
     ) -> CombinationTrainMetrics:
-        normal_wavs = sorted((combo_root / "normal").glob("*.wav"))
-        if not normal_wavs:
-            raise ValueError(f"No .wav files under {combo_root / 'normal'}")
+        """Train, evaluate and stage one ``(machine, machine_id, snr, combo_root)`` combination
+        (mirrors trainer.py::run_training)."""
+        machine, machine_id, snr, combo_root = combo
+        fitted = self._fit_new_model(combo, tracker)
 
-        specs = np.stack([wav_to_logmel(str(p)) for p in normal_wavs], axis=0)  # (N,1,mels,frames)
+        metrics_kwargs = {
+            "machine": machine, "machine_id": machine_id, "snr": snr,
+            "best_val_loss": round(fitted.best_val_loss, 6), "n_train": len(fitted.train_data),
+            "n_val": len(fitted.val_data),
+        }
 
-        device = self._device or _safe_device()
-        hyperparams = TRAINING_HYPERPARAMS_BY_MACHINE[machine]
-
-        # preprocess.py::process_machine_id: RandomState(split_seed=42) permutation, first
-        # int(0.8 * n) clips to train, the rest to val.
-        # pylint: disable-next=no-member  # legacy RandomState, as the original
-        idx = np.random.RandomState(TRAINING_SPLIT_SEED).permutation(len(specs))
-        cut = int(TRAINING_SPLIT_RATIO * len(specs))
-        train_raw, val_raw = specs[idx[:cut]], specs[idx[cut:]]
-        if len(val_raw) == 0 or len(train_raw) < hyperparams["batch_size"]:
-            raise ValueError(
-                f"{machine}/{machine_id}/{snr}: {len(specs)} clips normales no bastan. "
-                f"El split 80/20 deja {len(train_raw)} de entrenamiento y {len(val_raw)} de "
-                "validación, y el original "
-                f"descarta el último lote incompleto (drop_last): hacen falta al menos "
-                f"{hyperparams['batch_size']} clips de entrenamiento y 1 de validación."
+        abnormal = _score_abnormal(fitted, combo_root)
+        if abnormal is not None:
+            eval_metrics, n_abnormal = abnormal
+            metrics_kwargs.update(eval_metrics)
+            metrics_kwargs["n_abnormal_samples"] = n_abnormal
+            tracker.log_metrics(
+                {f"{machine}_{machine_id}_{snr}_{k}": v for k, v in eval_metrics.items()}
             )
 
-        # trainer.py::run_training (the original never fine-tunes: with an existing best.pth it
-        # skips training, and with force=True it trains a NEW model). Normalization stats come
-        # from the train split (MIMIIDataset), seed 42 is set BEFORE the model is created.
-        norm_mean, norm_std = float(train_raw.mean()), float(train_raw.std())
+        tracker.log_metrics({f"{machine}_{machine_id}_{snr}_best_val_loss": fitted.best_val_loss})
+
+        # Stage for MLflow only — the fixed base checkpoint is never written.
+        _stage_combination(
+            staging_dir / machine / machine_id / snr, combo, fitted,
+            metrics_kwargs.get("threshold"),
+        )
+        return CombinationTrainMetrics(**metrics_kwargs)
+
+    def _fit_new_model(self, combo: tuple, tracker: BaseMLflowTracker) -> _FittedCombination:
+        """Train a NEW model for ``combo`` with the original procedure.
+
+        trainer.py::run_training (the original never fine-tunes: with an existing best.pth it
+        skips training, and with force=True it trains a NEW model). Normalization stats come
+        from the train split (MIMIIDataset), seed 42 is set BEFORE the model is created.
+        """
+        machine, machine_id, snr = combo[:3]
+        hyperparams = TRAINING_HYPERPARAMS_BY_MACHINE[machine]
+        train_data, val_data, norm = _split_normal_clips(combo, hyperparams)
+        device = self._device or _safe_device()
+
         torch.manual_seed(TRAINING_COMMON["seed"])
         if torch.cuda.is_available():
             torch.cuda.manual_seed_all(TRAINING_COMMON["seed"])
@@ -379,89 +497,16 @@ class Ml41MeatCuringMachineryAcousticAnomalyPlugin(ModelPluginPort):
         model = build_model(machine, device)
         logger.info("Training %s/%s/%s from scratch (original procedure)", machine, machine_id, snr)
 
-        train_data = normalize_logmel(train_raw, norm_mean, norm_std)
-        val_data = normalize_logmel(val_raw, norm_mean, norm_std)
-
-        if tracker:
-            tracker.log_params(
-                {f"{machine}_{machine_id}_{snr}_{k}": v for k, v in hyperparams.items()}
-            )
-
-        best_val_loss, _history = fine_tune(model, train_data, val_data, device, hyperparams)
-
-        # Recalibrate Mahalanobis stats on the (fine-tuned) normal training embeddings.
-        model.eval()
-        embeddings = []
-        for i in range(len(train_data)):
-            spec = torch.from_numpy(train_data[i:i + 1]).float()
-            embeddings.append(get_cls_embedding_single(model, spec, device))
-        embeddings = np.stack(embeddings, axis=0)
-        pca_components_n = ARCHITECTURE_BY_MACHINE[machine]["pca_components"]
-        maha_mean, maha_inv_cov, maha_pca = fit_mahalanobis(embeddings, n_pca=pca_components_n)
-
-        metrics_kwargs = {
-            "machine": machine, "machine_id": machine_id, "snr": snr,
-            "best_val_loss": round(best_val_loss, 6), "n_train": len(train_data),
-            "n_val": len(val_data),
-        }
-
-        abnormal_dir = combo_root / "abnormal"
-        if abnormal_dir.is_dir() and any(abnormal_dir.glob("*.wav")):
-            abnormal_wavs = sorted(abnormal_dir.glob("*.wav"))
-            abn_specs = np.stack([wav_to_logmel(str(p)) for p in abnormal_wavs], axis=0)
-            abn_specs_norm = normalize_logmel(abn_specs, norm_mean, norm_std)
-
-            normal_mse, normal_maha, abnormal_mse, abnormal_maha = [], [], [], []
-            for i in range(len(val_data)):
-                spec = torch.from_numpy(val_data[i:i + 1]).float()
-                mse, maha = run_inference_single(model, spec, device), mahalanobis_score(
-                    get_cls_embedding_single(model, spec, device), maha_mean, maha_inv_cov, maha_pca
-                )
-                normal_mse.append(mse)
-                normal_maha.append(maha)
-            for i in range(len(abn_specs_norm)):
-                spec = torch.from_numpy(abn_specs_norm[i:i + 1]).float()
-                mse, maha = run_inference_single(model, spec, device), mahalanobis_score(
-                    get_cls_embedding_single(model, spec, device), maha_mean, maha_inv_cov, maha_pca
-                )
-                abnormal_mse.append(mse)
-                abnormal_maha.append(maha)
-
-            eval_metrics = evaluate_against_abnormal(
-                np.array(normal_maha), np.array(abnormal_maha),
-                np.array(normal_mse), np.array(abnormal_mse),
-            )
-            metrics_kwargs.update(eval_metrics)
-            metrics_kwargs["n_abnormal_samples"] = len(abnormal_wavs)
-            if tracker:
-                tracker.log_metrics(
-                    {f"{machine}_{machine_id}_{snr}_{k}": v for k, v in eval_metrics.items()}
-                )
-
-        if tracker:
-            tracker.log_metrics({f"{machine}_{machine_id}_{snr}_best_val_loss": best_val_loss})
-
-        # Stage for MLflow only — the fixed base checkpoint is never written.
-        combo_upload_dir = staging_dir / machine / machine_id / snr
-        combo_upload_dir.mkdir(parents=True, exist_ok=True)
-        checkpoint_out = {
-            "model_state_dict": model.state_dict(),
-            "norm_mean": norm_mean, "norm_std": norm_std,
-            "machine": machine, "machine_id": machine_id, "snr": snr,
-            # Explicit None means retrained but uncalibrated. Only legacy checkpoints
-            # without this key may use the original benchmark thresholds.
-            "threshold": metrics_kwargs.get("threshold"),
-        }
-        torch.save(checkpoint_out, combo_upload_dir / CHECKPOINT_FILENAME)
-        np.savez(
-            combo_upload_dir / MAHA_STATS_FILENAME,
-            mean=maha_mean, inv_cov=maha_inv_cov,
-            pca_mean=maha_pca[0] if maha_pca else np.zeros(0, dtype=np.float32),
-            pca_v=maha_pca[1] if maha_pca else np.zeros((0, 0), dtype=np.float32),
-            has_pca=np.array(maha_pca is not None),
+        tracker.log_params(
+            {f"{machine}_{machine_id}_{snr}_{k}": v for k, v in hyperparams.items()}
         )
 
-        return CombinationTrainMetrics(**metrics_kwargs)
+        best_val_loss = fine_tune(model, train_data, val_data, device, hyperparams)[0]
+        maha = _fit_maha(model, train_data, device, machine)
+        return _FittedCombination(
+            model=model, device=device, norm=norm, train_data=train_data, val_data=val_data,
+            best_val_loss=best_val_loss, maha=maha,
+        )
 
     # ── stats ────────────────────────────────────────────────────────────────
 
@@ -511,15 +556,6 @@ class Ml41MeatCuringMachineryAcousticAnomalyPlugin(ModelPluginPort):
                 ),
             ],
             metrics=dict(METRICS_REPORTED),
-            runtime_stats=RuntimeStats(total_predictions=self._predict_count, avg_latency_ms=None),
+            runtime_stats=self._runtime_stats(),
         )
-        if mlflow_run_id:
-            try:
-                tracker = BaseMLflowTracker(mlflow_run_id)
-                base.metrics["mlflow"] = {
-                    "params": tracker.get_params(),
-                    "metrics": tracker.get_metrics(),
-                }
-            except Exception as exc:  # pylint: disable=broad-exception-caught
-                logger.warning("Could not fetch MLflow stats for run_id=%s: %s", mlflow_run_id, exc)
-        return base
+        return add_mlflow_run_to_stats(base, mlflow_run_id)

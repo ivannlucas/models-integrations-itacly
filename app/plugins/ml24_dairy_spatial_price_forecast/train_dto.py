@@ -1,6 +1,4 @@
 """Pydantic DTOs for the ml24 /train endpoint."""
-# pylint: disable=line-too-long  # repo limit is 120 (.flake8), enforced by flake8
-# pylint: disable=too-few-public-methods  # Pydantic DTOs carry no behaviour
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.application.dto.base_version_dto import VersionInfo
@@ -13,10 +11,13 @@ class TrainRequest(BaseModel):
     data_path: str = Field(
         ...,
         description=(
-            "Ruta local o s3:// a un CSV en el formato largo de series_consumo_lacteos_ccaa.csv: anio, "
+            "Ruta local o s3:// a un CSV en el formato largo de series_consumo_lacteos_ccaa.csv: "
+            "anio, "
             "mes, ccaa, producto, metrica, valor, es_reconstruido, con TOTAL LECHE LIQUIDA y los 4 "
-            "productos de contexto. Los paneles, rezagos y señales espaciales se recalculan; la matriz "
-            "de fronteras es la del modelo base. La serie (sus 5 productos) pasa a ser la del modelo "
+            "productos de contexto. Los paneles, rezagos y señales espaciales se recalculan; la "
+            "matriz "
+            "de fronteras es la del modelo base. La serie (sus 5 productos) pasa a ser la del "
+            "modelo "
             "base nuevo, con la que se predice."
         ),
     )
@@ -30,9 +31,12 @@ class TrainRequest(BaseModel):
     exog_path: str = Field(
         default="",
         description=(
-            "Opcional: CSV con el formato de input_costs_monthly.csv (exógenas mensuales del mercado "
-            "lácteo UE, period_dt + columnas exog__*). Si se indica, se entrena con él y pasa a ser el "
-            "del modelo base nuevo; si no, se usan y se heredan las vigentes (upload_warning lo avisa)."
+            "Opcional: CSV con el formato de input_costs_monthly.csv (exógenas mensuales del "
+            "mercado "
+            "lácteo UE, period_dt + columnas exog__*). Si se indica, se entrena con él y pasa a "
+            "ser el "
+            "del modelo base nuevo; si no, se usan y se heredan las vigentes (upload_warning lo "
+            "avisa)."
         ),
     )
     validation_year: int | None = Field(
@@ -45,7 +49,8 @@ class TrainRequest(BaseModel):
     test_year: int | None = Field(
         default=None, ge=2006, le=2100,
         description=(
-            "Año de test = validation_year + 1. Por defecto, el último año con los 12 meses del precio "
+            "Año de test = validation_year + 1. Por defecto, el último año con los 12 meses del "
+            "precio "
             "ancla en la serie (config.yaml del equipo: 2020). Los paneles se cortan en este año."
         ),
     )
@@ -91,7 +96,8 @@ class TrainResponse(BaseModel):
     upload_warning: str | None = Field(
         default=None,
         description=(
-            "Avisos: subida a MLflow fallida (el modelo base se publica igualmente; solo un fallo al "
+            "Avisos: subida a MLflow fallida (el modelo base se publica igualmente; solo un fallo "
+            "al "
             "publicar la base es un 502) o exógenas no renovadas"
         ),
     )

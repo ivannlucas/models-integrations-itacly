@@ -205,61 +205,27 @@ def _real_unit_metrics(model, x_t, y_t, scaler_y) -> dict[str, dict[str, float]]
     }
 
 
-# pylint: disable-next=too-many-locals
-def train_model(df: pd.DataFrame) -> dict:
-    """Split, fit the scalers and train a new MLP; returns the model, its scalers and test
-    metrics.
+def _fit_one_epoch(model, loader, criterion, optimizer) -> None:
+    """One shuffled pass over the training batches (train mode, Adam step per batch)."""
+    model.train()
+    for bx, by in loader:
+        optimizer.zero_grad()
+        loss = criterion(model(bx), by)
+        loss.backward()
+        optimizer.step()
+
+
+def _fit_with_early_stopping(model, loader, *, criterion, optimizer, val: tuple) -> tuple:
+    """Up to TRAIN_EPOCHS epochs with early stopping (TRAIN_PATIENCE) on the full-batch
+    validation loss; restores the best weights. Returns ``(epochs_run, best_val_loss)``.
     """
-    started = time.perf_counter()
-    data = prepare_frame(df)
-    train_df, val_df, test_df = split_frame(data)
-
-    scaler_x = StandardScaler().fit(train_df[FEATURE_ORDER])
-    scaler_y = MinMaxScaler().fit(train_df[TARGETS])
-
-    def tensors(part: pd.DataFrame) -> tuple[torch.Tensor, torch.Tensor]:
-        x = scaler_x.transform(part[FEATURE_ORDER])
-        y = scaler_y.transform(part[TARGETS])
-        return torch.tensor(x, dtype=torch.float32), torch.tensor(y, dtype=torch.float32)
-
-    x_train, y_train = tensors(train_df)
-    x_val, y_val = tensors(val_df)
-    x_test, y_test = tensors(test_df)
-
-    config = {
-        "model_name": MODEL_FILENAME.removesuffix(".pt"),
-        "input_size": len(FEATURE_ORDER),
-        "output_size": len(TARGETS),
-        **TRAIN_ARCHITECTURE,
-        "lr": TRAIN_LR,
-        "epochs": TRAIN_EPOCHS,
-        "patience": TRAIN_PATIENCE,
-        "best_source": "notebook_best_config_1_layer",
-    }
-
-    final_seed = TRAIN_SEED + TRAIN_SEED_OFFSET
-    _set_training_seed(final_seed)
-    generator = torch.Generator()
-    generator.manual_seed(final_seed)
-    loader = DataLoader(
-        TensorDataset(x_train, y_train), batch_size=TRAIN_BATCH_SIZE, shuffle=True, num_workers=0,
-        generator=generator, drop_last=len(x_train) % TRAIN_BATCH_SIZE == 1 and len(x_train) > 1,
-    )
-    model = build_model_from_config(config)
-    criterion = nn.MSELoss()
-    optimizer = optim.Adam(model.parameters(), lr=TRAIN_LR)
-
+    x_val, y_val = val
     best_loss = float("inf")
     best_state = copy.deepcopy(model.state_dict())
     early_stop_count = 0
     epochs_run = 0
     for epoch in range(TRAIN_EPOCHS):
-        model.train()
-        for bx, by in loader:
-            optimizer.zero_grad()
-            loss = criterion(model(bx), by)
-            loss.backward()
-            optimizer.step()
+        _fit_one_epoch(model, loader, criterion, optimizer)
         model.eval()
         with torch.no_grad():
             val_loss = float(criterion(model(x_val), y_val).item())
@@ -273,14 +239,78 @@ def train_model(df: pd.DataFrame) -> dict:
         if early_stop_count >= TRAIN_PATIENCE:
             break
     model.load_state_dict(best_state)
+    return epochs_run, best_loss
+
+
+def _train_final_model(config: dict, train: tuple, val: tuple) -> tuple:
+    """Seed everything, build a new MLP from *config* and train it on ``train = (x, y)``.
+
+    Returns ``(model in eval mode, epochs_run, best_val_loss)``.
+    """
+    x_train, y_train = train
+    final_seed = TRAIN_SEED + TRAIN_SEED_OFFSET
+    _set_training_seed(final_seed)
+    generator = torch.Generator()
+    generator.manual_seed(final_seed)
+    loader = DataLoader(
+        TensorDataset(x_train, y_train), batch_size=TRAIN_BATCH_SIZE, shuffle=True, num_workers=0,
+        generator=generator, drop_last=len(x_train) % TRAIN_BATCH_SIZE == 1 and len(x_train) > 1,
+    )
+    model = build_model_from_config(config)
+    criterion = nn.MSELoss()
+    optimizer = optim.Adam(model.parameters(), lr=TRAIN_LR)
+
+    epochs_run, best_loss = _fit_with_early_stopping(
+        model, loader, criterion=criterion, optimizer=optimizer, val=val
+    )
     model.eval()
+    return model, epochs_run, best_loss
+
+
+def _scaled_tensors(part: pd.DataFrame, scaler_x, scaler_y) -> tuple[torch.Tensor, torch.Tensor]:
+    """Scaled (features, targets) of one split as float32 tensors."""
+    x = scaler_x.transform(part[FEATURE_ORDER])
+    y = scaler_y.transform(part[TARGETS])
+    return torch.tensor(x, dtype=torch.float32), torch.tensor(y, dtype=torch.float32)
+
+
+def _final_config() -> dict:
+    """final_model_config.json of the retrained model (1 x 64 precomputed best config)."""
+    return {
+        "model_name": MODEL_FILENAME.removesuffix(".pt"),
+        "input_size": len(FEATURE_ORDER),
+        "output_size": len(TARGETS),
+        **TRAIN_ARCHITECTURE,
+        "lr": TRAIN_LR,
+        "epochs": TRAIN_EPOCHS,
+        "patience": TRAIN_PATIENCE,
+        "best_source": "notebook_best_config_1_layer",
+    }
+
+
+def train_model(df: pd.DataFrame) -> dict:
+    """Split, fit the scalers and train a new MLP; returns the model, its scalers and test
+    metrics.
+    """
+    started = time.perf_counter()
+    train_df, val_df, test_df = split_frame(prepare_frame(df))
+
+    scaler_x = StandardScaler().fit(train_df[FEATURE_ORDER])
+    scaler_y = MinMaxScaler().fit(train_df[TARGETS])
+
+    train_t = _scaled_tensors(train_df, scaler_x, scaler_y)
+    val_t = _scaled_tensors(val_df, scaler_x, scaler_y)
+    test_t = _scaled_tensors(test_df, scaler_x, scaler_y)
+
+    config = _final_config()
+    model, epochs_run, best_loss = _train_final_model(config, train_t, val_t)
 
     result = {
         "model": model,
         "scaler_x": scaler_x,
         "scaler_y": scaler_y,
         "config": config,
-        "metrics": _real_unit_metrics(model, x_test, y_test, scaler_y),
+        "metrics": _real_unit_metrics(model, *test_t, scaler_y),
         "n_train": int(len(train_df)),
         "n_val": int(len(val_df)),
         "n_test": int(len(test_df)),

@@ -1,5 +1,4 @@
 """Pydantic DTOs for the ml18 /train endpoint."""
-# pylint: disable=too-few-public-methods  # Pydantic DTOs carry no behaviour
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.application.dto.base_version_dto import VersionInfo

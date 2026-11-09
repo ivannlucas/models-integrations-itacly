@@ -4,6 +4,7 @@ Port of src/main.py::train() from inbox/a18/codigo. A full run on the delivered 
 the original to 4 decimals (see outputs/a18/verification_report.md); here a small synthetic panel
 shaped like dataset_modelado_desde_2008.csv runs the same code in seconds.
 """
+# pylint: disable=protected-access  # the tests inspect the plugin's artifact store and bundle
 import shutil
 from unittest.mock import MagicMock
 
@@ -11,6 +12,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from app.domain.services import mlflow_artifacts
 from app.domain.services.exceptions import UserModelUnavailableError
 from app.plugins.ml18_meat_spatial_price_forecast import (
     constants,
@@ -129,7 +131,8 @@ def test_train_uploads_only_to_mlflow_and_the_model_is_served_by_run(
         )
     )
     monkeypatch.setattr(mlflow_utils, "BaseMLflowTracker", MagicMock(return_value=tracker))
-    store = plugin_mod.model_loader._store  # pylint: disable=protected-access
+    monkeypatch.setattr(mlflow_artifacts, "BaseMLflowTracker", MagicMock(return_value=tracker))
+    store = plugin_mod.model_loader._store
     local_before = set(store.local_dir.rglob("*"))
 
     # no base model loaded: train never needs it
@@ -138,7 +141,7 @@ def test_train_uploads_only_to_mlflow_and_the_model_is_served_by_run(
     assert resp.mlflow_run_id == "run-1" and resp.upload_warning is None
     assert resp.base_version.version == "v1"  # pylint: disable=no-member  # pydantic field
     assert resp.epochs_run == 2 and resp.n_test > 0
-    store = plugin_mod.model_loader._store  # pylint: disable=protected-access
+    store = plugin_mod.model_loader._store
     assert set(store.local_dir.rglob("*")) == local_before
     assert {"model.joblib", "x_scaler.json", "y_scaler.json", "metrics.json"} <= {
         p.name for p in (captured / "model").iterdir()
@@ -171,9 +174,9 @@ def test_mlflow_failure_is_a_warning(csv_path, monkeypatch):
 def test_predict_with_a_run_without_model_never_uses_the_base(monkeypatch):
     """A run without a model raises UserModelUnavailableError instead of using the base."""
     tracker = MagicMock(download_artifacts=MagicMock(return_value=""))
-    monkeypatch.setattr(mlflow_utils, "BaseMLflowTracker", MagicMock(return_value=tracker))
+    monkeypatch.setattr(mlflow_artifacts, "BaseMLflowTracker", MagicMock(return_value=tracker))
     instance = plugin_mod.Ml18MeatSpatialPriceForecastPlugin()
     # a base model is loaded
-    instance._bundle = {"model": object()}  # pylint: disable=protected-access
+    instance._bundle = {"model": object()}
     with pytest.raises(UserModelUnavailableError, match="run-vacio"):
         instance.predict_inline(features={"rows": []}, mlflow_run_id="run-vacio")

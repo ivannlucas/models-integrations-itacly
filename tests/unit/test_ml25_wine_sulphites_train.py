@@ -48,7 +48,7 @@ def _train(csv_path: Path, artifacts_dir: Path) -> dict:
     with patch(
         "app.plugins.ml25_wine_sulphites.model_loader.get_artifacts_dir",
         return_value=artifacts_dir,
-    ), patch("app.plugins.ml25_wine_sulphites.plugin.BaseMLflowTracker"):
+    ), patch("app.domain.services.mlflow_artifacts.BaseMLflowTracker"):
         return plugin.train(data_path=str(csv_path), mlflow_run_id="test-run-id")
 
 
@@ -67,7 +67,7 @@ def test_train_echoes_mlflow_run_id(wine_csv, tmp_path):
     with patch(
         "app.plugins.ml25_wine_sulphites.model_loader.get_artifacts_dir",
         return_value=tmp_path,
-    ), patch("app.plugins.ml25_wine_sulphites.plugin.BaseMLflowTracker") as tracker_cls:
+    ), patch("app.domain.services.mlflow_artifacts.BaseMLflowTracker") as tracker_cls:
         result = plugin.train(data_path=str(wine_csv), mlflow_run_id="run-abc123")
 
     assert result.mlflow_run_id == "run-abc123"
@@ -153,14 +153,14 @@ def _train_capturing_upload(csv_path: Path, artifacts_dir: Path):
     plugin.load = MagicMock()
     uploaded: dict[str, bytes] = {}
 
-    def _capture(local_dir, artifact_path):  # pylint: disable=unused-argument
+    def _capture(local_dir, **_kwargs):
         for f in Path(local_dir).iterdir():
             uploaded[f.name] = f.read_bytes()
 
     with patch(
         "app.plugins.ml25_wine_sulphites.model_loader.get_artifacts_dir",
         return_value=artifacts_dir,
-    ), patch("app.plugins.ml25_wine_sulphites.plugin.BaseMLflowTracker") as tracker_cls:
+    ), patch("app.domain.services.mlflow_artifacts.BaseMLflowTracker") as tracker_cls:
         tracker_cls.return_value.upload_artifacts.side_effect = _capture
         result = plugin.train(data_path=str(csv_path), mlflow_run_id="run-abc123")
     return plugin.load, uploaded, result
@@ -206,7 +206,7 @@ def test_retrained_model_round_trips_through_mlflow(wine_csv, tmp_path):
             (model_dir / name).write_bytes(content)
         return str(model_dir)
 
-    with patch("app.plugins.ml25_wine_sulphites.mlflow_utils.BaseMLflowTracker") as tracker_cls:
+    with patch("app.domain.services.mlflow_artifacts.BaseMLflowTracker") as tracker_cls:
         tracker_cls.return_value.download_artifacts.side_effect = _download
         model_qual, model_bound, metadata, temp_dir = download_user_predictor_from_mlflow(
             "run-abc123"

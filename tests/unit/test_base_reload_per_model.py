@@ -9,6 +9,8 @@ that each plugin's own loader reads them back. ml14 has its own test in test_ml1
 Each test imports its own plugin lazily: the plugins share module/constant names (model_loader,
 ARTIFACT_FOLDER_NAME...) and some need an optional backend checked first with importorskip.
 """
+# Lazy per-test plugin imports (see above); the checks read the plugin instance being served.
+# pylint: disable=import-outside-toplevel,protected-access
 import json
 import shutil
 from datetime import date, timedelta
@@ -67,7 +69,7 @@ def _start_on_v0(  # pylint: disable=too-many-arguments,too-many-positional-argu
 def _train_and_reload(container, store, root: Path, folder: str, data_path: str, **train_fields):
     """POST /train through the container; check the fresh instance reads only versions/v1/."""
     v0_files = {p.name for p in (root / folder).iterdir() if p.is_file()}
-    served_before = container._plugin  # pylint: disable=protected-access
+    served_before = container._plugin
     store.read.clear()
 
     entry = _entry(type(served_before))
@@ -78,7 +80,7 @@ def _train_and_reload(container, store, root: Path, folder: str, data_path: str,
     v1 = root / folder / "versions" / "v1"
     assert resp.base_version.version == "v1"
     assert container.base_version()["version"] == "v1"
-    assert container._plugin is not served_before  # pylint: disable=protected-access
+    assert container._plugin is not served_before
     assert container.service.is_loaded()
     assert store.read, "the fresh instance did not resolve any artifact"
     assert all(p == v1 or v1 in p.parents for p in store.read), store.read
@@ -87,7 +89,7 @@ def _train_and_reload(container, store, root: Path, folder: str, data_path: str,
 
 
 def _predict_batch(container, data_path: str):
-    entry = _entry(type(container._plugin))  # pylint: disable=protected-access
+    entry = _entry(type(container._plugin))
     body = TypeAdapter(entry.predict_request_type).validate_python(
         {"mode": "batch", "data_path": data_path}
     )
@@ -108,7 +110,7 @@ def _ml13_rows(n_weeks: int, seed: int) -> list[dict]:
     return rows
 
 
-def test_ml13_reloads_the_promoted_base(  # pylint: disable=import-outside-toplevel,too-many-locals
+def test_ml13_reloads_the_promoted_base(  # pylint: disable=too-many-locals
     monkeypatch, tmp_path, isolated_base_store,
 ):
     """ml13 serves v1 after /train and predicts with it (v0 seeded from synthetic data)."""
@@ -149,7 +151,7 @@ def test_ml13_reloads_the_promoted_base(  # pylint: disable=import-outside-tople
 
 # ── ml15 ───────────────────────────────────────────────────────────────────────
 
-def test_ml15_reloads_the_promoted_base_with_inherited_reference_csvs(  # pylint: disable=import-outside-toplevel,too-many-locals
+def test_ml15_reloads_the_promoted_base_with_inherited_reference_csvs(  # pylint: disable=too-many-locals
     monkeypatch, tmp_path, isolated_base_store,
 ):
     """ml15 serves v1 after /train, reading the inherited reference CSVs from versions/v1/."""
@@ -188,7 +190,7 @@ def test_ml15_reloads_the_promoted_base_with_inherited_reference_csvs(  # pylint
 
 # ── ml16 ───────────────────────────────────────────────────────────────────────
 
-def test_ml16_reloads_the_promoted_base(  # pylint: disable=import-outside-toplevel,too-many-locals
+def test_ml16_reloads_the_promoted_base(  # pylint: disable=too-many-locals
     monkeypatch, tmp_path, isolated_base_store,
 ):
     """ml16 serves v1 after /train and predicts with it."""
@@ -222,7 +224,7 @@ def test_ml16_reloads_the_promoted_base(  # pylint: disable=import-outside-tople
 
 # ── ml17 ───────────────────────────────────────────────────────────────────────
 
-def test_ml17_reloads_the_promoted_base(  # pylint: disable=import-outside-toplevel
+def test_ml17_reloads_the_promoted_base(
     monkeypatch, tmp_path, isolated_base_store,
 ):
     """ml17 serves v1 after /train and predicts with it."""
@@ -254,7 +256,7 @@ def test_ml17_reloads_the_promoted_base(  # pylint: disable=import-outside-tople
 
 # ── ml18 ───────────────────────────────────────────────────────────────────────
 
-def test_ml18_reloads_the_promoted_base(  # pylint: disable=import-outside-toplevel,too-many-locals
+def test_ml18_reloads_the_promoted_base(  # pylint: disable=too-many-locals
     monkeypatch, tmp_path, isolated_base_store,
 ):
     """ml18 serves v1 after /train (2-epoch GRU) and predicts with it."""
@@ -290,7 +292,7 @@ def test_ml18_reloads_the_promoted_base(  # pylint: disable=import-outside-tople
 
 # ── ml21 ───────────────────────────────────────────────────────────────────────
 
-class _FastSearch:  # pylint: disable=too-few-public-methods
+class _FastSearch:
     """Grid/RandomizedSearchCV stand-in: fits the estimator once with few trees / iterations
     (same code path, seconds instead of minutes on the full delivered panel)."""
 
@@ -298,6 +300,7 @@ class _FastSearch:  # pylint: disable=too-few-public-methods
         self.estimator = estimator
         self.best_params_ = {}
         self.best_score_ = 0.0
+        self.best_estimator_ = None
 
     def fit(self, x, y):
         """Fits the estimator once with reduced trees/iterations and exposes it as best."""
@@ -306,14 +309,11 @@ class _FastSearch:  # pylint: disable=too-few-public-methods
             self.estimator.set_params(n_estimators=5)
         if "max_iter" in params:
             self.estimator.set_params(solver="liblinear", max_iter=50)
-        # sklearn convention: fitted attributes are set by fit()
-        self.best_estimator_ = self.estimator.fit(  # pylint: disable=attribute-defined-outside-init
-            x, y
-        )
+        self.best_estimator_ = self.estimator.fit(x, y)
         return self
 
 
-def test_ml21_reloads_the_promoted_base_and_its_new_panel(  # pylint: disable=import-outside-toplevel,too-many-locals
+def test_ml21_reloads_the_promoted_base_and_its_new_panel(  # pylint: disable=too-many-locals
     monkeypatch, tmp_path, isolated_base_store,
 ):
     """ml21 serves v1 after /train, including the new month of its retraining panel."""
@@ -339,7 +339,7 @@ def test_ml21_reloads_the_promoted_base_and_its_new_panel(  # pylint: disable=im
     pd.concat([panel, new_month], ignore_index=True).to_csv(csv, index=False)
 
     _train_and_reload(container, store, isolated_base_store, ARTIFACT_FOLDER_NAME, str(csv))
-    served = container._plugin._panel_df  # pylint: disable=protected-access
+    served = container._plugin._panel_df
     assert served["date"].max() == last + pd.DateOffset(months=1)
     batch = tmp_path / "new_month.csv"
     new_month.to_csv(batch, index=False)
@@ -348,7 +348,7 @@ def test_ml21_reloads_the_promoted_base_and_its_new_panel(  # pylint: disable=im
 
 # ── ml23 ───────────────────────────────────────────────────────────────────────
 
-def test_ml23_reloads_the_promoted_base(  # pylint: disable=import-outside-toplevel
+def test_ml23_reloads_the_promoted_base(
     monkeypatch, tmp_path, isolated_base_store,
 ):
     """ml23 serves v1 after /train (2 epochs, 1 seed) and predicts with it."""
@@ -376,14 +376,14 @@ def test_ml23_reloads_the_promoted_base(  # pylint: disable=import-outside-tople
 
 
 def _predict_inline(container, payload: dict):
-    entry = _entry(type(container._plugin))  # pylint: disable=protected-access
+    entry = _entry(type(container._plugin))
     body = TypeAdapter(entry.predict_request_type).validate_python({"mode": "inline", **payload})
     return container.predict_use_case.execute(body)
 
 
 # ── ml19 ───────────────────────────────────────────────────────────────────────
 
-def test_ml19_reloads_the_promoted_base_and_its_new_dataset(  # pylint: disable=import-outside-toplevel,too-many-locals
+def test_ml19_reloads_the_promoted_base_and_its_new_dataset(  # pylint: disable=too-many-locals
     monkeypatch, tmp_path, isolated_base_store,
 ):
     """ml19 serves v1 after /train, including the new month of its retraining dataset."""
@@ -414,7 +414,7 @@ def test_ml19_reloads_the_promoted_base_and_its_new_dataset(  # pylint: disable=
 
 # ── ml24 ───────────────────────────────────────────────────────────────────────
 
-def test_ml24_reloads_the_promoted_base_with_its_series(  # pylint: disable=import-outside-toplevel
+def test_ml24_reloads_the_promoted_base_with_its_series(
     monkeypatch, isolated_base_store,
 ):
     """ml24 serves v1 after /train, with the series filtered to the model products."""
@@ -430,7 +430,7 @@ def test_ml24_reloads_the_promoted_base_with_its_series(  # pylint: disable=impo
     monkeypatch.setitem(TRAINING_CFG, "catboost_iterations", 20)
     container, store = _start_on_v0(monkeypatch, isolated_base_store, ARTIFACT_FOLDER_NAME,
                                     model_loader, Ml24DairySpatialPriceForecastPlugin)
-    served_v0 = container._plugin._reference["series"]  # pylint: disable=protected-access
+    served_v0 = container._plugin._reference["series"]
     series_csv = isolated_base_store / ARTIFACT_FOLDER_NAME / SERIES_FILENAME
 
     resp = _train_and_reload(
@@ -440,7 +440,7 @@ def test_ml24_reloads_the_promoted_base_with_its_series(  # pylint: disable=impo
     v1 = isolated_base_store / ARTIFACT_FOLDER_NAME / "versions" / "v1"
     # only the 5 model products
     assert (v1 / SERIES_FILENAME).stat().st_size < series_csv.stat().st_size
-    served_v1 = container._plugin._reference["series"]  # pylint: disable=protected-access
+    served_v1 = container._plugin._reference["series"]
     assert len(served_v1) == len(served_v0)
     out = _predict_inline(container, {"ccaa": ["CYL"], "horizons": [1]})
     assert out.n_predictions == 1

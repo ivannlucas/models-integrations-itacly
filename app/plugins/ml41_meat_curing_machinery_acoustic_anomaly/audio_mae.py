@@ -62,8 +62,8 @@ def get_2d_sincos_pos_embed(embed_dim, grid_size_h, grid_size_w, cls_token=False
 class AudioMAE(nn.Module):
     """Masked Autoencoder (MAE) with Transformer backbone, adapted for audio spectrograms."""
 
-    # pylint: disable-next=too-many-arguments,too-many-positional-arguments,too-many-locals
-    def __init__(self, img_size=(128, 1024), patch_size=(16, 16), in_chans=1,
+    # pylint: disable-next=too-many-arguments,too-many-locals  # delivered architecture
+    def __init__(self, *, img_size=(128, 1024), patch_size=(16, 16), in_chans=1,
                  embed_dim=768, depth=12, num_heads=12,
                  decoder_embed_dim=512, decoder_depth=8, decoder_num_heads=16,
                  mlp_ratio=4., norm_layer=nn.LayerNorm, norm_pix_loss=True):
