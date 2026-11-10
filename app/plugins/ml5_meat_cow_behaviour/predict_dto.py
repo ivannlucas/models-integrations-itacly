@@ -1,16 +1,20 @@
 """Pydantic request/response DTOs for the cow-behaviour ``/predict`` endpoint."""
 from typing import Annotated, Any, Literal, Union
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import Field
 
+from app.application.dto.plugin_dto import (
+    BatchRequestBase,
+    BatchResponseBase,
+    PluginDTO,
+    UserModelRunId,
+)
 from app.plugins.ml5_meat_cow_behaviour.constants import CLIP_LENGTH
 
 
-class PredictBatchRequest(BaseModel):
+class PredictBatchRequest(BatchRequestBase):
     """Batch request: path to a video file processed frame by frame."""
 
-    model_config = ConfigDict(protected_namespaces=())
-    mode: Literal["batch"] = "batch"
     data_path: str = Field(
         ...,
         description=(
@@ -18,22 +22,16 @@ class PredictBatchRequest(BaseModel):
             "ejecuta Detectron2 + ByteTrack + SlowFast sobre cada frame."
         ),
     )
-    mlflow_run_id: str = Field(default="", description="MLflow run ID for user-trained model")
+    mlflow_run_id: UserModelRunId = ""
 
 
-class PredictBatchResponse(BaseModel):
+class PredictBatchResponse(BatchResponseBase):
     """Batch response: per-frame detections with tracked behaviours."""
 
-    model_config = ConfigDict(protected_namespaces=())
-    model_id: str
-    predictions: list[dict[str, Any]]
-    output_path: str | None = None
 
-
-class PredictInlineRequest(BaseModel):
+class PredictInlineRequest(PluginDTO):
     """Inline request: a pre-cropped clip of one cow as base64 frames."""
 
-    model_config = ConfigDict(protected_namespaces=())
     mode: Literal["inline"] = "inline"
     model_key: str | None = None
     threshold: float | None = Field(
@@ -52,13 +50,12 @@ class PredictInlineRequest(BaseModel):
             "muestrea 8 frames 'slow' + 32 'fast' de este clip."
         ),
     )
-    mlflow_run_id: str = Field(default="", description="MLflow run ID for user-trained model")
+    mlflow_run_id: UserModelRunId = ""
 
 
-class PredictInlineResponse(BaseModel):
+class PredictInlineResponse(PluginDTO):
     """Inline response: predicted behaviour plus per-class probabilities for XAI."""
 
-    model_config = ConfigDict(protected_namespaces=())
     model_id: str
     threshold: float | None = None
     prediction: Any = Field(..., description="Comportamiento predicho, p.ej. 'grazing'")

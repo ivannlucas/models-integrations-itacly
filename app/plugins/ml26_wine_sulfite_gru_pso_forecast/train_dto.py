@@ -2,15 +2,16 @@
 
 from typing import Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import Field
+
+from app.application.dto.plugin_dto import PluginDTO, TrainRequestBase
 
 from app.application.dto.train_dto import MlflowRunId
 
 
-class TrainRequest(BaseModel):
+class TrainRequest(TrainRequestBase):
     """Fine-tune request: CSV in the AI team's sequential format (data/raw/sequential.csv.gz)."""
 
-    model_config = ConfigDict(protected_namespaces=())
     data_path: str = Field(
         ...,
         description=(
@@ -31,12 +32,11 @@ class TrainRequest(BaseModel):
     )
 
 
-class TrainResponse(BaseModel):
+class TrainResponse(PluginDTO):
     """Fine-tune response: validation metrics comparable to memoria Tabla 10 (+ test if the CSV
     allows it).
     """
 
-    model_config = ConfigDict(protected_namespaces=())
     detail: str
     n_lots_train: int
     n_lots_val: int

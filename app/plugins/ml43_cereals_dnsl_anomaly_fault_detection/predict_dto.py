@@ -1,13 +1,12 @@
 """Pydantic DTOs for the ml43-cereals-dnsl-anomaly-fault-detection /predict endpoint."""
-from typing import Any
+from pydantic import Field
 
-from pydantic import BaseModel, ConfigDict, Field
+from app.application.dto.plugin_dto import BatchResponseBase, PluginDTO
 
 
-class PredictBatchRequest(BaseModel):
+class PredictBatchRequest(PluginDTO):
     """Batch prediction request: CSV with real 180-row sensor windows."""
 
-    model_config = ConfigDict(protected_namespaces=())
     mode: str = Field(
         default="batch",
         description="Único modo soportado: 'batch' (CSV con ventanas reales de 180 filas)",
@@ -16,13 +15,9 @@ class PredictBatchRequest(BaseModel):
     mlflow_run_id: str = Field(default="", description="MLflow run ID for a user-trained model")
 
 
-class PredictBatchResponse(BaseModel):
+class PredictBatchResponse(BatchResponseBase):
     """Batch prediction response: one result per window, plus an optional warning."""
 
-    model_config = ConfigDict(protected_namespaces=())
-    model_id: str
-    predictions: list[dict[str, Any]]
-    output_path: str | None = None
     warning: str | None = Field(
         default=None,
         description=(

@@ -9,8 +9,8 @@ that each plugin's own loader reads them back. ml14 has its own test in test_ml1
 Each test imports its own plugin lazily: the plugins share module/constant names (model_loader,
 ARTIFACT_FOLDER_NAME...) and some need an optional backend checked first with importorskip.
 """
-# Lazy per-test plugin imports (see above); the checks read the plugin instance being served.
-# pylint: disable=import-outside-toplevel,protected-access
+# Lazy per-test plugin imports (see above).
+# pylint: disable=import-outside-toplevel
 import json
 import shutil
 from datetime import date, timedelta
@@ -69,7 +69,7 @@ def _start_on_v0(  # pylint: disable=too-many-arguments,too-many-positional-argu
 def _train_and_reload(container, store, root: Path, folder: str, data_path: str, **train_fields):
     """POST /train through the container; check the fresh instance reads only versions/v1/."""
     v0_files = {p.name for p in (root / folder).iterdir() if p.is_file()}
-    served_before = container._plugin
+    served_before = container.plugin
     store.read.clear()
 
     entry = _entry(type(served_before))
@@ -80,7 +80,7 @@ def _train_and_reload(container, store, root: Path, folder: str, data_path: str,
     v1 = root / folder / "versions" / "v1"
     assert resp.base_version.version == "v1"
     assert container.base_version()["version"] == "v1"
-    assert container._plugin is not served_before
+    assert container.plugin is not served_before
     assert container.service.is_loaded()
     assert store.read, "the fresh instance did not resolve any artifact"
     assert all(p == v1 or v1 in p.parents for p in store.read), store.read
@@ -89,7 +89,7 @@ def _train_and_reload(container, store, root: Path, folder: str, data_path: str,
 
 
 def _predict_batch(container, data_path: str):
-    entry = _entry(type(container._plugin))
+    entry = _entry(type(container.plugin))
     body = TypeAdapter(entry.predict_request_type).validate_python(
         {"mode": "batch", "data_path": data_path}
     )
@@ -339,7 +339,7 @@ def test_ml21_reloads_the_promoted_base_and_its_new_panel(  # pylint: disable=to
     pd.concat([panel, new_month], ignore_index=True).to_csv(csv, index=False)
 
     _train_and_reload(container, store, isolated_base_store, ARTIFACT_FOLDER_NAME, str(csv))
-    served = container._plugin._panel_df
+    served = container.plugin._panel_df  # pylint: disable=protected-access  # served panel
     assert served["date"].max() == last + pd.DateOffset(months=1)
     batch = tmp_path / "new_month.csv"
     new_month.to_csv(batch, index=False)
@@ -376,7 +376,7 @@ def test_ml23_reloads_the_promoted_base(
 
 
 def _predict_inline(container, payload: dict):
-    entry = _entry(type(container._plugin))
+    entry = _entry(type(container.plugin))
     body = TypeAdapter(entry.predict_request_type).validate_python({"mode": "inline", **payload})
     return container.predict_use_case.execute(body)
 
@@ -430,7 +430,7 @@ def test_ml24_reloads_the_promoted_base_with_its_series(
     monkeypatch.setitem(TRAINING_CFG, "catboost_iterations", 20)
     container, store = _start_on_v0(monkeypatch, isolated_base_store, ARTIFACT_FOLDER_NAME,
                                     model_loader, Ml24DairySpatialPriceForecastPlugin)
-    served_v0 = container._plugin._reference["series"]
+    served_v0 = container.plugin._reference["series"]  # pylint: disable=protected-access
     series_csv = isolated_base_store / ARTIFACT_FOLDER_NAME / SERIES_FILENAME
 
     resp = _train_and_reload(
@@ -440,7 +440,7 @@ def test_ml24_reloads_the_promoted_base_with_its_series(
     v1 = isolated_base_store / ARTIFACT_FOLDER_NAME / "versions" / "v1"
     # only the 5 model products
     assert (v1 / SERIES_FILENAME).stat().st_size < series_csv.stat().st_size
-    served_v1 = container._plugin._reference["series"]
+    served_v1 = container.plugin._reference["series"]  # pylint: disable=protected-access
     assert len(served_v1) == len(served_v0)
     out = _predict_inline(container, {"ccaa": ["CYL"], "horizons": [1]})
     assert out.n_predictions == 1

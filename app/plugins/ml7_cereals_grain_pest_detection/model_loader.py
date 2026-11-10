@@ -23,16 +23,12 @@ def safe_device():
     ultralytics' own default resolution (same pattern as
     ml10_dairy_disease_vector_detection/model_loader.py).
     """
-    import torch  # noqa: PLC0415 # pylint: disable=import-outside-toplevel
+    # Lazy: importing this module must not import torch (ultralytics/torch load on demand).
+    from app.domain.services.torch_device import (  # noqa: PLC0415 # pylint: disable=import-outside-toplevel
+        safe_torch_device,
+    )
 
-    if not torch.cuda.is_available():
-        return torch.device("cpu")
-    try:
-        torch.nn.Conv2d(1, 1, 1).cuda()(torch.zeros(1, 1, 4, 4).cuda())
-        return torch.device("cuda")
-    except Exception:  # pylint: disable=broad-exception-caught  # any CUDA failure → CPU
-        logger.warning("CUDA detectada pero no funcional para operaciones de red — usando CPU.")
-        return torch.device("cpu")
+    return safe_torch_device()
 
 
 def load_yolo():

@@ -1,30 +1,25 @@
 """Pydantic request/response DTOs for the thermal-mastitis /predict endpoint."""
 from typing import Annotated, Any, Literal, Union
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import Field
+
+from app.application.dto.plugin_dto import BatchResponseBase, PluginDTO
 
 
-class PredictBatchRequest(BaseModel):
+class PredictBatchRequest(PluginDTO):
     """Batch request: a directory or ZIP of thermal images."""
 
-    model_config = ConfigDict(protected_namespaces=())
     mode: Literal["batch"] = "batch"
     data_path: str = Field(..., description="Ruta a un directorio o .zip de imágenes térmicas")
 
 
-class PredictBatchResponse(BaseModel):
+class PredictBatchResponse(BatchResponseBase):
     """Batch response: one prediction dict per image."""
 
-    model_config = ConfigDict(protected_namespaces=())
-    model_id: str
-    predictions: list[dict[str, Any]]
-    output_path: str | None = None
 
-
-class PredictInlineRequest(BaseModel):
+class PredictInlineRequest(PluginDTO):
     """Inline request: a single thermal image as base64 or path."""
 
-    model_config = ConfigDict(protected_namespaces=())
     mode: Literal["inline"] = "inline"
     model_key: str | None = None
     threshold: float | None = None
@@ -32,10 +27,9 @@ class PredictInlineRequest(BaseModel):
     image_path: str | None = Field(default=None, description="Ruta a una imagen térmica en disco")
 
 
-class PredictInlineResponse(BaseModel):
+class PredictInlineResponse(PluginDTO):
     """Inline response: predicted class and per-class probabilities."""
 
-    model_config = ConfigDict(protected_namespaces=())
     model_id: str
     threshold: float | None = None
     prediction: Any = Field(..., description="Clase predicha: 'Healthy' o 'SCM'")

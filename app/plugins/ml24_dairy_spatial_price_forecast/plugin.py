@@ -125,10 +125,9 @@ class Ml24DairySpatialPriceForecastPlugin(PluginRuntimeMixin, ModelPluginPort):
     BASE_ARTIFACT_FOLDER = ARTIFACT_FOLDER_NAME   # every /train publishes the new base model
 
     def __init__(self) -> None:
-        """Initialize an unloaded plugin (count/last-prediction counters: mixin defaults)."""
+        """Initialize an unloaded plugin (runtime counters and latency: mixin defaults)."""
         self._bundle: dict | None = None
         self._reference: dict | None = None
-        self._total_latency_ms: float = 0.0
 
     # ── lifecycle ─────────────────────────────────────────────────────────────
 
@@ -158,8 +157,7 @@ class Ml24DairySpatialPriceForecastPlugin(PluginRuntimeMixin, ModelPluginPort):
 
     def _record_prediction(self, started: float) -> None:
         """Count one served prediction (mixin) and accumulate its latency since *started*."""
-        self._total_latency_ms += (time.perf_counter() - started) * 1000.0
-        self._record()
+        self._record_latency((time.perf_counter() - started) * 1000.0)
 
     # ── predict_inline ────────────────────────────────────────────────────────
 
@@ -325,7 +323,6 @@ class Ml24DairySpatialPriceForecastPlugin(PluginRuntimeMixin, ModelPluginPort):
                         description="Desfase MAPA > 24 meses o CCAA omitidas por histórico "
                                     "insuficiente."),
         ]
-        avg_latency = self._total_latency_ms / self._predict_count if self._predict_count else None
         return StatsResponse(
             model_name=MODEL_ID,
             version=VERSION,
@@ -345,5 +342,5 @@ class Ml24DairySpatialPriceForecastPlugin(PluginRuntimeMixin, ModelPluginPort):
             outputs=outputs,
             metrics=self._metrics_with_run(mlflow_run_id),
             runtime_stats=RuntimeStats(total_predictions=self._predict_count,
-                                       avg_latency_ms=avg_latency),
+                                       avg_latency_ms=self._avg_latency_ms()),
         )

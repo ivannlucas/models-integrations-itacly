@@ -9,8 +9,9 @@ navegación — el detalle de cada tarea vive en su skill correspondiente, no lo
   de uso genéricos), `app/infrastructure` (DI, router_factory, artifact store), `app/plugins/<nombre>`
   (implementación concreta de cada modelo).
 - Cada modelo = 1 plugin autocontenido, expuesto en `/models/<model-id>/...`. La lógica común a
-  todos los plugins (descarga/subida de MLflow, contadores, `_require_loaded`) vive en
-  `app/domain/services/mlflow_artifacts.py` y `plugin_runtime.py`: no se copia en cada plugin.
+  todos los plugins vive fuera de ellos y no se copia en cada uno: `app/domain/services/`
+  (`mlflow_artifacts`, `plugin_runtime`, `torch_device`, `batch_rows`, `xai_values`, `image_cam`) y
+  las bases de DTOs en `app/application/dto/plugin_dto.py`. Detalle en `plugin-integration`.
 - Tests: `pytest`, en `tests/unit/`.
 - Artefactos: local en `artifacts/<ARTIFACT_FOLDER_NAME>/` o en
   `s3://<STORAGE_BUCKET>/artifacts/fixed/<ARTIFACT_FOLDER_NAME>/`.

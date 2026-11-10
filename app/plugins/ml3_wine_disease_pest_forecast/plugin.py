@@ -362,6 +362,6 @@ class Ml3WineDiseasePestForecastPlugin(PluginRuntimeMixin, ModelPluginPort):
                     r2 = mlflow_metrics.get("r2")
                     if isinstance(r2, (int, float)):
                         base.metrics["regression"]["r2"] = r2
-            except Exception as exc:  # pylint: disable=broad-exception-caught
+            except Exception as exc:  # pylint: disable=broad-exception-caught  # stats stay usable
                 logger.warning("Could not fetch MLflow stats for run_id=%s: %s", mlflow_run_id, exc)
         return base

@@ -1,16 +1,15 @@
 """Train DTOs for ml23 — GRU dairy price forecast refit."""
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import Field
 
-from app.application.dto.base_version_dto import VersionInfo
+from app.application.dto.plugin_dto import PluginDTO, PromotingTrainRunId, PublishedBaseVersion
 
 
-class TrainRequest(BaseModel):
+class TrainRequest(PluginDTO):
     """Retrain request: CSV with the same contract as data/processed/
     dataset_forecast_ready.csv (fecha, producto, canal, target_precio_medio + the
     exogenous feature columns) — the AI team's own training input, not an invented
     format."""
 
-    model_config = ConfigDict(protected_namespaces=())
     data_path: str = Field(
         ...,
         description=(
@@ -19,20 +18,13 @@ class TrainRequest(BaseModel):
             "data/processed/dataset_forecast_ready.csv del equipo de IA."
         ),
     )
-    mlflow_run_id: str = Field(
-        default="",
-        description=(
-            "Run de MLflow opcional: si se indica, el modelo reentrenado también se guarda en él "
-            "(trazabilidad). Con o sin run, el modelo reentrenado pasa a ser el modelo base."
-        ),
-    )
+    mlflow_run_id: PromotingTrainRunId = ""
 
 
-class TrainResponse(BaseModel):
+class TrainResponse(PluginDTO):
     """Retrain response: test-set metrics of the refit GRU (best of N_SEEDS by validation
     RMSE — same artifact-selection policy used for the shipped gru_model.pt)."""
 
-    model_config = ConfigDict(protected_namespaces=())
     detail: str
     mae: float = Field(..., description="MAE en el split de test del refit (€/litro)")
     rmse: float = Field(..., description="RMSE en el split de test del refit (€/litro)")
@@ -47,6 +39,4 @@ class TrainResponse(BaseModel):
     upload_warning: str | None = Field(
         default=None, description="Aviso si el modelo reentrenado no se ha podido guardar en MLflow"
     )
-    base_version: VersionInfo | None = Field(
-        default=None, description="Versión del modelo base publicada por este reentreno"
-    )
+    base_version: PublishedBaseVersion = None

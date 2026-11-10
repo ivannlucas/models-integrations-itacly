@@ -26,7 +26,9 @@ from torch.utils.data import DataLoader, Dataset
 
 from app.application.dto.stats_dto import InputField, OutputField, StatsResponse
 from app.domain.ports.model_plugin_port import ModelPluginPort
+from app.domain.services.batch_rows import row_error_capture
 from app.domain.services.exceptions import InvalidImageError
+from app.domain.services.image_cam import compute_and_encode_cam
 from app.domain.services.mlflow_artifacts import (
     add_mlflow_run_to_stats,
     removing_dir,
@@ -62,10 +64,7 @@ from app.plugins.ml4_lactic_cnn_thermal_early_disease_detection.mlflow_utils imp
     download_user_model_from_mlflow,
 )
 from app.plugins.ml4_lactic_cnn_thermal_early_disease_detection.model_loader import load_model
-from app.plugins.ml4_lactic_cnn_thermal_early_disease_detection.postprocessing import (
-    compute_and_encode_cam,
-    decode_logits,
-)
+from app.plugins.ml4_lactic_cnn_thermal_early_disease_detection.postprocessing import decode_logits
 from app.plugins.ml4_lactic_cnn_thermal_early_disease_detection.predict_dto import (
     PredictBatchResponse,
     PredictInlineResponse,
@@ -202,31 +201,28 @@ def _single_subdir_or_self(folder: str) -> str:
 
 
 def _predict_batch_image(model, device, root: str, fname: str, idx: int) -> dict:
-    """Classify one batch image (with its CAM); any error becomes that row's ``error``."""
-    try:
-        with open(os.path.join(root, fname), "rb") as fh:
-            image_bytes = fh.read()
-        tensor = preprocess_image(image_bytes).to(device)
-        with torch.no_grad():
-            logits, feature_map = model(tensor, return_features=True)
-        result = decode_logits(logits)
-        row = {"filename": fname, **result}
-        image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
-        row["heatmap_url"] = compute_and_encode_cam(
-            feature_map, model.classifier[1].weight,
-            result["predicted_class_index"], image,
-        )
-        if idx == 0 or result["predicted_class_index"] != 0:
-            # Echo the first image back so the platform can request a real
-            # GradCAM explanation for the batch (mirrors the inline flow,
-            # which has a single image_path to read from — batch has none
-            # once this temp dir is removed below). Non-healthy images
-            # (class index != 0) are echoed too so their instances carry
-            # the source image; healthy ones stay out to keep the payload small.
-            row["image_base64"] = base64.b64encode(image_bytes).decode("ascii")
-        return row
-    except Exception as exc:  # pylint: disable=broad-exception-caught  # per-row error capture
-        return {"filename": fname, "error": str(exc)}
+    """Classify one batch image (with its CAM); the caller turns errors into rows."""
+    with open(os.path.join(root, fname), "rb") as fh:
+        image_bytes = fh.read()
+    tensor = preprocess_image(image_bytes).to(device)
+    with torch.no_grad():
+        logits, feature_map = model(tensor, return_features=True)
+    result = decode_logits(logits)
+    row = {"filename": fname, **result}
+    image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+    row["heatmap_url"] = compute_and_encode_cam(
+        feature_map, model.classifier[1].weight,
+        result["predicted_class_index"], image,
+    )
+    if idx == 0 or result["predicted_class_index"] != 0:
+        # Echo the first image back so the platform can request a real
+        # GradCAM explanation for the batch (mirrors the inline flow,
+        # which has a single image_path to read from — batch has none
+        # once this temp dir is removed below). Non-healthy images
+        # (class index != 0) are echoed too so their instances carry
+        # the source image; healthy ones stay out to keep the payload small.
+        row["image_base64"] = base64.b64encode(image_bytes).decode("ascii")
+    return row
 
 
 def _read_labeled_images(data_root: str) -> tuple[list[str], list[int]]:
@@ -400,7 +396,11 @@ class Ml4LacticCnnThermalEarlyDiseaseDetectionPlugin(PluginRuntimeMixin, ModelPl
                         if os.path.splitext(fname)[1].lower() in IMAGE_EXTENSIONS
                     )
                     for idx, (root, fname) in enumerate(image_files):
-                        predictions.append(_predict_batch_image(model, device, root, fname, idx))
+                        # one bad image never fails the batch
+                        with row_error_capture(predictions, {"filename": fname}, what=fname):
+                            predictions.append(
+                                _predict_batch_image(model, device, root, fname, idx)
+                            )
 
             self._record()
             return PredictBatchResponse(

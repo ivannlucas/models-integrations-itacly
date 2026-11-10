@@ -1,13 +1,14 @@
 """Pydantic request/response DTOs for the ml15 /train endpoint."""
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import Field
+
+from app.application.dto.plugin_dto import PluginDTO, PromotingTrainRunId
 
 from app.application.dto.base_version_dto import VersionInfo
 
 
-class TrainRequest(BaseModel):
+class TrainRequest(PluginDTO):
     """Retrain request: a CSV with the 16 feature_columns + target, optionally 'date'."""
 
-    model_config = ConfigDict(protected_namespaces=())
     data_path: str = Field(
         ...,
         description=(
@@ -21,13 +22,7 @@ class TrainRequest(BaseModel):
             "Ridge(alpha=25.0)) con las filas cuyo objetivo cae antes de la validación."
         ),
     )
-    mlflow_run_id: str = Field(
-        default="",
-        description=(
-            "Run de MLflow opcional: si se indica, el modelo reentrenado también se guarda en él "
-            "(trazabilidad). Con o sin run, el modelo reentrenado pasa a ser el modelo base."
-        ),
-    )
+    mlflow_run_id: PromotingTrainRunId = ""
     reference_prices_path: str = Field(
         default="",
         description=(
@@ -46,14 +41,13 @@ class TrainRequest(BaseModel):
     )
 
 
-class TrainResponse(BaseModel):
+class TrainResponse(PluginDTO):
     """Retrain response: test metrics of the original protocol (src/get_stats/get_stats.py).
 
     Metrics are null when the test window has no row with an observed target (or, for r2, a
     single one) — like the original, which reports evaluation_available=false there.
     """
 
-    model_config = ConfigDict(protected_namespaces=())
     detail: str
     n_train_rows: int = Field(
         ...,

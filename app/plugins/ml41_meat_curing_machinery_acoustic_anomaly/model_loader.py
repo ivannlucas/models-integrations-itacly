@@ -18,6 +18,7 @@ import numpy as np
 import torch
 
 from app.domain.services.exceptions import UnsupportedMachineConfigurationError
+from app.domain.services.torch_device import safe_torch_device
 from app.infrastructure.artifact_store import ArtifactStore
 from app.plugins.ml41_meat_curing_machinery_acoustic_anomaly.audio_mae import AudioMAE
 from app.plugins.ml41_meat_curing_machinery_acoustic_anomaly.constants import (
@@ -38,15 +39,7 @@ logger = logging.getLogger(__name__)
 _store = ArtifactStore(ARTIFACT_FOLDER_NAME)
 
 
-def _safe_device() -> torch.device:
-    if not torch.cuda.is_available():
-        return torch.device("cpu")
-    try:
-        torch.nn.Conv2d(1, 1, 1).cuda()(torch.zeros(1, 1, 4, 4).cuda())
-        return torch.device("cuda")
-    except Exception:  # pylint: disable=broad-exception-caught  # any CUDA failure -> CPU
-        logger.warning("CUDA detected but not functional — falling back to CPU.")
-        return torch.device("cpu")
+_safe_device = safe_torch_device
 
 
 def is_supported_combination(machine: str, machine_id: str, snr: str) -> bool:

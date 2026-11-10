@@ -4,7 +4,6 @@ Port of src/main.py::train() from inbox/a18/codigo. A full run on the delivered 
 the original to 4 decimals (see outputs/a18/verification_report.md); here a small synthetic panel
 shaped like dataset_modelado_desde_2008.csv runs the same code in seconds.
 """
-# pylint: disable=protected-access  # the tests inspect the plugin's artifact store and bundle
 import shutil
 from unittest.mock import MagicMock
 
@@ -14,9 +13,11 @@ import pytest
 
 from app.domain.services import mlflow_artifacts
 from app.domain.services.exceptions import UserModelUnavailableError
+from app.infrastructure.artifact_store import ArtifactStore
 from app.plugins.ml18_meat_spatial_price_forecast import (
     constants,
     mlflow_utils,
+    model_loader,
     preprocessing,
     training,
 )
@@ -132,16 +133,16 @@ def test_train_uploads_only_to_mlflow_and_the_model_is_served_by_run(
     )
     monkeypatch.setattr(mlflow_utils, "BaseMLflowTracker", MagicMock(return_value=tracker))
     monkeypatch.setattr(mlflow_artifacts, "BaseMLflowTracker", MagicMock(return_value=tracker))
-    store = plugin_mod.model_loader._store
+    store = ArtifactStore(constants.ARTIFACT_FOLDER_NAME)  # same local dir as the plugin's store
     local_before = set(store.local_dir.rglob("*"))
 
     # no base model loaded: train never needs it
     instance = plugin_mod.Ml18MeatSpatialPriceForecastPlugin()
     resp = instance.train(data_path=csv_path, mlflow_run_id="run-1")
     assert resp.mlflow_run_id == "run-1" and resp.upload_warning is None
-    assert resp.base_version.version == "v1"  # pylint: disable=no-member  # pydantic field
+    assert resp.base_version.version == "v1"
     assert resp.epochs_run == 2 and resp.n_test > 0
-    store = plugin_mod.model_loader._store
+    store = ArtifactStore(constants.ARTIFACT_FOLDER_NAME)  # same local dir as the plugin's store
     assert set(store.local_dir.rglob("*")) == local_before
     assert {"model.joblib", "x_scaler.json", "y_scaler.json", "metrics.json"} <= {
         p.name for p in (captured / "model").iterdir()
@@ -167,7 +168,7 @@ def test_mlflow_failure_is_a_warning(csv_path, monkeypatch):
     resp = plugin_mod.Ml18MeatSpatialPriceForecastPlugin().train(
         data_path=csv_path, mlflow_run_id="run-1"
     )
-    # pylint: disable-next=unsupported-membership-test,no-member  # pydantic fields
+    # pylint: disable-next=unsupported-membership-test  # pydantic fields
     assert "mlflow caído" in resp.upload_warning and resp.base_version.version == "v1"
 
 
@@ -177,6 +178,7 @@ def test_predict_with_a_run_without_model_never_uses_the_base(monkeypatch):
     monkeypatch.setattr(mlflow_artifacts, "BaseMLflowTracker", MagicMock(return_value=tracker))
     instance = plugin_mod.Ml18MeatSpatialPriceForecastPlugin()
     # a base model is loaded
-    instance._bundle = {"model": object()}
+    monkeypatch.setattr(model_loader, "load_artifact_bundle", lambda: {"model": object()})
+    instance.load()
     with pytest.raises(UserModelUnavailableError, match="run-vacio"):
         instance.predict_inline(features={"rows": []}, mlflow_run_id="run-vacio")

@@ -19,6 +19,7 @@ import pandas as pd
 
 from app.application.dto.stats_dto import InputField, OutputField, RuntimeStats, StatsResponse
 from app.domain.ports.model_plugin_port import ModelPluginPort
+from app.domain.services.batch_rows import row_error_capture
 from app.domain.services.mlflow_artifacts import add_mlflow_run_to_stats, removing_dir
 from app.domain.services.mlflow_tracker import BaseMLflowTracker
 from app.domain.services.plugin_runtime import PluginRuntimeMixin
@@ -213,11 +214,8 @@ class Ml17MeatMarketPriceAnalysisPlugin(PluginRuntimeMixin, ModelPluginPort):
     BASE_ARTIFACT_FOLDER = ARTIFACT_FOLDER_NAME   # every /train publishes the new base model
 
     def __init__(self) -> None:
-        """Initialize unloaded plugin with empty runtime counters."""
+        """Initialize unloaded plugin (runtime counters start at the mixin defaults)."""
         self._model: Any = None
-        self._predict_count: int = 0
-        self._total_latency_ms: float = 0.0
-        self._last_predict_at: str | None = None
 
     def load(self) -> None:
         """Load the Ridge pickle via ArtifactStore."""
@@ -254,11 +252,6 @@ class Ml17MeatMarketPriceAnalysisPlugin(PluginRuntimeMixin, ModelPluginPort):
         }
         return pd.DataFrame([row])[FEATURE_COLUMNS]
 
-    def _record(self, elapsed_ms: float = 0.0) -> None:
-        """Count one served prediction (mixin) and accumulate its latency for stats()."""
-        super()._record()
-        self._total_latency_ms += elapsed_ms
-
     def _resolve_model(self, mlflow_run_id: str) -> tuple[Any, str | None]:
         """Return (model, temp_dir) to serve this request.
 
@@ -288,7 +281,7 @@ class Ml17MeatMarketPriceAnalysisPlugin(PluginRuntimeMixin, ModelPluginPort):
             t0 = time.perf_counter()
             x = self._build_frame(features)
             y_pred = float(model.predict(x)[0])
-            self._record((time.perf_counter() - t0) * 1000)
+            self._record_latency((time.perf_counter() - t0) * 1000)
 
             xai_fv = {col: float(x.iloc[0][col]) for col in FEATURE_COLUMNS}
             logger.info(
@@ -305,29 +298,24 @@ class Ml17MeatMarketPriceAnalysisPlugin(PluginRuntimeMixin, ModelPluginPort):
                 xai_feature_values=xai_fv,
             )
 
-    def _predict_batch_row(self, model: Any, idx: int, row_dict: dict) -> dict:
-        """One predict_batch row: its prediction, or its error (a bad row never fails the batch)."""
+    def _predict_batch_row(self, model: Any, idx: int, row_dict: dict, rows: list[dict]) -> None:
+        """Append one predict_batch row: its prediction, or its error (a bad row never fails the
+        batch)."""
         date_val = _find_date(row_dict)
-        try:
+        date = _iso_date(date_val) if date_val is not None else ""
+        with row_error_capture(rows, {"row": idx, "date": date}, what=f"fila {idx}"):
             x = self._build_frame(row_dict)
             y_pred = float(model.predict(x)[0])
-            return {
+            rows.append({
                 "row": idx,
-                "date": _iso_date(date_val) if date_val is not None else "",
+                "date": date,
                 "y_pred": y_pred,
                 "model_id": MODEL_ID,
                 "line": LINE,
                 "xai_feature_values": {
                     col: float(x.iloc[0][col]) for col in FEATURE_COLUMNS
                 },
-            }
-        except Exception as exc:  # pylint: disable=broad-exception-caught  # per-row guard
-            logger.warning("Error en fila %s: %s", idx, exc)
-            return {
-                "row": idx,
-                "date": _iso_date(date_val) if date_val is not None else "",
-                "error": str(exc),
-            }
+            })
 
     def predict_batch(
         self, *, data_path: str, mlflow_run_id: str = ""
@@ -340,8 +328,8 @@ class Ml17MeatMarketPriceAnalysisPlugin(PluginRuntimeMixin, ModelPluginPort):
             predictions: list[dict] = []
             t0 = time.perf_counter()
             for idx, row in df.iterrows():
-                predictions.append(self._predict_batch_row(model, int(idx), row.to_dict()))
-            self._record((time.perf_counter() - t0) * 1000)
+                self._predict_batch_row(model, int(idx), row.to_dict(), predictions)
+            self._record_latency((time.perf_counter() - t0) * 1000)
             logger.info(
                 "predict_batch done — %d rows count=%d mlflow=%s",
                 len(predictions), self._predict_count, bool(mlflow_run_id),
@@ -411,7 +399,6 @@ class Ml17MeatMarketPriceAnalysisPlugin(PluginRuntimeMixin, ModelPluginPort):
 
     def stats(self, mlflow_run_id: str = "") -> StatsResponse:
         """Return model metadata and runtime statistics."""
-        avg = self._total_latency_ms / self._predict_count if self._predict_count else None
         base = StatsResponse(
             model_name=MODEL_ID,
             version=VERSION,
@@ -479,7 +466,7 @@ class Ml17MeatMarketPriceAnalysisPlugin(PluginRuntimeMixin, ModelPluginPort):
             },
             runtime_stats=RuntimeStats(
                 total_predictions=self._predict_count,
-                avg_latency_ms=round(avg, 1) if avg is not None else None,
+                avg_latency_ms=self._avg_latency_ms(1),
             ),
         )
         return add_mlflow_run_to_stats(base, mlflow_run_id)

@@ -1,5 +1,4 @@
 """ml19: /train runs the official pipeline and publishes the new base (spec 2026-10-14)."""
-# pylint: disable=protected-access  # the tests set the plugin's bundle directly
 import ast
 import json
 import pickle
@@ -64,7 +63,7 @@ def test_declares_its_base_folder():
 def test_train_without_run_publishes_models_meta_and_dataset(csv, isolated_base_store):
     """train() without a run publishes models, meta, audit and the dataset as v1."""
     resp = plugin_mod.Ml19CerealsCostForecastPlugin().train(data_path=csv, mlflow_run_id="")
-    assert resp.base_version.version == "v1" and resp.upload_warning is None  # pylint: disable=no-member  # pydantic field
+    assert resp.base_version.version == "v1" and resp.upload_warning is None
     assert resp.train_end == "2019-12-31" and [h.horizon for h in resp.horizons] == [1, 2, 3]
     assert resp.data_end < "2022-01-01"   # rows without target only serve inference
 
@@ -79,16 +78,18 @@ def test_train_without_run_publishes_models_meta_and_dataset(csv, isolated_base_
         assert (v1 / f"best_clf_h{h}m_{name.lower()}.pkl").exists()
     # The training CSV, front rows included, becomes the inference dataset of the new base.
     assert (v1 / DATASET_FE_FILENAME).read_bytes() == Path(csv).read_bytes()
-    assert resp.base_version.metrics["n_features"] == len(meta["features"])  # pylint: disable=no-member  # pydantic field
+    assert resp.base_version.metrics["n_features"] == len(meta["features"])
 
 
 @pytest.mark.usefixtures("fast")
-def test_promoted_bundle_loads_and_predicts_the_latest_row(csv, isolated_base_store):
+def test_promoted_bundle_loads_and_predicts_the_latest_row(csv, isolated_base_store, monkeypatch):
     """A promoted bundle loads from v1 and predicts the latest row."""
     plugin_mod.Ml19CerealsCostForecastPlugin().train(data_path=csv, mlflow_run_id="")
     fresh = plugin_mod.Ml19CerealsCostForecastPlugin()
-    fresh._bundle = model_loader.load_bundle_from_dir(
+    promoted = model_loader.load_bundle_from_dir(
         isolated_base_store / ARTIFACT_FOLDER_NAME / "versions" / "v1")
+    monkeypatch.setattr(model_loader, "load_artifact_bundle", lambda: promoted)
+    fresh.load()
     out = fresh.predict_inline(features={})
     assert out.date_label == pd.to_datetime(_dataset()["date"]).max().strftime("%Y-%m")
     assert len(out.horizons) == 3
@@ -101,11 +102,11 @@ def test_with_run_uploads_the_bundle_and_failure_is_a_warning(csv, monkeypatch):
     monkeypatch.setattr(mlflow_utils, "BaseMLflowTracker", MagicMock(return_value=tracker))
     resp = plugin_mod.Ml19CerealsCostForecastPlugin().train(data_path=csv, mlflow_run_id="run-1")
     assert tracker.upload_artifacts.call_args.kwargs["artifact_path"] == "model"
-    assert resp.base_version.mlflow_run_id == "run-1"  # pylint: disable=no-member  # pydantic field
+    assert resp.base_version.mlflow_run_id == "run-1"
 
     tracker.upload_artifacts.side_effect = ConnectionError("mlflow caído")
     resp = plugin_mod.Ml19CerealsCostForecastPlugin().train(data_path=csv, mlflow_run_id="run-2")
-    # pylint: disable-next=unsupported-membership-test,no-member  # pydantic fields
+    # pylint: disable-next=unsupported-membership-test  # pydantic fields
     assert "mlflow caído" in resp.upload_warning and resp.base_version.version == "v2"
 
 
@@ -139,7 +140,11 @@ def test_predict_with_a_run_uses_that_runs_bundle(csv, monkeypatch, isolated_bas
     monkeypatch.setattr(mlflow_artifacts, "BaseMLflowTracker", MagicMock(return_value=tracker))
     plugin = plugin_mod.Ml19CerealsCostForecastPlugin()
     # never used with a run
-    plugin._bundle = {"marker": "base"}
+    monkeypatch.setattr(
+        model_loader, "load_artifact_bundle",
+        lambda: {"marker": "base", "best_reg": "base", "best_clf": "base"},
+    )
+    plugin.load()
     out = plugin.predict_inline(features={}, mlflow_run_id="run-x")
     assert out.date_label == pd.to_datetime(_dataset()["date"]).max().strftime("%Y-%m")
 

@@ -1,6 +1,4 @@
 """ModelContainer promotes, reloads and rolls back the base of plugins with BASE_ARTIFACT_FOLDER."""
-# The tests inspect the container internals (served plugin, base store).
-# pylint: disable=protected-access
 import pytest
 
 from app.application.use_cases.train_model_use_case import TrainModelUseCase
@@ -40,7 +38,7 @@ def fixture_container():
 
 
 def _store():
-    return base_model_publisher._store_for(TINY_FOLDER)
+    return base_model_publisher._store_for(TINY_FOLDER)  # pylint: disable=protected-access
 
 
 def _served(c) -> str:
@@ -56,10 +54,10 @@ def test_init_reads_the_pointer_and_starts_at_v0(container):
 
 def test_train_publishes_and_serves_the_new_base_with_a_fresh_instance(container):
     """train publishes v1 and swaps in a fresh plugin instance serving the new base."""
-    old_plugin = container._plugin
+    old_plugin = container.plugin
     resp = container.train_use_case.execute(TinyTrainRequest(data_path="datos-1"))
     assert resp.base_version.version == "v1"
-    assert container._plugin is not old_plugin
+    assert container.plugin is not old_plugin
     assert old_plugin.value == "base"            # in-flight requests keep their instance
     assert _served(container) == "datos-1"
     assert container.base_version()["version"] == "v1"
@@ -182,7 +180,7 @@ def test_failed_pointer_restore_does_not_mask_the_original_error(container, monk
         raise OSError("s3 caído")
 
     monkeypatch.setattr(
-        container._base_store,
+        container._base_store,  # pylint: disable=protected-access  # the store the container serves
         "set_active_version",
         boom,
     )

@@ -108,14 +108,14 @@ def test_train(client):
     assert body["artifact_path"].endswith("user_final_winner.pt")
 
 
-def test_train_bad_csv_maps_to_400(client, fake_plugins):
+def test_train_bad_csv_maps_to_400(client, fake_plugins, monkeypatch):
     """A ValueError from train() (missing columns) must surface as 400, not 500."""
     plugin = fake_plugins["ml9-cereals-infestation-sequence-classifier"]
 
-    def _boom(_plugin, *, data_path):
+    def _boom(**_kwargs):
         raise ValueError("El CSV de entrenamiento no trae las columnas requeridas: ['target']")
 
-    plugin._train_factory = _boom  # pylint: disable=protected-access
+    monkeypatch.setattr(plugin, "train", _boom)
     resp = client.post(
         f"{PREFIX}/train", json={"data_path": "/tmp/bad.csv", "mlflow_run_id": "test-run-id"}
     )

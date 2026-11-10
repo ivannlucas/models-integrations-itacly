@@ -1,8 +1,9 @@
 """Pydantic request/response DTOs for the ml1 vineyard pest/disease ``/predict`` endpoint."""
 from typing import Annotated, Literal, Union
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, Field
 
+from app.application.dto.plugin_dto import BatchRequestBase, PluginDTO
 from app.plugins.ml1_wine_pest_disease_detection.constants import SENSOR_COLS
 
 _SENSORS_DESC = (
@@ -11,10 +12,9 @@ _SENSORS_DESC = (
 )
 
 
-class PredictInlineRequest(BaseModel):
+class PredictInlineRequest(PluginDTO):
     """Inline request: one sample — optional image + required sensor telemetry."""
 
-    model_config = ConfigDict(protected_namespaces=())
     mode: Literal["inline"] = "inline"
     image_base64: str | None = Field(
         default=None,
@@ -29,13 +29,11 @@ class PredictInlineRequest(BaseModel):
     )
 
 
-class PredictBatchRequest(BaseModel):
+class PredictBatchRequest(BatchRequestBase):
     """Batch request: a ZIP containing one CSV (Path_Imagen + sensor columns) and the images
     it references (at the ZIP root or under an images/ subfolder — both are searched by
     filename), the same contract as the original --input CSV + images_dir."""
 
-    model_config = ConfigDict(protected_namespaces=())
-    mode: Literal["batch"] = "batch"
     data_path: str = Field(
         ...,
         description=(
@@ -53,10 +51,9 @@ PredictRequest = Annotated[
 ]
 
 
-class PredictInlineResponse(BaseModel):
+class PredictInlineResponse(PluginDTO):
     """Inline response: predicted pathology/pest class, confidence and epidemiological risk."""
 
-    model_config = ConfigDict(protected_namespaces=())
     model_id: str
     enfermedad: str = Field(
         ..., description="Una de las 15 clases, o IMAGEN_NO_DISPONIBLE si no se aporto imagen"
@@ -80,10 +77,9 @@ class BatchPrediction(BaseModel):
     error: str | None = None
 
 
-class PredictBatchResponse(BaseModel):
+class PredictBatchResponse(PluginDTO):
     """Batch response: one prediction per input CSV row."""
 
-    model_config = ConfigDict(protected_namespaces=())
     model_id: str
     predictions: list[BatchPrediction]
     n_rows: int

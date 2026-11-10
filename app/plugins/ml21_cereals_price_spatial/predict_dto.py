@@ -1,13 +1,14 @@
 """Pydantic DTOs for ml21 (ESP-CEREAL spatial cereal price) /predict endpoint."""
 from typing import Annotated, Any, Literal, Union
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import Field
+
+from app.application.dto.plugin_dto import BatchResponseBase, PluginDTO, XaiFeatureValues
 
 
-class PredictBatchRequest(BaseModel):
+class PredictBatchRequest(PluginDTO):
     """Batch request: CSV with raw panel rows for a given month."""
 
-    model_config = ConfigDict(protected_namespaces=())
     mode: Literal["batch"] = "batch"
     data_path: str = Field(
         ..., description="Ruta al CSV con filas del panel cerealístico"
@@ -25,19 +26,13 @@ class PredictBatchRequest(BaseModel):
     )
 
 
-class PredictBatchResponse(BaseModel):
+class PredictBatchResponse(BatchResponseBase):
     """Batch response: predictions for all province×cereal combinations in the month."""
 
-    model_config = ConfigDict(protected_namespaces=())
-    model_id: str
-    predictions: list[dict[str, Any]]
-    output_path: str | None = None
 
-
-class PredictInlineRequest(BaseModel):
+class PredictInlineRequest(PluginDTO):
     """Single-row inference: province + cereal + month → 3-horizon predictions."""
 
-    model_config = ConfigDict(protected_namespaces=())
     mode: Literal["inline"] = "inline"
     model_key: str | None = None
     threshold: float | None = None
@@ -57,10 +52,9 @@ class PredictInlineRequest(BaseModel):
     presion_combustible_puerto: float | None = None
 
 
-class PredictInlineResponse(BaseModel):
+class PredictInlineResponse(PluginDTO):
     """Inline response: 3-horizon predictions with signals, confidence, and recommendation."""
 
-    model_config = ConfigDict(protected_namespaces=())
     model_id: str
     province: str
     cereal: str
@@ -71,10 +65,7 @@ class PredictInlineResponse(BaseModel):
     card_text: str
     predictions: dict[str, dict[str, Any]]
     model_version: str = Field(default="1.0.0")
-    xai_feature_values: dict[str, float] | None = Field(
-        default=None,
-        description="Valores de features usados — consumidos por el servicio XAI",
-    )
+    xai_feature_values: XaiFeatureValues = None
 
 
 PredictRequest = Annotated[

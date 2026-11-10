@@ -14,7 +14,6 @@ import pickle
 import shutil
 import tempfile
 import time
-from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
@@ -494,7 +493,7 @@ def _train_response(reported: dict, counts: dict, new_run_id: str | None) -> Tra
     )
 
 
-class Ml43CerealsDnslAnomalyFaultDetectionPlugin(PluginRuntimeMixin, ModelPluginPort):  # pylint: disable=too-many-instance-attributes
+class Ml43CerealsDnslAnomalyFaultDetectionPlugin(PluginRuntimeMixin, ModelPluginPort):
     """Deep Neuro-Fuzzy (BiLSTM + fuzzy rules) anomaly detector for cereal ovens."""
 
     def __init__(self) -> None:
@@ -505,7 +504,6 @@ class Ml43CerealsDnslAnomalyFaultDetectionPlugin(PluginRuntimeMixin, ModelPlugin
         self._xai_background = None
         self._explainer = None
         self._threshold: float = DECISION_THRESHOLD
-        self._total_latency_ms: float = 0.0
 
     def load(self) -> None:
         (
@@ -520,15 +518,6 @@ class Ml43CerealsDnslAnomalyFaultDetectionPlugin(PluginRuntimeMixin, ModelPlugin
 
     def is_loaded(self) -> bool:
         return self._model is not None
-
-    def _record(self, latency_ms: float = 0.0) -> None:
-        # modelo 43-44 audit: latency was already measured with perf_counter() (see
-        # predict_batch) but only ever logged, never accumulated — stats() hardcoded
-        # avg_latency_ms=None. Same _total_latency_ms/_predict_count pattern documented
-        # in IMPLEMENTATION.md and already used by other plugins (e.g. ml25_wine_sulphites).
-        self._predict_count += 1
-        self._total_latency_ms += latency_ms
-        self._last_predict_at = datetime.now(tz=timezone.utc).isoformat()
 
     def _load_model_for_predict(self, mlflow_run_id: str) -> dict | None:
         """Resolve the model/scalers/explainer to use — user-trained (MLflow) or served."""
@@ -599,7 +588,7 @@ class Ml43CerealsDnslAnomalyFaultDetectionPlugin(PluginRuntimeMixin, ModelPlugin
             x_arr, _, cycle_ids, window_timestamps = preprocessing.prepare_batch_sequences(df)
             if x_arr.shape[0] == 0:
                 logger.warning("predict_batch — no valid windows found in %s", data_path)
-                self._record((time.perf_counter() - t0) * 1000)
+                self._record_latency((time.perf_counter() - t0) * 1000)
                 return PredictBatchResponse(
                     model_id=MODEL_ID,
                     predictions=[],
@@ -610,7 +599,7 @@ class Ml43CerealsDnslAnomalyFaultDetectionPlugin(PluginRuntimeMixin, ModelPlugin
             predictions = _score_windows(ctx, x_arr, cycle_ids, window_timestamps)
 
             latency_ms = (time.perf_counter() - t0) * 1000
-            self._record(latency_ms)
+            self._record_latency(latency_ms)
             logger.info(
                 "predict_batch done — %d windows, %d failures (threshold=%.2f), latency_ms=%.1f "
                 "count=%d",
@@ -834,10 +823,8 @@ class Ml43CerealsDnslAnomalyFaultDetectionPlugin(PluginRuntimeMixin, ModelPlugin
             metrics={**TEST_METRICS, "decision_threshold": self._threshold},
             runtime_stats=RuntimeStats(
                 total_predictions=self._predict_count,
-                avg_latency_ms=(
-                    round(self._total_latency_ms / self._predict_count, 1)
-                    if self._predict_count > 0 else None
-                ),
+                # predict_batch accumulates its perf_counter() latency (_record_latency)
+                avg_latency_ms=self._avg_latency_ms(1),
             ),
         )
         if mlflow_run_id:
@@ -861,6 +848,6 @@ class Ml43CerealsDnslAnomalyFaultDetectionPlugin(PluginRuntimeMixin, ModelPlugin
                     value = mlflow_metrics.get(key)
                     if isinstance(value, (int, float)):
                         base.metrics[key] = value
-            except Exception as exc:  # pylint: disable=broad-exception-caught
+            except Exception as exc:  # pylint: disable=broad-exception-caught  # stats best-effort
                 logger.warning("Could not fetch MLflow stats for run_id=%s: %s", mlflow_run_id, exc)
         return base

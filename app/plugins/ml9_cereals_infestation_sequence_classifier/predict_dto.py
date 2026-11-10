@@ -1,16 +1,15 @@
 """Pydantic request/response DTOs for the ml9 (cereal infestation) /predict endpoint."""
 from typing import Annotated, Any, Literal, Union
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import Field
 
+from app.application.dto.plugin_dto import BatchRequestBase, PluginDTO, UserModelRunIdEs
 from app.plugins.ml9_cereals_infestation_sequence_classifier.constants import WINDOW_SIZE
 
 
-class PredictBatchRequest(BaseModel):
+class PredictBatchRequest(BatchRequestBase):
     """Batch request: a CSV of raw hourly telemetry for one or more monitored series."""
 
-    model_config = ConfigDict(protected_namespaces=())
-    mode: Literal["batch"] = "batch"
     data_path: str = Field(
         ...,
         description=(
@@ -21,15 +20,12 @@ class PredictBatchRequest(BaseModel):
             "por sample_id y devuelve una fila por ventana válida."
         ),
     )
-    mlflow_run_id: str = Field(
-        default="", description="MLflow run ID de un modelo reentrenado por el usuario"
-    )
+    mlflow_run_id: UserModelRunIdEs = ""
 
 
-class PredictBatchResponse(BaseModel):
+class PredictBatchResponse(PluginDTO):
     """Batch response: one scored window per row, plus aggregates useful for monitoring."""
 
-    model_config = ConfigDict(protected_namespaces=())
     model_id: str
     n_windows: int = Field(..., description="Ventanas válidas puntuadas")
     n_series: int = Field(
@@ -52,10 +48,9 @@ class PredictBatchResponse(BaseModel):
     output_path: str | None = None
 
 
-class PredictInlineRequest(BaseModel):
+class PredictInlineRequest(PluginDTO):
     """Inline request: at least WINDOW_SIZE hourly observations of one monitored series."""
 
-    model_config = ConfigDict(protected_namespaces=())
     mode: Literal["inline"] = "inline"
     model_key: str | None = None
     threshold: float | None = Field(
@@ -83,15 +78,12 @@ class PredictInlineRequest(BaseModel):
             "modelo original (ver manifest known_issues sensibilidad_al_historial_aportado)."
         ),
     )
-    mlflow_run_id: str = Field(
-        default="", description="MLflow run ID de un modelo reentrenado por el usuario"
-    )
+    mlflow_run_id: UserModelRunIdEs = ""
 
 
-class PredictInlineResponse(BaseModel):
+class PredictInlineResponse(PluginDTO):
     """Inline response: class and per-class probabilities for the most recent window."""
 
-    model_config = ConfigDict(protected_namespaces=())
     model_id: str
     sample_id: str
     window_index: int = Field(

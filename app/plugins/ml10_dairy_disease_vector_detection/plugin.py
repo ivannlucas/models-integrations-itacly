@@ -398,14 +398,11 @@ class Ml10DairyDiseaseVectorDetectionPlugin(PluginRuntimeMixin, ModelPluginPort)
     VERSION = VERSION
 
     def __init__(self) -> None:
-        """Initialize plugin with no loaded models and zero stats."""
+        """Initialize plugin with no loaded models (stats start at the mixin defaults)."""
         self._detector = None
         self._classifier = None
         self._class_names: list[str] = []
         self._device = safe_device()
-        self._predict_count: int = 0
-        self._total_latency_ms: float = 0.0
-        self._last_predict_at: str | None = None
 
     def load(self) -> None:
         """Carga los modelos desde artifacts/ y los prepara para inferencia."""
@@ -536,7 +533,6 @@ class Ml10DairyDiseaseVectorDetectionPlugin(PluginRuntimeMixin, ModelPluginPort)
 
     def stats(self, mlflow_run_id: str = "") -> StatsResponse:
         """Devuelve estadísticas de uso y metadata del modelo."""
-        avg = self._total_latency_ms / self._predict_count if self._predict_count > 0 else None
         base = StatsResponse(
             model_name=self.MODEL_ID,
             version=self.VERSION,
@@ -582,7 +578,7 @@ class Ml10DairyDiseaseVectorDetectionPlugin(PluginRuntimeMixin, ModelPluginPort)
             metrics={},
             runtime_stats=RuntimeStats(
                 total_predictions=self._predict_count,
-                avg_latency_ms=avg,
+                avg_latency_ms=self._avg_latency_ms(),
             ),
         )
         return add_mlflow_run_to_stats(base, mlflow_run_id)
@@ -736,5 +732,4 @@ class Ml10DairyDiseaseVectorDetectionPlugin(PluginRuntimeMixin, ModelPluginPort)
 
     def _update_stats(self, latency_ms: float = 0.0) -> None:
         """Actualiza las estadísticas de uso del modelo después de una predicción."""
-        self._record()
-        self._total_latency_ms += latency_ms
+        self._record_latency(latency_ms)

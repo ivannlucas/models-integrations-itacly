@@ -12,6 +12,7 @@ import pandas as pd
 
 from app.application.dto.stats_dto import InputField, OutputField, RuntimeStats, StatsResponse
 from app.domain.ports.model_plugin_port import ModelPluginPort
+from app.domain.services.batch_rows import row_error_capture
 from app.domain.services.exceptions import NoValidSimulationPointError
 from app.domain.services.mlflow_artifacts import (
     add_mlflow_run_to_stats,
@@ -264,12 +265,11 @@ class Ml25WineSulphitesPlugin(PluginRuntimeMixin, ModelPluginPort):
     """Plugin that recommends optimal free SO2 doses for wine preservation."""
 
     def __init__(self) -> None:
-        """Initialise the plugin with empty models and zeroed runtime counters."""
+        """Initialise the plugin with empty models (runtime counters: mixin defaults)."""
         self._model_qual: Any = None
         self._model_bound: Any = None
         self._metadata: dict = {}
         self._loaded: bool = False
-        self._total_latency_ms: float = 0.0
 
     def load(self) -> None:
         """Load quality and bound SO2 models plus metadata from the artifact store."""
@@ -360,16 +360,13 @@ class Ml25WineSulphitesPlugin(PluginRuntimeMixin, ModelPluginPort):
                 row_dict.setdefault("min_molecular", 0.6)
                 row_dict.setdefault("max_total", 200.0)
                 row_dict.setdefault("delta_max", 40.0)
-                try:
+                with row_error_capture(predictions, {"row": int(idx)}, what=f"fila {idx}"):
                     res = self._run_inference(row_dict, ctx)
                     predictions.append(_batch_row(
                         idx, row_dict, res, with_trajectory=trajectory_on_every_row or idx == 0
                     ))
-                except Exception as exc:  # pylint: disable=broad-exception-caught  # per-row error capture
-                    predictions.append({"row": int(idx), "error": str(exc)})
 
-            self._total_latency_ms += (time.perf_counter() - t0) * 1000
-            self._record()
+            self._record_latency((time.perf_counter() - t0) * 1000)
             logger.info(
                 "predict_batch done — %d predictions count=%d mlflow=%s",
                 len(predictions), self._predict_count, bool(mlflow_run_id),
@@ -398,10 +395,9 @@ class Ml25WineSulphitesPlugin(PluginRuntimeMixin, ModelPluginPort):
         with removing_dir(user_temp_dir):
             t0 = time.perf_counter()
             res = self._run_inference(features, ctx)
-            self._total_latency_ms += (time.perf_counter() - t0) * 1000
+            self._record_latency((time.perf_counter() - t0) * 1000)
             i = res["rec_idx"]
 
-            self._record()
             logger.info(
                 "predict_inline done — intervention=%s rec_free=%.1f quality=%.3f count=%d "
                 "mlflow=%s",
@@ -518,7 +514,6 @@ class Ml25WineSulphitesPlugin(PluginRuntimeMixin, ModelPluginPort):
 
     def stats(self, mlflow_run_id: str = "") -> StatsResponse:
         """Build and return the full stats response (input/output schema and runtime metrics)."""
-        avg = self._total_latency_ms / self._predict_count if self._predict_count > 0 else None
         base = StatsResponse(
             model_name=MODEL_ID,
             version=VERSION,
@@ -621,7 +616,7 @@ class Ml25WineSulphitesPlugin(PluginRuntimeMixin, ModelPluginPort):
             },
             runtime_stats=RuntimeStats(
                 total_predictions=self._predict_count,
-                avg_latency_ms=round(avg, 1) if avg is not None else None,
+                avg_latency_ms=self._avg_latency_ms(1),
             ),
         )
         return add_mlflow_run_to_stats(base, mlflow_run_id)

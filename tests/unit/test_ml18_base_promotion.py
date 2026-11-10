@@ -55,7 +55,6 @@ def test_train_without_run_publishes_the_new_base(csv_path, isolated_base_store)
     resp = plugin_mod.Ml18MeatSpatialPriceForecastPlugin().train(
         data_path=csv_path, mlflow_run_id=""
     )
-    # pylint: disable-next=no-member  # pydantic field seen as FieldInfo
     assert resp.base_version.version == "v1" and resp.upload_warning is None
     model_path = isolated_base_store / ARTIFACT_FOLDER_NAME / "versions" / "v1" / MODEL_FILENAME
     assert model_path.read_bytes() == b"gru"
@@ -71,4 +70,4 @@ def test_mlflow_failure_is_a_warning(csv_path, monkeypatch):
     )
     # pydantic fields seen as FieldInfo by pylint
     assert "mlflow caído" in resp.upload_warning  # pylint: disable=unsupported-membership-test
-    assert resp.base_version.mlflow_run_id == "run-1"  # pylint: disable=no-member
+    assert resp.base_version.mlflow_run_id == "run-1"

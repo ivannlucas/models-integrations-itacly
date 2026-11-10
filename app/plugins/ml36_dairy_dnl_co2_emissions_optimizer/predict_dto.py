@@ -11,17 +11,18 @@ Same transport contract as ml34: two modes (discriminated union on ``mode``),
     non-controllable context variables are needed; the current setpoints are
     optional and, if given, add the savings versus current operation.
 """
-from typing import Annotated, Any, Literal, Union
+from typing import Annotated, Literal, Union
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import Field, model_validator
+
+from app.application.dto.plugin_dto import BatchResponseBase, InlineRequestBase, PluginDTO
 
 CONTROL_FIELDS = ("T_serv", "Delta_P", "Regeneration_perc")
 
 
-class PredictBatchRequest(BaseModel):
+class PredictBatchRequest(PluginDTO):
     """Batch request: CSV path, dispatched by ``model_key`` like inline."""
 
-    model_config = ConfigDict(protected_namespaces=())
     mode: Literal["batch"] = "batch"
     data_path: str = Field(
         ...,
@@ -38,23 +39,12 @@ class PredictBatchRequest(BaseModel):
     mlflow_run_id: str = ""
 
 
-class PredictBatchResponse(BaseModel):
+class PredictBatchResponse(BatchResponseBase):
     """Batch response: one prediction dict per input row."""
 
-    model_config = ConfigDict(protected_namespaces=())
-    model_id: str
-    predictions: list[dict[str, Any]]
-    output_path: str | None = None
 
-
-class PredictInlineRequest(BaseModel):
+class PredictInlineRequest(InlineRequestBase):
     """Single-sample request; ``predict_inline`` dispatches by ``model_key``."""
-
-    model_config = ConfigDict(protected_namespaces=())
-    mode: Literal["inline"] = "inline"
-    model_key: str | None = None
-    threshold: float | None = None
-    mlflow_run_id: str = ""
 
     # Non-controllable context — required by both operations.
     F_milk: float = Field(..., description="Caudal volumétrico de leche (L/h)")
@@ -106,19 +96,17 @@ class PredictInlineRequest(BaseModel):
         return self
 
 
-class PredictInlineResponse(BaseModel):
+class PredictInlineResponse(PluginDTO):
     """Inline MLP response in real units."""
 
-    model_config = ConfigDict(protected_namespaces=())
     model_id: str
     T_out_pred: float = Field(..., description="Temperatura de salida de la leche predicha (°C)")
     CO2_emissions_pred: float = Field(..., description="Emisiones de CO2 predichas (kg)")
 
 
-class PredictOptimizeResponse(BaseModel):
+class PredictOptimizeResponse(PluginDTO):
     """Optimization response: recommended setpoints + predicted outcome + savings."""
 
-    model_config = ConfigDict(protected_namespaces=())
     model_id: str
     decision_mode: str = Field(..., description="static | adaptive | hybrid")
     used_adaptive_ga: bool = Field(..., description="True si se ejecutó el GA adaptativo")

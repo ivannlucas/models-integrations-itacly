@@ -20,6 +20,7 @@ from app.domain.services.mlflow_artifacts import (
     upload_model_to_mlflow,
 )
 from app.domain.services.plugin_runtime import PluginRuntimeMixin
+from app.domain.services.xai_values import xai_feature_values
 from app.infrastructure.artifact_store import local_file_path
 from app.plugins.ml30_meat_traceability_detection.constants import (
     DEFAULT_THRESHOLD,
@@ -77,19 +78,6 @@ def _to_native(value):
     return value.item() if hasattr(value, "item") else value
 
 
-def _xai_values_from_row(row, feature_columns: list[str]) -> dict[str, float] | None:
-    """Build xai_feature_values from a features dict (inline) or DataFrame row (batch)."""
-    xai: dict[str, float] = {}
-    for col in feature_columns:
-        val = row.get(col)
-        if val is not None and pd.notna(val):
-            try:
-                xai[col] = float(val)
-            except (TypeError, ValueError):
-                pass
-    return xai or None
-
-
 def _batch_rows(df: pd.DataFrame, y_pred, y_score, feature_columns: list[str]) -> list[dict]:
     """One predict_batch output row per CSV row (ids, prediction, score and XAI values)."""
     id_cols = [c for c in _ID_COLUMNS if c in df.columns]
@@ -100,7 +88,7 @@ def _batch_rows(df: pd.DataFrame, y_pred, y_score, feature_columns: list[str]) -
         row["pred_traceability_incident"] = int(y_pred[i])
         row["pred_score"] = float(y_score[i])
         row["model_name"] = MODEL_ID
-        row["xai_feature_values"] = _xai_values_from_row(df_row, feature_columns)
+        row["xai_feature_values"] = xai_feature_values(df_row, feature_columns) or None
         predictions.append(row)
     return predictions
 
@@ -219,7 +207,7 @@ class Ml30MeatTraceabilityDetectionPlugin(PluginRuntimeMixin, ModelPluginPort):
                 pred_score=score,
                 confidence=confidence,
                 model_name=MODEL_ID,
-                xai_feature_values=_xai_values_from_row(features, feature_columns),
+                xai_feature_values=xai_feature_values(features, feature_columns) or None,
             )
 
     def predict_batch(

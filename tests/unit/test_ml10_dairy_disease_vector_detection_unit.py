@@ -277,9 +277,9 @@ class TestMl10DairyDiseaseVectorDetectionPluginDirect:
         _ = mock_load
         plugin = Ml10DairyDiseaseVectorDetectionPlugin()
         assert plugin.is_loaded() is False
-        assert plugin._predict_count == 0
+        assert plugin.predict_count == 0
         assert plugin._total_latency_ms == 0.0
-        assert plugin._last_predict_at is None
+        assert plugin.last_predict_at is None
 
     @patch(_LOAD_PATCH)
     def test_plugin_load_sets_loaded(self, mock_load):
@@ -321,12 +321,12 @@ class TestMl10DairyDiseaseVectorDetectionPluginDirect:
         mock_load.return_value = (MagicMock(), MagicMock(), ["fly", "mos", "tick"])
         plugin = Ml10DairyDiseaseVectorDetectionPlugin()
         plugin.load()
-        assert plugin._predict_count == 0
-        assert plugin._last_predict_at is None
+        assert plugin.predict_count == 0
+        assert plugin.last_predict_at is None
         plugin._update_stats(latency_ms=50.0)
-        assert plugin._predict_count == 1
+        assert plugin.predict_count == 1
         assert plugin._total_latency_ms == 50.0
-        assert plugin._last_predict_at is not None
+        assert plugin.last_predict_at is not None
 
     @patch(_LOAD_PATCH)
     def test_require_loaded_raises_when_not_loaded(self, mock_load):
@@ -621,9 +621,9 @@ class TestPredictInlineWithMocks:
         b64 = base64.b64encode(buf.getvalue()).decode()
 
         plugin = self._make_plugin()
-        assert plugin._predict_count == 0
+        assert plugin.predict_count == 0
         plugin.predict_inline(features={"image_base64": b64})
-        assert plugin._predict_count == 1
+        assert plugin.predict_count == 1
 
     def test_predict_inline_skips_zero_area_detection(self):
         """Verify predict_inline skips boxes with zero area."""
@@ -686,7 +686,7 @@ class TestPredictBatchWithMocks:
                 result = plugin.predict_batch(data_path=tmp)
                 assert result.model_id == "ml10-dairy-disease-vector-detection"
                 assert len(result.predictions) == 1
-                assert plugin._predict_count == 1
+                assert plugin.predict_count == 1
 
     def test_predict_batch_with_csv(self):
         """Verify predict_batch works with a CSV file listing images."""
@@ -710,7 +710,7 @@ class TestPredictBatchWithMocks:
                 result = plugin.predict_batch(data_path=str(csv_path))
                 assert result.model_id == "ml10-dairy-disease-vector-detection"
                 assert len(result.predictions) == 1
-                assert plugin._predict_count == 1
+                assert plugin.predict_count == 1
 
     def test_predict_batch_empty_directory_raises(self):
         """Verify predict_batch raises ValueError on empty directories."""

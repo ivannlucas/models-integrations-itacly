@@ -1,12 +1,13 @@
 """Pydantic DTOs for the ml41 acoustic anomaly ``/predict`` endpoint."""
-from typing import Annotated, Any, Literal, Union
+from typing import Annotated, Literal, Union
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import Field
+
+from app.application.dto.plugin_dto import BatchRequestBase, BatchResponseBase, PluginDTO
 
 
-class PredictInlineRequest(BaseModel):
+class PredictInlineRequest(PluginDTO):
     """Inline request: one base64 WAV plus the machine combination to score it with."""
-    model_config = ConfigDict(protected_namespaces=())
     mode: Literal["inline"] = "inline"
     audio_base64: str = Field(..., description="Base64-encoded WAV recording of the machine")
     machine: Literal["fan", "pump", "slider", "valve"] = Field(
@@ -31,9 +32,8 @@ class PredictInlineRequest(BaseModel):
     )
 
 
-class PredictInlineResponse(BaseModel):
+class PredictInlineResponse(PluginDTO):
     """Inline response: anomaly scores and predicted label for one WAV."""
-    model_config = ConfigDict(protected_namespaces=())
     model_id: str
     machine: str
     machine_id: str
@@ -48,10 +48,8 @@ class PredictInlineResponse(BaseModel):
     threshold_used: float
 
 
-class PredictBatchRequest(BaseModel):
+class PredictBatchRequest(BatchRequestBase):
     """Batch request: ZIP with manifest.csv plus the referenced WAV files."""
-    model_config = ConfigDict(protected_namespaces=())
-    mode: Literal["batch"] = "batch"
     data_path: str = Field(
         ...,
         description=(
@@ -59,19 +57,14 @@ class PredictBatchRequest(BaseModel):
             "machine_id,snr) plus the referenced WAV files"
         ),
     )
-    mlflow_run_id: str = ""
     threshold: float | None = Field(
         default=None,
         description="Optional decision threshold override for every WAV in this batch",
     )
 
 
-class PredictBatchResponse(BaseModel):
+class PredictBatchResponse(BatchResponseBase):
     """Batch response: one prediction dict per WAV in the manifest."""
-    model_config = ConfigDict(protected_namespaces=())
-    model_id: str
-    predictions: list[dict[str, Any]]
-    output_path: str | None = None
 
 
 PredictRequest = Annotated[

@@ -2,7 +2,9 @@
 
 from typing import Annotated, Any, Literal, Optional, Union
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import Field, model_validator
+
+from app.application.dto.plugin_dto import BatchRequestBase, PluginDTO, UserModelRunIdEs
 
 from app.plugins.ml26_wine_sulfite_gru_pso_forecast.constants import WINDOW
 
@@ -10,10 +12,9 @@ WineType = Literal["red", "rose", "white"]
 Stage = Literal["must", "fermentation", "stabilization", "storage", "pre_bottling"]
 
 
-class LotInput(BaseModel):
+class LotInput(PluginDTO):
     """Fixed data of one tank/lot (one row of lote.csv)."""
 
-    model_config = ConfigDict(protected_namespaces=())
     lot_id: str = Field(..., description="Identificador del lote/depósito")
     wine_type: WineType = Field(..., description="Tipo de vino: red, rose o white")
     volume_l: float = Field(
@@ -24,10 +25,9 @@ class LotInput(BaseModel):
     )
 
 
-class ReadingInput(BaseModel):
+class ReadingInput(PluginDTO):
     """One 2-hour reading of the lot (one row of lecturas.csv)."""
 
-    model_config = ConfigDict(protected_namespaces=())
     lot_id: Optional[str] = Field(
         default=None, description="Opcional en inline: si falta se usa el del lote"
     )
@@ -67,10 +67,9 @@ class ReadingInput(BaseModel):
     )
 
 
-class PredictInlineRequest(BaseModel):
+class PredictInlineRequest(PluginDTO):
     """Inline request: one lot + its reading history (>= 24 readings), or a pre-processed window."""
 
-    model_config = ConfigDict(protected_namespaces=())
     mode: Literal["inline"] = "inline"
     model_key: str | None = None
     threshold: float | None = Field(
@@ -97,9 +96,7 @@ class PredictInlineRequest(BaseModel):
             "técnica."
         ),
     )
-    mlflow_run_id: str = Field(
-        default="", description="MLflow run ID de un modelo reentrenado por el usuario"
-    )
+    mlflow_run_id: UserModelRunIdEs = ""
 
     @model_validator(mode="after")
     def _one_input_mode(self) -> "PredictInlineRequest":
@@ -118,10 +115,9 @@ class PredictInlineRequest(BaseModel):
         return self
 
 
-class LotPrediction(BaseModel):
+class LotPrediction(PluginDTO):
     """72 h forecast for one lot."""
 
-    model_config = ConfigDict(protected_namespaces=())
     lot_id: Optional[str] = None
     timestamp: Optional[str] = Field(
         default=None, description="Instante de predicción (última lectura usada)"
@@ -162,11 +158,9 @@ class PredictInlineResponse(LotPrediction):
     )
 
 
-class PredictBatchRequest(BaseModel):
+class PredictBatchRequest(BatchRequestBase):
     """Batch request: CSV of readings with the lot columns repeated on every row."""
 
-    model_config = ConfigDict(protected_namespaces=())
-    mode: Literal["batch"] = "batch"
     data_path: str = Field(
         ...,
         description=(
@@ -178,15 +172,12 @@ class PredictBatchRequest(BaseModel):
             f"Se devuelve una predicción por lote (mínimo {WINDOW} lecturas por lote)."
         ),
     )
-    mlflow_run_id: str = Field(
-        default="", description="MLflow run ID de un modelo reentrenado por el usuario"
-    )
+    mlflow_run_id: UserModelRunIdEs = ""
 
 
-class PredictBatchResponse(BaseModel):
+class PredictBatchResponse(PluginDTO):
     """Batch response: one forecast per lot."""
 
-    model_config = ConfigDict(protected_namespaces=())
     model_id: str
     model_source: str
     n_lots: int

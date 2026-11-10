@@ -7,13 +7,13 @@ single-row mode, not a workaround.
 """
 from typing import Annotated, Any, Literal, Union
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import Field
+
+from app.application.dto.plugin_dto import BatchRequestBase, PluginDTO
 
 
-class PredictBatchRequest(BaseModel):
+class PredictBatchRequest(BatchRequestBase):
     """Batch request: path to a CSV with one row per date/raw material/destination."""
-    model_config = ConfigDict(protected_namespaces=())
-    mode: Literal["batch"] = "batch"
     data_path: str = Field(
         ...,
         description=(
@@ -27,9 +27,8 @@ class PredictBatchRequest(BaseModel):
     )
 
 
-class PredictBatchResponse(BaseModel):
+class PredictBatchResponse(PluginDTO):
     """Batch response: per-row decisions plus aggregate policy-simulation summary."""
-    model_config = ConfigDict(protected_namespaces=())
     model_id: str
     predictions: list[dict[str, Any]]
     summary: dict[str, Any] | None = Field(
@@ -42,9 +41,8 @@ class PredictBatchResponse(BaseModel):
     output_path: str | None = None
 
 
-class PredictInlineRequest(BaseModel):
+class PredictInlineRequest(PluginDTO):
     """Inline request: a single operational row (date + raw material + destination)."""
-    model_config = ConfigDict(protected_namespaces=())
     mode: Literal["inline"] = "inline"
     date: str = Field(..., description="ISO or parseable date of the operational need")
     raw_material_id: str = Field(..., description="Meat raw material identifier")
@@ -78,9 +76,8 @@ class PredictInlineRequest(BaseModel):
     )
 
 
-class PredictInlineResponse(BaseModel):
+class PredictInlineResponse(PluginDTO):
     """Inline response: purchase decision for a single row."""
-    model_config = ConfigDict(protected_namespaces=())
     model_id: str
     date: str
     raw_material_id: str

@@ -5,10 +5,9 @@ there is no cheaper path in the original code, predict() always runs the full XA
 """
 from __future__ import annotations
 
-import logging
-
 import numpy as np
 
+from app.domain.services.batch_rows import row_error_capture
 from app.plugins.ml45_cereals_dnsl_critical_point_detection._vendor.xai import DNFLExplainer
 from app.plugins.ml45_cereals_dnsl_critical_point_detection.constants import (
     PCC_CATALOG_RECORDS,
@@ -20,8 +19,6 @@ from app.plugins.ml45_cereals_dnsl_critical_point_detection.constants import (
     XAI_TOP_RULES,
     XAI_TOP_VARIABLES,
 )
-
-logger = logging.getLogger(__name__)
 
 
 def build_explainer(model, stats_columns: list[str], model_cfg: dict) -> DNFLExplainer:
@@ -105,7 +102,7 @@ def build_predictions(ctx: dict, windows: tuple) -> list[dict]:
 
     predictions: list[dict] = []
     for idx, x_window in enumerate(sequences_scaled):
-        try:
+        with row_error_capture(predictions, {"window_index": idx + 1}, what=f"ventana {idx + 1}"):
             row = explain_window(
                 explainer,
                 x_window=x_window,
@@ -113,15 +110,11 @@ def build_predictions(ctx: dict, windows: tuple) -> list[dict]:
                 xai_background=xai_background,
                 threshold=threshold,
             )
-            row = {
+            predictions.append({
                 "window_index": idx + 1,
                 **({"cycle_id": entity_ids[idx]} if entity_ids else {}),
                 "timestamp_init": str(timestamp_windows[idx][0]),
                 "timestamp_end": str(timestamp_windows[idx][1]),
                 **row,
-            }
-        except Exception as exc:  # pylint: disable=broad-exception-caught  # per-window error row
-            logger.warning("Error en ventana %s: %s", idx + 1, exc)
-            row = {"window_index": idx + 1, "error": str(exc)}
-        predictions.append(row)
+            })
     return predictions

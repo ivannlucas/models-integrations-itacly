@@ -8,6 +8,7 @@ import torch
 from torch import nn
 from torchvision import models
 
+from app.domain.services.torch_device import safe_torch_device
 from app.infrastructure.artifact_store import ArtifactStore
 from app.plugins.ml10_dairy_disease_vector_detection.constants import (
     ARTIFACT_FOLDER_NAME,
@@ -30,14 +31,7 @@ def safe_device() -> torch.device:
     unsupported by the installed PyTorch build (e.g. sm_61), but real ops then fail.
     This probes a tiny conv and falls back to CPU when CUDA is not functional.
     """
-    if not torch.cuda.is_available():
-        return torch.device("cpu")
-    try:
-        torch.nn.Conv2d(1, 1, 1).cuda()(torch.zeros(1, 1, 4, 4).cuda())
-        return torch.device("cuda")
-    except Exception:  # pylint: disable=broad-exception-caught  # any CUDA failure → CPU fallback
-        logger.warning("CUDA detectada pero no funcional para operaciones de red — usando CPU.")
-        return torch.device("cpu")
+    return safe_torch_device()
 
 
 def _build_mobilenetv3_classifier(num_classes: int) -> nn.Module:

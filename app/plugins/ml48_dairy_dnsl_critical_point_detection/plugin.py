@@ -35,6 +35,7 @@ from app.plugins.ml48_dairy_dnsl_critical_point_detection.mlflow_utils import (
 from app.plugins.ml48_dairy_dnsl_critical_point_detection.model_loader import (
     load_artifacts_from_dir,
     load_shap_background,
+    safe_device,
 )
 from app.plugins.ml48_dairy_dnsl_critical_point_detection.postprocessing import (
     format_batch_row,
@@ -113,7 +114,8 @@ class Ml48DairyDnslCriticalPointDetectionPlugin(PluginRuntimeMixin, ModelPluginP
         if bucket:
             ArtifactStore(ARTIFACT_FOLDER_NAME).download_all_if_needed()
 
-        self._device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        # Real CUDA self-test: a visible but unusable GPU must fall back to CPU, not fail load().
+        self._device = safe_device()
         model, scaler, feature_cols, ts1_mean_train = load_artifacts_from_dir(_ARTIFACT_DIR)
         self._model = model.to(self._device)
         self._scaler = scaler

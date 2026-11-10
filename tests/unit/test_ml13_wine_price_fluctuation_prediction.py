@@ -5,7 +5,6 @@ unit tests exercise the real plugin modules on small deterministic synthetic ser
 wiring and invariants, not correctness (golden cases live in inbox/a13/manifest.yaml and are
 checked by the verification skill).
 """
-# pylint: disable=protected-access  # the real-plugin tests inject a trained bundle
 from datetime import date, timedelta
 from unittest.mock import MagicMock
 
@@ -19,6 +18,7 @@ from app.domain.services.exceptions import (
     UserModelUnavailableError,
 )
 from app.domain.services import mlflow_artifacts
+from app.infrastructure.artifact_store import ArtifactStore
 from app.plugins.ml13_wine_price_fluctuation_prediction import (
     model_loader,
     preprocessing,
@@ -281,19 +281,22 @@ def test_train_models_end_to_end_on_synthetic_series():
 # ── real plugin: retraining contract (MLflow only, no silent fallback) ───────
 
 @pytest.fixture(name="real_plugin")
-def fixture_real_plugin():
-    """The real plugin with a bundle trained on the synthetic series.
+def fixture_real_plugin(monkeypatch):
+    """The real plugin loaded with a bundle trained on the synthetic series.
 
-    Fixed artifacts live in S3.
+    Fixed artifacts live in S3, so load() reads the bundle from a stubbed loader.
     """
     result = training.train_models(
         preprocessing.clean_and_index_data(pd.DataFrame(_rows(160, seed=3)))
     )
-    plugin = Ml13WinePriceFluctuationPredictionPlugin()
-    plugin._bundle = {
+    bundle = {
         "model": result["model"], "scaler": result["scaler"],
         "schema": {"feature_columns": FEATURE_COLUMNS}, "model_type": result["model_type"],
     }
+    plugin = Ml13WinePriceFluctuationPredictionPlugin()
+    with monkeypatch.context() as patch:
+        patch.setattr(model_loader, "load_artifacts", lambda: bundle)
+        plugin.load()
     return plugin
 
 
@@ -309,7 +312,7 @@ def test_real_train_publishes_the_new_base_and_uploads_to_the_run(
     real_plugin, train_csv, monkeypatch, isolated_base_store
 ):
     """train() publishes v1 with all artifacts and uploads them to the MLflow run."""
-    repo_dir = model_loader._store.local_dir
+    repo_dir = ArtifactStore(ARTIFACT_FOLDER_NAME).local_dir  # the plugin's store dir
     before = set(repo_dir.rglob("*")) if repo_dir.exists() else set()
     tracker = MagicMock()
     monkeypatch.setattr(plugin_mod, "BaseMLflowTracker", MagicMock(return_value=tracker))

@@ -1,7 +1,9 @@
 """Pydantic request/response DTOs for the ml24 /predict endpoint."""
 from typing import Annotated, Any, Literal, Union
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import Field
+
+from app.application.dto.plugin_dto import InlineRequestBase, PluginDTO, UnusedThreshold
 
 _CCAA_DESC = (
     "CCAA a devolver: códigos de 3 letras de src/utils/ccaa_codes.py (AND, ARA, NAV, CAN, CTB, "
@@ -21,14 +23,13 @@ _AS_OF_DESC = (
 _RUN_DESC = "MLflow run ID de un modelo reentrenado por el usuario (vacío = modelo base)."
 
 
-class PredictBatchRequest(BaseModel):
+class PredictBatchRequest(PluginDTO):
     """Batch request: a long-format MAPA series CSV (the original's --input), every CCAA x horizon.
 
     The generic use case only forwards data_path/mlflow_run_id to predict_batch, so the
     ccaa/horizons/as_of_period filters exist in inline mode only.
     """
 
-    model_config = ConfigDict(protected_namespaces=())
     mode: Literal["batch"] = "batch"
     mlflow_run_id: str = Field(default="", description=_RUN_DESC)
     data_path: str = Field(
@@ -46,19 +47,10 @@ class PredictBatchRequest(BaseModel):
     )
 
 
-class PredictInlineRequest(BaseModel):
+class PredictInlineRequest(InlineRequestBase):
     """Inline request: predict from the base series bundled with the artifacts."""
 
-    model_config = ConfigDict(protected_namespaces=())
-    mode: Literal["inline"] = "inline"
-    model_key: str | None = None
-    threshold: float | None = Field(
-        default=None,
-        description=(
-            "No usado por este modelo (no hay umbral de decisión); se acepta por compatibilidad "
-            "de contrato."
-        ),
-    )
+    threshold: UnusedThreshold = None
     mlflow_run_id: str = Field(default="", description=_RUN_DESC)
     ccaa: list[str] | None = Field(default=None, description=_CCAA_DESC)
     horizons: list[Literal[1, 3, 6]] | None = Field(default=None, description=_HORIZONS_DESC)
@@ -79,8 +71,7 @@ _FRESHNESS_DESC = (
 )
 
 
-class _PredictResponseBase(BaseModel):
-    model_config = ConfigDict(protected_namespaces=())
+class _PredictResponseBase(PluginDTO):
     model_id: str
     predictions: list[dict[str, Any]] = Field(..., description=_PREDICTIONS_DESC)
     n_predictions: int

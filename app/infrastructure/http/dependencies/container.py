@@ -160,3 +160,8 @@ class ModelContainer:  # pylint: disable=too-many-instance-attributes  # DI wiri
     def service(self) -> ModelRuntimeService:
         """Devuelve el servicio runtime asociado al plugin."""
         return self._service
+
+    @property
+    def plugin(self) -> ModelPluginPort:
+        """Plugin instance currently served (replaced whole when a new base is promoted)."""
+        return self._plugin

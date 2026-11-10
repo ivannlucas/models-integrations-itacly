@@ -187,7 +187,7 @@ def _watch(proc: Any, job_id: str, store: TrainJobStorePort, max_duration_s: flo
             error_type=TIMEOUT_ERROR_TYPE, error=max_duration_error(max_duration_s),
             http_status=500,
         ))
-    except Exception:  # pylint: disable=broad-exception-caught
+    except Exception:  # pylint: disable=broad-exception-caught  # watchdog must never crash
         logger.exception("Could not mark training job %s as timed out", job_id)
 
 

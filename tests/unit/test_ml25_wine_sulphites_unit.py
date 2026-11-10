@@ -2,7 +2,6 @@
 
 Tests preprocessing, postprocessing, and the real plugin (mocked models).
 """
-# pylint: disable=protected-access
 
 from __future__ import annotations
 
@@ -335,8 +334,8 @@ class TestMl25WineSulphitesPluginDirect:
         mock_load.return_value = (MagicMock(), MagicMock(), {})
         plugin = Ml25WineSulphitesPlugin()
         assert plugin.is_loaded() is False
-        assert plugin._predict_count == 0
-        assert plugin._last_predict_at is None
+        assert plugin.predict_count == 0
+        assert plugin.last_predict_at is None
 
     @patch("app.plugins.ml25_wine_sulphites.plugin.load_artifacts")
     def test_load_sets_loaded(self, mock_load):
@@ -413,7 +412,7 @@ class TestMl25WineSulphitesPluginDirect:
         assert hasattr(result, "prediction")
         assert hasattr(result, "confidence")
         assert hasattr(result, "recommended_free_so2")
-        assert plugin._predict_count == 1
+        assert plugin.predict_count == 1
 
     @patch("app.plugins.ml25_wine_sulphites.plugin.load_artifacts")
     def test_predict_inline_no_valid_point_raises(self, mock_load):

@@ -1,15 +1,24 @@
-"""Shared plugin helpers: mlflow_artifacts (download/upload/stats) and PluginRuntimeMixin."""
+"""Shared plugin helpers: mlflow_artifacts, PluginRuntimeMixin, batch_rows, torch_device, DTOs."""
 # pylint: disable=protected-access  # the mixin's API is the plugins' private helpers
+import base64
+import io
 import os
 import tempfile
 from pathlib import Path
 
+import pandas as pd
 import pytest
+import torch
+from PIL import Image
+from pydantic import ValidationError
 
+from app.application.dto import plugin_dto
 from app.application.dto.stats_dto import RuntimeStats, StatsResponse
-from app.domain.services import mlflow_artifacts
+from app.domain.services import image_cam, mlflow_artifacts, torch_device
+from app.domain.services.batch_rows import row_error_capture
 from app.domain.services.exceptions import ModelNotLoadedError, ModelPersistenceError
 from app.domain.services.plugin_runtime import PluginRuntimeMixin
+from app.domain.services.xai_values import xai_feature_values
 
 
 class _FakeTracker:
@@ -209,5 +218,80 @@ def test_plugin_runtime_mixin():
     assert plugin._runtime_stats() == RuntimeStats(
         total_predictions=2, avg_latency_ms=None
     )
-    assert plugin._last_predict_at
-    assert other._predict_count == 0
+    assert plugin.predict_count == 2 and plugin.last_predict_at
+    assert other.predict_count == 0 and other.last_predict_at is None
+
+
+def test_row_error_capture_appends_error_row_and_goes_on():
+    """A failing row becomes {**error_row, "error": msg}; good rows are untouched."""
+    rows = []
+    for idx, value in enumerate([1, 0, 2]):
+        with row_error_capture(rows, {"row": idx}, what=f"fila {idx}"):
+            rows.append({"row": idx, "inv": 1 / value})
+    assert rows == [
+        {"row": 0, "inv": 1.0},
+        {"row": 1, "error": "division by zero"},
+        {"row": 2, "inv": 0.5},
+    ]
+
+
+def test_safe_torch_device(monkeypatch):
+    """CPU without CUDA or when the CUDA probe fails; CUDA only when the probe runs."""
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    assert torch_device.safe_torch_device() == torch.device("cpu")
+
+    def broken_cuda(self, *args, **kwargs):
+        _ = self, args, kwargs
+        raise RuntimeError("no kernel image is available for execution on the device")
+
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(torch.nn.Module, "cuda", broken_cuda)
+    assert torch_device.safe_torch_device() == torch.device("cpu")
+
+
+def test_plugin_dto_bases():
+    """The bases carry the shared leading fields, in order, with the shared defaults."""
+    assert list(plugin_dto.BatchRequestBase.model_fields) == ["mode", "data_path", "mlflow_run_id"]
+    assert list(plugin_dto.InlineRequestBase.model_fields) == [
+        "mode", "model_key", "threshold", "mlflow_run_id",
+    ]
+    response = plugin_dto.BatchResponseBase(model_id="m", predictions=[{"a": 1}])
+    assert response.model_dump() == {
+        "model_id": "m", "predictions": [{"a": 1}], "output_path": None,
+    }
+    with pytest.raises(ValidationError):
+        plugin_dto.TrainRequestBase(data_path="x.csv", mlflow_run_id="  ")
+
+
+def test_latency_tracking():
+    """_record_latency counts the prediction; _avg_latency_ms rounds as asked."""
+    plugin = _Plugin()
+    assert plugin._avg_latency_ms(1) is None
+    plugin._record_latency(10.0)
+    plugin._record_latency(5.25)
+    assert plugin.predict_count == 2
+    assert plugin._avg_latency_ms() == 7.625
+    assert plugin._avg_latency_ms(1) == 7.6
+    assert _Plugin()._avg_latency_ms() is None
+
+
+def test_xai_feature_values():
+    """Numeric, non-NaN values of the requested columns, from a dict or a Series."""
+    row = {"a": "1.5", "b": None, "c": float("nan"), "d": "x", "e": 3, "f": "nan"}
+    assert xai_feature_values(row, ["a", "b", "c", "d", "e", "f", "missing"]) == {
+        "a": 1.5, "e": 3.0,
+    }
+    assert xai_feature_values(pd.Series(row), ["a", "e"]) == {"a": 1.5, "e": 3.0}
+    assert not xai_feature_values({}, ["a"])
+
+
+def test_compute_and_encode_cam():
+    """CAM overlay is a JPEG data URI, downscaled to at most MAX_HEATMAP_SIZE."""
+    feature_map = torch.rand(1, 4, 7, 7)
+    weight = torch.rand(3, 4)
+    uri = image_cam.compute_and_encode_cam(feature_map, weight, 1, Image.new("RGB", (1280, 640)))
+    assert uri.startswith("data:image/jpeg;base64,")
+    decoded = Image.open(io.BytesIO(base64.b64decode(uri.split(",", 1)[1])))
+    assert decoded.size == (image_cam.MAX_HEATMAP_SIZE, 320)
+    cam = image_cam.class_activation_map(feature_map, weight, 1)
+    assert cam.shape == (7, 7) and 0.0 <= cam.min() and cam.max() <= 1.0

@@ -1,32 +1,32 @@
 """DTOs for wine sulphite prediction operations."""
 from typing import Annotated, Any, Literal, Union
 
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import Field
+
+from app.application.dto.plugin_dto import (
+    BatchRequestBase,
+    BatchResponseBase,
+    PluginDTO,
+    UserModelRunId,
+)
 
 
-class PredictBatchRequest(BaseModel):
+class PredictBatchRequest(BatchRequestBase):
     """DTO for batch prediction request."""
-    model_config = ConfigDict(protected_namespaces=())
-    mode: Literal["batch"] = "batch"
     data_path: str = Field(
         ...,
         description="Path to CSV file with wine physicochemical properties inside the container",
     )
-    mlflow_run_id: str = Field(default="", description="MLflow run ID for user-trained model")
+    mlflow_run_id: UserModelRunId = ""
 
 
-class PredictBatchResponse(BaseModel):
+class PredictBatchResponse(BatchResponseBase):
     """DTO for batch prediction response."""
-    model_config = ConfigDict(protected_namespaces=())
-    model_id: str
-    predictions: list[dict[str, Any]]
-    output_path: str | None = None
     mlflow_run_id: str = ""
 
 
-class PredictInlineRequest(BaseModel):
+class PredictInlineRequest(PluginDTO):
     """DTO for inline prediction request."""
-    model_config = ConfigDict(protected_namespaces=())
     mode: Literal["inline"] = "inline"
     model_key: str | None = None
     threshold: float | None = None
@@ -63,12 +63,11 @@ class PredictInlineRequest(BaseModel):
         default=40.0,
         description="Maximum free SO2 increment to explore in simulation (mg/L)",
     )
-    mlflow_run_id: str = Field(default="", description="MLflow run ID for user-trained model")
+    mlflow_run_id: UserModelRunId = ""
 
 
-class PredictInlineResponse(BaseModel):
+class PredictInlineResponse(PluginDTO):
     """DTO for inline prediction response."""
-    model_config = ConfigDict(protected_namespaces=())
     model_id: str
     threshold: float | None = None
     prediction: Any = Field(

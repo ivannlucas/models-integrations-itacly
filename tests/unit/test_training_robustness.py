@@ -2,7 +2,7 @@
 
 Real plugin code, no mocks.
 """
-# pylint: disable=protected-access
+# pylint: disable=protected-access  # ml10's split helper is what this test checks
 
 import numpy as np
 import pandas as pd

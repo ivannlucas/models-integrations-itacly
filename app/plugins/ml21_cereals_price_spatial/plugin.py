@@ -23,9 +23,12 @@ import pandas as pd
 
 from app.application.dto.stats_dto import InputField, OutputField, RuntimeStats, StatsResponse
 from app.domain.ports.model_plugin_port import ModelPluginPort
+from app.domain.services.batch_rows import row_error_capture
 from app.domain.services.exceptions import ModelNotLoadedError
 from app.domain.services.mlflow_artifacts import removing_dir
 from app.domain.services.mlflow_tracker import BaseMLflowTracker
+from app.domain.services.plugin_runtime import PluginRuntimeMixin
+from app.domain.services.xai_values import xai_feature_values
 from app.infrastructure.artifact_store import local_file_path
 from app.infrastructure.base_model_publisher import persist_retrained_bundle
 from app.plugins.ml21_cereals_price_spatial.constants import (
@@ -214,21 +217,6 @@ def _build_card_text(
         ]
     )
     return "\n".join(lines)
-
-
-def _xai_values_from_row(row: pd.Series, feature_cols: list[str]) -> dict[str, float]:
-    """Build xai_feature_values from a DataFrame row."""
-    xai: dict[str, float] = {}
-    for col in feature_cols:
-        if col in row.index:
-            val = row[col]
-            try:
-                fv = float(val)
-                if not np.isnan(fv):
-                    xai[col] = fv
-            except (TypeError, ValueError):
-                pass
-    return xai
 
 
 def _regression_search(h: int, cv):
@@ -486,7 +474,7 @@ def _train_response(all_metrics: dict[str, Any], df: pd.DataFrame, persisted) ->
     )
 
 
-class Ml21CerealsPriceSpatialPlugin(ModelPluginPort):
+class Ml21CerealsPriceSpatialPlugin(PluginRuntimeMixin, ModelPluginPort):
     """ESP-CEREAL plugin for spatial cereal price prediction across Spanish provinces."""
 
     BASE_ARTIFACT_FOLDER = ARTIFACT_FOLDER_NAME   # every /train publishes the new base model
@@ -497,9 +485,6 @@ class Ml21CerealsPriceSpatialPlugin(ModelPluginPort):
         self._panel_df: pd.DataFrame | None = None
         # (mean, std) of the H3-regression features over the base panel (causal drivers)
         self._h3_reference: tuple[pd.Series | None, pd.Series | None] = (None, None)
-        self._predict_count: int = 0
-        self._total_latency_ms: float = 0.0
-        self._last_predict_at: str | None = None
 
     def load(self) -> None:
         self._models, self._metadata, self._panel_df = load_model_bundle()
@@ -549,13 +534,9 @@ class Ml21CerealsPriceSpatialPlugin(ModelPluginPort):
         return self._models is not None
 
     def _require_loaded(self) -> None:
+        # own message (no accent), kept as the API always returned it
         if self._models is None:
             raise ModelNotLoadedError("El modelo no esta cargado.")
-
-    def _record(self, elapsed_ms: float) -> None:
-        self._predict_count += 1
-        self._total_latency_ms += elapsed_ms
-        self._last_predict_at = datetime.now(tz=timezone.utc).isoformat()
 
     def _get_geo_risk_provinces(self, metadata: dict) -> set[str]:
         _ = metadata
@@ -674,7 +655,7 @@ class Ml21CerealsPriceSpatialPlugin(ModelPluginPort):
             )
             response_fields = self._decision_card(raw_row, ctx, metadata)
 
-            self._record((time.perf_counter() - t0) * 1000)
+            self._record_latency((time.perf_counter() - t0) * 1000)
 
             return PredictInlineResponse(**response_fields)
 
@@ -706,7 +687,7 @@ class Ml21CerealsPriceSpatialPlugin(ModelPluginPort):
         # The H3 regression model's own input row (one-hot cereal/provincia columns included),
         # not the raw panel row: the explainability service feeds these values straight to
         # datagia_best_h3_reg, so any column missing here would be explained as 0.
-        xai_values = _xai_values_from_row(
+        xai_values = xai_feature_values(
             build_features_from_row(raw_row, expected_r).iloc[0], expected_r
         ) or None
 
@@ -725,27 +706,23 @@ class Ml21CerealsPriceSpatialPlugin(ModelPluginPort):
         }
 
     def _batch_row(self, idx, row: pd.Series, metadata: dict, models: dict) -> dict[str, Any]:
-        """Predictions of one CSV row, or its error (one bad row never aborts the batch)."""
-        try:
-            raw_row = row.to_frame().T
-            predictions = self._predict_single(
-                raw_row, metadata, models
-            )
-            return {
-                "row": int(idx),
-                "provincia": str(row.get("provincia", "")),
-                "cereal_predominante": str(row.get("cereal_predominante", "")),
-                **{f"ret_h{h}": predictions[h]["expected_return"] for h in VALID_HORIZONS},
-                **{f"prob_up_h{h}": predictions[h]["prob_up"] for h in VALID_HORIZONS},
-                **{f"signal_h{h}": predictions[h]["signal"] for h in VALID_HORIZONS},
-                **{
-                    f"confidence_h{h}": predictions[h]["confidence"]
-                    for h in VALID_HORIZONS
-                },
-            }
-        except Exception as exc:  # pylint: disable=broad-exception-caught  # per-row error capture
-            logger.warning("Error en fila %s: %s", idx, exc)
-            return {"row": int(idx), "error": str(exc)}
+        """Predictions of one CSV row (predict_batch turns a failure into that row's error)."""
+        raw_row = row.to_frame().T
+        predictions = self._predict_single(
+            raw_row, metadata, models
+        )
+        return {
+            "row": int(idx),
+            "provincia": str(row.get("provincia", "")),
+            "cereal_predominante": str(row.get("cereal_predominante", "")),
+            **{f"ret_h{h}": predictions[h]["expected_return"] for h in VALID_HORIZONS},
+            **{f"prob_up_h{h}": predictions[h]["prob_up"] for h in VALID_HORIZONS},
+            **{f"signal_h{h}": predictions[h]["signal"] for h in VALID_HORIZONS},
+            **{
+                f"confidence_h{h}": predictions[h]["confidence"]
+                for h in VALID_HORIZONS
+            },
+        }
 
     def predict_batch(self, *, data_path: str, mlflow_run_id: str = "") -> Any:
         """Batch inference: CSV with raw panel rows → predictions for all province×cereal."""
@@ -760,10 +737,14 @@ class Ml21CerealsPriceSpatialPlugin(ModelPluginPort):
                 df["date"] = pd.to_datetime(df["date"], errors="coerce")
 
             t0 = time.perf_counter()
-            results = [self._batch_row(idx, row, metadata, models) for idx, row in df.iterrows()]
+            results: list[dict[str, Any]] = []
+            for idx, row in df.iterrows():
+                # one bad row never aborts the batch
+                with row_error_capture(results, {"row": int(idx)}, what=f"fila {idx}"):
+                    results.append(self._batch_row(idx, row, metadata, models))
 
             elapsed_ms = (time.perf_counter() - t0) * 1000
-            self._record(elapsed_ms)
+            self._record_latency(elapsed_ms)
 
             logger.info(
                 "predict_batch done — %d rows in %.1fms count=%d",
@@ -875,7 +856,6 @@ class Ml21CerealsPriceSpatialPlugin(ModelPluginPort):
 
     def stats(self, mlflow_run_id: str = "") -> StatsResponse:
         """Return model metadata and runtime statistics."""
-        avg = self._total_latency_ms / self._predict_count if self._predict_count else None
         metrics = self._served_metrics()
 
         base = StatsResponse(
@@ -924,7 +904,7 @@ class Ml21CerealsPriceSpatialPlugin(ModelPluginPort):
             metrics=metrics,
             runtime_stats=RuntimeStats(
                 total_predictions=self._predict_count,
-                avg_latency_ms=round(avg, 1) if avg is not None else None,
+                avg_latency_ms=self._avg_latency_ms(1),
             ),
         )
         # modelo 43-44-style audit follow-up: stats(mlflow_run_id=...) accepted the

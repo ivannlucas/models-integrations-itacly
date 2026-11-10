@@ -11,6 +11,7 @@ import torch
 
 from app.application.dto.stats_dto import InputField, OutputField, StatsResponse
 from app.domain.ports.model_plugin_port import ModelPluginPort
+from app.domain.services.batch_rows import row_error_capture
 from app.domain.services.exceptions import PuConstraintViolationError
 from app.domain.services.mlflow_artifacts import (
     add_mlflow_run_to_stats,
@@ -19,6 +20,7 @@ from app.domain.services.mlflow_artifacts import (
     upload_model_to_mlflow,
 )
 from app.domain.services.plugin_runtime import PluginRuntimeMixin
+from app.domain.services.xai_values import xai_feature_values
 from app.infrastructure.artifact_store import local_file_path
 from app.plugins.ml35_dairy_ann_cleaning_cost.constants import (
     BASELINE_FLUJO,
@@ -77,19 +79,6 @@ def _resolve_features(features: dict) -> dict:
     if data.get("temp_agua_servicio") is None:
         data["temp_agua_servicio"] = data["temp_proceso_leche"] + 10.0
     return data
-
-
-def _xai_values_from_features(data: dict) -> dict[str, float] | None:
-    """Build xai_feature_values from a resolved (post-default) feature dict."""
-    xai: dict[str, float] = {}
-    for f in FEATURES:
-        val = data.get(f)
-        if val is not None and pd.notna(val):
-            try:
-                xai[f] = float(val)
-            except (TypeError, ValueError):
-                pass
-    return xai or None
 
 
 def _build_df(  # pylint: disable=too-many-arguments,too-many-positional-arguments
@@ -289,7 +278,7 @@ class Ml35DairyAnnCleaningCostPlugin(PluginRuntimeMixin, ModelPluginPort):
                 df = pd.read_csv(local_path)
             predictions: list[dict] = []
             for idx, row in df.iterrows():
-                try:
+                with row_error_capture(predictions, {"row": int(idx)}, what=f"fila {idx}"):
                     row_dict = row.to_dict()
                     pred = self._run_predict(row_dict, ctx)
                     predictions.append(
@@ -297,14 +286,12 @@ class Ml35DairyAnnCleaningCostPlugin(PluginRuntimeMixin, ModelPluginPort):
                             "row": int(idx),
                             "consumo_agua_l": pred.consumo_agua_l,
                             "pu_logrado": pred.pu_logrado,
-                            "xai_feature_values": _xai_values_from_features(
-                                _resolve_features(row_dict)
-                            ),
+                            "xai_feature_values": xai_feature_values(
+                                _resolve_features(row_dict), FEATURES
+                            )
+                            or None,
                         }
                     )
-                except Exception as exc:  # pylint: disable=broad-exception-caught  # per-row error capture
-                    logger.warning("Error en fila %s: %s", idx, exc)
-                    predictions.append({"row": int(idx), "error": str(exc)})
             self._record()
             logger.info(
                 "predict_batch done — %d rows, mlflow=%s", len(predictions), bool(mlflow_run_id)

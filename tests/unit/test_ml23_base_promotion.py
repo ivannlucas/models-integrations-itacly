@@ -57,7 +57,7 @@ def test_train_without_run_publishes_the_new_base(train_csv, isolated_base_store
         data_path=train_csv, mlflow_run_id=""
     )
     base_version = resp.base_version
-    assert base_version.version == "v1"  # pylint: disable=no-member  # pydantic field
+    assert base_version.version == "v1"
     assert resp.upload_warning is None
     v1 = isolated_base_store / ARTIFACT_FOLDER_NAME / "versions" / "v1"
     assert (v1 / MODEL_FILENAME).exists() and (v1 / SCALER_FILENAME).exists()
@@ -74,5 +74,5 @@ def test_train_with_run_and_mlflow_failure_is_a_warning(train_csv, monkeypatch):
     )
     assert "mlflow caído" in resp.upload_warning  # pylint: disable=unsupported-membership-test
     base_version = resp.base_version
-    assert base_version.version == "v1"  # pylint: disable=no-member  # pydantic field
-    assert base_version.mlflow_run_id == "run-1"  # pylint: disable=no-member  # pydantic field
+    assert base_version.version == "v1"
+    assert base_version.mlflow_run_id == "run-1"

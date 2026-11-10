@@ -14,6 +14,7 @@ from typing import Annotated, Any, Literal, Union
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.application.dto.plugin_dto import BatchRequestBase, PluginDTO
 from app.plugins.ml33_cereals_reuse_strategy_optimizer.constants import (
     DEFAULT_ANIMAL_FEED_CAPACITY_T,
     DEFAULT_BIOCHAR_CAPACITY_T,
@@ -52,10 +53,8 @@ class LotInput(BaseModel):
     )
 
 
-class _ExecutionParams(BaseModel):
+class _ExecutionParams(PluginDTO):
     """Capacity/runtime parameters shared by inline and batch requests."""
-
-    model_config = ConfigDict(protected_namespaces=())
 
     lots_per_day: int = Field(
         default=DEFAULT_LOTS_PER_DAY, gt=0,
@@ -96,10 +95,8 @@ class StrategyCandidate(BaseModel):
     )
 
 
-class LotResult(BaseModel):
+class LotResult(PluginDTO):
     """Assignment result for a single lot."""
-
-    model_config = ConfigDict(protected_namespaces=())
 
     row: int
     ai_assigned_strategy: str
@@ -121,7 +118,6 @@ class LotResult(BaseModel):
 class PredictInlineRequest(_ExecutionParams):
     """Inline request: a list of lots (>=1), processed in blocks of ``lots_per_day``."""
 
-    model_config = ConfigDict(protected_namespaces=())
     mode: Literal["inline"] = "inline"
     model_key: str | None = None
     threshold: float | None = None
@@ -132,10 +128,9 @@ class PredictInlineRequest(_ExecutionParams):
     )
 
 
-class PredictInlineResponse(BaseModel):
+class PredictInlineResponse(PluginDTO):
     """Per-lot assignments plus an aggregate summary."""
 
-    model_config = ConfigDict(protected_namespaces=())
     model_id: str
     results: list[LotResult]
     distribution: dict[str, Any] = Field(
@@ -147,7 +142,7 @@ class PredictInlineResponse(BaseModel):
 
 # ── batch ───────────────────────────────────────────────────────────────────
 
-class PredictBatchRequest(BaseModel):
+class PredictBatchRequest(BatchRequestBase):
     """Batch request: a CSV with the required lot columns, one lot per row.
 
     Deliberately just {mode, data_path, mlflow_run_id} — matches every other plugin's
@@ -159,21 +154,17 @@ class PredictBatchRequest(BaseModel):
     override them.
     """
 
-    model_config = ConfigDict(protected_namespaces=())
-    mode: Literal["batch"] = "batch"
     data_path: str = Field(
         ...,
         description=(
             "Path a un CSV con generated_volume_tons, moisture_pct, subproduct_type, season"
         ),
     )
-    mlflow_run_id: str = ""
 
 
-class PredictBatchResponse(BaseModel):
+class PredictBatchResponse(PluginDTO):
     """Per-row assignments plus an aggregate summary, mirroring the inline response."""
 
-    model_config = ConfigDict(protected_namespaces=())
     model_id: str
     n_rows: int
     predictions: list[dict[str, Any]]

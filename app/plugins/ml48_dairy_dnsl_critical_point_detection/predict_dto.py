@@ -1,7 +1,14 @@
 """DTOs de predicción de ml48 (batch e inline)."""
 from typing import Annotated, Any, Literal, Union
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import Field, model_validator
+
+from app.application.dto.plugin_dto import (
+    BatchRequestBase,
+    BatchResponseBase,
+    PluginDTO,
+    UserModelRunId,
+)
 
 _DT_DESC = (
     "Desplaza TS1/TS2 al baseline de 65 °C (gemelo digital). Solo para datos del banco UCI "
@@ -11,18 +18,16 @@ _DT_DESC = (
 )
 
 
-class PredictBatchRequest(BaseModel):
+class PredictBatchRequest(BatchRequestBase):
     """Petición batch: CSV con varios ciclos por Cycle_ID."""
 
-    model_config = ConfigDict(protected_namespaces=())
-    mode: Literal["batch"] = "batch"
     data_path: str = Field(
         ...,
         description=(
             "Path to CSV file with sensor time-series data (varios ciclos por Cycle_ID)"
         ),
     )
-    mlflow_run_id: str = Field(default="", description="MLflow run ID for user-trained model")
+    mlflow_run_id: UserModelRunId = ""
     apply_digital_twin: bool | None = Field(default=None, description=_DT_DESC)
     include_xai: bool = Field(
         default=True,
@@ -53,11 +58,9 @@ class PredictBatchRequest(BaseModel):
         return self
 
 
-class PredictBatchResponse(BaseModel):
+class PredictBatchResponse(BatchResponseBase):
     """Respuesta batch: una fila por ciclo con predicción y XAI."""
 
-    model_config = ConfigDict(protected_namespaces=())
-    model_id: str
     predictions: list[dict[str, Any]] = Field(
         ...,
         description=(
@@ -65,13 +68,11 @@ class PredictBatchResponse(BaseModel):
             "(XAI por ciclo, contrato de modelo-43)"
         ),
     )
-    output_path: str | None = None
 
 
-class PredictInlineRequest(BaseModel):
+class PredictInlineRequest(PluginDTO):
     """Petición inline: arrays de sensores de un ciclo o ruta a un CSV."""
 
-    model_config = ConfigDict(protected_namespaces=())
     mode: Literal["inline"] = "inline"
     data_path: str | None = Field(
         default=None, description="Path to CSV file (alternative to sending sensor arrays)"
@@ -87,7 +88,7 @@ class PredictInlineRequest(BaseModel):
         default=None, description="Time in seconds for each observation"
     )
     Cycle_ID: int | None = Field(default=None, description="Cycle identifier")
-    mlflow_run_id: str = Field(default="", description="MLflow run ID for user-trained model")
+    mlflow_run_id: UserModelRunId = ""
     apply_digital_twin: bool | None = Field(default=None, description=_DT_DESC)
     include_xai: bool = Field(
         default=True,
@@ -119,10 +120,9 @@ class PredictInlineRequest(BaseModel):
         return self
 
 
-class PredictInlineResponse(BaseModel):
+class PredictInlineResponse(PluginDTO):
     """Respuesta inline: clase y confianza por componente más XAI del ciclo."""
 
-    model_config = ConfigDict(protected_namespaces=())
     model_id: str
     Enfriador_Fouling: int = Field(..., description="0=SANO, 1=WARNING, 2=CRÍTICO")
     Valvula_Switch: int = Field(..., description="0=SANO, 1=WARNING, 2=CRÍTICO")

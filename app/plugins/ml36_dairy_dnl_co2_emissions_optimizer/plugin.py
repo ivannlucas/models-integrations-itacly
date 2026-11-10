@@ -21,6 +21,7 @@ import torch
 
 from app.application.dto.stats_dto import InputField, OutputField, StatsResponse
 from app.domain.ports.model_plugin_port import ModelPluginPort
+from app.domain.services.batch_rows import row_error_capture
 from app.domain.services.mlflow_artifacts import (
     add_mlflow_run_to_stats,
     removing_dir,
@@ -28,6 +29,7 @@ from app.domain.services.mlflow_artifacts import (
     upload_model_to_mlflow,
 )
 from app.domain.services.plugin_runtime import PluginRuntimeMixin
+from app.domain.services.xai_values import xai_feature_values
 from app.infrastructure.artifact_store import local_file_path
 from app.plugins.ml36_dairy_dnl_co2_emissions_optimizer.constants import (
     BASE_FEATURES,
@@ -73,24 +75,6 @@ from app.plugins.ml36_dairy_dnl_co2_emissions_optimizer.train_dto import TrainRe
 from app.plugins.ml36_dairy_dnl_co2_emissions_optimizer.training import train_model
 
 logger = logging.getLogger(__name__)
-
-
-def _xai_values_from_features(data: dict) -> dict[str, float] | None:
-    """Build xai_feature_values from a predict_batch row dict.
-
-    Without this, predict_batch rows only carry row/T_out_pred/CO2_emissions_pred —
-    the platform's XAI-context builder would be left with zero input features and
-    silently skip the explain service (same fix as ml34/ml35).
-    """
-    xai: dict[str, float] = {}
-    for f in BASE_FEATURES:
-        val = data.get(f)
-        if val is not None and pd.notna(val):
-            try:
-                xai[f] = float(val)
-            except (TypeError, ValueError):
-                pass
-    return xai or None
 
 
 def _present(value: Any) -> bool:
@@ -292,18 +276,15 @@ class Ml36DairyDnlCo2EmissionsOptimizerPlugin(PluginRuntimeMixin, ModelPluginPor
             raise ValueError(f"CSV falta columnas requeridas: {missing}")
         predictions: list[dict] = []
         for idx, row in df.iterrows():
-            try:
+            with row_error_capture(predictions, {"row": int(idx)}, what=f"fila {idx}"):
                 row_dict = row.to_dict()
                 pred = self._run_predict(row_dict, bundle)
                 predictions.append({
                     "row": int(idx),
                     "T_out_pred": pred.T_out_pred,
                     "CO2_emissions_pred": pred.CO2_emissions_pred,
-                    "xai_feature_values": _xai_values_from_features(row_dict),
+                    "xai_feature_values": xai_feature_values(row_dict, BASE_FEATURES) or None,
                 })
-            except Exception as exc:  # pylint: disable=broad-exception-caught
-                logger.warning("Error en fila %s: %s", idx, exc)
-                predictions.append({"row": int(idx), "error": str(exc)})
         return predictions
 
     def _predict_batch_optimize(self, df: pd.DataFrame, bundle: tuple) -> list[dict]:
@@ -320,7 +301,7 @@ class Ml36DairyDnlCo2EmissionsOptimizerPlugin(PluginRuntimeMixin, ModelPluginPor
             raise ValueError(f"CSV falta columnas requeridas: {missing}")
         predictions: list[dict] = []
         for idx, row in df.iterrows():
-            try:
+            with row_error_capture(predictions, {"row": int(idx)}, what=f"fila {idx} (optimize)"):
                 features = {c: float(row[c]) for c in CONTEXT_COLS}
                 features["seed"] = (
                     int(row["seed"]) if "seed" in df.columns and _present(row["seed"])
@@ -334,9 +315,6 @@ class Ml36DairyDnlCo2EmissionsOptimizerPlugin(PluginRuntimeMixin, ModelPluginPor
                 pred = self._run_optimize(features, bundle).model_dump()
                 pred.update({"row": int(idx), **{c: features[c] for c in CONTEXT_COLS}})
                 predictions.append(pred)
-            except Exception as exc:  # pylint: disable=broad-exception-caught
-                logger.warning("Error en fila %s (optimize): %s", idx, exc)
-                predictions.append({"row": int(idx), "error": str(exc)})
         return predictions
 
     # ── train ─────────────────────────────────────────────────────────────────

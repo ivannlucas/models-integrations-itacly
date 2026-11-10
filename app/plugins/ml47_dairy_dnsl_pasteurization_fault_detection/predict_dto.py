@@ -1,31 +1,30 @@
 """Contrato de transporte de ml47 (batch por CSV o inline con series de sensores)."""
-from typing import Annotated, Any, Literal, Union
+from typing import Annotated, Literal, Union
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import Field, model_validator
+
+from app.application.dto.plugin_dto import (
+    BatchRequestBase,
+    BatchResponseBase,
+    PluginDTO,
+    UserModelRunId,
+)
 
 
-class PredictBatchRequest(BaseModel):
+class PredictBatchRequest(BatchRequestBase):
     """Petición batch: CSV con series de sensores (uno o varios ciclos)."""
 
-    model_config = ConfigDict(protected_namespaces=())
-    mode: Literal["batch"] = "batch"
     data_path: str = Field(..., description="Path to CSV file with sensor time-series data")
-    mlflow_run_id: str = Field(default="", description="MLflow run ID for user-trained model")
+    mlflow_run_id: UserModelRunId = ""
 
 
-class PredictBatchResponse(BaseModel):
+class PredictBatchResponse(BatchResponseBase):
     """Respuesta batch: una fila de predicción por ciclo."""
 
-    model_config = ConfigDict(protected_namespaces=())
-    model_id: str
-    predictions: list[dict[str, Any]]
-    output_path: str | None = None
 
-
-class PredictInlineRequest(BaseModel):
+class PredictInlineRequest(PluginDTO):
     """Petición inline: ruta a CSV o series de los 7 sensores."""
 
-    model_config = ConfigDict(protected_namespaces=())
     mode: Literal["inline"] = "inline"
     data_path: str | None = Field(
         default=None,
@@ -43,7 +42,7 @@ class PredictInlineRequest(BaseModel):
         description="Time in seconds for each observation",
     )
     Cycle_ID: int | None = Field(default=None, description="Cycle identifier")
-    mlflow_run_id: str = Field(default="", description="MLflow run ID for user-trained model")
+    mlflow_run_id: UserModelRunId = ""
 
     @model_validator(mode="after")
     def _check_sensors_or_path(self):
@@ -55,10 +54,9 @@ class PredictInlineRequest(BaseModel):
         return self
 
 
-class PredictInlineResponse(BaseModel):
+class PredictInlineResponse(PluginDTO):
     """Respuesta inline: estado y confianza de los 4 componentes."""
 
-    model_config = ConfigDict(protected_namespaces=())
     model_id: str
     Enfriador_Fouling: int = Field(..., description="0=SANO, 1=WARNING, 2=CRÍTICO")
     Valvula_Switch: int = Field(..., description="0=SANO, 1=WARNING, 2=CRÍTICO")

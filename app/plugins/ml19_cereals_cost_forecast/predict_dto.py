@@ -6,7 +6,9 @@ bundled with the plugin, not on client-supplied data.
 """
 from typing import Annotated, Literal, Union
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, Field
+
+from app.application.dto.plugin_dto import BatchRequestBase, PluginDTO
 
 _DATE_DESC = (
     "Mes a consultar dentro del dataset de referencia empaquetado (YYYY-MM). Si se omite, se "
@@ -51,10 +53,9 @@ class HorizonResult(BaseModel):
     )
 
 
-class PredictInlineRequest(BaseModel):
+class PredictInlineRequest(PluginDTO):
     """Inline request: optional month label to query the bundled reference dataset."""
 
-    model_config = ConfigDict(protected_namespaces=())
     mode: Literal["inline"] = "inline"
     date: str | None = Field(default=None, pattern=r"^\d{4}-\d{2}$", description=_DATE_DESC)
     mlflow_run_id: str = Field(
@@ -62,10 +63,9 @@ class PredictInlineRequest(BaseModel):
     )
 
 
-class PredictInlineResponse(BaseModel):
+class PredictInlineResponse(PluginDTO):
     """Inline response: multi-horizon ensemble signal for one reference month."""
 
-    model_config = ConfigDict(protected_namespaces=())
     model_id: str
     date_label: str = Field(..., description="Mes 'hoy' usado (fila de referencia), YYYY-MM")
     mapa_month_used: str = Field(
@@ -76,11 +76,9 @@ class PredictInlineResponse(BaseModel):
     horizons: list[HorizonResult]
 
 
-class PredictBatchRequest(BaseModel):
+class PredictBatchRequest(BatchRequestBase):
     """Batch request: a CSV with a single 'date' column (YYYY-MM), one row per month to query."""
 
-    model_config = ConfigDict(protected_namespaces=())
-    mode: Literal["batch"] = "batch"
     data_path: str = Field(
         ...,
         description=(
@@ -103,10 +101,9 @@ class BatchPrediction(BaseModel):
     error: str | None = None
 
 
-class PredictBatchResponse(BaseModel):
+class PredictBatchResponse(PluginDTO):
     """Batch response: one entry per requested month."""
 
-    model_config = ConfigDict(protected_namespaces=())
     model_id: str
     train_cutoff: str
     predictions: list[BatchPrediction]

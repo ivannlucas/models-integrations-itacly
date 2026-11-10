@@ -1,13 +1,12 @@
 """Pydantic DTOs for the ml24 /train endpoint."""
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, Field
 
-from app.application.dto.base_version_dto import VersionInfo
+from app.application.dto.plugin_dto import PluginDTO, PromotingTrainRunId, PublishedBaseVersion
 
 
-class TrainRequest(BaseModel):
+class TrainRequest(PluginDTO):
     """Retrain the three horizons from scratch with the AI team's procedure on a series CSV."""
 
-    model_config = ConfigDict(protected_namespaces=())
     data_path: str = Field(
         ...,
         description=(
@@ -21,13 +20,7 @@ class TrainRequest(BaseModel):
             "base nuevo, con la que se predice."
         ),
     )
-    mlflow_run_id: str = Field(
-        default="",
-        description=(
-            "Run de MLflow opcional: si se indica, el modelo reentrenado también se guarda en él "
-            "(trazabilidad). Con o sin run, el modelo reentrenado pasa a ser el modelo base."
-        ),
-    )
+    mlflow_run_id: PromotingTrainRunId = ""
     exog_path: str = Field(
         default="",
         description=(
@@ -79,10 +72,9 @@ class HorizonMetrics(BaseModel):
     n_features: int
 
 
-class TrainResponse(BaseModel):
+class TrainResponse(PluginDTO):
     """Per-horizon metrics of the retraining, comparable with the memoria's Tables 8-10."""
 
-    model_config = ConfigDict(protected_namespaces=())
     detail: str
     h1: HorizonMetrics
     h3: HorizonMetrics
@@ -101,6 +93,4 @@ class TrainResponse(BaseModel):
             "publicar la base es un 502) o exógenas no renovadas"
         ),
     )
-    base_version: VersionInfo | None = Field(
-        default=None, description="Versión del modelo base publicada por este reentreno"
-    )
+    base_version: PublishedBaseVersion = None

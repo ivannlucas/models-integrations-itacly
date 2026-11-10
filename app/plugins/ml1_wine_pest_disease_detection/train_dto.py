@@ -1,14 +1,14 @@
 """Train DTOs for ml1 — RandomForest tabular experts only (see constants.py / manifest.yaml
 training.scope_note: the CNN Deep Ensemble + YOLO are not retrainable via this endpoint)."""
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import Field
 
+from app.application.dto.plugin_dto import PluginDTO, TrainRequestBase
 from app.application.dto.train_dto import MlflowRunId
 
 
-class TrainRequest(BaseModel):
+class TrainRequest(TrainRequestBase):
     """Retrain the 2 RandomForest tabular experts on a client-supplied sensor CSV."""
 
-    model_config = ConfigDict(protected_namespaces=())
     data_path: str = Field(
         ...,
         description=(
@@ -23,11 +23,10 @@ class TrainRequest(BaseModel):
     )
 
 
-class TrainResponse(BaseModel):
+class TrainResponse(PluginDTO):
     """Metrics of the retrained RandomForest pair, holdout test (same protocol as
     src/training/train_tabular.py: 80/20 split, random_state=42)."""
 
-    model_config = ConfigDict(protected_namespaces=())
     detail: str
     accuracy: float
     f1_macro: float

@@ -7,7 +7,6 @@ import os
 import shutil
 import tempfile
 import time
-from datetime import datetime, timezone
 from pathlib import Path
 
 import copy
@@ -440,9 +439,7 @@ def _train_response(
     )
 
 
-class Ml45CerealsDnslCriticalPointDetectionPlugin(  # pylint: disable=too-many-instance-attributes
-    PluginRuntimeMixin, ModelPluginPort
-):
+class Ml45CerealsDnslCriticalPointDetectionPlugin(PluginRuntimeMixin, ModelPluginPort):
     """Deep Neuro-Fuzzy (LSTM+attention || fuzzy TSK rules) grain-dryer fault detector.
 
     Predicts per-window (240 consecutive readings) binary anomaly, then classifies into
@@ -458,7 +455,6 @@ class Ml45CerealsDnslCriticalPointDetectionPlugin(  # pylint: disable=too-many-i
         self._scaler_num = None
         self._xai_background = None
         self._threshold: float = 0.73
-        self._total_latency_ms: float = 0.0
 
     def load(self) -> None:
         bucket = os.environ.get("STORAGE_BUCKET")
@@ -476,11 +472,6 @@ class Ml45CerealsDnslCriticalPointDetectionPlugin(  # pylint: disable=too-many-i
 
     def is_loaded(self) -> bool:
         return self._model is not None
-
-    def _record(self, latency_ms: float = 0.0) -> None:
-        self._predict_count += 1
-        self._total_latency_ms += latency_ms
-        self._last_predict_at = datetime.now(tz=timezone.utc).isoformat()
 
     def _load_model_for_predict(self, mlflow_run_id: str):
         if not mlflow_run_id:
@@ -544,7 +535,7 @@ class Ml45CerealsDnslCriticalPointDetectionPlugin(  # pylint: disable=too-many-i
                 xai_background=ctx["xai_background"],
                 threshold=ctx["threshold"],
             )
-            self._record((time.perf_counter() - t0) * 1000)
+            self._record_latency((time.perf_counter() - t0) * 1000)
             return PredictInlineResponse(
                 model_id=MODEL_ID,
                 window_index=1,
@@ -566,7 +557,7 @@ class Ml45CerealsDnslCriticalPointDetectionPlugin(  # pylint: disable=too-many-i
             predictions = build_predictions(
                 ctx, (sequences, stats, stats_cols, ts_windows, entity_ids)
             )
-            self._record((time.perf_counter() - t0) * 1000)
+            self._record_latency((time.perf_counter() - t0) * 1000)
             return PredictBatchResponse(
                 model_id=MODEL_ID, predictions=predictions, output_path=None
             )
@@ -792,10 +783,7 @@ class Ml45CerealsDnslCriticalPointDetectionPlugin(  # pylint: disable=too-many-i
             metrics=metrics,
             runtime_stats=RuntimeStats(
                 total_predictions=self._predict_count,
-                avg_latency_ms=(
-                    round(self._total_latency_ms / self._predict_count, 1)
-                    if self._predict_count > 0 else None
-                ),
+                avg_latency_ms=self._avg_latency_ms(1),
             ),
         )
         if mlflow_run_id:
@@ -819,6 +807,6 @@ class Ml45CerealsDnslCriticalPointDetectionPlugin(  # pylint: disable=too-many-i
                     value = mlflow_metrics.get(key)
                     if isinstance(value, (int, float)):
                         base.metrics[key] = value
-            except Exception as exc:  # pylint: disable=broad-exception-caught
+            except Exception as exc:  # pylint: disable=broad-exception-caught  # stats best-effort
                 logger.warning("Could not fetch MLflow stats for run_id=%s: %s", mlflow_run_id, exc)
         return base

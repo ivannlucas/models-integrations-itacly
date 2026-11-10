@@ -8,15 +8,14 @@ differs slightly; `mlflow_run_id` is required here on purpose — every retrain 
 to a specific MLflow run (never silently discarded, never overwrites the fixed S3 artifact),
 exactly like every other plugin with real training support.
 """
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import Field
 
-from app.application.dto.train_dto import MlflowRunId
+from app.application.dto.plugin_dto import TrainRequestBase
 
 
-class TrainRequest(BaseModel):
+class TrainRequest(TrainRequestBase):
     """Petición de reentrenamiento del clasificador de ml10."""
 
-    model_config = ConfigDict(protected_namespaces=())
     data_path: str = Field(
         ...,
         description=(
@@ -25,4 +24,3 @@ class TrainRequest(BaseModel):
             "({train|val}/{fly|mos|tick}/*.jpg)."
         ),
     )
-    mlflow_run_id: MlflowRunId

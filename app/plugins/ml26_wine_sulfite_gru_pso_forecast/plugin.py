@@ -100,10 +100,9 @@ class Ml26WineSulfiteGruPsoForecastPlugin(PluginRuntimeMixin, ModelPluginPort):
     """GRU-PSO multitask regressor: free SO2 and underprotection risk at 72 h per wine tank."""
 
     def __init__(self) -> None:
-        """Initialize an unloaded plugin with zeroed runtime counters."""
+        """Initialize an unloaded plugin (runtime counters and latency: mixin defaults)."""
         self._model: model_loader.LoadedModel | None = None
         self._registry: dict = {}
-        self._total_latency_ms: float = 0.0
 
     # ── lifecycle ─────────────────────────────────────────────────────────────
 
@@ -129,8 +128,7 @@ class Ml26WineSulfiteGruPsoForecastPlugin(PluginRuntimeMixin, ModelPluginPort):
 
     def _record_timed(self, started: float) -> None:
         """Count one served prediction and add its latency since *started*."""
-        self._total_latency_ms += (time.perf_counter() - started) * 1000.0
-        self._record()
+        self._record_latency((time.perf_counter() - started) * 1000.0)
 
     # ── shared inference ──────────────────────────────────────────────────────
 
@@ -378,7 +376,6 @@ class Ml26WineSulfiteGruPsoForecastPlugin(PluginRuntimeMixin, ModelPluginPort):
                 description="bajo / medio / alto (umbrales 0.33 / 0.66)",
             ),
         ]
-        avg = self._total_latency_ms / self._predict_count if self._predict_count else None
         base = StatsResponse(
             model_name=MODEL_ID,
             version=VERSION,
@@ -399,7 +396,7 @@ class Ml26WineSulfiteGruPsoForecastPlugin(PluginRuntimeMixin, ModelPluginPort):
             | {"model_config": dict(self._model.config) if self._model else None},
             runtime_stats=RuntimeStats(
                 total_predictions=self._predict_count,
-                avg_latency_ms=round(avg, 3) if avg is not None else None,
+                avg_latency_ms=self._avg_latency_ms(3),
             ),
         )
         return add_mlflow_run_to_stats(base, mlflow_run_id)

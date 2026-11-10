@@ -1,10 +1,11 @@
 """Train DTOs for ml7 grain pest-detection YOLO fine-tuning."""
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import Field
 
+from app.application.dto.plugin_dto import PluginDTO, TrainRequestBase, UploadWarning
 from app.application.dto.train_dto import MlflowRunId
 
 
-class TrainRequest(BaseModel):
+class TrainRequest(TrainRequestBase):
     """Fine-tune the YOLO detector on a new annotated image dataset.
 
     ``data_path`` must point to a YOLO-format dataset root — a directory containing
@@ -14,7 +15,6 @@ class TrainRequest(BaseModel):
     for this model — it is an object detector, not a tabular regressor/classifier.
     """
 
-    model_config = ConfigDict(protected_namespaces=())
     data_path: str = Field(
         ...,
         description=(
@@ -27,16 +27,13 @@ class TrainRequest(BaseModel):
     )
 
 
-class TrainResponse(BaseModel):
+class TrainResponse(PluginDTO):
     """Fine-tuning result — detection metrics computed on the dataset's val split."""
 
-    model_config = ConfigDict(protected_namespaces=())
     detail: str
     map50: float = Field(..., description="mAP@0.5 on the val split after fine-tuning")
     map50_95: float = Field(..., description="mAP@0.5:0.95 on the val split after fine-tuning")
     precision: float = Field(..., description="Mean precision on the val split")
     recall: float = Field(..., description="Mean recall on the val split")
     n_images: int = Field(..., description="Number of training images used")
-    upload_warning: str | None = Field(
-        default=None, description="Aviso si el modelo reentrenado no se ha guardado en MLflow"
-    )
+    upload_warning: UploadWarning = None

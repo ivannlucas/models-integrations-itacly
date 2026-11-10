@@ -5,7 +5,6 @@ delivered data/processed/model_ready_panel.csv it reproduces horizon_6_ridge.pkl
 models/metrics/final_evaluation.json exactly; that test needs inbox/a15/codigo (not committed) and
 is skipped without it. The rest runs on small synthetic panels.
 """
-# pylint: disable=protected-access  # the tests inject the loaded payload
 import json
 import shutil
 from pathlib import Path
@@ -16,7 +15,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from app.plugins.ml15_wine_ipi_price_forecast import history, training
+from app.plugins.ml15_wine_ipi_price_forecast import history, model_loader, training
 from app.plugins.ml15_wine_ipi_price_forecast import plugin as plugin_mod
 from app.plugins.ml15_wine_ipi_price_forecast.constants import (
     ANCHOR_COLUMN, FEATURE_COLUMNS, MODEL_FILENAME, REFERENCE_FINANCIAL_FILENAME,
@@ -116,15 +115,23 @@ def test_retraining_reproduces_the_delivered_artifact_and_final_evaluation():
 
 # ── plugin.train: MLflow only ──────────────────────────────────────────────────
 
-@pytest.fixture(name="instance")
-def fixture_instance():
-    """ml15 plugin with a stub loaded payload (Ridge, horizon 6)."""
-    plugin = plugin_mod.Ml15WineIpiPriceForecastPlugin()
-    plugin._payload = {
+@pytest.fixture(name="payload")
+def fixture_payload():
+    """Stub loaded payload (Ridge, horizon 6); a test may swap its "model"."""
+    return {
         "model": object(), "feature_columns": list(FEATURE_COLUMNS),
         "target_column": TARGET_COLUMN, "anchor_column": ANCHOR_COLUMN, "horizon": 6,
         "model_name": "Ridge",
     }
+
+
+@pytest.fixture(name="instance")
+def fixture_instance(payload, monkeypatch):
+    """ml15 plugin loaded with the stub payload (the fixed artifact lives in S3)."""
+    plugin = plugin_mod.Ml15WineIpiPriceForecastPlugin()
+    with monkeypatch.context() as patch:
+        patch.setattr(model_loader, "load_artifact", lambda: payload)
+        plugin.load()
     return plugin
 
 
@@ -278,11 +285,11 @@ def _reference(monkeypatch):
                         lambda: (prices, history.reindex_financial_to_base_2020(financial)))
 
 
-def test_prediction_metadata_follows_the_original(instance, monkeypatch):
+def test_prediction_metadata_follows_the_original(instance, payload, monkeypatch):
     """y_true, feature_status and feature_notes follow the original predictor.py."""
     _reference(monkeypatch)
     model = MagicMock(predict=MagicMock(return_value=np.array([110.0])))
-    instance._payload["model"] = model
+    payload["model"] = model
 
     known = instance.predict_inline(features={"origin_date": "2023-12"})
     assert (
@@ -300,10 +307,10 @@ def test_prediction_metadata_follows_the_original(instance, monkeypatch):
     )
 
 
-def test_origin_date_wins_over_date_like_the_original(instance, monkeypatch):
+def test_origin_date_wins_over_date_like_the_original(instance, payload, monkeypatch):
     """origin_date takes precedence over date, like the original."""
     _reference(monkeypatch)
-    instance._payload["model"] = MagicMock(
+    payload["model"] = MagicMock(
         predict=MagicMock(return_value=np.array([110.0]))
     )
     resp = instance.predict_inline(features={"origin_date": "2023-12-01", "date": "2023-08-01"})

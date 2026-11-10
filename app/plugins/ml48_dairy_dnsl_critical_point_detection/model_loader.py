@@ -7,6 +7,7 @@ import numpy as np
 import torch
 from torch import nn
 
+from app.domain.services.torch_device import safe_torch_device
 from app.infrastructure.artifact_store import ArtifactStore
 from app.plugins.ml48_dairy_dnsl_critical_point_detection.constants import (
     ARTIFACT_FOLDER_NAME,
@@ -25,16 +26,12 @@ _store = ArtifactStore(ARTIFACT_FOLDER_NAME)
 
 
 def safe_device() -> torch.device:
-    """CUDA solo si puede ejecutar una convolución real (mismo autotest que ml47)."""
-    if not torch.cuda.is_available():
-        return torch.device("cpu")
-    try:
-        probe = torch.nn.Conv1d(1, 1, 1).cuda()
-        probe(torch.zeros(1, 1, 4).cuda())
-        return torch.device("cuda")
-    except Exception:  # pylint: disable=broad-exception-caught
-        logger.warning("CUDA detectada pero no funcional — usando CPU.")
-        return torch.device("cpu")
+    """GPU only if a real convolution runs on it, else CPU (shared ``safe_torch_device``).
+
+    torch.cuda.is_available() alone is not enough: a visible but incompatible GPU passes it
+    and then fails on the first real operation.
+    """
+    return safe_torch_device()
 
 
 class CNN_Pasteurizer(nn.Module):  # pylint: disable=invalid-name  # name of the delivered model, imported by tests

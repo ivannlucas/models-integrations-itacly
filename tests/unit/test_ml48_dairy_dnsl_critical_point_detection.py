@@ -9,8 +9,9 @@ comportamiento con un modelo sintetico.
 Los modulos del plugin que dependen de torch se importan dentro de cada prueba, despues del
 ``pytest.importorskip("torch")`` de mas abajo.
 """
-# pylint: disable=protected-access
 from __future__ import annotations
+
+from unittest.mock import patch
 
 import numpy as np
 import pandas as pd
@@ -235,7 +236,11 @@ def test_explain_cycle_ok_and_error_never_raises(monkeypatch):
 
 # ── Plugin real con modelo sintético: inline y batch por ciclo ───────────────
 
-def _synthetic_plugin():
+def _synthetic_plugin(cuda_available: bool = False):
+    """ml48 plugin loaded through load() with fake artifacts (random model, no SHAP background).
+
+    ``cuda_available=True`` makes the GPU visible but unusable (every ``.cuda()`` fails).
+    """
     # pylint: disable=import-outside-toplevel
     from sklearn.preprocessing import StandardScaler
 
@@ -247,13 +252,25 @@ def _synthetic_plugin():
     cols = SENSOR_COLUMNS + [f"{s}_rmean" for s in SENSOR_COLUMNS] \
         + [f"{s}_rstd" for s in SENSOR_COLUMNS] + [f"{s}_lag1" for s in SENSOR_COLUMNS]
     p = Ml48DairyDnslCriticalPointDetectionPlugin()
-    p._model = _random_model()
-    p._scaler = StandardScaler().fit(np.random.default_rng(0).normal(size=(200, 28)))
-    p._feature_columns = cols
-    p._ts1_mean_train = 45.0
-    p._device = torch.device("cpu")
-    p._shap_background = None
+    model = _random_model()
+    scaler = StandardScaler().fit(np.random.default_rng(0).normal(size=(200, 28)))
+    # Public load() path with fake artifacts: random model on CPU, no SHAP background.
+    plugin_mod = "app.plugins.ml48_dairy_dnsl_critical_point_detection.plugin"
+    with patch(f"{plugin_mod}.ArtifactStore"), \
+            patch("torch.cuda.is_available", return_value=cuda_available), \
+            patch("torch.nn.Module.cuda", side_effect=RuntimeError("no kernel image")), \
+            patch(f"{plugin_mod}.load_artifacts_from_dir",
+                  return_value=(model, scaler, cols, 45.0)), \
+            patch(f"{plugin_mod}.load_shap_background", return_value=None):
+        p.load()
     return p, pd
+
+
+def test_load_falls_back_to_cpu_when_the_gpu_is_unusable():
+    """A visible GPU that cannot run a convolution makes load() pick CPU, not fail."""
+    plugin, _ = _synthetic_plugin(cuda_available=True)
+    assert plugin.stats().model_name  # loaded and serving
+    assert next(plugin._model.parameters()).device.type == "cpu"  # pylint: disable=protected-access
 
 
 def _cycles_csv(tmp_path, n_cycles):

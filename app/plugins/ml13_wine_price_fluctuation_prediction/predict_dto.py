@@ -1,7 +1,9 @@
 """Pydantic request/response DTOs for the ml13 /predict endpoint."""
 from typing import Annotated, Any, Literal, Union
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import Field, field_validator
+
+from app.application.dto.plugin_dto import BatchRequestBase, PluginDTO, UserModelRunIdEs
 
 from app.plugins.ml13_wine_price_fluctuation_prediction.constants import (
     BULLETIN_COLUMN,
@@ -20,21 +22,16 @@ _SCHEMA_DOC = (
 )
 
 
-class PredictBatchRequest(BaseModel):
+class PredictBatchRequest(BatchRequestBase):
     """Batch request: a raw weekly price CSV, same schema as data/raw/mapa_wine_prices_raw.csv."""
 
-    model_config = ConfigDict(protected_namespaces=())
-    mode: Literal["batch"] = "batch"
     data_path: str = Field(..., description=f"Ruta local o s3:// a un CSV. {_SCHEMA_DOC}")
-    mlflow_run_id: str = Field(
-        default="", description="MLflow run ID de un modelo reentrenado por el usuario",
-    )
+    mlflow_run_id: UserModelRunIdEs = ""
 
 
-class PredictBatchResponse(BaseModel):
+class PredictBatchResponse(PluginDTO):
     """Batch response: one row per input row (predict_from_csv keeps every input row)."""
 
-    model_config = ConfigDict(protected_namespaces=())
     model_id: str
     model_type: str = Field(
         ..., description="logreg | xgboost (según model_config.json del artefacto usado)",
@@ -55,10 +52,9 @@ class PredictBatchResponse(BaseModel):
     output_path: str | None = None
 
 
-class PredictInlineRequest(BaseModel):
+class PredictInlineRequest(PluginDTO):
     """Inline request: the weekly price history as a list of row dicts."""
 
-    model_config = ConfigDict(protected_namespaces=())
     mode: Literal["inline"] = "inline"
     model_key: str | None = None
     threshold: float | None = Field(
@@ -75,9 +71,7 @@ class PredictInlineRequest(BaseModel):
         min_length=MIN_INFERENCE_WEEKS,
         description=f"{_SCHEMA_DOC} Se devuelve la predicción de la semana más reciente.",
     )
-    mlflow_run_id: str = Field(
-        default="", description="MLflow run ID de un modelo reentrenado por el usuario",
-    )
+    mlflow_run_id: UserModelRunIdEs = ""
 
     @field_validator("rows")
     @classmethod
@@ -92,10 +86,9 @@ class PredictInlineRequest(BaseModel):
         return rows
 
 
-class PredictInlineResponse(BaseModel):
+class PredictInlineResponse(PluginDTO):
     """Inline response: prediction for the most recent week of the submitted history."""
 
-    model_config = ConfigDict(protected_namespaces=())
     model_id: str
     fecha: str = Field(..., description="Lunes de la semana ISO de referencia t (YYYY-MM-DD)")
     campaign: str | None = None

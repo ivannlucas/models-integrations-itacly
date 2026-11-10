@@ -1,13 +1,12 @@
 """Train DTOs for ml17 — Ridge pork price forecast retraining."""
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import Field
 
-from app.application.dto.base_version_dto import VersionInfo
+from app.application.dto.plugin_dto import PluginDTO, PromotingTrainRunId, PublishedBaseVersion
 
 
-class TrainRequest(BaseModel):
+class TrainRequest(PluginDTO):
     """Retrain request: CSV with the 8 official_v1_4 columns; MLflow run optional."""
 
-    model_config = ConfigDict(protected_namespaces=())
     data_path: str = Field(
         ...,
         description=(
@@ -18,19 +17,12 @@ class TrainRequest(BaseModel):
             "cronológicamente, mínimo 2 filas (supervisión one-step-ahead t -> t+1)."
         ),
     )
-    mlflow_run_id: str = Field(
-        default="",
-        description=(
-            "Run de MLflow opcional: si se indica, el modelo reentrenado también se guarda en él "
-            "(trazabilidad). Con o sin run, el modelo reentrenado pasa a ser el modelo base."
-        ),
-    )
+    mlflow_run_id: PromotingTrainRunId = ""
 
 
-class TrainResponse(BaseModel):
+class TrainResponse(PluginDTO):
     """Retrain response: in-sample one-step metrics of the refit Ridge pipeline."""
 
-    model_config = ConfigDict(protected_namespaces=())
     detail: str
     mae: float = Field(..., description="MAE one-step in-sample tras el reentrenamiento (€/100kg)")
     rmse: float = Field(
@@ -51,6 +43,4 @@ class TrainResponse(BaseModel):
     upload_warning: str | None = Field(
         default=None, description="Aviso si el modelo reentrenado no se ha podido guardar en MLflow"
     )
-    base_version: VersionInfo | None = Field(
-        default=None, description="Versión del modelo base publicada por este reentreno"
-    )
+    base_version: PublishedBaseVersion = None

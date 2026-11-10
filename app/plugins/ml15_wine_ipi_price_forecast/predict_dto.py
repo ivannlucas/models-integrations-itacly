@@ -15,7 +15,9 @@ IPI value. See preprocessing.py::build_feature_row for the exact derivation/over
 """
 from typing import Annotated, Any, Literal, Union
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import Field
+
+from app.application.dto.plugin_dto import BatchRequestBase, PluginDTO, UserModelRunIdEs
 
 _CALENDAR_NOTE = "Opcional: se deriva de 'date'/'origin_date' si se omite."
 _HISTORY_NOTE = (
@@ -24,11 +26,9 @@ _HISTORY_NOTE = (
 )
 
 
-class PredictBatchRequest(BaseModel):
+class PredictBatchRequest(BatchRequestBase):
     """Batch request: a CSV with one row per prediction."""
 
-    model_config = ConfigDict(protected_namespaces=())
-    mode: Literal["batch"] = "batch"
     data_path: str = Field(
         ...,
         description=(
@@ -43,16 +43,12 @@ class PredictBatchRequest(BaseModel):
             "las filas del CSV para que unas sirvan de contexto de retardo a las otras."
         ),
     )
-    mlflow_run_id: str = Field(
-        default="",
-        description="MLflow run ID de un modelo reentrenado por el usuario",
-    )
+    mlflow_run_id: UserModelRunIdEs = ""
 
 
-class PredictBatchResponse(BaseModel):
+class PredictBatchResponse(PluginDTO):
     """Batch response: one row per input row (y_pred, or 'error' if that row failed)."""
 
-    model_config = ConfigDict(protected_namespaces=())
     model_id: str
     predictions: list[dict[str, Any]] = Field(
         ...,
@@ -66,10 +62,9 @@ class PredictBatchResponse(BaseModel):
     output_path: str | None = None
 
 
-class PredictInlineRequest(BaseModel):
+class PredictInlineRequest(PluginDTO):
     """Inline request: the artifact's 16 feature_columns, one field each."""
 
-    model_config = ConfigDict(protected_namespaces=())
     mode: Literal["inline"] = "inline"
     model_key: str | None = None
     threshold: float | None = Field(
@@ -150,16 +145,12 @@ class PredictInlineRequest(BaseModel):
         ) + _CALENDAR_NOTE,
     )
 
-    mlflow_run_id: str = Field(
-        default="",
-        description="MLflow run ID de un modelo reentrenado por el usuario",
-    )
+    mlflow_run_id: UserModelRunIdEs = ""
 
 
-class PredictInlineResponse(BaseModel):
+class PredictInlineResponse(PluginDTO):
     """Inline response: t+6 national IPI forecast for the given feature vector."""
 
-    model_config = ConfigDict(protected_namespaces=())
     model_id: str
     origin_date: str | None = Field(
         default=None,

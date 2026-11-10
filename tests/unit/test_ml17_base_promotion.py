@@ -43,10 +43,10 @@ def test_train_without_run_publishes_the_new_base(train_csv, isolated_base_store
     )
     # pydantic fields are seen as FieldInfo by pylint
     assert (
-        resp.base_version.version == "v1"  # pylint: disable=no-member
-        and resp.base_version.mlflow_run_id is None  # pylint: disable=no-member
+        resp.base_version.version == "v1"
+        and resp.base_version.mlflow_run_id is None
     )
-    assert resp.base_version.metrics["mae"] == pytest.approx(  # pylint: disable=no-member
+    assert resp.base_version.metrics["mae"] == pytest.approx(
         resp.mae, abs=1e-4
     )
     tracker.upload_artifacts.assert_not_called()
@@ -66,7 +66,7 @@ def test_train_with_run_also_uploads_to_mlflow(train_csv, monkeypatch):
     assert tracker.upload_artifacts.call_args.kwargs["artifact_path"] == "model"
     tracker.log_params.assert_called_once()
     assert (
-        resp.base_version.mlflow_run_id == "run-1"  # pylint: disable=no-member
+        resp.base_version.mlflow_run_id == "run-1"
         and resp.upload_warning is None
     )
 
@@ -80,5 +80,5 @@ def test_mlflow_failure_is_a_warning(train_csv, monkeypatch):
     )
     assert (
         "mlflow caído" in resp.upload_warning  # pylint: disable=unsupported-membership-test
-        and resp.base_version.version == "v1"  # pylint: disable=no-member
+        and resp.base_version.version == "v1"
     )

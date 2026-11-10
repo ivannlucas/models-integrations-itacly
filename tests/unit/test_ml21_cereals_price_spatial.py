@@ -5,7 +5,8 @@ import joblib
 import numpy as np
 import pytest
 
-from app.plugins.ml21_cereals_price_spatial import model_loader
+from app.infrastructure.artifact_store import ArtifactStore
+from app.plugins.ml21_cereals_price_spatial.constants import ARTIFACT_FOLDER_NAME
 from app.plugins.ml21_cereals_price_spatial.plugin import Ml21CerealsPriceSpatialPlugin
 
 PREFIX = "/models/ml21-cereals-price-spatial"
@@ -134,7 +135,7 @@ def test_stats_overwrites_legacy_per_horizon_keys_with_the_real_run_values():
 def test_xai_feature_values_are_the_h3_model_input_row():
     """xai_feature_values must be the H3 regressor's real input (one-hot columns included):
     the explainability service feeds them straight to datagia_best_h3_reg."""
-    local = model_loader._store.local_dir  # pylint: disable=protected-access
+    local = ArtifactStore(ARTIFACT_FOLDER_NAME).local_dir  # the plugin's store dir
     if not (local / "datagia_best_h3_reg.joblib").exists():
         pytest.skip("ml21 artifacts not vendored locally")
     plugin = Ml21CerealsPriceSpatialPlugin()
@@ -150,5 +151,5 @@ def test_xai_feature_values_are_the_h3_model_input_row():
     xai = resp.xai_feature_values
     assert xai["cereal_predominante_trigo"] == 1.0  # pylint: disable=unsubscriptable-object
     model = joblib.load(local / "datagia_best_h3_reg.joblib")
-    row = np.array([[xai.get(f, 0.0) for f in model.feature_names_in_]])  # pylint: disable=no-member
+    row = np.array([[xai.get(f, 0.0) for f in model.feature_names_in_]])
     assert float(model.predict(row)[0]) == pytest.approx(resp.predictions["H3"]["expected_return"])

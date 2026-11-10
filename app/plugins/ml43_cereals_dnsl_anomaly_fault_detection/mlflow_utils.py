@@ -85,7 +85,7 @@ def get_calibrated_threshold(run_id: str, default: float) -> float:
     """
     try:
         metrics = BaseMLflowTracker(run_id).get_metrics()
-    except Exception as exc:  # pylint: disable=broad-exception-caught
+    except Exception as exc:  # pylint: disable=broad-exception-caught  # any MLflow failure -> default
         logger.warning("Could not fetch decision_threshold for run_id=%s: %s", run_id, exc)
         return default
     value = metrics.get("decision_threshold")

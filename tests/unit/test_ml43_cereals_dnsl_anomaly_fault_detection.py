@@ -1,7 +1,7 @@
 """Tests for ``ml43-cereals-dnsl-anomaly-fault-detection``: endpoint wiring (FakePlugin) plus
 direct tests of the real plugin's training, validation, postprocessing, XAI report and MLflow
 threshold helpers on synthetic data."""
-# pylint: disable=protected-access
+# pylint: disable=protected-access  # tests of private helpers (_record, *_ctx, _build_final_report)
 import pickle
 from pathlib import Path
 from unittest.mock import patch
@@ -84,14 +84,14 @@ def test_stats_without_mlflow_run_id_exposes_only_the_unified_metric_keys():
 
 def test_avg_latency_ms_is_computed_from_recorded_predictions():
     """Fase 4 (modelo 43-44 audit): perf_counter() was measured but only logged —
-    stats() hardcoded avg_latency_ms=None. Tests _record()/stats() directly (no real
+    stats() hardcoded avg_latency_ms=None. Tests _record_latency()/stats() directly (no real
     model artifacts needed) since predict_batch just forwards its measured latency
-    into _record(), already exercised end-to-end by test_predict_batch above."""
+    into _record_latency(), already exercised end-to-end by test_predict_batch above."""
     plugin = Ml43CerealsDnslAnomalyFaultDetectionPlugin()
     assert plugin.stats().runtime_stats.avg_latency_ms is None  # no predictions yet
 
-    plugin._record(120.0)
-    plugin._record(80.0)
+    plugin._record_latency(120.0)
+    plugin._record_latency(80.0)
 
     stats = plugin.stats()
     assert stats.runtime_stats.total_predictions == 2

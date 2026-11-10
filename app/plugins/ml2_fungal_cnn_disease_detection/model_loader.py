@@ -9,6 +9,7 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 
+from app.domain.services.torch_device import safe_torch_device
 from app.infrastructure.artifact_store import ArtifactStore
 from app.plugins.ml2_fungal_cnn_disease_detection.constants import (
     ARTIFACT_FOLDER_NAME,
@@ -25,15 +26,7 @@ _store = ArtifactStore(ARTIFACT_FOLDER_NAME)
 
 def _safe_device() -> torch.device:
     """Return a CUDA device only if it can actually execute model operations."""
-    if not torch.cuda.is_available():
-        return torch.device("cpu")
-    try:
-        probe = torch.nn.Conv2d(1, 1, 1).cuda()
-        probe(torch.zeros(1, 1, 4, 4).cuda())
-        return torch.device("cuda")
-    except Exception:  # pylint: disable=broad-exception-caught  # any CUDA failure -> CPU
-        logger.warning("CUDA detectada pero no funcional para operaciones de red — usando CPU.")
-        return torch.device("cpu")
+    return safe_torch_device()
 
 
 class LeafCNN(nn.Module):

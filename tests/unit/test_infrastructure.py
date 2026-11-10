@@ -3,7 +3,6 @@
 Covers ModelContainer, ModelRuntimeService, ArtifactStore (local path ops),
 and router_factory edge cases (exception mapping).
 """
-# pylint: disable=protected-access
 
 from __future__ import annotations
 
@@ -83,8 +82,8 @@ class TestModelContainer:
         """Verify ModelContainer wires use cases on construction."""
         plugin = FakeModelPlugin()
         container = ModelContainer(plugin=plugin)
-        assert container._plugin is plugin
-        assert container._service is not None
+        assert container.plugin is plugin
+        assert container.service is not None
         assert container.predict_use_case is not None
         assert container.stats_use_case is not None
         assert container.train_use_case is not None
@@ -102,7 +101,7 @@ class TestModelContainer:
         plugin = FakeModelPlugin()
         container = ModelContainer(plugin=plugin)
         assert isinstance(container.service, ModelRuntimeService)
-        assert container.service._plugin is plugin
+        assert container.service.plugin is plugin
 
     def test_predict_use_case_executes(self):
         """Verify predict use case is wired in the container."""
@@ -184,8 +183,8 @@ class TestArtifactStoreLocal:
     def test_local_dir_construction(self):
         """Verify ArtifactStore builds the local directory path correctly."""
         store = ArtifactStore("test_model")
-        assert store._model_name == "test_model"
-        assert store._local_dir == ARTIFACTS_ROOT / "test_model"
+        assert store._model_name == "test_model"  # pylint: disable=protected-access  # no public accessor
+        assert store.local_dir == ARTIFACTS_ROOT / "test_model"
 
     def test_path_returns_local_path(self):
         """Verify path() returns the correct local Path."""
@@ -247,11 +246,10 @@ class TestArtifactStoreS3:
         """Verify path() calls _download_all when the file is absent and STORAGE_BUCKET is set."""
         monkeypatch.setenv("STORAGE_BUCKET", "test-bucket")
         with patch_unit("app.infrastructure.artifact_store.ArtifactStore._download_all") as mock_dl:
-            store = ArtifactStore("test_model")
-            store._local_dir = tmp_path / "missing_dir"
+            store = ArtifactStore("test_model", root=tmp_path / "missing_dir")
             result = store.path("model.pkl")
             mock_dl.assert_called_once()
-            assert result == tmp_path / "missing_dir" / "model.pkl"
+            assert result == tmp_path / "missing_dir" / "test_model" / "model.pkl"
 
     def test_build_s3_client_reads_env_vars(self, monkeypatch):
         """Verify _build_s3_client passes environment credentials to boto3."""
@@ -275,15 +273,14 @@ class TestArtifactStoreS3:
         mock_paginator.paginate.return_value = [{}]  # page with no Contents key
         mock_s3.get_paginator.return_value = mock_paginator
         with patch_unit("app.infrastructure.artifact_store._build_s3_client", return_value=mock_s3):
-            store = ArtifactStore("test_model")
-            store._local_dir = tmp_path
-            store._download_all()
+            ArtifactStore("test_model", root=tmp_path).download_all_if_needed()
         mock_s3.download_file.assert_not_called()
 
     def test_download_all_skips_unchanged_files(self, monkeypatch, tmp_path):
         """Verify _download_all skips files whose local size already matches S3."""
         monkeypatch.setenv("STORAGE_BUCKET", "test-bucket")
-        (tmp_path / "model.pkl").write_bytes(b"x" * 100)
+        (tmp_path / "test_model").mkdir()
+        (tmp_path / "test_model" / "model.pkl").write_bytes(b"x" * 100)
         mock_s3 = MagicMock()
         mock_paginator = MagicMock()
         mock_paginator.paginate.return_value = [{
@@ -291,9 +288,7 @@ class TestArtifactStoreS3:
         }]
         mock_s3.get_paginator.return_value = mock_paginator
         with patch_unit("app.infrastructure.artifact_store._build_s3_client", return_value=mock_s3):
-            store = ArtifactStore("test_model")
-            store._local_dir = tmp_path
-            store._download_all()
+            ArtifactStore("test_model", root=tmp_path).download_all_if_needed()
         mock_s3.download_file.assert_not_called()
 
     def test_download_all_downloads_missing_file(self, monkeypatch, tmp_path):
@@ -307,11 +302,9 @@ class TestArtifactStoreS3:
         }]
         mock_s3.get_paginator.return_value = mock_paginator
         with patch_unit("app.infrastructure.artifact_store._build_s3_client", return_value=mock_s3):
-            store = ArtifactStore("test_model")
-            store._local_dir = tmp_path
-            store._download_all()
+            ArtifactStore("test_model", root=tmp_path).download_all_if_needed()
         mock_s3.download_file.assert_called_once_with(
-            "test-bucket", remote_key, str(tmp_path / "model.pkl")
+            "test-bucket", remote_key, str(tmp_path / "test_model" / "model.pkl")
         )
 
     def test_download_all_raises_on_s3_error(self, monkeypatch, tmp_path):
@@ -325,10 +318,9 @@ class TestArtifactStoreS3:
         mock_s3.get_paginator.return_value = mock_paginator
         mock_s3.download_file.side_effect = RuntimeError("connection refused")
         with patch_unit("app.infrastructure.artifact_store._build_s3_client", return_value=mock_s3):
-            store = ArtifactStore("test_model")
-            store._local_dir = tmp_path
+            store = ArtifactStore("test_model", root=tmp_path)
             with pytest.raises(RuntimeError, match="connection refused"):
-                store._download_all()
+                store.download_all_if_needed()
 
 # ── model_loader helper tests ─────────────────────────────────────────────
 

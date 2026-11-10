@@ -17,7 +17,7 @@ def load_catalog(filename):
     try:
         with open(filename, 'r', encoding='utf-8') as f:
             return json.load(f)
-    except Exception as e:  # pylint: disable=broad-exception-caught  # shown in the UI, returns None
+    except (OSError, ValueError) as e:  # I/O, JSON or UnicodeDecodeError: shown in the UI
         st.error(f"Error al cargar {filename}: {e}")
         return None
 

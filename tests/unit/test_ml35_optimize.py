@@ -4,7 +4,7 @@ The endpoint test in test_ml35_dairy_ann_cleaning_cost.py goes through the fake 
 never caught that ``_run_optimize`` overwrote its ``ctx`` tuple with the scenario features
 (ValueError: too many values to unpack) nor that pygad was missing from requirements.txt.
 """
-# pylint: disable=protected-access
+# pylint: disable=protected-access  # tests call the private GA helper _run_optimize with a ctx
 from pathlib import Path
 
 import joblib

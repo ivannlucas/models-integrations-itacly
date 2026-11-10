@@ -16,11 +16,18 @@ The optimization objective (minimize_residue|maximize_benefit) is carried in the
 """
 from typing import Annotated, Any, Literal, Union
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import Field
+
+from app.application.dto.plugin_dto import (
+    BatchRequestBase,
+    BatchResponseBase,
+    InlineRequestBase,
+    PluginDTO,
+)
 
 
 # ── inline (optimize / pareto) ─────────────────────────────────────────────
-class PredictInlineRequest(BaseModel):
+class PredictInlineRequest(InlineRequestBase):
     """Single-scenario inline request. All fields have manifest defaults.
 
     ``predict_inline`` dispatches on ``model_key``:
@@ -28,11 +35,7 @@ class PredictInlineRequest(BaseModel):
       - == "pareto": trace the residue-vs-benefit Pareto frontier.
     """
 
-    model_config = ConfigDict(protected_namespaces=())
-    mode: Literal["inline"] = "inline"
     model_key: str = "optimize"  # "optimize" (default) | "pareto"
-    threshold: float | None = None
-    mlflow_run_id: str = ""
 
     reference_year: int = Field(
         default=2023, description="Año de referencia (superficies históricas)"
@@ -108,10 +111,9 @@ class PredictInlineRequest(BaseModel):
     )
 
 
-class PredictOptimizeResponse(BaseModel):
+class PredictOptimizeResponse(PluginDTO):
     """Optimal crop-allocation plan plus impact metrics vs the historical baseline."""
 
-    model_config = ConfigDict(protected_namespaces=())
     model_id: str
     reference_year: int
     optimization_mode: str
@@ -149,10 +151,9 @@ class PredictOptimizeResponse(BaseModel):
 
 
 # ── pareto ──────────────────────────────────────────────────────────────────
-class PredictParetoResponse(BaseModel):
+class PredictParetoResponse(PluginDTO):
     """Pareto frontier: bounds, non-dominated points (in millions) and knee point."""
 
-    model_config = ConfigDict(protected_namespaces=())
     model_id: str
     reference_year: int
     bounds: dict[str, float] = Field(
@@ -174,7 +175,7 @@ class PredictParetoResponse(BaseModel):
 
 
 # ── batch ───────────────────────────────────────────────────────────────────
-class PredictBatchRequest(BaseModel):
+class PredictBatchRequest(BatchRequestBase):
     """Batch request: a CSV where each row is an optimization scenario.
 
     Recognised columns (all optional; defaults from the optimize contract):
@@ -183,19 +184,11 @@ class PredictBatchRequest(BaseModel):
     surface_tolerance_pct, min_secano_use_pct, min_regadio_use_pct.
     """
 
-    model_config = ConfigDict(protected_namespaces=())
-    mode: Literal["batch"] = "batch"
     data_path: str = Field(..., description="Path to CSV with one optimization scenario per row")
-    mlflow_run_id: str = ""
 
 
-class PredictBatchResponse(BaseModel):
+class PredictBatchResponse(BatchResponseBase):
     """Batch response: one optimization summary dict per scenario row."""
-
-    model_config = ConfigDict(protected_namespaces=())
-    model_id: str
-    predictions: list[dict[str, Any]]
-    output_path: str | None = None
 
 
 PredictRequest = Annotated[

@@ -5,7 +5,6 @@ dataset it reproduces model_comparison.json to 4 decimals and the delivered gru_
 (see outputs/a14/verification_report.md); here a small synthetic weekly series runs the same code
 in seconds.
 """
-# pylint: disable=protected-access  # the tests inject the loaded bundle
 import shutil
 from unittest.mock import MagicMock
 
@@ -54,13 +53,16 @@ def fixture_raw_csv(tmp_path):
 
 
 @pytest.fixture(name="instance")
-def fixture_instance():
+def fixture_instance(monkeypatch):
     """The real plugin with only the feature contract loaded (the fixed artifacts live in S3)."""
-    plugin = plugin_mod.Ml14WinePhytoPriceForecastPlugin()
-    plugin._bundle = {
+    bundle = {
         "feature_columns": _features(),
         "model": object(),
     }
+    plugin = plugin_mod.Ml14WinePhytoPriceForecastPlugin()
+    with monkeypatch.context() as patch:
+        patch.setattr(model_loader, "load_artifact_bundle", lambda: bundle)
+        plugin.load()
     return plugin
 
 
@@ -136,7 +138,7 @@ def test_train_uploads_only_to_mlflow_and_the_model_is_served_by_run(
     )
     monkeypatch.setattr(mlflow_utils, "BaseMLflowTracker", MagicMock(return_value=tracker))
     monkeypatch.setattr(mlflow_artifacts, "BaseMLflowTracker", MagicMock(return_value=tracker))
-    local_dir = plugin_mod.model_loader._store.local_dir
+    local_dir = ArtifactStore(constants.ARTIFACT_FOLDER_NAME).local_dir  # the plugin's store dir
     before = set(local_dir.rglob("*")) if local_dir.exists() else set()
 
     resp = instance.train(data_path=raw_csv, mlflow_run_id="run-1")

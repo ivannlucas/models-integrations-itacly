@@ -1,5 +1,5 @@
 """ProcessTrainExecutor with real `spawn` child processes and a file-backed store."""
-# pylint: disable=protected-access
+# pylint: disable=protected-access  # tests the watchdog/renice helpers and live child procs
 from __future__ import annotations
 
 import logging

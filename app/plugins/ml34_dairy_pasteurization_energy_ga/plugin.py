@@ -23,6 +23,7 @@ import torch
 
 from app.application.dto.stats_dto import InputField, OutputField, StatsResponse
 from app.domain.ports.model_plugin_port import ModelPluginPort
+from app.domain.services.batch_rows import row_error_capture
 from app.domain.services.exceptions import ThermalSafetyViolationError
 from app.domain.services.mlflow_artifacts import (
     add_mlflow_run_to_stats,
@@ -31,6 +32,7 @@ from app.domain.services.mlflow_artifacts import (
     upload_model_to_mlflow,
 )
 from app.domain.services.plugin_runtime import PluginRuntimeMixin
+from app.domain.services.xai_values import xai_feature_values
 from app.infrastructure.artifact_store import local_file_path
 from app.plugins.ml34_dairy_pasteurization_energy_ga.constants import (
     FEATURES,
@@ -74,26 +76,6 @@ from app.plugins.ml34_dairy_pasteurization_energy_ga.predict_dto import (
 from app.plugins.ml34_dairy_pasteurization_energy_ga.train_dto import TrainResponse
 
 logger = logging.getLogger(__name__)
-
-
-def _xai_values_from_features(data: dict) -> dict[str, float] | None:
-    """Build xai_feature_values from a predict_batch row dict.
-
-    Without this, predict_batch rows only carry row/E_consumo_pred/T_out_pred —
-    the platform's XAI-context builder filters those out as known output columns,
-    is left with zero input features, and silently skips calling the explain
-    service (no error, no request — just no explanation). See
-    ml35_dairy_ann_cleaning_cost's _xai_values_from_features for the same fix.
-    """
-    xai: dict[str, float] = {}
-    for f in FEATURES:
-        val = data.get(f)
-        if val is not None and pd.notna(val):
-            try:
-                xai[f] = float(val)
-            except (TypeError, ValueError):
-                pass
-    return xai or None
 
 
 def _ga_best_individual(ctx: tuple, *, t_in: float, t_ciclo: float, delta_p: float, seed: int):
@@ -335,18 +317,15 @@ class Ml34DairyPasteurizationEnergyGaPlugin(PluginRuntimeMixin, ModelPluginPort)
             raise ValueError(f"CSV falta columnas requeridas: {missing}")
         predictions: list[dict] = []
         for idx, row in df.iterrows():
-            try:
+            with row_error_capture(predictions, {"row": int(idx)}, what=f"fila {idx}"):
                 row_dict = row.to_dict()
                 pred = self._run_predict(row_dict, ctx)
                 predictions.append({
                     "row": int(idx),
                     "E_consumo_pred": pred.E_consumo_pred,
                     "T_out_pred": pred.T_out_pred,
-                    "xai_feature_values": _xai_values_from_features(row_dict),
+                    "xai_feature_values": xai_feature_values(row_dict, FEATURES) or None,
                 })
-            except Exception as exc:  # pylint: disable=broad-exception-caught
-                logger.warning("Error en fila %s: %s", idx, exc)
-                predictions.append({"row": int(idx), "error": str(exc)})
         return predictions
 
     def _predict_batch_optimize(self, df: pd.DataFrame, ctx: tuple) -> list[dict]:
@@ -372,7 +351,7 @@ class Ml34DairyPasteurizationEnergyGaPlugin(PluginRuntimeMixin, ModelPluginPort)
         has_seed_col = "seed" in df.columns
         predictions: list[dict] = []
         for idx, row in df.iterrows():
-            try:
+            with row_error_capture(predictions, {"row": int(idx)}, what=f"fila {idx} (optimize)"):
                 t_in, delta_p, t_ciclo = (
                     float(row["T_in_leche"]), float(row["Delta_P"]), float(row["t_ciclo"])
                 )
@@ -385,9 +364,6 @@ class Ml34DairyPasteurizationEnergyGaPlugin(PluginRuntimeMixin, ModelPluginPort)
                     "row": int(idx), "T_in_leche": t_in, "Delta_P": delta_p, "t_ciclo": t_ciclo
                 })
                 predictions.append(pred)
-            except Exception as exc:  # pylint: disable=broad-exception-caught
-                logger.warning("Error en fila %s (optimize): %s", idx, exc)
-                predictions.append({"row": int(idx), "error": str(exc)})
         return predictions
 
     # ── train ─────────────────────────────────────────────────────────────────

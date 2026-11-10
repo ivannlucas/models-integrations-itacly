@@ -1,33 +1,32 @@
 """Pydantic DTOs for ml17 (Ridge pork price forecast) /predict endpoint."""
 from typing import Annotated, Any, Literal, Union
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import Field
+
+from app.application.dto.plugin_dto import PluginDTO, XaiFeatureValues
 
 
-class PredictBatchRequest(BaseModel):
+class PredictBatchRequest(PluginDTO):
     """Batch request: CSV with date + 6 exogenous features per row."""
 
-    model_config = ConfigDict(protected_namespaces=())
     mode: Literal["batch"] = "batch"
     data_path: str = Field(
         ..., description="Ruta al CSV con columnas date + 6 features porcino"
     )
 
 
-class PredictBatchResponse(BaseModel):
+class PredictBatchResponse(PluginDTO):
     """Batch response: one Ridge prediction per CSV row."""
 
-    model_config = ConfigDict(protected_namespaces=())
     model_id: str
     line: str
     predictions: list[dict[str, Any]]
     output_path: str | None = None
 
 
-class PredictInlineRequest(BaseModel):
+class PredictInlineRequest(PluginDTO):
     """Single-row Ridge inference — date + 6 required feature fields."""
 
-    model_config = ConfigDict(protected_namespaces=())
     mode: Literal["inline"] = "inline"
     model_key: str | None = None
     threshold: float | None = None
@@ -56,10 +55,9 @@ class PredictInlineRequest(BaseModel):
     )
 
 
-class PredictInlineResponse(BaseModel):
+class PredictInlineResponse(PluginDTO):
     """Inline response: predicted pork class E Spain price at t+1."""
 
-    model_config = ConfigDict(protected_namespaces=())
     model_id: str
     line: str
     prediction: Any = Field(
@@ -68,10 +66,7 @@ class PredictInlineResponse(BaseModel):
     y_pred: float = Field(..., description="Alias de prediction")
     confidence: float | None = None
     base_date: str = Field(..., description="Fecha de referencia usada (YYYY-MM-DD)")
-    xai_feature_values: dict[str, float] | None = Field(
-        default=None,
-        description="Valores de features usados — consumidos por el servicio XAI",
-    )
+    xai_feature_values: XaiFeatureValues = None
 
 
 PredictRequest = Annotated[

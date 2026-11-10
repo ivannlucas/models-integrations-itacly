@@ -10,15 +10,15 @@ mlflow_run_id + upload_warning), same pattern as ml10_dairy_disease_vector_detec
 MLflow run (never silently discarded, never overwrites the fixed S3 artifact).
 """
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import Field
 
+from app.application.dto.plugin_dto import TrainRequestBase
 from app.application.dto.train_dto import MlflowRunId
 
 
-class TrainRequest(BaseModel):
+class TrainRequest(TrainRequestBase):
     """Request body for retraining the SlowFast cow-behaviour classifier."""
 
-    model_config = ConfigDict(protected_namespaces=())
     data_path: str = Field(
         ...,
         description=(

@@ -5,37 +5,30 @@ Three modes via discriminated union:
   - "optimize": run GA to find optimal setpoints given 4 context inputs
   - "batch":    run inline prediction on each row of a CSV
 """
-from typing import Annotated, Any, Literal, Union
+from typing import Annotated, Literal, Union
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import Field
+
+from app.application.dto.plugin_dto import (
+    BatchRequestBase,
+    BatchResponseBase,
+    InlineRequestBase,
+    PluginDTO,
+)
 
 
-class PredictBatchRequest(BaseModel):
+class PredictBatchRequest(BatchRequestBase):
     """Batch prediction request: CSV with the 8 ANN input features per row."""
 
-    model_config = ConfigDict(protected_namespaces=())
-    mode: Literal["batch"] = "batch"
     data_path: str = Field(..., description="Path to CSV with 8 ANN input features")
-    mlflow_run_id: str = ""
 
 
-class PredictBatchResponse(BaseModel):
+class PredictBatchResponse(BatchResponseBase):
     """Batch prediction response: one prediction (or error) per CSV row."""
 
-    model_config = ConfigDict(protected_namespaces=())
-    model_id: str
-    predictions: list[dict[str, Any]]
-    output_path: str | None = None
 
-
-class PredictInlineRequest(BaseModel):
+class PredictInlineRequest(InlineRequestBase):
     """Single-sample prediction: provide all 8 ANN inputs."""
-
-    model_config = ConfigDict(protected_namespaces=())
-    mode: Literal["inline"] = "inline"
-    model_key: str | None = None
-    threshold: float | None = None
-    mlflow_run_id: str = ""
 
     temp_entrada_leche: float = Field(..., description="Temperatura de entrada de la leche (°C)")
     temp_ambiente: float = Field(..., description="Temperatura ambiente (°C)")
@@ -57,10 +50,9 @@ class PredictInlineRequest(BaseModel):
     )
 
 
-class PredictInlineResponse(BaseModel):
+class PredictInlineResponse(PluginDTO):
     """Inline prediction response: ANN water consumption + computed PU."""
 
-    model_config = ConfigDict(protected_namespaces=())
     model_id: str
     consumo_agua_l: float = Field(..., description="Consumo de agua de refrigeración predicho (L)")
     pu_logrado: float = Field(
@@ -68,10 +60,9 @@ class PredictInlineResponse(BaseModel):
     )
 
 
-class PredictOptimizeRequest(BaseModel):
+class PredictOptimizeRequest(PluginDTO):
     """Optimization mode: provide the 4 fixed-context inputs; the GA finds optimal setpoints."""
 
-    model_config = ConfigDict(protected_namespaces=())
     mode: Literal["optimize"] = "optimize"
     # model_key="optimize" tells predict_inline to dispatch to the GA branch
     model_key: str = "optimize"
@@ -86,10 +77,9 @@ class PredictOptimizeRequest(BaseModel):
     )
 
 
-class PredictOptimizeResponse(BaseModel):
+class PredictOptimizeResponse(PluginDTO):
     """Optimization response: recommended setpoints + water savings vs. baseline."""
 
-    model_config = ConfigDict(protected_namespaces=())
     model_id: str
     opt_temp_leche: float = Field(..., description="Setpoint óptimo de temperatura leche (°C)")
     opt_temp_agua: float = Field(..., description="Temperatura óptima del agua de servicio (°C)")

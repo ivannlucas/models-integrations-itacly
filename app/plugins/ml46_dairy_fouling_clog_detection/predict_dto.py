@@ -1,16 +1,16 @@
 """Pydantic request/response DTOs for the ml46 (DNSL fouling/clog) /predict endpoint."""
 from typing import Annotated, Any, Literal, Union
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import Field
+
+from app.application.dto.plugin_dto import BatchRequestBase, PluginDTO
 
 from app.plugins.ml46_dairy_fouling_clog_detection.constants import SEQ_LEN
 
 
-class PredictBatchRequest(BaseModel):
+class PredictBatchRequest(BatchRequestBase):
     """Batch request: a CSV of raw telemetry rows (one or more assets, ordered by timestamp)."""
 
-    model_config = ConfigDict(protected_namespaces=())
-    mode: Literal["batch"] = "batch"
     data_path: str = Field(
         ...,
         description=(
@@ -22,20 +22,18 @@ class PredictBatchRequest(BaseModel):
     mlflow_run_id: str = Field(default="", description="MLflow run ID for user fine-tuned model")
 
 
-class PredictBatchResponse(BaseModel):
+class PredictBatchResponse(PluginDTO):
     """Batch response: one scored window per row, plus consolidated alert episodes."""
 
-    model_config = ConfigDict(protected_namespaces=())
     model_id: str
     predictions: list[dict[str, Any]]
     alerts: list[dict[str, Any]] = Field(default_factory=list)
     output_path: str | None = None
 
 
-class PredictInlineRequest(BaseModel):
+class PredictInlineRequest(PluginDTO):
     """Inline request: at least SEQ_LEN minutes of raw telemetry history for one asset."""
 
-    model_config = ConfigDict(protected_namespaces=())
     mode: Literal["inline"] = "inline"
     model_key: str | None = None
     threshold: float | None = Field(
@@ -63,10 +61,9 @@ class PredictInlineRequest(BaseModel):
     mlflow_run_id: str = Field(default="", description="MLflow run ID for user fine-tuned model")
 
 
-class PredictInlineResponse(BaseModel):
+class PredictInlineResponse(PluginDTO):
     """Inline response: model outputs for the last window plus operator explanation."""
 
-    model_config = ConfigDict(protected_namespaces=())
     model_id: str
     asset_id: str
     timestamp: str

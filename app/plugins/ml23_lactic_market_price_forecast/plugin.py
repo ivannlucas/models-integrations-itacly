@@ -23,6 +23,7 @@ from app.application.dto.stats_dto import InputField, OutputField, RuntimeStats,
 from app.domain.ports.model_plugin_port import ModelPluginPort
 from app.domain.services.mlflow_artifacts import add_mlflow_run_to_stats, removing_dir
 from app.domain.services.plugin_runtime import PluginRuntimeMixin
+from app.domain.services.xai_values import xai_feature_values
 from app.infrastructure.artifact_store import local_file_path
 from app.infrastructure.base_model_publisher import persist_retrained_bundle
 from app.plugins.ml23_lactic_market_price_forecast.constants import (
@@ -99,21 +100,6 @@ def _describe_feature(column: str) -> str:
         if matches(column):
             return description
     return "Columna auxiliar"
-
-
-def _xai_values_from_row(row, feature_cols: list[str]) -> dict[str, float]:
-    """Build xai_feature_values from a features dict (inline) or DataFrame row (batch)."""
-    xai: dict[str, float] = {}
-    for col in feature_cols:
-        val = row.get(col)
-        if val is not None:
-            try:
-                fv = float(val)
-                if not np.isnan(fv):
-                    xai[col] = fv
-            except (TypeError, ValueError):
-                pass
-    return xai
 
 
 class _RefitSplit(NamedTuple):
@@ -195,12 +181,11 @@ class Ml23LacticMarketPriceForecastPlugin(PluginRuntimeMixin, ModelPluginPort):
     BASE_ARTIFACT_FOLDER = ARTIFACT_FOLDER_NAME   # every /train publishes the new base model
 
     def __init__(self) -> None:
-        """Initialize unloaded plugin with empty runtime counters."""
+        """Initialize unloaded plugin (runtime counters start at the mixin defaults)."""
         self._model: GRUModel | None = None
         self._scaler_mean: np.ndarray | None = None
         self._scaler_scale: np.ndarray | None = None
         self._manifest: dict = {}
-        self._total_latency_ms: float = 0.0
 
     def load(self) -> None:
         """Load GRU model, scaler and manifest from artifact store."""
@@ -243,11 +228,6 @@ class Ml23LacticMarketPriceForecastPlugin(PluginRuntimeMixin, ModelPluginPort):
         with torch.no_grad():
             return float(model(x_t).cpu().numpy().reshape(-1)[0])
 
-    def _record_latency(self, elapsed_ms: float) -> None:
-        """Count one served prediction (mixin) and accumulate its latency."""
-        self._record()
-        self._total_latency_ms += elapsed_ms
-
     def _slide(self, frame: pd.DataFrame, bundle: tuple, manifest: dict, extra: dict) -> list[dict]:
         """One prediction per seq_len window of an ordered frame (bundle = model, mean, scale);
         extra (producto/canal) goes right after "fecha" in each row."""
@@ -264,7 +244,7 @@ class Ml23LacticMarketPriceForecastPlugin(PluginRuntimeMixin, ModelPluginPort):
                 **extra,
                 "current_price": float(r.get("current_price", float("nan"))),
                 "y_pred": round(pred, 4),
-                "xai_feature_values": _xai_values_from_row(r, feature_cols),
+                "xai_feature_values": xai_feature_values(r, feature_cols),
             })
         return rows
 
@@ -374,7 +354,7 @@ class Ml23LacticMarketPriceForecastPlugin(PluginRuntimeMixin, ModelPluginPort):
                 horizon=manifest.get("horizon", 6),
                 features_used=feature_cols,
                 model_version=VERSION,
-                xai_feature_values=_xai_values_from_row(features, feature_cols) or None,
+                xai_feature_values=xai_feature_values(features, feature_cols) or None,
             )
 
     def train(self, *, data_path: str, mlflow_run_id: str) -> TrainResponse:
@@ -440,7 +420,6 @@ class Ml23LacticMarketPriceForecastPlugin(PluginRuntimeMixin, ModelPluginPort):
     def stats(self, mlflow_run_id: str = "") -> StatsResponse:
         """Return model metadata and runtime statistics."""
         feature_cols: list[str] = self._manifest.get("feature_cols", [])
-        avg = self._total_latency_ms / self._predict_count if self._predict_count else None
         metrics = {
             "horizon_months": self._manifest.get("horizon", 6),
             "seq_len": self._manifest.get("seq_len", 6),
@@ -472,6 +451,6 @@ class Ml23LacticMarketPriceForecastPlugin(PluginRuntimeMixin, ModelPluginPort):
             metrics=metrics,
             runtime_stats=RuntimeStats(
                 total_predictions=self._predict_count,
-                avg_latency_ms=round(avg, 1) if avg is not None else None,
+                avg_latency_ms=self._avg_latency_ms(1),
             ),
         ), mlflow_run_id)

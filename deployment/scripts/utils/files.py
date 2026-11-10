@@ -38,7 +38,7 @@ def read_file_content(filepath: Path) -> Optional[str]:
     """
     try:
         return filepath.read_text(encoding='utf-8')
-    except Exception as e:  # pylint: disable=broad-exception-caught  # None signals unreadable
+    except (OSError, ValueError) as e:  # I/O error or UnicodeDecodeError -> None (unreadable)
         log_message(f"Could not read file '{filepath}': {e}", "ERROR")
         return None
 

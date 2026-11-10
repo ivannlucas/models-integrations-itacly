@@ -21,7 +21,9 @@ from torch.utils.data import DataLoader, Dataset
 
 from app.application.dto.stats_dto import InputField, OutputField, StatsResponse
 from app.domain.ports.model_plugin_port import ModelPluginPort
-from app.domain.services.exceptions import InvalidImageError, ModelNotLoadedError
+from app.domain.services.batch_rows import row_error_capture
+from app.domain.services.exceptions import ModelNotLoadedError
+from app.domain.services.image_cam import compute_and_encode_cam
 from app.domain.services.mlflow_artifacts import (
     mlflow_run_summary,
     removing_dir,
@@ -58,7 +60,6 @@ from app.plugins.ml2_fungal_cnn_disease_detection.model_loader import (
 from app.plugins.ml2_fungal_cnn_disease_detection.postprocessing import (
     build_batch_response,
     build_inline_response,
-    compute_and_encode_cam,
 )
 from app.plugins.ml2_fungal_cnn_disease_detection.predict_dto import (
     PredictBatchResponse,
@@ -310,34 +311,23 @@ def _train_on_folders(extract_dir: str, tracker) -> _TrainOutcome:
 
 
 def _predict_image(bundle: dict, image_path: Path) -> dict:
-    """Classify one batch image and attach its CAM heatmap; errors become the row's ``error``."""
+    """Classify one batch image and attach its CAM heatmap (the caller turns errors into rows)."""
     model = bundle["model"]
-    try:
-        tensor, image = image_path_to_tensor_and_image(
-            image_path, image_size=bundle["image_size"]
-        )
-        tensor = tensor.to(bundle["device"])
-        with torch.no_grad():
-            logits, feature_map = model(tensor, return_features=True)
-        result = build_inline_response(
-            logits,
-            classes=bundle["classes"],
-            model_id=bundle["model_id"],
-        )
-        result["filename"] = image_path.name
-        class_idx = bundle["classes"].index(result["prediction"])
-        result["heatmap_url"] = compute_and_encode_cam(
-            feature_map, model.classifier.weight, class_idx, image
-        )
-        return result
-    except InvalidImageError as exc:
-        return {"filename": image_path.name, "error": str(exc)}
-    except Exception as exc:  # pylint: disable=broad-exception-caught
-        # per-image error capture: one bad image never fails the batch
-        logger.warning(
-            "Unexpected error processing %s: %s", image_path.name, exc
-        )
-        return {"filename": image_path.name, "error": str(exc)}
+    tensor, image = image_path_to_tensor_and_image(image_path, image_size=bundle["image_size"])
+    tensor = tensor.to(bundle["device"])
+    with torch.no_grad():
+        logits, feature_map = model(tensor, return_features=True)
+    result = build_inline_response(
+        logits,
+        classes=bundle["classes"],
+        model_id=bundle["model_id"],
+    )
+    result["filename"] = image_path.name
+    class_idx = bundle["classes"].index(result["prediction"])
+    result["heatmap_url"] = compute_and_encode_cam(
+        feature_map, model.classifier.weight, class_idx, image
+    )
+    return result
 
 
 class Ml2FungalCnnDiseaseDetectionPlugin(PluginRuntimeMixin, ModelPluginPort):
@@ -428,7 +418,11 @@ class Ml2FungalCnnDiseaseDetectionPlugin(PluginRuntimeMixin, ModelPluginPort):
 
                 bundle["model"].eval()
                 for image_path in image_paths:
-                    predictions.append(_predict_image(bundle, image_path))
+                    # one bad image (unreadable, model error…) never fails the batch
+                    with row_error_capture(
+                        predictions, {"filename": image_path.name}, what=image_path.name
+                    ):
+                        predictions.append(_predict_image(bundle, image_path))
 
             self._record()
             logger.info(

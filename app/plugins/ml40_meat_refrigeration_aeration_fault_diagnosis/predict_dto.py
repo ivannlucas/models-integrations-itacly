@@ -1,13 +1,14 @@
 """Pydantic request/response DTOs for the ml40 /predict endpoint."""
 from typing import Annotated, Any, Literal, Optional, Union
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import Field
+
+from app.application.dto.plugin_dto import PluginDTO
 
 
-class PredictBatchRequest(BaseModel):
+class PredictBatchRequest(PluginDTO):
     """Batch request: a CSV with one or more full cycles (run_id) of one subsystem."""
 
-    model_config = ConfigDict(protected_namespaces=())
     mode: Literal["batch"] = "batch"
     data_path: str = Field(
         ...,
@@ -27,10 +28,9 @@ class PredictBatchRequest(BaseModel):
     mlflow_run_id: str = Field(default="", description="MLflow run ID for a user-retrained model")
 
 
-class PredictBatchResponse(BaseModel):
+class PredictBatchResponse(PluginDTO):
     """Batch response: one consolidated diagnosis per cycle."""
 
-    model_config = ConfigDict(protected_namespaces=())
     model_id: str
     system: str = Field(..., description="Subsistema detectado: refrigeracion o aireado")
     predictions: list[dict[str, Any]] = Field(
@@ -46,10 +46,9 @@ class PredictBatchResponse(BaseModel):
     output_path: str | None = None
 
 
-class PredictInlineRequest(BaseModel):
+class PredictInlineRequest(PluginDTO):
     """Inline request: the full time series of one cycle as a list of row dicts."""
 
-    model_config = ConfigDict(protected_namespaces=())
     mode: Literal["inline"] = "inline"
     model_key: str | None = None
     system: Optional[Literal["refrigeracion", "aireado"]] = Field(
@@ -74,10 +73,9 @@ class PredictInlineRequest(BaseModel):
     mlflow_run_id: str = Field(default="", description="MLflow run ID for a user-retrained model")
 
 
-class PredictInlineResponse(BaseModel):
+class PredictInlineResponse(PluginDTO):
     """Inline response: consolidated diagnosis for the submitted cycle."""
 
-    model_config = ConfigDict(protected_namespaces=())
     model_id: str
     system: str
     run_id: int

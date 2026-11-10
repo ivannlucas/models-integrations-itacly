@@ -20,7 +20,8 @@ from torchvision import transforms
 
 from app.application.dto.stats_dto import InputField, OutputField, StatsResponse
 from app.domain.ports.model_plugin_port import ModelPluginPort
-from app.domain.services.exceptions import InvalidImageError, ModelNotLoadedError
+from app.domain.services.batch_rows import row_error_capture
+from app.domain.services.exceptions import ModelNotLoadedError
 from app.domain.services.mlflow_artifacts import (
     add_mlflow_run_to_stats,
     removing_dir,
@@ -440,29 +441,23 @@ def _checkpoint(model: nn.Module) -> dict:
 
 
 def _predict_image(bundle: dict, image_path: Path) -> dict:
-    """Batch row of one image (an ``error`` row when it cannot be classified)."""
-    try:
-        tensor, image = image_path_to_tensor_and_image(
-            image_path, image_size=bundle["image_size"]
-        )
-        tensor = tensor.to(bundle["device"])
-        with torch.no_grad():
-            logits_cat, logits_cer = bundle["model"](tensor)
-        result = build_inline_response(
-            logits_cat,
-            logits_cer,
-            idx_to_class=bundle["idx_to_class"],
-            idx_to_cereal=bundle["idx_to_cereal"],
-            model_id=bundle["model_id"],
-        )
-        result["filename"] = image_path.name
-        result["annotated_image"] = encode_image_base64(image)
-        return result
-    except InvalidImageError as exc:
-        return {"filename": image_path.name, "error": str(exc)}
-    except Exception as exc:  # pylint: disable=broad-exception-caught  # per-image error capture
-        logger.warning("Unexpected error processing %s: %s", image_path.name, exc)
-        return {"filename": image_path.name, "error": str(exc)}
+    """Batch row of one image (the caller turns errors into ``error`` rows)."""
+    tensor, image = image_path_to_tensor_and_image(
+        image_path, image_size=bundle["image_size"]
+    )
+    tensor = tensor.to(bundle["device"])
+    with torch.no_grad():
+        logits_cat, logits_cer = bundle["model"](tensor)
+    result = build_inline_response(
+        logits_cat,
+        logits_cer,
+        idx_to_class=bundle["idx_to_class"],
+        idx_to_cereal=bundle["idx_to_cereal"],
+        model_id=bundle["model_id"],
+    )
+    result["filename"] = image_path.name
+    result["annotated_image"] = encode_image_base64(image)
+    return result
 
 
 # ── Plugin ────────────────────────────────────────────────────────────────────
@@ -553,7 +548,11 @@ class Ml8CerealsImgAnomalyDetectorPlugin(PluginRuntimeMixin, ModelPluginPort):
 
                     bundle["model"].eval()
                     for image_path in image_paths:
-                        predictions.append(_predict_image(bundle, image_path))
+                        # one bad image (unreadable, model error…) never fails the batch
+                        with row_error_capture(
+                            predictions, {"filename": image_path.name}, what=image_path.name
+                        ):
+                            predictions.append(_predict_image(bundle, image_path))
 
             self._record()
             logger.info("predict_batch done — %d predictions count=%d mlflow=%s",

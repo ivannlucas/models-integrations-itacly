@@ -18,6 +18,7 @@ import yaml
 
 from app.application.dto.stats_dto import InputField, OutputField, StatsResponse
 from app.domain.ports.model_plugin_port import ModelPluginPort
+from app.domain.services.batch_rows import row_error_capture
 from app.domain.services.exceptions import (
     InvalidImageError,
     ModelNotLoadedError,
@@ -232,7 +233,9 @@ class Ml7CerealsGrainPestDetectionPlugin(PluginRuntimeMixin, ModelPluginPort):
 
                     predictions: list[dict] = []
                     for img_file in image_files:
-                        try:
+                        with row_error_capture(
+                            predictions, {"filename": img_file.name}, what=img_file.name
+                        ):
                             img_np = image_path_to_numpy(str(img_file))
                             results = model.predict(
                                 _to_bgr(img_np), verbose=False, conf=CONF_THRESHOLD,
@@ -240,9 +243,6 @@ class Ml7CerealsGrainPestDetectionPlugin(PluginRuntimeMixin, ModelPluginPort):
                             )
                             result = yolo_results_to_dict(results[0], img_np)
                             predictions.append({"filename": img_file.name, **result})
-                        except Exception as exc:  # pylint: disable=broad-exception-caught  # per-image error capture
-                            logger.warning("Error processing %s: %s", img_file.name, exc)
-                            predictions.append({"filename": img_file.name, "error": str(exc)})
 
                     self._record()
                     return PredictBatchResponse(

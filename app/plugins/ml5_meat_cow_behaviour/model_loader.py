@@ -9,6 +9,7 @@ import logging
 import torch
 from torch import nn
 
+from app.domain.services.torch_device import safe_torch_device
 from app.infrastructure.artifact_store import ArtifactStore
 from app.plugins.ml5_meat_cow_behaviour.constants import (
     ARTIFACT_FOLDER_NAME,
@@ -54,14 +55,7 @@ def build_classifier_module(num_classes: int, device: str) -> "SlowFastCowBehavi
 
 def _safe_device() -> str:
     """Return ``"cuda"`` only if it can execute a conv op; otherwise ``"cpu"``."""
-    if not torch.cuda.is_available():
-        return "cpu"
-    try:
-        torch.nn.Conv2d(1, 1, 1).cuda()(torch.zeros(1, 1, 4, 4).cuda())
-        return "cuda"
-    except Exception:  # pylint: disable=broad-exception-caught  # any CUDA failure falls back to CPU
-        logger.warning("CUDA detectada pero no funcional para operaciones de red — usando CPU.")
-        return "cpu"
+    return str(safe_torch_device())
 
 
 def _load_detector(detector_path: str, device: str):

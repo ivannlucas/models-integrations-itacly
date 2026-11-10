@@ -95,7 +95,7 @@ resultado es un 500 en *todas* las llamadas reales (pasó en ml21).
 | `__init__.py` | Sí | Vacío |
 | `constants.py` | Sí | `MODEL_ID`, `ARTIFACT_FOLDER_NAME`, `VERSION` en cabecera, nombres de artefactos e hiperparámetros de entrenamiento (`TRAIN_*`) |
 | `plugin.py` | Sí | Clase con los 6 métodos |
-| `predict_dto.py` | Sí | `PredictBatchRequest/Response`, `PredictInlineRequest/Response`, `PredictRequest = Annotated[Union[...], Field(discriminator="mode")]` |
+| `predict_dto.py` | Sí | `PredictBatchRequest/Response`, `PredictInlineRequest/Response` (sobre las bases de `plugin_dto`), `PredictRequest = Annotated[Union[...], Field(discriminator="mode")]` |
 | `model_loader.py` | Sí | `ArtifactStore(ARTIFACT_FOLDER_NAME)` con carga perezosa (ver Artefactos) |
 | `mlflow_utils.py` | **Sí, siempre** | Carga del modelo reentrenado sobre los helpers de `mlflow_artifacts` (plantilla abajo). En modelos sin entrenamiento, un stub documentado |
 | `train_dto.py` | Si `train()` es real | `TrainRequest` (con `mlflow_run_id` **obligatorio**, salvo en los modelos que promueven su base (ver «Modelos que promueven su base»), donde es opcional) y `TrainResponse` |
@@ -289,6 +289,28 @@ class MiPlugin(PluginRuntimeMixin, ModelPluginPort):   # _require_loaded(), _rec
 Referencia completa: `ml35_dairy_ann_cleaning_cost`. Los tests que simulan MLflow parchean
 `app.domain.services.mlflow_artifacts.BaseMLflowTracker`.
 
+Otras piezas comunes que un plugin nuevo usa en vez de copiarlas (no se reimplementan en el plugin):
+
+| Necesidad | Usa |
+|---|---|
+| Contadores y latencia de `/stats` | `PluginRuntimeMixin`: `_record()`, o `_record_latency(ms)` + `_avg_latency_ms(ndigits)` si se mide; los tests leen `predict_count` / `last_predict_at` |
+| Elegir GPU/CPU | `app.domain.services.torch_device.safe_torch_device()` (autotest real de CUDA) |
+| Una fila mala no tumba el batch | `with row_error_capture(predictions, {"row": int(idx)}, what=f"fila {idx}"):` (`app.domain.services.batch_rows`) → fila `{"row", "error"}` |
+| `xai_feature_values` de cada predicción | `app.domain.services.xai_values.xai_feature_values(row, FEATURES)` (sin NaN ni no numéricos) |
+| Mapa CAM de una CNN con GAP + Linear | `app.domain.services.image_cam.compute_and_encode_cam` |
+| DTOs | `app.application.dto.plugin_dto` (ver abajo) |
+
+**DTOs (`predict_dto.py`, `train_dto.py`).** Las clases heredan de `PluginDTO` (lleva
+`protected_namespaces=()`) o de una base con los campos iniciales comunes: `BatchRequestBase`
+(`mode`, `data_path`, `mlflow_run_id`), `InlineRequestBase` (`mode`, `model_key`, `threshold`,
+`mlflow_run_id`), `BatchResponseBase` (`model_id`, `predictions`, `output_path`) y
+`TrainRequestBase` (`data_path`, `mlflow_run_id` obligatorio). Pydantic pone los campos heredados
+**primero**: hereda de una base solo si esos son de verdad los primeros campos de la clase, o
+cambiará el orden de las claves del JSON. Un campo heredado se puede redeclarar (p. ej. `data_path`
+con su descripción) sin moverlo. Para campos repetidos que no van al principio hay tipos con la
+descripción común: `UserModelRunId`, `ConfirmedRunId`, `UploadWarning`, `PublishedBaseVersion`,
+`XaiFeatureValues`… (`mlflow_run_id: UserModelRunId = ""`).
+
 ⚠ **`predict_inline`, `predict_batch` y `stats` deben usar `mlflow_run_id`**, no descartarlo
 con `_ = mlflow_run_id`. En ml2, ml4, ml7, ml17 y ml23 se aceptaba y se ignoraba: el usuario
 creía estar usando su modelo y recibía el base. ⚠ Por lo mismo, **si el modelo del run no se
@@ -329,7 +351,7 @@ del run.
 | Preprocesado | Replica **exactamente** el de inferencia del original: `imgsz`, resize/crop, normalización, orden de canales | ml7 no pasaba `imgsz=512` (usaba 640). A modelo10 le faltaba `CenterCrop` |
 | Features derivadas | Nunca rellenes con 0 las features que el original calcula o busca. Si el contrato de entrada es reducido (provincia + fecha), busca la fila real en el dataset de referencia | ml21 rellenaba con 0 ~90 features: predicciones corruptas |
 | Columnas derivadas en batch | Replica las derivaciones del predictor original (p. ej. `current_price = target_precio_medio`) | ml23 devolvía 0 predicciones con HTTP 200 |
-| Autotest de CUDA | `torch.nn.Conv2d(1,1,1).cuda()(torch.zeros(1,1,4,4).cuda())`: **el módulo también va a CUDA**. Sin `.cuda()` en el módulo, la prueba falla siempre y se cae a CPU | 7 plugins corrían en CPU con GPU disponible |
+| Autotest de CUDA | Usa `safe_torch_device()`: prueba `torch.nn.Conv2d(1,1,1).cuda()(torch.zeros(1,1,4,4).cuda())` — **el módulo también va a CUDA**. Sin `.cuda()` en el módulo, la prueba falla siempre y se cae a CPU | 7 plugins corrían en CPU con GPU disponible |
 | Device explícito | Pasa `device=` explícito a YOLO y a cualquier `.predict()` de librería | El detector de modelo10 daba un 500 real |
 | Artefacto base | Comprueba con md5 que `artifacts/<ARTIFACT_FOLDER_NAME>/` es **bit a bit** el entregado por el equipo de IA | ml25 servía un modelo generado por un `train()` antiguo |
 | `predict_inline` de series temporales | Si para construir la secuencia se repite (`tile`) una sola fila, documéntalo como aproximación en `known_issues` | ml23, ml16, ml40, ml46 |

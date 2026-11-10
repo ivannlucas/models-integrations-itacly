@@ -5,9 +5,9 @@ exercise the real plugin helpers (preprocessing, postprocessing, restricted unpi
 on small toy inputs — wiring only; numeric correctness against the golden dataset lives in
 outputs/a26/verification_report.md.
 """
-# pylint: disable=protected-access  # the real-plugin tests inject/inspect the loaded model
+# pylint: disable=protected-access  # the train test checks the SERVED model and the local store
 import pickle
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pandas as pd
@@ -412,20 +412,27 @@ def test_training_requires_validation_lots():
 
 # ── Real plugin class with an injected tiny model (no artifacts, MLflow mocked) ─
 
-def _real_plugin():
+_ML26 = "app.plugins.ml26_wine_sulfite_gru_pso_forecast"
+
+
+def _real_plugin(model=None):
+    """Real plugin loaded through load() with the artifact loader replaced by a tiny model."""
     # pylint: disable-next=import-outside-toplevel  # torch-heavy plugin module
     from app.plugins.ml26_wine_sulfite_gru_pso_forecast.plugin import (
         Ml26WineSulfiteGruPsoForecastPlugin,
     )
 
     plugin = Ml26WineSulfiteGruPsoForecastPlugin()
-    plugin._model = _tiny_loaded_model()
+    loaded = (model if model is not None else _tiny_loaded_model(), {})
+    with patch(f"{_ML26}.model_loader.load_artifacts", return_value=loaded):
+        plugin.load()
     return plugin
 
 
 def test_real_plugin_inline_operational_and_feature_window():
     """The real plugin predicts from readings and from a feature_window, with XAI fields."""
-    plugin = _real_plugin()
+    model = _tiny_loaded_model()
+    plugin = _real_plugin(model)
     assert plugin.is_loaded()
     resp = plugin.predict_inline(
         features={"lot": LOT, "readings": _readings(30), "feature_window": None}
@@ -433,7 +440,6 @@ def test_real_plugin_inline_operational_and_feature_window():
     assert resp.lot_id == "LOT-T1" and resp.timestamp_index == 29
     assert resp.model_source == "fixed" and len(resp.xai_feature_values) == 22
     # Same contract as the feature_window path: the model's engineered features, not raw columns.
-    model = plugin._model
     assert list(resp.xai_feature_values) == model.feature_names
     assert len(resp.xai_feature_window) == 24
     # pylint: disable-next=unsubscriptable-object,no-member  # pydantic fields
@@ -480,8 +486,9 @@ def test_real_plugin_train_uploads_only_to_mlflow(tmp_path, monkeypatch):
     monkeypatch.setattr(mlflow_artifacts, "BaseMLflowTracker", MagicMock(return_value=tracker))
     csv = tmp_path / "sequential.csv"
     _sequential_training_frame().to_csv(csv, index=False)
-    plugin = _real_plugin()
-    network = plugin._model.network
+    model = _tiny_loaded_model()
+    plugin = _real_plugin(model)
+    network = model.network
     before = {k: v.clone() for k, v in network.state_dict().items()}
     resp = plugin.train(data_path=str(csv), mlflow_run_id="run123")
     assert resp.n_lots_train == 5 and resp.n_windows_val > 0

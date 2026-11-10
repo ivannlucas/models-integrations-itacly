@@ -1,5 +1,4 @@
 """Endpoint tests for ``ml45-cereals-dnsl-critical-point-detection``."""
-# pylint: disable=protected-access
 from pathlib import Path
 from unittest.mock import patch
 
@@ -254,8 +253,13 @@ class TestTrainFaithfulPipeline:
         df.to_csv(csv_path, index=False)
 
         plugin = Ml45CerealsDnslCriticalPointDetectionPlugin()
-        plugin._model = object()  # only needs to be non-None for _require_loaded()
-        plugin._model_cfg = _build_ml45_model_cfg()
+        # Public load() path with fake artifacts: the model only needs to be non-None for
+        # _require_loaded(); no scalers/XAI background, and the default 0.73 threshold.
+        with patch(f"{_PLUGIN_MOD}._store"), patch(
+            f"{_PLUGIN_MOD}.load_artifacts",
+            return_value=(object(), _build_ml45_model_cfg(), None, None, None, 0.73),
+        ):
+            plugin.load()
 
         saved_checkpoints = []
         real_torch_save = torch.save

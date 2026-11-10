@@ -1,5 +1,5 @@
 """HTTP contract of async training: POST /train?wait=false and GET /train/{job_id}."""
-# pylint: disable=protected-access
+# pylint: disable=protected-access  # checks the lazy wiring of the async use cases
 from __future__ import annotations
 
 from types import SimpleNamespace

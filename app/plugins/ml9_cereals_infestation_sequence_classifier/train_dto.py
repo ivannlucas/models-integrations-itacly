@@ -1,13 +1,13 @@
 """Pydantic DTOs for the ml9 (cereal infestation) /train endpoint."""
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import Field
 
+from app.application.dto.plugin_dto import PluginDTO, TrainRequestBase
 from app.application.dto.train_dto import MlflowRunId
 
 
-class TrainRequest(BaseModel):
+class TrainRequest(TrainRequestBase):
     """Fine-tune request: CSV of labelled hourly telemetry (manifest.training.required_columns)."""
 
-    model_config = ConfigDict(protected_namespaces=())
     data_path: str = Field(
         ...,
         description=(
@@ -23,10 +23,9 @@ class TrainRequest(BaseModel):
     )
 
 
-class TrainResponse(BaseModel):
+class TrainResponse(PluginDTO):
     """Fine-tune response: hold-out metrics of the retrained model on the caller's own CSV."""
 
-    model_config = ConfigDict(protected_namespaces=())
     detail: str
     n_series_train: int
     n_series_validation: int

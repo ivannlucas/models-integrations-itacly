@@ -1,13 +1,17 @@
 """Pydantic request/response DTOs for the ml13 /train endpoint."""
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import Field
 
-from app.application.dto.base_version_dto import VersionInfo
+from app.application.dto.plugin_dto import (
+    PluginDTO,
+    PromotingTrainRunId,
+    PromotingUploadWarning,
+    PublishedBaseVersion,
+)
 
 
-class TrainRequest(BaseModel):
+class TrainRequest(PluginDTO):
     """Retrain request: raw weekly price CSV (the binary target is derived from the price)."""
 
-    model_config = ConfigDict(protected_namespaces=())
     data_path: str = Field(
         ...,
         description=(
@@ -20,19 +24,12 @@ class TrainRequest(BaseModel):
             "evaluación hold-out sobre esas 24."
         ),
     )
-    mlflow_run_id: str = Field(
-        default="",
-        description=(
-            "Run de MLflow opcional: si se indica, el modelo reentrenado también se guarda en él "
-            "(trazabilidad). Con o sin run, el modelo reentrenado pasa a ser el modelo base."
-        ),
-    )
+    mlflow_run_id: PromotingTrainRunId = ""
 
 
-class TrainResponse(BaseModel):
+class TrainResponse(PluginDTO):
     """Retrain response: hold-out metrics (last 24 weeks) + walk-forward CV summary."""
 
-    model_config = ConfigDict(protected_namespaces=())
     detail: str
     best_model_type: str
     n_trainval_rows: int
@@ -51,13 +48,5 @@ class TrainResponse(BaseModel):
     cv_xgboost_f1_mean: float
     smart_score_logreg: float
     smart_score_xgboost: float
-    upload_warning: str | None = Field(
-        default=None,
-        description=(
-            "Aviso si la subida a MLflow falló; el modelo base se publica igualmente "
-            "(solo un fallo al publicar la base es un 502)"
-        ),
-    )
-    base_version: VersionInfo | None = Field(
-        default=None, description="Versión del modelo base publicada por este reentreno"
-    )
+    upload_warning: PromotingUploadWarning = None
+    base_version: PublishedBaseVersion = None

@@ -1,13 +1,12 @@
 """Pydantic DTOs for the ml8-cereals-img-anomaly-detector /train endpoint."""
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import Field
 
-from app.application.dto.train_dto import MlflowRunId
+from app.application.dto.plugin_dto import ConfirmedRunId, PluginDTO, TrainRequestBase
 
 
-class TrainRequest(BaseModel):
+class TrainRequest(TrainRequestBase):
     """Training request: ZIP with {cereal}/train/{categoria}/ images."""
 
-    model_config = ConfigDict(protected_namespaces=())
     data_path: str = Field(
         ...,
         description=(
@@ -15,13 +14,11 @@ class TrainRequest(BaseModel):
             "{cereal}/train/{categoria}/*.jpg"
         ),
     )
-    mlflow_run_id: MlflowRunId
 
 
-class TrainResponse(BaseModel):
+class TrainResponse(PluginDTO):
     """Training result: sample counts, phase timings and best validation accuracies."""
 
-    model_config = ConfigDict(protected_namespaces=())
     detail: str
     train_samples: int
     val_samples: int
@@ -35,11 +32,4 @@ class TrainResponse(BaseModel):
         default=None,
         description="Informativo si los artefactos se guardaron en local pero falló el upload a S3",
     )
-    mlflow_run_id: str = Field(
-        default="",
-        description=(
-            "Run de MLflow al que se subieron los artefactos. La plataforma lo toma como "
-            "autoritativo frente al run que pre-creó ella: si aquel falló, este es el que "
-            "de verdad tiene el modelo entrenado (train-task-manager.ts, confirmedRunId)."
-        ),
-    )
+    mlflow_run_id: ConfirmedRunId = ""

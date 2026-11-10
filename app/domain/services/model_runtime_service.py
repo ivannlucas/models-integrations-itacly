@@ -14,6 +14,11 @@ class ModelRuntimeService:
         """Initialize the service with a model plugin."""
         self._plugin = plugin
 
+    @property
+    def plugin(self) -> ModelPluginPort:
+        """The plugin this service reports on."""
+        return self._plugin
+
     def stats(self) -> StatsResponse:
         """Fetches model statistics from the plugin."""
         return self._plugin.stats()

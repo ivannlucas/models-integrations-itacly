@@ -24,6 +24,7 @@ import pandas as pd
 from app.application.dto.stats_dto import InputField, OutputField, StatsResponse
 from app.domain.ports.model_plugin_port import ModelPluginPort
 from app.infrastructure.artifact_store import local_file_path
+from app.domain.services.batch_rows import row_error_capture
 from app.domain.services.exceptions import (
     InfeasibleOptimizationError,
     TrainingNotSupportedError,
@@ -471,7 +472,7 @@ class Ml31CerealsResidueOptimizerPlugin(PluginRuntimeMixin, ModelPluginPort):
             df = pd.read_csv(local_path)
         predictions: list[dict] = []
         for idx, row in df.iterrows():
-            try:
+            with row_error_capture(predictions, {"row": int(idx)}, what=f"fila {idx}"):
                 features = self._row_to_scenario(row)
                 # Sensitivity (explainability) is only ever surfaced for the first row
                 # of a batch by the platform's XAI panel — computing it for every row
@@ -493,9 +494,6 @@ class Ml31CerealsResidueOptimizerPlugin(PluginRuntimeMixin, ModelPluginPort):
                 if result.sensitivity is not None:
                     row_out["sensitivity"] = result.sensitivity
                 predictions.append(row_out)
-            except Exception as exc:  # pylint: disable=broad-exception-caught  # per-row error capture
-                logger.warning("Error en fila %s: %s", idx, exc)
-                predictions.append({"row": int(idx), "error": str(exc)})
         self._record()
         logger.info("predict_batch done — %d scenarios", len(predictions))
         return PredictBatchResponse(model_id=MODEL_ID, predictions=predictions, output_path=None)

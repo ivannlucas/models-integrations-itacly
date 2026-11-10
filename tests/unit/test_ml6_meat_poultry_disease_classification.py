@@ -4,7 +4,7 @@ The endpoint tests use FakePlugin (wiring only). The last tests run the plugin's
 functions (majority vote, split, folder mapping) against the AI team's behaviour; numerical
 correctness is in outputs/a06/verification_report.md.
 """
-# The train() tests set and inspect the plugin's served ensembles directly.
+# The train() tests inspect the plugin's served ensembles (no public accessor) directly.
 # pylint: disable=protected-access
 import os
 
@@ -247,8 +247,10 @@ def fixture_ml6_train_stubbed(monkeypatch, tmp_path):
 
     instance = ml6.Ml6MeatPoultryDiseaseClassificationPlugin()
     base = {name: _Tiny() for name in ("densenet121", "efficientnet_v2s", "resnet50")}
-    instance._ensembles = {"thermal": base, "rgb": {}}
-    instance._device = torch.device("cpu")
+    monkeypatch.setattr(
+        ml6, "load_ensembles", lambda: ({"thermal": base, "rgb": {}}, torch.device("cpu"))
+    )
+    instance.load()
     splits = {"train": [("a", 0)] * 3, "val": [("b", 1)], "test": [("c", 0), ("d", 1)]}
     monkeypatch.setattr(ml6, "split_dataset", lambda root, task: splits)
     monkeypatch.setattr(ml6, "make_loaders", lambda splits, task, bs: {"test": None})

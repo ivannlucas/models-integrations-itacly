@@ -1,7 +1,9 @@
 """Pydantic request/response DTOs for the ml16 /predict endpoint."""
 from typing import Annotated, Any, Literal, Union
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import Field
+
+from app.application.dto.plugin_dto import BatchRequestBase, PluginDTO, UserModelRunIdEs
 
 from app.plugins.ml16_meat_raw_material_price_alert.constants import (
     DEFAULT_LOOKBACK,
@@ -11,11 +13,9 @@ from app.plugins.ml16_meat_raw_material_price_alert.constants import (
 _MIN_INLINE_ROWS = FEATURE_WARMUP_ROWS + DEFAULT_LOOKBACK + 1  # warmup(6) + lookback(3) + 1 = 10
 
 
-class PredictBatchRequest(BaseModel):
+class PredictBatchRequest(BatchRequestBase):
     """Batch request: a monthly historical CSV, same schema as dataset_clasificacion_base.csv."""
 
-    model_config = ConfigDict(protected_namespaces=())
-    mode: Literal["batch"] = "batch"
     data_path: str = Field(
         ...,
         description=(
@@ -25,15 +25,12 @@ class PredictBatchRequest(BaseModel):
             "predicción (warmup de features + lookback)."
         ),
     )
-    mlflow_run_id: str = Field(
-        default="", description="MLflow run ID de un modelo reentrenado por el usuario"
-    )
+    mlflow_run_id: UserModelRunIdEs = ""
 
 
-class PredictBatchResponse(BaseModel):
+class PredictBatchResponse(PluginDTO):
     """Batch response: one row per valid target month."""
 
-    model_config = ConfigDict(protected_namespaces=())
     model_id: str
     predictions: list[dict[str, Any]] = Field(
         ...,
@@ -47,10 +44,9 @@ class PredictBatchResponse(BaseModel):
     output_path: str | None = None
 
 
-class PredictInlineRequest(BaseModel):
+class PredictInlineRequest(PluginDTO):
     """Inline request: the monthly historical series as a list of row dicts."""
 
-    model_config = ConfigDict(protected_namespaces=())
     mode: Literal["inline"] = "inline"
     model_key: str | None = None
     threshold: float | None = Field(
@@ -70,15 +66,12 @@ class PredictInlineRequest(BaseModel):
             "predicción del mes objetivo más reciente que el historial permite calcular."
         ),
     )
-    mlflow_run_id: str = Field(
-        default="", description="MLflow run ID de un modelo reentrenado por el usuario"
-    )
+    mlflow_run_id: UserModelRunIdEs = ""
 
 
-class PredictInlineResponse(BaseModel):
+class PredictInlineResponse(PluginDTO):
     """Inline response: prediction for the most recent target month available."""
 
-    model_config = ConfigDict(protected_namespaces=())
     model_id: str
     fecha: str = Field(
         ..., description="Mes objetivo de la predicción (YYYY-MM-01) = último mes de entrada + 4."

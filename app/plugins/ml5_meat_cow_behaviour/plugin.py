@@ -150,9 +150,8 @@ class Ml5MeatCowBehaviourPlugin(PluginRuntimeMixin, ModelPluginPort):
     """Faster R-CNN (detection) + ByteTrack (tracking) + SlowFast (classification) pipeline."""
 
     def __init__(self) -> None:
-        """Initialize an unloaded plugin (count/timestamp start at the mixin defaults)."""
+        """Initialize an unloaded plugin (counters and latency start at the mixin defaults)."""
         self._bundle: dict | None = None
-        self._total_latency_ms: float = 0.0
 
     def load(self) -> None:
         """Load the detector and classifier into memory."""
@@ -201,11 +200,6 @@ class Ml5MeatCowBehaviourPlugin(PluginRuntimeMixin, ModelPluginPort):
             logits = bundle["classifier"](slow_fast)
         return decode_logits(logits, bundle["idx_to_behavior"], anomaly_threshold)
 
-    def _record_prediction(self, latency_ms: float) -> None:
-        """Update runtime counters (latency included) after a prediction."""
-        self._total_latency_ms += latency_ms
-        self._record()
-
     def predict_batch(self, *, data_path: str, mlflow_run_id: str = "") -> PredictBatchResponse:
         """Run the full detection + tracking + classification pipeline over a video file."""
         local_path, temp_path = _resolve_video_path(data_path)
@@ -252,7 +246,7 @@ class Ml5MeatCowBehaviourPlugin(PluginRuntimeMixin, ModelPluginPort):
 
         cap.release()
 
-        self._record_prediction((time.perf_counter() - t0) * 1000)
+        self._record_latency((time.perf_counter() - t0) * 1000)
         logger.info(
             "predict_batch done — %d frames processed, count=%d", frame_idx, self._predict_count
         )
@@ -326,7 +320,7 @@ class Ml5MeatCowBehaviourPlugin(PluginRuntimeMixin, ModelPluginPort):
         t0 = time.perf_counter()
         with self._request_bundle(mlflow_run_id) as bundle:
             result = self._classify_clip(bundle, frames_np, anomaly_threshold)
-        self._record_prediction((time.perf_counter() - t0) * 1000)
+        self._record_latency((time.perf_counter() - t0) * 1000)
         logger.info(
             "predict_inline done — behavior=%s confidence=%.4f anomaly=%s count=%d",
             result["prediction"], result["confidence"], result["is_anomaly"], self._predict_count,
@@ -424,8 +418,6 @@ class Ml5MeatCowBehaviourPlugin(PluginRuntimeMixin, ModelPluginPort):
         # labels are the served model's either way.
         with self._request_bundle(mlflow_run_id) as bundle:
             behaviors = list(bundle["idx_to_behavior"].values())
-        avg = self._total_latency_ms / self._predict_count if self._predict_count > 0 else None
-
         return StatsResponse(
             model_name=MODEL_ID,
             version=VERSION,
@@ -466,6 +458,6 @@ class Ml5MeatCowBehaviourPlugin(PluginRuntimeMixin, ModelPluginPort):
             metrics={},
             runtime_stats=RuntimeStats(
                 total_predictions=self._predict_count,
-                avg_latency_ms=round(avg, 1) if avg is not None else None,
+                avg_latency_ms=self._avg_latency_ms(1),
             ),
         )

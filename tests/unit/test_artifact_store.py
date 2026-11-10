@@ -1,5 +1,4 @@
 """Unit tests for ArtifactStore — local_dir property, path resolution, and download."""
-# pylint: disable=protected-access
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -19,17 +18,16 @@ def test_local_dir_returns_correct_path():
 
 def test_path_returns_local_path_when_file_exists(tmp_path):
     """path() returns the correct Path when the file already exists locally."""
-    (tmp_path / "model.pkl").write_bytes(b"data")
-    store = ArtifactStore("my_model")
-    store._local_dir = tmp_path
-    assert store.path("model.pkl") == tmp_path / "model.pkl"
+    (tmp_path / "my_model").mkdir()
+    (tmp_path / "my_model" / "model.pkl").write_bytes(b"data")
+    store = ArtifactStore("my_model", root=tmp_path)
+    assert store.path("model.pkl") == tmp_path / "my_model" / "model.pkl"
 
 
 def test_path_raises_file_not_found_when_missing_and_no_s3(monkeypatch, tmp_path):
     """path() raises FileNotFoundError when the file is absent and STORAGE_BUCKET is unset."""
     monkeypatch.delenv("STORAGE_BUCKET", raising=False)
-    store = ArtifactStore("my_model")
-    store._local_dir = tmp_path
+    store = ArtifactStore("my_model", root=tmp_path)
     with pytest.raises(FileNotFoundError):
         store.path("missing.pkl")
 

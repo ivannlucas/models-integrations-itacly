@@ -1,32 +1,27 @@
 """Pydantic DTOs for ml23 (GRU dairy price forecast) /predict endpoint."""
 from typing import Annotated, Any, Literal, Union
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import Field
+
+from app.application.dto.plugin_dto import BatchResponseBase, PluginDTO, XaiFeatureValues
 
 
-class PredictBatchRequest(BaseModel):
+class PredictBatchRequest(PluginDTO):
     """Batch request: CSV with 32 feature columns, grouped by (producto, canal)."""
 
-    model_config = ConfigDict(protected_namespaces=())
     mode: Literal["batch"] = "batch"
     data_path: str = Field(
         ..., description="Ruta al CSV con las 32 features del dataset lácteo"
     )
 
 
-class PredictBatchResponse(BaseModel):
+class PredictBatchResponse(BatchResponseBase):
     """Batch response: one GRU prediction per (producto, canal, fecha) window."""
 
-    model_config = ConfigDict(protected_namespaces=())
-    model_id: str
-    predictions: list[dict[str, Any]]
-    output_path: str | None = None
 
-
-class PredictInlineRequest(BaseModel):
+class PredictInlineRequest(PluginDTO):
     """Single-row GRU inference — all 32 feature columns optional (default 0.0)."""
 
-    model_config = ConfigDict(protected_namespaces=())
     mode: Literal["inline"] = "inline"
     model_key: str | None = None
     threshold: float | None = None
@@ -65,20 +60,16 @@ class PredictInlineRequest(BaseModel):
     current_price: float | None = None
 
 
-class PredictInlineResponse(BaseModel):
+class PredictInlineResponse(PluginDTO):
     """Inline response: GRU price prediction (€/litre) at 6-month horizon."""
 
-    model_config = ConfigDict(protected_namespaces=())
     model_id: str
     prediction: Any = Field(..., description="Precio predicho (€/litro) a 6 meses vista")
     confidence: float | None = None
     horizon: int = Field(default=6, description="Horizonte de predicción en meses")
     features_used: list[str]
     model_version: str = Field(default="1.0.0")
-    xai_feature_values: dict[str, float] | None = Field(
-        default=None,
-        description="Valores de features usados — consumidos por el servicio XAI",
-    )
+    xai_feature_values: XaiFeatureValues = None
 
 
 PredictRequest = Annotated[

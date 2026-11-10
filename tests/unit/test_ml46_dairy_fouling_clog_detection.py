@@ -1,9 +1,9 @@
 """Endpoint tests for ``ml46-dairy-fouling-clog-detection``."""
-# pylint: disable=protected-access
 import pandas as pd
 import pytest
 
 from app.domain.services.exceptions import InsufficientTelemetryHistoryError
+from app.plugins.ml46_dairy_fouling_clog_detection import plugin as ml46_plugin_module
 from app.plugins.ml46_dairy_fouling_clog_detection._vendor.artifact_validation import (
     validate_feature_artifacts,
     validate_policy_artifact,
@@ -240,15 +240,19 @@ def test_validate_checkpoint_compatibility_rejects_architecture_contract_mismatc
         )
 
 
-def test_stats_uses_dynamic_dataset_and_test_metrics():
+def test_stats_uses_dynamic_dataset_and_test_metrics(monkeypatch):
     """stats() must reflect whatever checkpoint/manifest is actually loaded, not a stale
     literal."""
-    plugin = Ml46DairyFoulingClogDetectionPlugin()
-    plugin._feature_artifacts = _feature_artifacts(
+    feature_artifacts = _feature_artifacts(
         dataset_fingerprint={"telemetry": {"n_assets": 100, "rows": 2288800}},
         created_from_train_assets=[f"asset_{i:02d}" for i in range(60)],
     )
-    plugin._manifest = {"summary": {"test_window_metrics": {"stage_accuracy": 0.9775}}}
+    manifest = {"summary": {"test_window_metrics": {"stage_accuracy": 0.9775}}}
+    # Loaded through the public load() path (model / train_cfg / policy are not read by stats).
+    monkeypatch.setattr(ml46_plugin_module.model_loader, "load_artifacts",
+                        lambda: (object(), None, feature_artifacts, None, manifest))
+    plugin = Ml46DairyFoulingClogDetectionPlugin()
+    plugin.load()
     stats = plugin.stats()
     assert stats.metrics["n_total_assets"] == 100
     assert stats.metrics["n_telemetry_rows_total"] == 2288800

@@ -19,6 +19,7 @@ import torch
 
 from app.application.dto.stats_dto import InputField, OutputField, StatsResponse
 from app.domain.ports.model_plugin_port import ModelPluginPort
+from app.domain.services.batch_rows import row_error_capture
 from app.domain.services.exceptions import (
     InvalidAudioError,
     ModelNotLoadedError,
@@ -346,13 +347,10 @@ class Ml41MeatCuringMachineryAcousticAnomalyPlugin(PluginRuntimeMixin, ModelPlug
 
                 for row in rows:
                     filename = row["filename"]
-                    try:
+                    with row_error_capture(predictions, {"filename": filename}, what=filename):
                         predictions.append(self._predict_manifest_row(
                             row, manifest_path.parent, mlflow_run_id, threshold
                         ))
-                    except Exception as exc:  # pylint: disable=broad-exception-caught  # per-row error
-                        logger.warning("Error processing %s: %s", filename, exc)
-                        predictions.append({"filename": filename, "error": str(exc)})
 
         self._record()
         return PredictBatchResponse(model_id=MODEL_ID, predictions=predictions, output_path=None)
