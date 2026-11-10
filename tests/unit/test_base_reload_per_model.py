@@ -428,6 +428,11 @@ def test_ml24_reloads_the_promoted_base_with_its_series(
     )
 
     monkeypatch.setitem(TRAINING_CFG, "catboost_iterations", 20)
+    # A tiny CatBoost run is far slower on GPU (device init on each of its ~20 fits) than on CPU:
+    # 133 s -> 34 s. The test checks the promotion and reload, not the device.
+    monkeypatch.setattr(
+        "app.plugins.ml24_dairy_spatial_price_forecast.training.resolve_task_type", lambda: "CPU"
+    )
     container, store = _start_on_v0(monkeypatch, isolated_base_store, ARTIFACT_FOLDER_NAME,
                                     model_loader, Ml24DairySpatialPriceForecastPlugin)
     served_v0 = container.plugin._reference["series"]  # pylint: disable=protected-access

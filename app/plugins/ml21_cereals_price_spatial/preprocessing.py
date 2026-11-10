@@ -86,21 +86,6 @@ def lookup_panel_row(
     return candidate.sort_values("date").iloc[-1]
 
 
-def validate_expected_columns(
-    actual_cols: list[str],
-    expected_cols: list[str],
-    horizon: int,
-    task: str,
-) -> None:
-    """Raise ValueError if feature columns don't match expected schema."""
-    missing = sorted(set(expected_cols) - set(actual_cols))
-    extra = sorted(set(actual_cols) - set(expected_cols))
-    if missing or extra:
-        raise ValueError(
-            f"Column mismatch en H{horizon} {task}. Missing={missing[:10]} Extra={extra[:10]}"
-        )
-
-
 def get_selected_feature_columns(
     metadata: dict,
     horizon: int,

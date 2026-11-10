@@ -13,10 +13,6 @@ class InsufficientDataError(ValueError):
     """Raised when the input time series is too short to compute features (wine price)."""
 
 
-class UnsupportedProductError(ValueError):
-    """Raised when the requested product has no trained model (cereal forecast)."""
-
-
 class InsufficientRowsError(ValueError):
     """Raised when not enough rows survive dropna() after lag feature construction.
 

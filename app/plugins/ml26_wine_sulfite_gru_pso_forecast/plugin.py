@@ -102,13 +102,13 @@ class Ml26WineSulfiteGruPsoForecastPlugin(PluginRuntimeMixin, ModelPluginPort):
     def __init__(self) -> None:
         """Initialize an unloaded plugin (runtime counters and latency: mixin defaults)."""
         self._model: model_loader.LoadedModel | None = None
-        self._registry: dict = {}
 
     # ── lifecycle ─────────────────────────────────────────────────────────────
 
     def load(self) -> None:
         """Load the AI team's gru_pso.pkl bundle and best_model.json from the artifact store."""
-        self._model, self._registry = model_loader.load_artifacts()
+        # The registry (best_model.json) is already folded into the LoadedModel.
+        self._model, _ = model_loader.load_artifacts()
         logger.info("Ml26WineSulfiteGruPsoForecastPlugin loaded: %s", MODEL_ID)
 
     def is_loaded(self) -> bool:

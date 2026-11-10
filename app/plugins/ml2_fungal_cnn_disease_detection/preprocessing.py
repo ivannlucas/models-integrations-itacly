@@ -66,14 +66,6 @@ def image_base64_to_tensor(
     return transform(image).unsqueeze(0)
 
 
-def image_path_to_tensor(
-    image_path: str | Path,
-    image_size: int = IMAGE_SIZE,
-) -> torch.Tensor:
-    """Load an image from disk and return a ``(1, C, H, W)`` float tensor."""
-    return image_path_to_tensor_and_image(image_path, image_size=image_size)[0]
-
-
 def image_path_to_tensor_and_image(
     image_path: str | Path,
     image_size: int = IMAGE_SIZE,

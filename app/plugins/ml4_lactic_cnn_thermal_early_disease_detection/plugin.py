@@ -325,13 +325,6 @@ class Ml4LacticCnnThermalEarlyDiseaseDetectionPlugin(PluginRuntimeMixin, ModelPl
         """Return True if the model is loaded."""
         return self._model is not None
 
-    def _infer_image(self, image_bytes: bytes) -> dict:
-        """Preprocess image bytes, run the model and decode the prediction dict."""
-        tensor = preprocess_image(image_bytes).to(self._device)
-        with torch.no_grad():
-            logits = self._model(tensor)
-        return decode_logits(logits)
-
     def _resolve_model(self, mlflow_run_id: str) -> tuple[Any, Any, str | None]:
         """Return (model, device, temp_dir) to serve this request.
 

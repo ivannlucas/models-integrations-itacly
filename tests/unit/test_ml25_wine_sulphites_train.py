@@ -2,6 +2,7 @@
 import json
 import shutil
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import numpy as np
@@ -15,8 +16,7 @@ from app.plugins.ml25_wine_sulphites.plugin import Ml25WineSulphitesPlugin
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 
-@pytest.fixture(name="wine_csv")
-def fixture_wine_csv(tmp_path: Path) -> Path:
+def _write_wine_csv(folder: Path) -> Path:
     """Minimal wine-quality CSV (30 rows) sufficient for RF training."""
     rng = np.random.default_rng(42)
     n = 30
@@ -35,9 +35,15 @@ def fixture_wine_csv(tmp_path: Path) -> Path:
         "total sulfur dioxide": free_so2 + rng.uniform(20, 100, n),
         "quality": rng.integers(4, 9, n).astype(float),
     })
-    path = tmp_path / "wine.csv"
+    path = folder / "wine.csv"
     df.to_csv(path, index=False)
     return path
+
+
+@pytest.fixture(name="wine_csv")
+def fixture_wine_csv(tmp_path: Path) -> Path:
+    """Minimal wine-quality CSV (30 rows) sufficient for RF training."""
+    return _write_wine_csv(tmp_path)
 
 
 def _train(csv_path: Path, artifacts_dir: Path) -> dict:
@@ -98,10 +104,9 @@ def test_train_accepts_platform_column_names(wine_csv_underscores, tmp_path):
     assert result.n_train + result.n_test == 30
 
 
-def test_train_accepts_canonical_column_names(wine_csv, tmp_path):
+def test_train_accepts_canonical_column_names(trained):
     """train() sigue aceptando la convencion con espacios de los artefactos."""
-    result = _train(wine_csv, tmp_path)
-    assert result.mae_quality >= 0
+    assert trained.result.mae_quality >= 0
 
 
 def test_train_missing_target_raises_value_error(wine_csv, tmp_path):
@@ -124,23 +129,23 @@ def test_train_missing_feature_raises_value_error(wine_csv, tmp_path):
 
 # ── train() return value ───────────────────────────────────────────────────────
 
-def test_train_returns_expected_keys(wine_csv, tmp_path):
+def test_train_returns_expected_keys(trained):
     """train() result contains all documented top-level keys."""
-    result = _train(wine_csv, tmp_path)
+    result = trained.result
     assert result.detail == "Training completed"
     for key in ("mae_quality", "mae_bound_so2", "n_train", "n_test", "training_time_s"):
         assert hasattr(result, key), f"missing key: {key}"
 
 
-def test_train_split_sums_to_dataset_size(wine_csv, tmp_path):
+def test_train_split_sums_to_dataset_size(trained):
     """n_train + n_test equals the total number of rows in the input CSV."""
-    result = _train(wine_csv, tmp_path)
+    result = trained.result
     assert result.n_train + result.n_test == 30
 
 
-def test_train_mae_values_are_non_negative(wine_csv, tmp_path):
+def test_train_mae_values_are_non_negative(trained):
     """MAE values for quality and bound SO2 models are non-negative after training."""
-    result = _train(wine_csv, tmp_path)
+    result = trained.result
     assert result.mae_quality >= 0
     assert result.mae_bound_so2 >= 0
 
@@ -166,38 +171,47 @@ def _train_capturing_upload(csv_path: Path, artifacts_dir: Path):
     return plugin.load, uploaded, result
 
 
-def test_train_never_writes_to_base_artifacts_dir(wine_csv, tmp_path):
-    """A retrain must not overwrite the served base model's local artifacts."""
-    base_dir = tmp_path / "base"
+@pytest.fixture(name="trained", scope="module")
+def fixture_trained(tmp_path_factory) -> SimpleNamespace:
+    """One real train() on the canonical CSV, shared by the tests that only inspect its outcome.
+
+    Training the two RFs takes ~6 s; these tests read the same response, uploaded files and
+    base folder, so they share a single run instead of retraining each time.
+    """
+    folder = tmp_path_factory.mktemp("ml25_train")
+    base_dir = folder / "base"
     base_dir.mkdir()
-    _train_capturing_upload(wine_csv, base_dir)
-    assert not list(base_dir.iterdir())
+    load_mock, uploaded, result = _train_capturing_upload(_write_wine_csv(folder), base_dir)
+    return SimpleNamespace(load=load_mock, uploaded=uploaded, result=result, base_dir=base_dir)
 
 
-def test_train_uploads_models_and_metadata_to_mlflow(wine_csv, tmp_path):
+def test_train_never_writes_to_base_artifacts_dir(trained):
+    """A retrain must not overwrite the served base model's local artifacts."""
+    assert not list(trained.base_dir.iterdir())
+
+
+def test_train_uploads_models_and_metadata_to_mlflow(trained):
     """The retrained RFs and metadata.json (with metrics) go to the MLflow run."""
-    _, uploaded, result = _train_capturing_upload(wine_csv, tmp_path)
-    assert {"quality_rf.pkl", "bound_rf.pkl", "metadata.json"} <= set(uploaded)
-    metadata = json.loads(uploaded["metadata.json"])
+    assert {"quality_rf.pkl", "bound_rf.pkl", "metadata.json"} <= set(trained.uploaded)
+    metadata = json.loads(trained.uploaded["metadata.json"])
     assert "mae_mean" in metadata["metrics"]["quality_cv"]
     assert "bound_cv" in metadata["metrics"]
-    assert result.upload_warning is None
+    assert trained.result.upload_warning is None
 
 
-def test_train_does_not_reload_base_model(wine_csv, tmp_path):
+def test_train_does_not_reload_base_model(trained):
     """The served base model is not reloaded or replaced after a retrain."""
-    load_mock, _, _ = _train_capturing_upload(wine_csv, tmp_path)
-    load_mock.assert_not_called()
+    trained.load.assert_not_called()
 
 
-def test_retrained_model_round_trips_through_mlflow(wine_csv, tmp_path):
+def test_retrained_model_round_trips_through_mlflow(trained):
     """What train() uploads to the run is what predict loads back from it.
 
     train() writes the RFs with joblib.dump; the loader used pickle.load, which cannot read
     them ("UnpicklingError: STACK_GLOBAL requires str"), so every prediction with a retrained
     modelo-25 failed. The other tests mock the whole download and never caught it.
     """
-    _, uploaded, _ = _train_capturing_upload(wine_csv, tmp_path / "base")
+    uploaded = trained.uploaded
 
     def _download(dest_dir, artifact_path):
         model_dir = Path(dest_dir) / artifact_path
@@ -229,7 +243,6 @@ def test_get_artifacts_dir_points_to_ml25_wine_sulphites():
 
 # ── Training duration ─────────────────────────────────────────────────────────
 
-def test_train_time_is_non_negative(wine_csv, tmp_path):
+def test_train_time_is_non_negative(trained):
     """training_time_s is a non-negative float."""
-    result = _train(wine_csv, tmp_path)
-    assert result.training_time_s >= 0.0
+    assert trained.result.training_time_s >= 0.0

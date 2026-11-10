@@ -23,6 +23,7 @@ from typing import Any, Callable
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from starlette.datastructures import State
 from pydantic import BaseModel
 
 from app.application.dto.stats_dto import InputField, OutputField, RuntimeStats, StatsResponse
@@ -3278,15 +3279,17 @@ def fixture_fake_plugins() -> dict[str, FakePlugin]:
     return plugins
 
 
-@pytest.fixture(name="app")
-def fixture_app(fake_plugins: dict[str, FakePlugin]) -> FastAPI:
-    """A FastAPI app wired to fake containers — no real ML artifacts touched."""
+@pytest.fixture(name="routed_app", scope="session")
+def fixture_routed_app() -> FastAPI:
+    """The test app with every TEST_REGISTRY router, built once per session.
+
+    Building the 36 routers costs ~0.8 s and used to be paid by every test that asks for
+    ``client``/``app`` (about half of the suite's time). The routes hold no state of their own:
+    each request reads its container from ``request.app.state``, which ``app`` rebuilds for every
+    test, so tests stay as isolated as before.
+    """
     application = FastAPI(title="Luce ML Models API (test)")
-    application.state.containers = {}
     for entry in TEST_REGISTRY:
-        application.state.containers[entry.model_id] = _build_container(
-            fake_plugins[entry.model_id]
-        )
         application.include_router(
             make_model_router(
                 model_id=entry.model_id,
@@ -3301,6 +3304,16 @@ def fixture_app(fake_plugins: dict[str, FakePlugin]) -> FastAPI:
             tags=[entry.model_id],
         )
     return application
+
+
+@pytest.fixture(name="app")
+def fixture_app(routed_app: FastAPI, fake_plugins: dict[str, FakePlugin]) -> FastAPI:
+    """The test app with fresh fake containers (new state for every test, no ML artifacts)."""
+    routed_app.state = State()
+    routed_app.state.containers = {
+        entry.model_id: _build_container(fake_plugins[entry.model_id]) for entry in TEST_REGISTRY
+    }
+    return routed_app
 
 
 @pytest.fixture
