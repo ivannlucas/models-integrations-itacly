@@ -10,7 +10,6 @@ from app.plugins.ml46_dairy_fouling_clog_detection._vendor.common import (
 from app.plugins.ml46_dairy_fouling_clog_detection._vendor.data import load_telemetry
 from app.plugins.ml46_dairy_fouling_clog_detection._vendor.datasets import (
     AssetSequence,
-    WindowDataset,
     make_sequences,
 )
 from app.plugins.ml46_dairy_fouling_clog_detection._vendor.features import (
@@ -59,17 +58,6 @@ def prepare_sequences(
     feature_indices = [feature_to_idx[name] for name in feature_artifacts.no_clock_feature_names]
     asset_ids = sorted(telemetry_df["asset_id"].astype(str).unique().tolist())
     return sequences, feature_indices, asset_ids
-
-
-def make_window_dataset(
-    sequences: dict[str, AssetSequence],
-    asset_ids: list[str],
-    feature_indices: list[int],
-    train_cfg: TrainConfig,
-    stride: int | None = None,
-) -> WindowDataset:
-    """Build a WindowDataset over every valid window ending in production/no-maintenance."""
-    return WindowDataset(sequences, asset_ids, feature_indices, train_cfg, stride=stride)
 
 
 def last_window_only(

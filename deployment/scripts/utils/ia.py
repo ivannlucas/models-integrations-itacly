@@ -4,7 +4,6 @@
 
 import json
 import os
-import re
 from typing import Dict, Any, Optional
 
 import google.generativeai as genai  # pylint: disable=import-error,no-name-in-module  # optional tooling dependency
@@ -91,42 +90,6 @@ def calculate_consumption_price(consumes, model):
     price = input_price + output_price + cache_price
 
     return price
-
-
-def parse_json_from_response(response_text: str) -> Optional[Dict[str, Any]]:
-    """
-    Extracts and parses a JSON object from a string, which might contain markdown code blocks.
-    It robustly finds a JSON block and decodes it.
-
-    Args:
-        response_text: The text response from the AI model.
-
-    Returns:
-        A dictionary if a valid JSON object is found and parsed, otherwise None.
-    """
-    # First, try to find a JSON block inside markdown ```json ... ```
-    match = re.search(r"```json\s*([\s\S]*?)\s*```", response_text, re.DOTALL)
-    if match:
-        json_str = match.group(1)
-    else:
-        # If no markdown block is found, try to find the first '{' and the last '}'
-        start = response_text.find('{')
-        end = response_text.rfind('}')
-        if start != -1 and end != -1 and end > start:
-            json_str = response_text[start:end + 1]
-        else:
-            log_message("No valid JSON structure found in the model's response.", "ERROR")
-            log_message(f"Received response:\n{response_text}", "INFO")
-            return None
-
-    try:
-        # Clean up potential artifacts before parsing
-        json_str = json_str.strip()
-        return json.loads(json_str)
-    except json.JSONDecodeError as e:
-        log_message(f"Failed to decode JSON from the response: {e}", "ERROR")
-        log_message(f"Problematic JSON string:\n{json_str}", "INFO")
-        return None
 
 
 def invoke_model(model: genai.GenerativeModel, prompt: str, is_json_output: bool = True):
