@@ -3,7 +3,7 @@
 The expected scores come from the AI team's own predictor on data/splits/test.csv. Case
 obs_OBS0000776 has an empty sensor_ph: it checks the plugin lets the fitted preprocessor impute
 the training median, as the original does (it used to fill 0.0 and score that real incident 0).
-Skipped when the local artifacts are not available.
+Skipped when the manifest or the local artifacts are not available.
 
 Inline, the data-contract scale check sees a single row, so a real but extreme value (z > 10)
 is rejected: golden obs_OBS0001565 (1199 h since the previous lot) gets DataContractError.
@@ -22,6 +22,8 @@ from app.plugins.ml30_meat_traceability_detection.plugin import Ml30MeatTraceabi
 
 _ROOT = Path(__file__).resolve().parents[2]
 _MANIFEST = _ROOT / "inbox" / "a30" / "manifest.yaml"
+if not _MANIFEST.exists():  # inbox/ only lives in the integration repo, not in the service one
+    pytest.skip(f"No está {_MANIFEST}", allow_module_level=True)
 _GOLDEN = yaml.safe_load(_MANIFEST.read_text(encoding="utf-8"))["golden_cases"]
 TOLERANCE = 1e-6  # expected scores are rounded to 6 decimals
 REJECTED_INLINE = {"obs_OBS0001565"}  # single-row scale check (see module docstring)
