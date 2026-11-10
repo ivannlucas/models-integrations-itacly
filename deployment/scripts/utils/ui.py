@@ -1,10 +1,11 @@
 # utils/ui.py
 # Description: Shared module for console user interface elements, like colored logging.
+"""Console UI helpers shared by the deployment scripts (coloured logging)."""
 
 import sys
 
 
-class Colors:
+class Colors:  # pylint: disable=too-few-public-methods  # plain constants holder
     """Contains ANSI escape codes for coloring text in the terminal."""
     HEADER = '\033[95m'
     GREEN = '\033[92m'

@@ -12,7 +12,8 @@ MODEL_ID = "ml1-wine-pest-disease-detection"
 
 # Minimal valid base64 PNG (1x1 pixel, red) — does not go through real inference
 _TINY_PNG_B64 = (
-    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwADhQGAWjR9awAAAABJRU5ErkJggg=="
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQ"
+    "DwADhQGAWjR9awAAAABJRU5ErkJggg=="
 )
 
 _SENSORS = {
@@ -34,6 +35,7 @@ INLINE_PAYLOAD_NO_IMAGE = {
 
 
 def test_health(client):
+    """GET /health reports the model as ok and loaded."""
     body = client.get(f"{PREFIX}/health").json()
     assert body["status"] == "ok"
     assert body["model"] == MODEL_ID
@@ -41,10 +43,12 @@ def test_health(client):
 
 
 def test_stats(client):
+    """GET /stats returns the model name."""
     assert client.get(f"{PREFIX}/stats").json()["model_name"] == MODEL_ID
 
 
 def test_predict_inline_with_image_uses_hybrid_ensemble(client):
+    """Inline /predict with an image uses the hybrid ensemble path."""
     resp = client.post(f"{PREFIX}/predict", json=INLINE_PAYLOAD_WITH_IMAGE)
     assert resp.status_code == 200
     body = resp.json()
@@ -65,11 +69,13 @@ def test_predict_inline_without_image_uses_tabular_fallback(client):
 
 
 def test_predict_inline_missing_sensors_returns_422(client):
+    """Inline /predict without sensors fails validation with 422."""
     resp = client.post(f"{PREFIX}/predict", json={"mode": "inline", "image_base64": _TINY_PNG_B64})
     assert resp.status_code == 422
 
 
 def test_predict_inline_invalid_image_maps_to_422(client, fake_plugins):
+    """InvalidImageError from the plugin maps to HTTP 422."""
     fake_plugins[MODEL_ID].raise_on_inline = InvalidImageError("imagen no decodificable")
     resp = client.post(f"{PREFIX}/predict", json=INLINE_PAYLOAD_WITH_IMAGE)
     assert resp.status_code == 422
@@ -87,6 +93,7 @@ def test_predict_inline_sensor_mismatch_maps_to_422(client, fake_plugins):
 
 
 def test_predict_batch(client):
+    """Batch /predict returns one prediction per row."""
     resp = client.post(
         f"{PREFIX}/predict", json={"mode": "batch", "data_path": "/tmp/a1_batch.zip"},
     )

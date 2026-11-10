@@ -6,15 +6,15 @@ layout as the original raw datasets. See manifest.training in inbox/a06/manifest
 """
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import Field
 
+from app.application.dto.plugin_dto import PluginDTO, TrainRequestBase
 from app.application.dto.train_dto import MlflowRunId
 
 
-class TrainRequest(BaseModel):
+class TrainRequest(TrainRequestBase):
     """Train request: the raw dataset of one modality, split 70/15/15 with seed 42."""
 
-    model_config = ConfigDict(protected_namespaces=())
     data_path: str = Field(
         ...,
         description=(
@@ -34,10 +34,9 @@ class TrainRequest(BaseModel):
     task: Literal["thermal", "rgb"] = Field(..., description="Ensemble a reentrenar")
 
 
-class TrainResponse(BaseModel):
+class TrainResponse(PluginDTO):
     """Train response: test-split metrics of each retrained base model and of the ensemble."""
 
-    model_config = ConfigDict(protected_namespaces=())
     detail: str
     task: str
     accuracy: float = Field(..., description="Accuracy del ensemble en el split de test")

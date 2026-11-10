@@ -1,4 +1,5 @@
-"""Vendored verbatim (logic unchanged) from inbox/a45/codigo/src/data_processing/input_validation.py.
+"""Vendored verbatim (logic unchanged) from
+inbox/a45/codigo/src/data_processing/input_validation.py.
 
 Only the logger wiring was adapted (get_logger() -> logging.getLogger(__name__)).
 """
@@ -14,6 +15,7 @@ logger = logging.getLogger(__name__)
 
 
 def expected_sensor_columns(config: dict) -> list[str]:
+    """Return the lower-cased sensor names of data_generation.sensors (non-empty, unique)."""
     sensors = config.get("data_generation", {}).get("sensors", [])
     expected = [
         str(sensor["name"]).strip().lower()
@@ -32,6 +34,7 @@ def expected_sensor_columns(config: dict) -> list[str]:
 
 
 def drop_fully_empty_rows(df: pd.DataFrame) -> tuple[pd.DataFrame, int, pd.Series]:
+    """Drop rows whose cells are all empty/blank; also return their count and CSV line numbers."""
     csv_lines = pd.Series(np.arange(2, len(df) + 2, dtype=int), index=df.index)
     empty_mask = (
         df.replace(r"^\s*$", np.nan, regex=True)
@@ -117,12 +120,16 @@ def _format_examples(
     return "".join(lines)
 
 
-def validate_model_input_data(
+def validate_model_input_data(  # pylint: disable=too-many-locals,too-many-branches,too-many-statements
     df: pd.DataFrame,
     config: dict,
     context: str,
     require_target: bool = False,
 ) -> dict[str, Any]:
+    """Validate the input frame (columns, timestamps, nulls); raise ValueError listing errors.
+
+    Returns the partial-null threshold and per-column partial-null stats.
+    """
     data_cfg = config["data_processing"]
     df_work = df.copy()
     df_work.columns = df_work.columns.astype(str).str.strip().str.lower()
@@ -269,7 +276,8 @@ def validate_model_input_data(
                             [timestamp_column],
                         )
                         errors.append(
-                            "Se detectaron timestamps duplicados para el mismo identificador de ciclo "
+                            "Se detectaron timestamps duplicados para el mismo identificador "
+                            "de ciclo "
                             f"en {context}.\n"
                             "Pares duplicados:"
                             f"{_format_examples(duplicate_pair_examples)}"
@@ -421,6 +429,7 @@ def prepare_model_input_dataframe(
     config: dict,
     context: str,
 ) -> pd.DataFrame:
+    """Normalise column names, parse timestamps and keep sensor + metadata columns, sorted."""
     data_cfg = config["data_processing"]
     df_work = df.copy()
     df_work.columns = df_work.columns.astype(str).str.strip().str.lower()
@@ -493,6 +502,7 @@ def temporal_impute_partial_nulls(
     id_column: Optional[str],
     timestamp_column: str,
 ) -> pd.DataFrame:
+    """Fill partial nulls by interpolation + ffill/bfill (per cycle when possible), then median."""
     columns_to_impute = [
         column
         for column, stats in partial_null_stats.items()

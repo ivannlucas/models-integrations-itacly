@@ -1,34 +1,41 @@
-"""Ml9CerealsInfestationSequenceClassifierPlugin — GRU classifier over 48 h windows of stored-cereal telemetry.
+"""Ml9CerealsInfestationSequenceClassifierPlugin — GRU over 48 h stored-cereal telemetry windows.
 
 Classifies each temporal window of a monitored grain series as sano / insectos / moho_critico from
 CO2, temperature, ambient RH and grain humidity (a09 / INF-CER). See inbox/a09/manifest.yaml for the
 full input/output contract, the "Ensemble learning" title vs. LSTM-vs-GRU implementation
 discrepancy, and the synthetic-data caveat that applies to every metric reported here.
 """
+
 from __future__ import annotations
 
 import json
 import logging
-import shutil
-import tempfile
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import pandas as pd
 
-from app.application.dto.stats_dto import InputField, OutputField, RuntimeStats, StatsResponse
+from app.application.dto.stats_dto import InputField, OutputField, StatsResponse
 from app.domain.ports.model_plugin_port import ModelPluginPort
-from app.domain.services.exceptions import (
-    InsufficientSequenceHistoryError,
-    ModelNotLoadedError,
-    ModelPersistenceError,
+from app.domain.services.exceptions import InsufficientSequenceHistoryError
+from app.domain.services.mlflow_artifacts import (
+    add_mlflow_run_to_stats,
+    removing_dir,
+    require_train_tracker,
+    upload_model_to_mlflow,
 )
 from app.domain.services.mlflow_tracker import BaseMLflowTracker
+from app.domain.services.plugin_runtime import PluginRuntimeMixin
 from app.infrastructure.artifact_store import local_file_path
-from app.plugins.ml9_cereals_infestation_sequence_classifier import model_loader, postprocessing, preprocessing
-from app.plugins.ml9_cereals_infestation_sequence_classifier._vendor.preprocess import split_sample_ids_stratified
+from app.plugins.ml9_cereals_infestation_sequence_classifier import (
+    model_loader,
+    postprocessing,
+    preprocessing,
+)
+from app.plugins.ml9_cereals_infestation_sequence_classifier._vendor.preprocess import (
+    split_sample_ids_stratified,
+)
 from app.plugins.ml9_cereals_infestation_sequence_classifier._vendor.sequential import (
     build_class_weights,
     evaluate_sequence_model,
@@ -61,7 +68,9 @@ from app.plugins.ml9_cereals_infestation_sequence_classifier.constants import (
     VERSION,
     WINDOW_SIZE,
 )
-from app.plugins.ml9_cereals_infestation_sequence_classifier.mlflow_utils import download_user_model_from_mlflow
+from app.plugins.ml9_cereals_infestation_sequence_classifier.mlflow_utils import (
+    download_user_model_from_mlflow,
+)
 from app.plugins.ml9_cereals_infestation_sequence_classifier.predict_dto import (
     PredictBatchResponse,
     PredictInlineResponse,
@@ -70,19 +79,114 @@ from app.plugins.ml9_cereals_infestation_sequence_classifier.train_dto import Tr
 
 logger = logging.getLogger(__name__)
 
-_METRIC_KEYS = ("accuracy", "balanced_accuracy", "f1_macro", "precision_macro", "recall_macro", "log_loss")
+_METRIC_KEYS = (
+    "accuracy",
+    "balanced_accuracy",
+    "f1_macro",
+    "precision_macro",
+    "recall_macro",
+    "log_loss",
+)
 
 
-class Ml9CerealsInfestationSequenceClassifierPlugin(ModelPluginPort):
+def _score_windows(checkpoint: dict, scaler: Any, bundle: dict, rows: list[dict]) -> tuple:
+    """Build the windows of an inline series history and score them.
+
+    Returns ``(raw_df, payload, index of the latest window, predictions frame)``.
+    """
+    raw_df = preprocessing.build_raw_dataframe(rows)
+
+    missing = preprocessing.missing_required_columns(raw_df)
+    if missing:
+        raise ValueError(
+            f"Las filas recibidas no traen las columnas obligatorias: {missing}"
+        )
+
+    payload, _, has_target = preprocessing.build_windows(raw_df, bundle)
+    idx = preprocessing.last_window_index(payload)
+    if idx == -1:
+        raise InsufficientSequenceHistoryError(
+            f"El histórico recibido no genera ninguna ventana: se necesitan al menos "
+            f"{WINDOW_SIZE} observaciones horarias consecutivas del mismo sample_id "
+            f"(pad_short_sequences=false). Filas recibidas: {len(raw_df)}, series: "
+            f"{raw_df[GROUP_COLUMN].nunique()}."
+        )
+
+    proba = postprocessing.run_inference(checkpoint, scaler, payload["X_seq"])
+    pred_df = postprocessing.build_predictions_frame(
+        payload["window_meta"], proba, payload["y_seq"], has_target=has_target,
+    )
+    return raw_df, payload, idx, pred_df
+
+
+def _confidence_fields(row: pd.Series, pred_df: pd.DataFrame, threshold: float | None) -> dict:
+    """``confidence``, ``low_confidence`` and ``y_true`` of the scored window ``row``."""
+    confidence = float(row["confidence"])
+    return {
+        "confidence": confidence,
+        "low_confidence": bool(threshold is not None and confidence < float(threshold)),
+        "y_true": (
+            int(row["y_true"])
+            if "y_true" in pred_df.columns and pd.notna(row.get("y_true"))
+            else None
+        ),
+    }
+
+
+def _load_train_windows(data_path: str, bundle: dict) -> tuple:
+    """Read the training CSV and build its labelled windows: ``(raw_df, payload, runtime_cfg)``."""
+    with local_file_path(data_path) as local_path:
+        raw_df = pd.read_csv(local_path)
+
+    missing = [c for c in TRAIN_HARD_REQUIRED_COLUMNS if c not in raw_df.columns]
+    if missing:
+        raise ValueError(f"El CSV de entrenamiento no trae las columnas requeridas: {missing}")
+
+    payload, runtime_cfg, _ = preprocessing.build_windows(raw_df, bundle, require_target=True)
+    if len(payload["X_seq"]) == 0:
+        raise ValueError(
+            f"El CSV no genera ninguna ventana de entrenamiento: se necesitan al menos "
+            f"{WINDOW_SIZE} observaciones horarias consecutivas por sample_id."
+        )
+    return raw_df, payload, runtime_cfg
+
+
+def _split_windows(raw_df: pd.DataFrame, payload: dict, runtime_cfg: dict) -> tuple:
+    """Stratified split by sample_id (no leakage between series).
+
+    Returns ``(split_ids, {"train"|"validation"|"test": (x, y)})``.
+    """
+    try:
+        split_ids = split_sample_ids_stratified(raw_df, runtime_cfg)
+    except ValueError as exc:
+        raise ValueError(
+            f"No se puede partir el CSV en train/validation/test sin fuga entre series: {exc} "
+            "Se necesitan al menos 3 sample_id por clase."
+        ) from exc
+
+    group_seq = np.asarray(payload["group_seq"])
+    splits = {}
+    for part in ("train", "validation", "test"):
+        mask = np.isin(group_seq, np.asarray(split_ids[f"{part}_sample_ids"]))
+        splits[part] = (payload["X_seq"][mask], payload["y_seq"][mask])
+    if min(len(x) for x, _ in splits.values()) == 0:
+        raise ValueError(
+            "Alguna de las particiones (train/validation/test) se ha quedado sin ventanas. "
+            f"Ventanas por partición: train={len(splits['train'][0])}, "
+            f"validation={len(splits['validation'][0])}, "
+            f"test={len(splits['test'][0])}. Aporta más series o series más largas."
+        )
+    return split_ids, splits
+
+
+class Ml9CerealsInfestationSequenceClassifierPlugin(PluginRuntimeMixin, ModelPluginPort):
     """Recurrent (GRU) 3-class classifier over 48-hour sliding windows per monitored series."""
 
     def __init__(self) -> None:
-        """Initialize an unloaded plugin with empty runtime counters."""
+        """Initialize an unloaded plugin (runtime counters start at the mixin defaults)."""
         self._checkpoint: dict | None = None
         self._scaler: Any = None
         self._bundle: dict | None = None
-        self._predict_count: int = 0
-        self._last_predict_at: str | None = None
 
     # ── lifecycle ─────────────────────────────────────────────────────────────
 
@@ -93,15 +197,9 @@ class Ml9CerealsInfestationSequenceClassifierPlugin(ModelPluginPort):
 
     def is_loaded(self) -> bool:
         """Return True once the checkpoint, scaler and bundle are loaded."""
-        return self._checkpoint is not None and self._scaler is not None and self._bundle is not None
-
-    def _require_loaded(self) -> None:
-        if not self.is_loaded():
-            raise ModelNotLoadedError("El modelo no está cargado.")
-
-    def _record_prediction(self) -> None:
-        self._predict_count += 1
-        self._last_predict_at = datetime.now(tz=timezone.utc).isoformat()
+        return (
+            self._checkpoint is not None and self._scaler is not None and self._bundle is not None
+        )
 
     def _resolve_model(self, mlflow_run_id: str) -> tuple[dict, Any, dict, str | None]:
         """Return (checkpoint, scaler, bundle, temp_dir) to serve this request.
@@ -123,7 +221,7 @@ class Ml9CerealsInfestationSequenceClassifierPlugin(ModelPluginPort):
         if mlflow_run_id:
             logger.info("predict_batch — using user model from MLflow run_id=%s", mlflow_run_id)
         checkpoint, scaler, bundle, user_tmp = self._resolve_model(mlflow_run_id)
-        try:
+        with removing_dir(user_tmp):
             with local_file_path(data_path) as local_path:
                 raw_df = pd.read_csv(local_path)
 
@@ -151,7 +249,7 @@ class Ml9CerealsInfestationSequenceClassifierPlugin(ModelPluginPort):
                     payload["X_seq"], payload["y_seq"], checkpoint=checkpoint, scaler=scaler,
                 )
 
-            self._record_prediction()
+            self._record()
             logger.info(
                 "predict_batch done — %d ventanas, %d series, target=%s, mlflow=%s",
                 len(pred_df), int(pred_df[GROUP_COLUMN].nunique()), has_target, bool(mlflow_run_id),
@@ -165,58 +263,36 @@ class Ml9CerealsInfestationSequenceClassifierPlugin(ModelPluginPort):
                 evaluated_metrics=evaluated,
                 output_path=None,
             )
-        finally:
-            if user_tmp:
-                shutil.rmtree(user_tmp, ignore_errors=True)
 
     # ── predict_inline ────────────────────────────────────────────────────────
 
-    def predict_inline(  # pylint: disable=too-many-locals
+    def predict_inline(
         self,
         *,
         features: dict,
         model_key: str | None = None,
         threshold: float | None = None,
         mlflow_run_id: str = "",
-    ) -> PredictInlineResponse:  # pylint: disable=too-many-locals
+    ) -> PredictInlineResponse:
         """Score the most recent 48-hour window of the submitted series history."""
         _ = model_key
         if mlflow_run_id:
             logger.info("predict_inline — using user model from MLflow run_id=%s", mlflow_run_id)
         checkpoint, scaler, bundle, user_tmp = self._resolve_model(mlflow_run_id)
-        try:
-            rows: list[dict] = features["rows"]
-            raw_df = preprocessing.build_raw_dataframe(rows)
-
-            missing = preprocessing.missing_required_columns(raw_df)
-            if missing:
-                raise ValueError(f"Las filas recibidas no traen las columnas obligatorias: {missing}")
-
-            payload, _, has_target = preprocessing.build_windows(raw_df, bundle)
-            idx = preprocessing.last_window_index(payload)
-            if idx == -1:
-                raise InsufficientSequenceHistoryError(
-                    f"El histórico recibido no genera ninguna ventana: se necesitan al menos "
-                    f"{WINDOW_SIZE} observaciones horarias consecutivas del mismo sample_id "
-                    f"(pad_short_sequences=false). Filas recibidas: {len(raw_df)}, series: "
-                    f"{raw_df[GROUP_COLUMN].nunique()}."
-                )
-
-            proba = postprocessing.run_inference(checkpoint, scaler, payload["X_seq"])
-            pred_df = postprocessing.build_predictions_frame(
-                payload["window_meta"], proba, payload["y_seq"], has_target=has_target,
+        with removing_dir(user_tmp):
+            raw_df, payload, idx, pred_df = _score_windows(
+                checkpoint, scaler, bundle, features["rows"]
             )
-            # build_predictions_frame sorts by (sample_id, timestamp_end); re-find the latest window.
+            # build_predictions_frame sorts by (sample_id, timestamp_end); re-find the latest
+            # window.
             row = pred_df.loc[pd.to_datetime(pred_df["timestamp_end"]).idxmax()]
+            scored = _confidence_fields(row, pred_df, threshold)
 
-            confidence = float(row["confidence"])
-            low_confidence = bool(threshold is not None and confidence < float(threshold))
-            y_true = int(row["y_true"]) if "y_true" in pred_df.columns and pd.notna(row.get("y_true")) else None
-
-            self._record_prediction()
+            self._record()
             logger.info(
                 "predict_inline done — sample_id=%s clase=%s confianza=%.4f ventanas=%d count=%d",
-                row[GROUP_COLUMN], row["pred_label"], confidence, len(pred_df), self._predict_count,
+                row[GROUP_COLUMN], row["pred_label"], scored["confidence"], len(pred_df),
+                self._predict_count,
             )
             return PredictInlineResponse(
                 model_id=MODEL_ID,
@@ -229,11 +305,9 @@ class Ml9CerealsInfestationSequenceClassifierPlugin(ModelPluginPort):
                 proba_sano=float(row["proba_sano"]),
                 proba_insectos=float(row["proba_insectos"]),
                 proba_moho_critico=float(row["proba_moho_critico"]),
-                confidence=confidence,
-                low_confidence=low_confidence,
+                **scored,
                 n_rows_used=len(raw_df),
                 n_windows_available=len(pred_df),
-                y_true=y_true,
                 model_name=MODEL_ID,
                 # Las 65 variables derivadas que vio el modelo en el último paso de la ventana
                 # puntuada — es lo que el servicio de explicabilidad de la plataforma necesita
@@ -242,13 +316,10 @@ class Ml9CerealsInfestationSequenceClassifierPlugin(ModelPluginPort):
                     payload["X_seq"], payload["feature_columns"], idx,
                 ),
             )
-        finally:
-            if user_tmp:
-                shutil.rmtree(user_tmp, ignore_errors=True)
 
     # ── train (fine-tuning) ───────────────────────────────────────────────────
 
-    def train(self, *, data_path: str, mlflow_run_id: str) -> TrainResponse:  # pylint: disable=too-many-locals,too-many-statements
+    def train(self, *, data_path: str, mlflow_run_id: str) -> TrainResponse:
         """Fine-tune the served GRU checkpoint on the caller's own labelled CSV.
 
         Follows the delivered training procedure (src/training/trainer.py) for everything that
@@ -264,45 +335,47 @@ class Ml9CerealsInfestationSequenceClassifierPlugin(ModelPluginPort):
            bundle must keep holding, and a small user CSV is not a sound basis to re-derive scaling.
         """
         self._require_loaded()
-        with local_file_path(data_path) as local_path:
-            raw_df = pd.read_csv(local_path)
+        # The fine-tuned bundle lives only in its own MLflow run: without one it would be lost.
+        tracker = require_train_tracker(mlflow_run_id)
+        raw_df, payload, runtime_cfg = _load_train_windows(data_path, self._bundle)
+        split_ids, splits = _split_windows(raw_df, payload, runtime_cfg)
 
-        missing = [c for c in TRAIN_HARD_REQUIRED_COLUMNS if c not in raw_df.columns]
-        if missing:
-            raise ValueError(f"El CSV de entrenamiento no trae las columnas requeridas: {missing}")
+        result, metrics, baseline = self._fine_tune(splits, runtime_cfg, tracker)
+        artifact_path = self._persist_retrained(result, metrics, tracker)
 
-        payload, runtime_cfg, _ = preprocessing.build_windows(raw_df, self._bundle, require_target=True)
-        if len(payload["X_seq"]) == 0:
-            raise ValueError(
-                f"El CSV no genera ninguna ventana de entrenamiento: se necesitan al menos "
-                f"{WINDOW_SIZE} observaciones horarias consecutivas por sample_id."
-            )
-
-        try:
-            split_ids = split_sample_ids_stratified(raw_df, runtime_cfg)
-        except ValueError as exc:
-            raise ValueError(
-                f"No se puede partir el CSV en train/validation/test sin fuga entre series: {exc} "
-                "Se necesitan al menos 3 sample_id por clase."
-            ) from exc
-
-        group_seq = np.asarray(payload["group_seq"])
-        subsets = {}
-        for key in ("train_sample_ids", "validation_sample_ids", "test_sample_ids"):
-            mask = np.isin(group_seq, np.asarray(split_ids[key]))
-            subsets[key] = (payload["X_seq"][mask], payload["y_seq"][mask])
-        (x_train, y_train), (x_val, y_val), (x_test, y_test) = (
-            subsets["train_sample_ids"], subsets["validation_sample_ids"], subsets["test_sample_ids"],
+        logger.info(
+            "ml9 train() done — ventanas train/val/test=%d/%d/%d f1_macro=%.4f (baseline %.4f) "
+            "mlflow=%s",
+            len(splits["train"][0]),
+            len(splits["validation"][0]),
+            len(splits["test"][0]),
+            metrics["f1_macro"],
+            baseline["f1_macro"],
+            bool(mlflow_run_id),
         )
-        if min(len(x_train), len(x_val), len(x_test)) == 0:
-            raise ValueError(
-                "Alguna de las particiones (train/validation/test) se ha quedado sin ventanas. "
-                f"Ventanas por partición: train={len(x_train)}, validation={len(x_val)}, "
-                f"test={len(x_test)}. Aporta más series o series más largas."
-            )
+        return TrainResponse(
+            detail=(
+                "Fine-tuning completado sobre el checkpoint servido "
+                f"({self._checkpoint['model_type'].upper()}), reutilizando el escalador original. "
+                "Métricas medidas sobre el hold-out por sample_id del CSV aportado."
+            ),
+            n_series_train=len(split_ids["train_sample_ids"]),
+            n_series_validation=len(split_ids["validation_sample_ids"]),
+            n_series_test=len(split_ids["test_sample_ids"]),
+            n_windows_train=len(splits["train"][0]),
+            n_windows_validation=len(splits["validation"][0]),
+            n_windows_test=len(splits["test"][0]),
+            epochs_run=int(result.checkpoint["best_epoch"]),
+            **metrics,
+            validation_f1_macro=float(result.metrics["f1_macro"]),
+            baseline_f1_macro=baseline["f1_macro"],
+            artifact_path=artifact_path,
+            upload_warning=None,
+        )
 
+    def _fine_tune_params(self) -> tuple[int, dict]:
+        """``(num_classes, params)`` of the served architecture and its training settings."""
         model_config = dict(self._checkpoint["model_config"])
-        num_classes = int(model_config["num_classes"])
         params = {
             "hidden_size": model_config["hidden_size"],
             "num_layers": model_config["num_layers"],
@@ -311,27 +384,31 @@ class Ml9CerealsInfestationSequenceClassifierPlugin(ModelPluginPort):
             **{k: v for k, v in self._checkpoint.get("training_params", {}).items()
                if k in ("batch_size", "learning_rate", "weight_decay")},
         }
+        return int(model_config["num_classes"]), params
+
+    def _fine_tune(self, splits: dict, runtime_cfg: dict, tracker: BaseMLflowTracker) -> tuple:
+        """Fine-tune a copy of the served GRU: ``(result, test metrics, baseline test metrics)``."""
+        num_classes, params = self._fine_tune_params()
+        x_test, y_test = splits["test"]
         set_global_seed(int(runtime_cfg.get("training", {}).get("random_state", 42)))
-        class_weights = build_class_weights(y_train, num_classes=num_classes)
+        class_weights = build_class_weights(splits["train"][1], num_classes=num_classes)
 
         baseline = self._metrics_from_windows(x_test, y_test)
 
-        tracker: BaseMLflowTracker | None = BaseMLflowTracker(mlflow_run_id) if mlflow_run_id else None
-        if tracker:
-            tracker.log_params({
-                "modo": "fine_tuning",
-                "model_type": self._checkpoint["model_type"],
-                "optimizer": "AdamW",
-                "loss": "CrossEntropyLoss(class_weights)",
-                "window_size": WINDOW_SIZE,
-                "stride": STRIDE,
-                "label_mode": LABEL_MODE,
-                **params,
-            })
+        tracker.log_params({
+            "modo": "fine_tuning",
+            "model_type": self._checkpoint["model_type"],
+            "optimizer": "AdamW",
+            "loss": "CrossEntropyLoss(class_weights)",
+            "window_size": WINDOW_SIZE,
+            "stride": STRIDE,
+            "label_mode": LABEL_MODE,
+            **params,
+        })
 
         result = train_sequence_model(
             str(self._checkpoint["model_type"]),
-            x_train, y_train, x_val, y_val,
+            *splits["train"], *splits["validation"],
             params=params,
             cfg=runtime_cfg,
             scaler=self._scaler,          # reused, never refitted
@@ -348,37 +425,15 @@ class Ml9CerealsInfestationSequenceClassifierPlugin(ModelPluginPort):
             batch_size=int(params.get("batch_size", 64)),
             device="cpu",
         )
-        metrics = {k: float(test_eval["metrics"][k]) for k in _METRIC_KEYS}
-
-        artifact_path = self._persist_retrained(result, metrics, tracker)
-
-        logger.info(
-            "ml9 train() done — ventanas train/val/test=%d/%d/%d f1_macro=%.4f (baseline %.4f) mlflow=%s",
-            len(x_train), len(x_val), len(x_test), metrics["f1_macro"],
-            baseline["f1_macro"], bool(mlflow_run_id),
-        )
-        return TrainResponse(
-            detail=(
-                "Fine-tuning completado sobre el checkpoint servido "
-                f"({self._checkpoint['model_type'].upper()}), reutilizando el escalador original. "
-                "Métricas medidas sobre el hold-out por sample_id del CSV aportado."
-            ),
-            n_series_train=len(split_ids["train_sample_ids"]),
-            n_series_validation=len(split_ids["validation_sample_ids"]),
-            n_series_test=len(split_ids["test_sample_ids"]),
-            n_windows_train=len(x_train),
-            n_windows_validation=len(x_val),
-            n_windows_test=len(x_test),
-            epochs_run=int(result.checkpoint["best_epoch"]),
-            **metrics,
-            validation_f1_macro=float(result.metrics["f1_macro"]),
-            baseline_f1_macro=baseline["f1_macro"],
-            artifact_path=artifact_path,
-            upload_warning=None,
-        )
+        return result, {k: float(test_eval["metrics"][k]) for k in _METRIC_KEYS}, baseline
 
     def _metrics_from_windows(
-        self, x_seq: np.ndarray, y_seq: np.ndarray, *, checkpoint: dict | None = None, scaler: Any = None,
+        self,
+        x_seq: np.ndarray,
+        y_seq: np.ndarray,
+        *,
+        checkpoint: dict | None = None,
+        scaler: Any = None,
     ) -> dict[str, float]:
         """Evaluate a model (the base one unless checkpoint/scaler are given) on built windows."""
         checkpoint = checkpoint if checkpoint is not None else self._checkpoint
@@ -396,7 +451,7 @@ class Ml9CerealsInfestationSequenceClassifierPlugin(ModelPluginPort):
         self,
         result: Any,
         metrics: dict[str, float],
-        tracker: BaseMLflowTracker | None,
+        tracker: BaseMLflowTracker,
     ) -> str:
         """Upload the fine-tuned bundle to its own MLflow run (artifact_path="model").
 
@@ -404,9 +459,6 @@ class Ml9CerealsInfestationSequenceClassifierPlugin(ModelPluginPort):
         copy are never written. Files keep the user_* names that mlflow_utils already reads.
         Raises ModelPersistenceError if it cannot be saved: the result would be lost.
         """
-        if not tracker:
-            raise ModelPersistenceError("Sin run de MLflow: el modelo reentrenado no se ha guardado.")
-
         user_bundle = dict(self._bundle or {})
         user_bundle["model_files"] = {"winner": USER_MODEL_FILENAME}
         user_bundle["scaler_file"] = USER_SCALER_FILENAME
@@ -414,79 +466,123 @@ class Ml9CerealsInfestationSequenceClassifierPlugin(ModelPluginPort):
         user_bundle["best_model_metric"] = float(result.metrics["f1_macro"])
         user_bundle["retrained_by_user"] = True
 
-        mlflow_tmp = tempfile.mkdtemp(prefix="ml9_mlflow_")
-        try:
+        def _write(mlflow_tmp: str) -> None:
+            # The final metrics are logged first, as part of saving (a failure is a save failure).
             tracker.log_metrics(metrics)
             save_checkpoint(Path(mlflow_tmp) / USER_MODEL_FILENAME, result.checkpoint)
             with open(Path(mlflow_tmp) / USER_BUNDLE_FILENAME, "w", encoding="utf-8") as fh:
                 json.dump(user_bundle, fh, ensure_ascii=False, indent=2)
             save_pickle(self._scaler, Path(mlflow_tmp) / USER_SCALER_FILENAME)
-            tracker.upload_artifacts(mlflow_tmp, artifact_path="model")
-        except Exception as exc:  # pylint: disable=broad-exception-caught
-            logger.error("MLflow artifact upload failed: %s", exc)
-            raise ModelPersistenceError(f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}") from exc
-        finally:
-            shutil.rmtree(mlflow_tmp, ignore_errors=True)
+
+        upload_model_to_mlflow(tracker, _write, prefix="ml9_mlflow_")
         return f"runs:/{tracker.run_id}/model/{USER_MODEL_FILENAME}"
 
     # ── stats ─────────────────────────────────────────────────────────────────
 
     def stats(self, mlflow_run_id: str = "") -> StatsResponse:
         """Return model metadata, the input/output contract and the real hold-out metrics."""
-        inputs = [
-            InputField(
-                name=GROUP_COLUMN, type="string",
-                description="Identificador de la serie monitorizada (silo/lote). Agrupa las observaciones.",
-            ),
-            InputField(
-                name=TIMESTAMP_COLUMN, type="datetime",
-                description="Marca temporal horaria de la observación. Debe parsear y no tener nulos.",
-            ),
-        ] + [
-            InputField(
-                name=name, type="float",
-                description=desc,
-            )
-            for name, desc in (
-                ("co2_ppm", "Concentración de CO2 en ppm (rango observado en el dataset: 350–2543)."),
-                ("temp_c", "Temperatura en °C (rango observado: 7,8–37,2)."),
-                ("ambient_rh_pct", "Humedad relativa ambiental en % (rango observado: 24,6–89,4)."),
-                ("humidity_grain_pct", "Humedad del grano en % (rango observado: 11,3–17,2)."),
-            )
-        ] + [
-            InputField(
-                name=TARGET_COLUMN, type="int", default=None,
-                description=(
-                    "Etiqueta real por observación (0=sano, 1=insectos, 2=moho_critico). Obligatoria "
-                    "en /train; opcional en /predict (si viene, se devuelve y_true y las métricas)."
+        inputs = (
+            [
+                InputField(
+                    name=GROUP_COLUMN,
+                    type="string",
+                    description=(
+                        "Identificador de la serie monitorizada (silo/lote). Agrupa las "
+                        "observaciones."
+                    ),
                 ),
-            ),
-            InputField(
-                name="target_global", type="int", default=None,
-                description="Clase global de la serie; solo se usa para estratificar la partición en /train.",
-            ),
-        ]
+                InputField(
+                    name=TIMESTAMP_COLUMN,
+                    type="datetime",
+                    description=(
+                        "Marca temporal horaria de la observación. Debe parsear y no tener nulos."
+                    ),
+                ),
+            ]
+            + [
+                InputField(
+                    name=name,
+                    type="float",
+                    description=desc,
+                )
+                for name, desc in (
+                    (
+                        "co2_ppm",
+                        "Concentración de CO2 en ppm (rango observado en el dataset: 350–2543).",
+                    ),
+                    ("temp_c", "Temperatura en °C (rango observado: 7,8–37,2)."),
+                    (
+                        "ambient_rh_pct",
+                        "Humedad relativa ambiental en % (rango observado: 24,6–89,4).",
+                    ),
+                    ("humidity_grain_pct", "Humedad del grano en % (rango observado: 11,3–17,2)."),
+                )
+            ]
+            + [
+                InputField(
+                    name=TARGET_COLUMN,
+                    type="int",
+                    default=None,
+                    description=(
+                        "Etiqueta real por observación (0=sano, 1=insectos, 2=moho_critico). "
+                        "Obligatoria en /train; opcional en /predict (si viene, se devuelve y_true "
+                        "y las métricas)."
+                    ),
+                ),
+                InputField(
+                    name="target_global",
+                    type="int",
+                    default=None,
+                    description=(
+                        "Clase global de la serie; solo se usa para estratificar la partición en "
+                        "/train."
+                    ),
+                ),
+            ]
+        )
         outputs = [
-            OutputField(name="pred_class", type="int", description="Clase predicha de la ventana: 0, 1 o 2"),
-            OutputField(name="pred_label", type="str", description="sano / insectos / moho_critico"),
-            OutputField(name="proba_sano", type="float", description="Probabilidad de la clase sano"),
-            OutputField(name="proba_insectos", type="float", description="Probabilidad de la clase insectos"),
-            OutputField(name="proba_moho_critico", type="float", description="Probabilidad de la clase moho crítico"),
-            OutputField(name="confidence", type="float", description="Probabilidad de la clase predicha"),
-            OutputField(name="window_index", type="int", description="Índice de la ventana dentro de la serie"),
-            OutputField(name="timestamp_end", type="datetime", description="Instante al que se refiere la clase"),
+            OutputField(
+                name="pred_class", type="int", description="Clase predicha de la ventana: 0, 1 o 2"
+            ),
+            OutputField(
+                name="pred_label", type="str", description="sano / insectos / moho_critico"
+            ),
+            OutputField(
+                name="proba_sano", type="float", description="Probabilidad de la clase sano"
+            ),
+            OutputField(
+                name="proba_insectos", type="float", description="Probabilidad de la clase insectos"
+            ),
+            OutputField(
+                name="proba_moho_critico",
+                type="float",
+                description="Probabilidad de la clase moho crítico",
+            ),
+            OutputField(
+                name="confidence", type="float", description="Probabilidad de la clase predicha"
+            ),
+            OutputField(
+                name="window_index",
+                type="int",
+                description="Índice de la ventana dentro de la serie",
+            ),
+            OutputField(
+                name="timestamp_end",
+                type="datetime",
+                description="Instante al que se refiere la clase",
+            ),
         ]
         base = StatsResponse(
             model_name=MODEL_ID,
             version=VERSION,
             description=(
                 "Clasificador secuencial recurrente (GRU) que asigna a cada ventana de 48 horas de "
-                "una serie de cereal almacenado uno de tres estados: sano, insectos o moho crítico. "
-                "Entradas: CO2, temperatura, humedad ambiental y humedad del grano, muestreadas cada "
-                "hora. La unidad de decisión es la ventana temporal, no la observación aislada ni la "
-                "serie completa. El entregable se titula 'Ensemble learning' por continuidad "
-                "administrativa, pero la solución validada compara LSTM y GRU y sirve solo la "
-                "ganadora (GRU) — ver inbox/a09/manifest.yaml."
+                "una serie de cereal almacenado uno de tres estados: sano, insectos o moho "
+                "crítico. Entradas: CO2, temperatura, humedad ambiental y humedad del grano, "
+                "muestreadas cada hora. La unidad de decisión es la ventana temporal, no la "
+                "observación aislada ni la serie completa. El entregable se titula 'Ensemble "
+                "learning' por continuidad administrativa, pero la solución validada compara LSTM "
+                "y GRU y sirve solo la ganadora (GRU) — ver inbox/a09/manifest.yaml."
             ),
             task_type=TASK_TYPE,
             framework=FRAMEWORK,
@@ -511,19 +607,7 @@ class Ml9CerealsInfestationSequenceClassifierPlugin(ModelPluginPort):
                     "recommended": TRAIN_RECOMMENDED_COLUMNS,
                 },
             },
-            runtime_stats=RuntimeStats(
-                total_predictions=self._predict_count,
-                avg_latency_ms=None,  # a single call scores many windows; per-window latency is not comparable
-            ),
+            # a single call scores many windows; per-window latency is not comparable
+            runtime_stats=self._runtime_stats(),
         )
-        if mlflow_run_id:
-            try:
-                tracker = BaseMLflowTracker(mlflow_run_id)
-                base.metrics["mlflow"] = {
-                    "params": tracker.get_params(),
-                    "metrics": tracker.get_metrics(),
-                }
-                logger.info("Stats enriched with MLflow data for run_id=%s", mlflow_run_id)
-            except Exception as exc:  # pylint: disable=broad-exception-caught
-                logger.warning("Could not fetch MLflow stats for run_id=%s: %s", mlflow_run_id, exc)
-        return base
+        return add_mlflow_run_to_stats(base, mlflow_run_id)

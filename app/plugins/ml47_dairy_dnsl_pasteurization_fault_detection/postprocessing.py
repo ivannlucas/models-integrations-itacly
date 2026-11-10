@@ -1,3 +1,4 @@
+"""Postprocesado de ml47: inferencia de la CNN y formato de las respuestas."""
 import numpy as np
 import torch
 
@@ -8,24 +9,33 @@ from app.plugins.ml47_dairy_dnsl_pasteurization_fault_detection.constants import
 from app.plugins.ml47_dairy_dnsl_pasteurization_fault_detection.preprocessing import pad_or_truncate
 
 
-def run_inference(model, scaler, feature_cols, x_df, device, label: str = "") -> dict | None:
+def _build_input_tensor(scaler, feature_cols, x_df, label: str = ""):
+    """Escala las features y devuelve (tensor (1, C, ventana), n_samples); None si faltan."""
     try:
         df_to_scale = x_df[feature_cols]
     except KeyError:
         return None
 
-    X_scaled = scaler.transform(df_to_scale)
-    n_samples = X_scaled.shape[0]
-    X_ready = pad_or_truncate(X_scaled, label=label)
-    input_tensor = (
-        torch.tensor(X_ready, dtype=torch.float32)
-        .unsqueeze(0)
-        .permute(0, 2, 1)
-        .to(device)
-    )
+    x_scaled = scaler.transform(df_to_scale)
+    n_samples = x_scaled.shape[0]
+    x_ready = pad_or_truncate(x_scaled, label=label)
+    tensor = torch.tensor(x_ready, dtype=torch.float32).unsqueeze(0).permute(0, 2, 1)
+    return tensor, n_samples
+
+
+def run_inference(ctx: dict, x_df, device, label: str = "") -> dict | None:
+    """Escala, ajusta a la ventana y predice; None si faltan columnas de features.
+
+    ``ctx`` aporta ``model``, ``scaler`` y ``feature_cols``.
+    """
+    built = _build_input_tensor(ctx["scaler"], ctx["feature_cols"], x_df, label=label)
+    if built is None:
+        return None
+    cpu_tensor, n_samples = built
+    input_tensor = cpu_tensor.to(device)
 
     with torch.no_grad():
-        p_foul, p_valv, p_bomb, p_acum = model(input_tensor)
+        p_foul, p_valv, p_bomb, p_acum = ctx["model"](input_tensor)
         probs = [torch.softmax(p, dim=1) for p in [p_foul, p_valv, p_bomb, p_acum]]
         preds = [p.argmax(1).item() for p in probs]
         confidences = [p.max(1).values.item() for p in probs]
@@ -34,6 +44,7 @@ def run_inference(model, scaler, feature_cols, x_df, device, label: str = "") ->
 
 
 def format_inline_response(model_id: str, resultados: dict) -> dict:
+    """Convierte el resultado de run_inference en el dict de PredictInlineResponse."""
     preds = resultados["predicciones"]
     confs = resultados["confianzas"]
     return {
@@ -51,6 +62,7 @@ def format_inline_response(model_id: str, resultados: dict) -> dict:
 
 
 def format_batch_row(resultados: dict, cycle_id) -> dict:
+    """Convierte el resultado de run_inference en una fila de la respuesta batch."""
     preds = resultados["predicciones"]
     confs = resultados["confianzas"]
     row: dict = {}

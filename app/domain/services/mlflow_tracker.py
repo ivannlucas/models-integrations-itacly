@@ -1,3 +1,4 @@
+"""MLflow helpers shared by every plugin: user-model loading guard and a generic run tracker."""
 from __future__ import annotations
 
 import functools
@@ -87,13 +88,14 @@ class BaseMLflowTracker:
 
     @property
     def client(self):
+        """MLflow client, built lazily on first use."""
         if self._client is None:
             self._client = self._build_client()
         return self._client
 
     def _build_client(self, uri: str | None = None):
-        import mlflow
-        from mlflow.tracking import MlflowClient
+        import mlflow  # pylint: disable=import-outside-toplevel  # heavy, lazy
+        from mlflow.tracking import MlflowClient  # pylint: disable=import-outside-toplevel
         uri = uri or self.TRACKING_URI
         mlflow.set_tracking_uri(uri)
         return MlflowClient(tracking_uri=uri)
@@ -158,7 +160,7 @@ class BaseMLflowTracker:
             self.client.download_artifacts(self.run_id, artifact_path, dst_path=dest_dir)
             local_path = os.path.join(dest_dir, artifact_path) if artifact_path else dest_dir
             return os.path.normpath(local_path)
-        except Exception as exc:
+        except Exception as exc:  # pylint: disable=broad-exception-caught  # best-effort download
             logger.warning("MLflow artifact download failed (run=%s path=%s): %s",
                            self.run_id, artifact_path, exc)
             return ""
@@ -172,7 +174,7 @@ class BaseMLflowTracker:
         try:
             run = self.client.get_run(self.run_id)
             return dict(run.data.metrics)
-        except Exception as exc:
+        except Exception as exc:  # pylint: disable=broad-exception-caught  # best-effort, {} on failure
             logger.warning("MLflow get_metrics failed: %s", exc)
             return {}
 
@@ -183,7 +185,7 @@ class BaseMLflowTracker:
         try:
             run = self.client.get_run(self.run_id)
             return dict(run.data.params)
-        except Exception as exc:
+        except Exception as exc:  # pylint: disable=broad-exception-caught  # best-effort, {} on failure
             logger.warning("MLflow get_params failed: %s", exc)
             return {}
 
@@ -194,6 +196,6 @@ class BaseMLflowTracker:
         try:
             run = self.client.get_run(self.run_id)
             return dict(run.data.tags)
-        except Exception as exc:
+        except Exception as exc:  # pylint: disable=broad-exception-caught  # best-effort, {} on failure
             logger.warning("MLflow get_tags failed: %s", exc)
             return {}

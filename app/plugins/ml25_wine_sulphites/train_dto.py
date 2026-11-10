@@ -1,21 +1,18 @@
 """DTOs for wine sulphite training operations."""
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import Field
 
-from app.application.dto.train_dto import MlflowRunId
+from app.application.dto.plugin_dto import ConfirmedRunId, PluginDTO, TrainRequestBase
 
 
-class TrainRequest(BaseModel):
+class TrainRequest(TrainRequestBase):
     """Request body that specifies the CSV file to use for training."""
 
-    model_config = ConfigDict(protected_namespaces=())
     data_path: str = Field(..., description="Path to the CSV training file inside the container")
-    mlflow_run_id: MlflowRunId
 
 
-class TrainResponse(BaseModel):
+class TrainResponse(PluginDTO):
     """Response body returned after a successful training run."""
 
-    model_config = ConfigDict(protected_namespaces=())
     detail: str = Field(..., description="Human-readable result message")
     mae_quality: float = Field(
         ..., description="Mean absolute error of the quality model on the held-out test split"
@@ -30,11 +27,4 @@ class TrainResponse(BaseModel):
     upload_warning: str | None = Field(
         default=None, description="Set if artifacts were saved locally but S3 upload failed"
     )
-    mlflow_run_id: str = Field(
-        default="",
-        description=(
-            "Run de MLflow al que se subieron los artefactos. La plataforma lo toma como "
-            "autoritativo frente al run que pre-creó ella: si aquel falló, este es el que "
-            "de verdad tiene el modelo entrenado (train-task-manager.ts, confirmedRunId)."
-        ),
-    )
+    mlflow_run_id: ConfirmedRunId = ""

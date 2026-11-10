@@ -154,16 +154,19 @@ def create_refrigeration_lags(df: pd.DataFrame) -> pd.DataFrame:
             df[f"{feature}_roll_mean_{w}"] = roll_mean.reset_index(level=0, drop=True)
 
     df["P_dis_bar_roll_std_20"] = (
-        df.groupby("run_id")["P_dis_bar"].rolling(20, min_periods=10).std().reset_index(level=0, drop=True)
+        df.groupby("run_id")["P_dis_bar"].rolling(20, min_periods=10).std()
+        .reset_index(level=0, drop=True)
     )
     df["P_dis_bar_roll_mean_20"] = (
-        df.groupby("run_id")["P_dis_bar"].rolling(20, min_periods=10).mean().reset_index(level=0, drop=True)
+        df.groupby("run_id")["P_dis_bar"].rolling(20, min_periods=10).mean()
+        .reset_index(level=0, drop=True)
     )
     df["Pdis_instability_20"] = df["P_dis_bar_roll_std_20"] / (df["P_dis_bar_roll_mean_20"] + 1e-5)
 
     if "T_cond_approach" in df.columns:
         df["cond_approach_std_20"] = (
-            df.groupby("run_id")["T_cond_approach"].rolling(20, min_periods=10).std().reset_index(level=0, drop=True)
+            df.groupby("run_id")["T_cond_approach"].rolling(20, min_periods=10).std()
+            .reset_index(level=0, drop=True)
         )
 
     df = df.dropna(subset=["Pdis_instability_20", "P_dis_bar_delta_15"])
@@ -173,7 +176,9 @@ def create_refrigeration_lags(df: pd.DataFrame) -> pd.DataFrame:
 def physics_indicators_refrigeration(df: pd.DataFrame) -> pd.DataFrame:
     """Per-run early/mean physics summaries used by the neurosymbolic rules."""
     df = df.copy()
-    df["early_P_dis_error"] = df.groupby("run_id")["P_dis_error"].transform(lambda x: x.iloc[:100].mean())
+    df["early_P_dis_error"] = df.groupby("run_id")["P_dis_error"].transform(
+        lambda x: x.iloc[:100].mean()
+    )
     df["mean_P_dis_bar"] = df.groupby("run_id")["P_dis_bar"].transform("mean")
     return df
 
@@ -235,7 +240,10 @@ def prepare_input(df: pd.DataFrame, system: str | None = None) -> tuple[pd.DataF
     """
     system = detect_system(df.columns, system)
     if is_engineered(df, system):
-        prepared = df.sort_values(["run_id", "time_min"]) if set(CYCLE_COLUMNS) <= set(df.columns) else df
+        prepared = (
+            df.sort_values(["run_id", "time_min"])
+            if set(CYCLE_COLUMNS) <= set(df.columns) else df
+        )
     else:
         validate_raw_input(df, system)
         validate_history(df, system)

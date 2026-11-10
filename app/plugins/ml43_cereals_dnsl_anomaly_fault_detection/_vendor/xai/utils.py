@@ -2,16 +2,17 @@
 Funciones de utilidad para XAI.
 """
 
+from typing import Any, Dict, List, Optional, Tuple
+
 import numpy as np
 import torch
-from typing import Any, Dict, List, Optional, Tuple
 
 
 def safe_float(x: Any, default: float = 0.0) -> float:
     """Convierte a float de manera segura."""
     try:
         return float(x)
-    except Exception:
+    except Exception:  # pylint: disable=broad-exception-caught  # "safe" conversion by design
         return float(default)
 
 
@@ -53,7 +54,7 @@ def get_semantic_mf_name_for_feature(
     return lookup.get(str(feature_name), {}).get(int(mf_idx), f"mf_{mf_idx}")
 
 
-def infer_semantic_mf_names_from_centers(
+def infer_semantic_mf_names_from_centers(  # pylint: disable=too-many-locals
     model,
     feature_names: Optional[List[str]] = None,
     semantic_names_map: Optional[Dict[int, List[str]]] = None,
@@ -73,7 +74,9 @@ def infer_semantic_mf_names_from_centers(
     sigmas = getattr(fl, "sigmas", None)
 
     with torch.no_grad():
-        centers = centers.detach().cpu().numpy() if torch.is_tensor(centers) else np.asarray(centers)
+        centers = (
+            centers.detach().cpu().numpy() if torch.is_tensor(centers) else np.asarray(centers)
+        )
         sigmas = (
             sigmas.detach().cpu().numpy() if (sigmas is not None and torch.is_tensor(sigmas))
             else (np.asarray(sigmas) if sigmas is not None else None)
@@ -82,10 +85,10 @@ def infer_semantic_mf_names_from_centers(
     if centers.ndim != 2:
         raise ValueError(f"Se esperaban centros con forma [F, M]. Recibido: {centers.shape}")
 
-    F_dim, M = centers.shape
+    n_feats, n_mf = centers.shape
 
-    if feature_names is None or len(feature_names) != F_dim:
-        feature_names = [f"feature_{i}" for i in range(F_dim)]
+    if feature_names is None or len(feature_names) != n_feats:
+        feature_names = [f"feature_{i}" for i in range(n_feats)]
 
     if semantic_names_map is None:
         semantic_names_map = {
@@ -93,7 +96,7 @@ def infer_semantic_mf_names_from_centers(
             5: ["muy_bajo", "bajo", "medio", "alto", "muy_alto"],
         }
 
-    semantic_labels = semantic_names_map.get(M, [f"nivel_{i}" for i in range(M)])
+    semantic_labels = semantic_names_map.get(n_mf, [f"nivel_{i}" for i in range(n_mf)])
 
     global_mf_names_by_feature = {}
     semantic_name_lookup = {}

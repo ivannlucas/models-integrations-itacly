@@ -8,7 +8,26 @@ from __future__ import annotations
 import numpy as np
 
 from app.plugins.ml18_meat_spatial_price_forecast.constants import FEATURE_COLUMNS
-from app.plugins.ml18_meat_spatial_price_forecast.preprocessing import build_modeling_panel, build_sequences
+from app.plugins.ml18_meat_spatial_price_forecast.preprocessing import (
+    build_modeling_panel,
+    build_sequences,
+)
+
+
+def _predict_prices(bundle: dict, entries: list[dict]) -> np.ndarray:
+    """Scale the stacked windows with the frozen x scaler, run the GRU, unscale the prices."""
+    x_scaler = bundle["x_scaler"]
+    y_scaler = bundle["y_scaler"]
+    model = bundle["model"]
+
+    windows = np.stack([e["window"] for e in entries])
+    n_samples, lookback, n_features = windows.shape
+    flat = windows.reshape(-1, n_features)
+    flat_scaled = x_scaler.transform(flat)
+    windows_scaled = flat_scaled.reshape(n_samples, lookback, n_features).astype(np.float32)
+
+    y_pred_scaled = model.predict(windows_scaled, verbose=0).ravel()
+    return y_scaler.inverse_transform(y_pred_scaled.reshape(-1, 1)).ravel()
 
 
 def run_inference(bundle: dict, rows: list[dict]) -> list[dict]:
@@ -22,19 +41,7 @@ def run_inference(bundle: dict, rows: list[dict]) -> list[dict]:
     """
     panel = build_modeling_panel(rows)
     entries = build_sequences(panel)
-
-    x_scaler = bundle["x_scaler"]
-    y_scaler = bundle["y_scaler"]
-    model = bundle["model"]
-
-    windows = np.stack([e["window"] for e in entries])
-    n_samples, lookback, n_features = windows.shape
-    flat = windows.reshape(-1, n_features)
-    flat_scaled = x_scaler.transform(flat)
-    windows_scaled = flat_scaled.reshape(n_samples, lookback, n_features).astype(np.float32)
-
-    y_pred_scaled = model.predict(windows_scaled, verbose=0).ravel()
-    y_pred = y_scaler.inverse_transform(y_pred_scaled.reshape(-1, 1)).ravel()
+    y_pred = _predict_prices(bundle, entries)
 
     return [
         {
@@ -42,7 +49,9 @@ def run_inference(bundle: dict, rows: list[dict]) -> list[dict]:
             "Producto": e["producto"],
             "Fecha": str(e["target_date"].date()),
             "predicted_price": round(float(pred), 6),
-            "xai_feature_values": {col: float(v) for col, v in zip(FEATURE_COLUMNS, e["window"][-1])},
+            "xai_feature_values": {
+                col: float(v) for col, v in zip(FEATURE_COLUMNS, e["window"][-1])
+            },
             "xai_feature_window": e["window"].astype(float).tolist(),
         }
         for e, pred in zip(entries, y_pred)

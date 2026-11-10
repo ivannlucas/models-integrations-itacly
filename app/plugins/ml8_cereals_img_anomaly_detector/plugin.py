@@ -1,22 +1,36 @@
+"""Ml8CerealsImgAnomalyDetectorPlugin — multitask CNN (sanitary category + cereal) for grain."""
 from __future__ import annotations
 
 import gc
 import logging
 import os
 import random
-import shutil
 import tempfile
 import time
-from datetime import datetime, timezone
+from collections import Counter
 from pathlib import Path
+from typing import NamedTuple
 
 import torch
+from PIL import Image
+from torch import nn
+from torch.utils.data import DataLoader, Dataset
+from torchvision import models as _tv_models
+from torchvision import transforms
 
-from app.application.dto.stats_dto import InputField, OutputField, RuntimeStats, StatsResponse
+from app.application.dto.stats_dto import InputField, OutputField, StatsResponse
 from app.domain.ports.model_plugin_port import ModelPluginPort
-from app.domain.services.exceptions import InvalidImageError, ModelNotLoadedError, ModelPersistenceError
-from app.domain.services.mlflow_tracker import BaseMLflowTracker
+from app.domain.services.batch_rows import row_error_capture
+from app.domain.services.exceptions import ModelNotLoadedError
+from app.domain.services.mlflow_artifacts import (
+    add_mlflow_run_to_stats,
+    removing_dir,
+    require_train_tracker,
+    upload_model_to_mlflow,
+)
+from app.domain.services.plugin_runtime import PluginRuntimeMixin
 from app.infrastructure.archive import safe_extract_zip
+from app.infrastructure.artifact_store import local_file_path
 from app.plugins.ml8_cereals_img_anomaly_detector.constants import (
     CATEGORY_NAMES,
     CEREAL_NAMES,
@@ -24,7 +38,14 @@ from app.plugins.ml8_cereals_img_anomaly_detector.constants import (
     MODEL_FILENAME,
     MODEL_ID,
 )
-from app.plugins.ml8_cereals_img_anomaly_detector.model_loader import load_model_bundle
+from app.plugins.ml8_cereals_img_anomaly_detector.mlflow_utils import (
+    download_user_model_from_mlflow,
+)
+from app.plugins.ml8_cereals_img_anomaly_detector.model_loader import (
+    MultiTaskMobileNetV3Large,
+    _safe_device,
+    load_model_bundle,
+)
 from app.plugins.ml8_cereals_img_anomaly_detector.postprocessing import (
     build_batch_response,
     build_inline_response,
@@ -34,7 +55,6 @@ from app.plugins.ml8_cereals_img_anomaly_detector.predict_dto import (
     PredictBatchResponse,
     PredictInlineResponse,
 )
-from app.plugins.ml8_cereals_img_anomaly_detector.mlflow_utils import download_user_model_from_mlflow
 from app.plugins.ml8_cereals_img_anomaly_detector.preprocessing import (
     image_base64_to_tensor,
     image_path_to_tensor_and_image,
@@ -44,6 +64,26 @@ from app.plugins.ml8_cereals_img_anomaly_detector.train_dto import TrainResponse
 logger = logging.getLogger(__name__)
 
 _SUPPORTED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
+
+_TRAIN_SEED = 42
+_TRAIN_PARAMS = {
+    "batch_size": 16,
+    "fase1_lr": 0.001,
+    "fase1_epochs": 10,
+    "fase1_optimizer": "Adam",
+    "fase2_lr": 0.00001,
+    "fase2_epochs": 5,
+    "fase2_optimizer": "Adam",
+    "model": "MultiTaskMobileNetV3Large",
+    "backbone_weights": "IMAGENET1K_V1",
+    "accumulation_steps": 2,
+    "seed": _TRAIN_SEED,
+    "class_balancing": (
+        "balance_hongos + class/cereal_weights (CrossEntropyLoss) + "
+        "WeightedRandomSampler"
+    ),
+}
+_IMAGENET_NORMALIZE = ([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
 
 
 # ── Training helpers ──────────────────────────────────────────────────────────
@@ -68,8 +108,6 @@ def _balance_hongos(records: list, max_samples_hongos: int | None, seed: int) ->
     category in the TRAIN split only, down to max_samples_hongos (or, if None, to the
     average count of the other categories). Part of the real delivered training
     procedure (memoria sección 6.2: "esquema de balanceo en entrenamiento"), not optional."""
-    from collections import Counter
-
     counts = Counter(categoria for _, categoria, _ in records)
     current_hongos = counts.get("hongos", 0)
     if current_hongos == 0:
@@ -99,12 +137,11 @@ def _load_mobilenetv3_backbone():
     real IMAGENET1K_V1 pretrained weights (as used in training/model.py and notebook
     04_MobileNetV3.ipynb), falling back to weights=None if the download is unreachable
     (e.g. sandboxed/offline environment)."""
-    from torchvision import models as _tv_models
     try:
         return _tv_models.mobilenet_v3_large(
             weights=_tv_models.MobileNet_V3_Large_Weights.IMAGENET1K_V1
         )
-    except Exception as exc:
+    except Exception as exc:  # pylint: disable=broad-exception-caught  # offline -> weights=None
         logger.warning(
             "No se pudieron descargar los pesos preentrenados IMAGENET1K_V1 (%s). "
             "Continuando con inicialización aleatoria (weights=None).", exc,
@@ -112,72 +149,94 @@ def _load_mobilenetv3_backbone():
         return _tv_models.mobilenet_v3_large(weights=None)
 
 
-def _train_epoch(model, loader, optimizer, crit_cat, crit_cer, device, accumulation_steps=1):
+class _TrainSetup(NamedTuple):
+    """What every epoch of both training phases shares."""
+
+    model: nn.Module
+    train_loader: DataLoader
+    val_loader: DataLoader
+    crit_cat: nn.Module
+    crit_cer: nn.Module
+    device: torch.device
+    accumulation_steps: int = 1
+
+
+def _train_epoch(setup: _TrainSetup, optimizer):
     """Replicates src/training/train.py:train_one_epoch — gradient accumulation included,
     since the delivered training procedure uses accumulation_steps=2 (config.yaml)."""
+    model = setup.model
     model.train()
     total_loss = correct_cat = correct_cer = total = 0
     optimizer.zero_grad()
     batch_idx = -1
-    for batch_idx, (imgs, lbls_cat, lbls_cer, _) in enumerate(loader):
-        imgs = imgs.to(device)
-        lbls_cat = lbls_cat.to(device)
-        lbls_cer = lbls_cer.to(device)
+    for batch_idx, (imgs, lbls_cat, lbls_cer, _) in enumerate(setup.train_loader):
+        imgs = imgs.to(setup.device)
+        lbls_cat = lbls_cat.to(setup.device)
+        lbls_cer = lbls_cer.to(setup.device)
         out_cat, out_cer = model(imgs)
-        loss_full = crit_cat(out_cat, lbls_cat) + crit_cer(out_cer, lbls_cer)
-        (loss_full / accumulation_steps).backward()
-        if (batch_idx + 1) % accumulation_steps == 0:
+        loss_full = setup.crit_cat(out_cat, lbls_cat) + setup.crit_cer(out_cer, lbls_cer)
+        (loss_full / setup.accumulation_steps).backward()
+        if (batch_idx + 1) % setup.accumulation_steps == 0:
             optimizer.step()
             optimizer.zero_grad()
         total_loss += loss_full.item()
         correct_cat += (out_cat.argmax(1) == lbls_cat).sum().item()
         correct_cer += (out_cer.argmax(1) == lbls_cer).sum().item()
         total += lbls_cat.size(0)
-    if (batch_idx + 1) % accumulation_steps != 0:
+    if (batch_idx + 1) % setup.accumulation_steps != 0:
         optimizer.step()
         optimizer.zero_grad()
-    n = max(len(loader), 1)
-    return total_loss / n, 100 * correct_cat / total if total else 0.0, 100 * correct_cer / total if total else 0.0
+    n = max(len(setup.train_loader), 1)
+    return (
+        total_loss / n,
+        100 * correct_cat / total if total else 0.0,
+        100 * correct_cer / total if total else 0.0,
+    )
 
 
-def _validate_epoch(model, loader, crit_cat, crit_cer, device):
+def _validate_epoch(setup: _TrainSetup):
+    """Mean val loss and category/cereal accuracy (%) of the current model."""
+    model = setup.model
     model.eval()
     total_loss = correct_cat = correct_cer = total = 0
     with torch.no_grad():
-        for imgs, lbls_cat, lbls_cer, _ in loader:
-            imgs = imgs.to(device)
-            lbls_cat = lbls_cat.to(device)
-            lbls_cer = lbls_cer.to(device)
+        for imgs, lbls_cat, lbls_cer, _ in setup.val_loader:
+            imgs = imgs.to(setup.device)
+            lbls_cat = lbls_cat.to(setup.device)
+            lbls_cer = lbls_cer.to(setup.device)
             out_cat, out_cer = model(imgs)
-            total_loss += (crit_cat(out_cat, lbls_cat) + crit_cer(out_cer, lbls_cer)).item()
+            total_loss += (
+                setup.crit_cat(out_cat, lbls_cat) + setup.crit_cer(out_cer, lbls_cer)
+            ).item()
             correct_cat += (out_cat.argmax(1) == lbls_cat).sum().item()
             correct_cer += (out_cer.argmax(1) == lbls_cer).sum().item()
             total += lbls_cat.size(0)
-    n = max(len(loader), 1)
-    return total_loss / n, 100 * correct_cat / total if total else 0.0, 100 * correct_cer / total if total else 0.0
+    n = max(len(setup.val_loader), 1)
+    return (
+        total_loss / n,
+        100 * correct_cat / total if total else 0.0,
+        100 * correct_cer / total if total else 0.0,
+    )
 
 
-def _run_phase(model, train_loader, val_loader, optimizer, crit_cat, crit_cer,
-               device, epochs, patience, phase_name, accumulation_steps=1):
+def _run_phase(setup: _TrainSetup, optimizer, *, epochs: int, patience: int, phase_name: str):
+    """One training phase with early stopping on val loss; restores the best weights."""
+    model = setup.model
     best_loss, no_improve, best_state = float("inf"), 0, None
     history: dict = {"val_acc_cat": [], "val_acc_cer": []}
     logger.info("Iniciando %s", phase_name)
     for epoch in range(epochs):
-        tr_loss, tr_acc_cat, tr_acc_cer = _train_epoch(
-            model, train_loader, optimizer, crit_cat, crit_cer, device, accumulation_steps
-        )
-        val_loss, val_acc_cat, val_acc_cer = _validate_epoch(
-            model, val_loader, crit_cat, crit_cer, device
-        )
-        history["val_acc_cat"].append(val_acc_cat)
-        history["val_acc_cer"].append(val_acc_cer)
+        tr_loss, tr_acc_cat, tr_acc_cer = _train_epoch(setup, optimizer)
+        val = _validate_epoch(setup)
+        history["val_acc_cat"].append(val[1])
+        history["val_acc_cer"].append(val[2])
         logger.info(
             "  Epoch %d/%d | tr=%.4f val=%.4f cat=%.1f%%/%.1f%% cer=%.1f%%/%.1f%%",
-            epoch + 1, epochs, tr_loss, val_loss,
-            tr_acc_cat, val_acc_cat, tr_acc_cer, val_acc_cer,
+            epoch + 1, epochs, tr_loss, val[0],
+            tr_acc_cat, val[1], tr_acc_cer, val[2],
         )
-        if val_loss < best_loss:
-            best_loss, no_improve = val_loss, 0
+        if val[0] < best_loss:
+            best_loss, no_improve = val[0], 0
             best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
         else:
             no_improve += 1
@@ -189,14 +248,225 @@ def _run_phase(model, train_loader, val_loader, optimizer, crit_cat, crit_cer,
     return history
 
 
+class _CerealDataset(Dataset):
+    """(image tensor, category idx, cereal idx, path) per record; unreadable image → zeros."""
+
+    def __init__(self, records, tfm):
+        self.records = records
+        self.tfm = tfm
+
+    def __len__(self):
+        return len(self.records)
+
+    def __getitem__(self, idx):
+        img_path, categoria, cereal = self.records[idx]
+        try:
+            img = Image.open(img_path).convert("RGB")
+            img = self.tfm(img)
+        except Exception:  # pylint: disable=broad-exception-caught  # unreadable image -> zeros
+            img = torch.zeros(3, 224, 224)
+        return img, CATEGORY_NAMES.index(categoria), CEREAL_NAMES.index(cereal), img_path
+
+
+def _load_records(tmp_dir: str) -> tuple[list, list]:
+    """Train/val records of the extracted ZIP (auto-split 80/20 when it has no validation)."""
+    entries = list(Path(tmp_dir).iterdir())
+    data_root = entries[0] if len(entries) == 1 and entries[0].is_dir() else Path(tmp_dir)
+
+    train_records = _scan_split(data_root, ("train",))
+    val_records = _scan_split(data_root, ("validation", "val"))
+
+    if not train_records:
+        raise ValueError(
+            "No se encontraron imágenes de entrenamiento. "
+            "Estructura esperada: {cereal}/train/{categoria}/*.jpg"
+        )
+    if not val_records:
+        random.shuffle(train_records)
+        split_idx = int(len(train_records) * 0.8)
+        val_records = train_records[split_idx:]
+        train_records = train_records[:split_idx]
+        logger.info(
+            "Sin validación — auto-split 80/20: %d train, %d val",
+            len(train_records), len(val_records),
+        )
+    return train_records, val_records
+
+
+def _inverse_frequency_weights(counts: Counter, names, total_train: int) -> torch.Tensor:
+    """class/cereal weights for CrossEntropyLoss — igual que src/main.py:run_training.
+
+    max(..., 1): a diferencia del notebook original (que asume las 4 categorías/cereales
+    siempre presentes en train), aquí el ZIP lo sube un usuario vía API y una categoría/cereal
+    podría venir ausente — evitamos un ZeroDivisionError en lugar de que /train devuelva 500
+    por un dataset de usuario incompleto.
+    """
+    weights = torch.tensor(
+        [total_train / max(counts.get(c, 0), 1) for c in names],
+        dtype=torch.float32,
+    )
+    return weights / weights.sum() * len(names)
+
+
+def _build_loaders(train_records: list, val_records: list) -> tuple:
+    """``(train_loader, val_loader, class_weights, cereal_weights)`` of the real balancing scheme.
+
+    Esquema de balanceo real (memoria 6.2 / src/main.py:run_training), SOLO sobre train:
+    balance_hongos ya aplicado, class/cereal weights para la loss y WeightedRandomSampler
+    (balanceo por lote, basado en categoría) en lugar del shuffle=True plano.
+    """
+    cat_counts = Counter(categoria for _, categoria, _ in train_records)
+    cer_counts = Counter(cereal for _, _, cereal in train_records)
+    total_train = len(train_records)
+    class_weights = _inverse_frequency_weights(cat_counts, CATEGORY_NAMES, total_train)
+    cereal_weights = _inverse_frequency_weights(cer_counts, CEREAL_NAMES, total_train)
+
+    sample_weights = [
+        1.0 / max(cat_counts.get(categoria, 0), 1) for _, categoria, _ in train_records
+    ]
+    sampler = torch.utils.data.WeightedRandomSampler(
+        sample_weights, num_samples=len(sample_weights), replacement=True
+    )
+    train_tfm = transforms.Compose([
+        transforms.Resize((224, 224)),
+        transforms.RandomHorizontalFlip(),
+        transforms.RandomRotation(10),
+        transforms.ToTensor(),
+        transforms.Normalize(*_IMAGENET_NORMALIZE),
+    ])
+    val_tfm = transforms.Compose([
+        transforms.Resize((224, 224)),
+        transforms.ToTensor(),
+        transforms.Normalize(*_IMAGENET_NORMALIZE),
+    ])
+    train_loader = DataLoader(
+        _CerealDataset(train_records, train_tfm),
+        batch_size=16, sampler=sampler, num_workers=0,
+    )
+    val_loader = DataLoader(
+        _CerealDataset(val_records, val_tfm),
+        batch_size=16, shuffle=False, num_workers=0,
+    )
+    return train_loader, val_loader, class_weights, cereal_weights
+
+
+def _build_train_model(device: torch.device) -> nn.Module:
+    """MobileNetV3-Large multitask with IMAGENET1K_V1 backbone, only the classifier trainable.
+
+    Mismo backbone que src/training/model.py:_load_backbone y notebook 04_MobileNetV3.ipynb.
+    """
+    os.environ.setdefault("TORCH_HOME", "/tmp/.torch")
+    base = _load_mobilenetv3_backbone()
+    for param in base.parameters():
+        param.requires_grad = False
+    for param in base.classifier.parameters():
+        param.requires_grad = True
+    model = MultiTaskMobileNetV3Large(
+        num_classes=len(CATEGORY_NAMES),
+        num_cereals=len(CEREAL_NAMES),
+        base_model=base,
+    )
+    model.to(device)
+    return model
+
+
+def _make_setup(train_records: list, val_records: list, device: torch.device) -> _TrainSetup:
+    """Loaders, weighted losses and the model to train (gradient accumulation of 2 batches)."""
+    train_loader, val_loader, class_weights, cereal_weights = _build_loaders(
+        train_records, val_records
+    )
+    logger.info("Dataset: %d train, %d val", len(train_records), len(val_records))
+    model = _build_train_model(device)
+    return _TrainSetup(
+        model, train_loader, val_loader,
+        nn.CrossEntropyLoss(weight=class_weights.to(device)),
+        nn.CrossEntropyLoss(weight=cereal_weights.to(device)),
+        device, accumulation_steps=2,
+    )
+
+
+def _log_phase_history(tracker, prefix: str, history: dict) -> None:
+    """Log the per-epoch val accuracies of one phase to MLflow."""
+    for ep in range(len(history["val_acc_cat"])):
+        tracker.log_metrics({
+            f"{prefix}_val_acc_cat": history["val_acc_cat"][ep],
+            f"{prefix}_val_acc_cer": history["val_acc_cer"][ep],
+        }, step=ep)
+
+
+def _best(values_h2: list, values_h1: list) -> float:
+    """Best val accuracy of phase 2 (phase 1 if phase 2 ran no epoch), rounded to 0.1."""
+    combined = values_h2 or values_h1
+    return round(max(combined), 1) if combined else 0.0
+
+
+def _fit(setup: _TrainSetup, tracker) -> tuple[dict, dict, float, float]:
+    """Fase 1 (transfer learning, neck + heads) and Fase 2 (fine-tune completo).
+
+    Returns ``(history 1, history 2, seconds 1, seconds 2)``.
+    """
+    model = setup.model
+    t0 = time.perf_counter()
+    opt1 = torch.optim.Adam([p for p in model.parameters() if p.requires_grad], lr=0.001)
+    h1 = _run_phase(setup, opt1, epochs=10, patience=3, phase_name="Fase 1: Transfer Learning")
+    t1 = time.perf_counter() - t0
+    _log_phase_history(tracker, "fase1", h1)
+    gc.collect()
+
+    for param in model.parameters():
+        param.requires_grad = True
+    opt2 = torch.optim.Adam(model.parameters(), lr=0.00001)
+    t0 = time.perf_counter()
+    h2 = _run_phase(setup, opt2, epochs=5, patience=3, phase_name="Fase 2: Fine-tuning")
+    t2 = time.perf_counter() - t0
+    _log_phase_history(tracker, "fase2", h2)
+    gc.collect()
+    return h1, h2, t1, t2
+
+
+def _checkpoint(model: nn.Module) -> dict:
+    """The checkpoint layout of the delivered training (same keys load_model_bundle reads)."""
+    class_to_idx = {c: i for i, c in enumerate(CATEGORY_NAMES)}
+    cereal_to_idx = {c: i for i, c in enumerate(CEREAL_NAMES)}
+    return {
+        "model_name": "mobilenet_v3_large",
+        "model_state_dict": model.state_dict(),
+        "num_classes": len(CATEGORY_NAMES),
+        "num_cereales": len(CEREAL_NAMES),
+        "class_to_idx": class_to_idx,
+        "cereal_to_idx": cereal_to_idx,
+        "idx_to_class": {v: k for k, v in class_to_idx.items()},
+        "idx_to_cereal": {v: k for k, v in cereal_to_idx.items()},
+    }
+
+
+def _predict_image(bundle: dict, image_path: Path) -> dict:
+    """Batch row of one image (the caller turns errors into ``error`` rows)."""
+    tensor, image = image_path_to_tensor_and_image(
+        image_path, image_size=bundle["image_size"]
+    )
+    tensor = tensor.to(bundle["device"])
+    with torch.no_grad():
+        logits_cat, logits_cer = bundle["model"](tensor)
+    result = build_inline_response(
+        logits_cat,
+        logits_cer,
+        idx_to_class=bundle["idx_to_class"],
+        idx_to_cereal=bundle["idx_to_cereal"],
+        model_id=bundle["model_id"],
+    )
+    result["filename"] = image_path.name
+    result["annotated_image"] = encode_image_base64(image)
+    return result
+
+
 # ── Plugin ────────────────────────────────────────────────────────────────────
 
-class Ml8CerealsImgAnomalyDetectorPlugin(ModelPluginPort):
+class Ml8CerealsImgAnomalyDetectorPlugin(PluginRuntimeMixin, ModelPluginPort):
+    """ModelPluginPort implementation for ml8-cereals-img-anomaly-detector."""
 
     def __init__(self) -> None:
         self._bundle: dict | None = None
-        self._predict_count: int = 0
-        self._last_predict_at: str | None = None
 
     def load(self) -> None:
         self._bundle = load_model_bundle()
@@ -231,9 +501,11 @@ class Ml8CerealsImgAnomalyDetectorPlugin(ModelPluginPort):
         mlflow_run_id: str = "",
     ) -> PredictInlineResponse:
         if mlflow_run_id:
-            logger.info("predict_inline — using user-trained model from MLflow run_id=%s", mlflow_run_id)
+            logger.info(
+                "predict_inline — using user-trained model from MLflow run_id=%s", mlflow_run_id
+            )
         bundle, user_temp_dir = self._resolve_bundle(mlflow_run_id)
-        try:
+        with removing_dir(user_temp_dir):
             tensor = image_base64_to_tensor(
                 features["image_base64"], image_size=bundle["image_size"]
             ).to(bundle["device"])
@@ -242,9 +514,10 @@ class Ml8CerealsImgAnomalyDetectorPlugin(ModelPluginPort):
             with torch.no_grad():
                 logits_cat, logits_cer = bundle["model"](tensor)
 
-            self._predict_count += 1
-            self._last_predict_at = datetime.now(tz=timezone.utc).isoformat()
-            logger.info("predict_inline done — count=%d mlflow=%s", self._predict_count, bool(mlflow_run_id))
+            self._record()
+            logger.info(
+                "predict_inline done — count=%d mlflow=%s", self._predict_count, bool(mlflow_run_id)
+            )
 
             return PredictInlineResponse(**build_inline_response(
                 logits_cat,
@@ -253,42 +526,18 @@ class Ml8CerealsImgAnomalyDetectorPlugin(ModelPluginPort):
                 idx_to_cereal=bundle["idx_to_cereal"],
                 model_id=bundle["model_id"],
             ))
-        finally:
-            if user_temp_dir:
-                shutil.rmtree(user_temp_dir, ignore_errors=True)
 
-    def predict_batch(self, *, data_path: str, mlflow_run_id: str = "") -> PredictBatchResponse:
+    def predict_batch(
+        self, *, data_path: str, mlflow_run_id: str = ""
+    ) -> PredictBatchResponse:
         if mlflow_run_id:
-            logger.info("predict_batch — using user-trained model from MLflow run_id=%s", mlflow_run_id)
+            logger.info(
+                "predict_batch — using user-trained model from MLflow run_id=%s", mlflow_run_id
+            )
         bundle, user_temp_dir = self._resolve_bundle(mlflow_run_id)
-        try:
-            model = bundle["model"]
-            device: torch.device = bundle["device"]
-            image_size: int = bundle["image_size"]
+        with removing_dir(user_temp_dir):
             predictions: list[dict] = []
-
-            _tmp_zip: str | None = None
-            local_data_path = data_path
-            if data_path.startswith("s3://"):
-                import boto3
-                from botocore.client import Config as BotoConfig
-                without_prefix = data_path[5:]
-                bucket, _, s3_key = without_prefix.partition("/")
-                s3 = boto3.client(
-                    "s3",
-                    endpoint_url=os.environ.get("CUSTOM_S3_ENDPOINT"),
-                    aws_access_key_id=os.environ.get("AWS_ACCESS_KEY_ID"),
-                    aws_secret_access_key=os.environ.get("AWS_SECRET_ACCESS_KEY"),
-                    config=BotoConfig(signature_version="s3v4"),
-                    region_name=os.environ.get("CUSTOM_REGION", "us-east-1"),
-                )
-                fd, _tmp_zip = tempfile.mkstemp(suffix=".zip")
-                os.close(fd)
-                logger.info("Downloading batch data from s3://%s/%s", bucket, s3_key)
-                s3.download_file(bucket, s3_key, _tmp_zip)
-                local_data_path = _tmp_zip
-
-            try:
+            with local_file_path(data_path) as local_data_path:
                 with tempfile.TemporaryDirectory() as tmp_dir:
                     safe_extract_zip(local_data_path, tmp_dir)
 
@@ -297,41 +546,21 @@ class Ml8CerealsImgAnomalyDetectorPlugin(ModelPluginPort):
                         if p.is_file() and p.suffix.lower() in IMAGE_EXTENSIONS
                     )
 
-                    model.eval()
+                    bundle["model"].eval()
                     for image_path in image_paths:
-                        try:
-                            tensor, image = image_path_to_tensor_and_image(image_path, image_size=image_size)
-                            tensor = tensor.to(device)
-                            with torch.no_grad():
-                                logits_cat, logits_cer = model(tensor)
-                            result = build_inline_response(
-                                logits_cat,
-                                logits_cer,
-                                idx_to_class=bundle["idx_to_class"],
-                                idx_to_cereal=bundle["idx_to_cereal"],
-                                model_id=bundle["model_id"],
-                            )
-                            result["filename"] = image_path.name
-                            result["annotated_image"] = encode_image_base64(image)
-                            predictions.append(result)
-                        except InvalidImageError as exc:
-                            predictions.append({"filename": image_path.name, "error": str(exc)})
-                        except Exception as exc:
-                            logger.warning("Unexpected error processing %s: %s", image_path.name, exc)
-                            predictions.append({"filename": image_path.name, "error": str(exc)})
-            finally:
-                if _tmp_zip:
-                    os.unlink(_tmp_zip)
+                        # one bad image (unreadable, model error…) never fails the batch
+                        with row_error_capture(
+                            predictions, {"filename": image_path.name}, what=image_path.name
+                        ):
+                            predictions.append(_predict_image(bundle, image_path))
 
-            self._predict_count += 1
-            self._last_predict_at = datetime.now(tz=timezone.utc).isoformat()
+            self._record()
             logger.info("predict_batch done — %d predictions count=%d mlflow=%s",
                         len(predictions), self._predict_count, bool(mlflow_run_id))
 
-            return PredictBatchResponse(**build_batch_response(predictions, model_id=bundle["model_id"]))
-        finally:
-            if user_temp_dir:
-                shutil.rmtree(user_temp_dir, ignore_errors=True)
+            return PredictBatchResponse(
+                **build_batch_response(predictions, model_id=bundle["model_id"])
+            )
 
     def stats(self, mlflow_run_id: str = "") -> StatsResponse:
         arch = self._bundle["arch"] if self._bundle is not None else "unknown"
@@ -355,287 +584,86 @@ class Ml8CerealsImgAnomalyDetectorPlugin(ModelPluginPort):
                 ),
             ],
             outputs=[
-                OutputField(name="categoria", type="str", description="Categoría predicha (anomalía/estado)"),
+                OutputField(
+                    name="categoria", type="str", description="Categoría predicha (anomalía/estado)"
+                ),
                 OutputField(name="cereal", type="str", description="Tipo de cereal predicho"),
-                OutputField(name="confianza_categoria", type="float", description="Confianza de la categoría [0, 1]"),
-                OutputField(name="confianza_cereal", type="float", description="Confianza del cereal [0, 1]"),
-                OutputField(name="probabilidades_categoria", type="dict", description="Probabilidad por categoría"),
-                OutputField(name="probabilidades_cereal", type="dict", description="Probabilidad por cereal"),
-                OutputField(name="annotated_image", type="str",
-                            description="Imagen re-escalada en base64 JPEG (solo en predict_batch)"),
+                OutputField(
+                    name="confianza_categoria",
+                    type="float",
+                    description="Confianza de la categoría [0, 1]",
+                ),
+                OutputField(
+                    name="confianza_cereal", type="float", description="Confianza del cereal [0, 1]"
+                ),
+                OutputField(
+                    name="probabilidades_categoria",
+                    type="dict",
+                    description="Probabilidad por categoría",
+                ),
+                OutputField(
+                    name="probabilidades_cereal", type="dict", description="Probabilidad por cereal"
+                ),
+                OutputField(
+                    name="annotated_image",
+                    type="str",
+                    description="Imagen re-escalada en base64 JPEG (solo en predict_batch)",
+                ),
             ],
             metrics={"arch": arch},
-            runtime_stats=RuntimeStats(
-                total_predictions=self._predict_count,
-                avg_latency_ms=None,
-            ),
+            runtime_stats=self._runtime_stats(),
         )
-        if mlflow_run_id:
-            try:
-                tracker = BaseMLflowTracker(mlflow_run_id)
-                base.metrics["mlflow"] = {
-                    "params": tracker.get_params(),
-                    "metrics": tracker.get_metrics(),
-                }
-                logger.info("Stats enriched with MLflow data for run_id=%s", mlflow_run_id)
-            except Exception as exc:
-                logger.warning("Could not fetch MLflow stats for run_id=%s: %s", mlflow_run_id, exc)
-        return base
+        return add_mlflow_run_to_stats(base, mlflow_run_id)
 
     # ── Entrenamiento ─────────────────────────────────────────────────────────
 
     def train(self, *, data_path: str, mlflow_run_id: str) -> TrainResponse:
-        import torch.nn as nn
-        from PIL import Image
-        from torch.utils.data import DataLoader, Dataset
-        from torchvision import transforms
+        # The retrained checkpoint lives only in its own MLflow run (predict with that
+        # mlflow_run_id); the served base model and its local artifacts are never replaced.
+        tracker = require_train_tracker(mlflow_run_id)
+        logger.info("Training with MLflow tracking, run_id=%s", mlflow_run_id)
+        tracker.log_params(_TRAIN_PARAMS)
 
-        from app.plugins.ml8_cereals_img_anomaly_detector.model_loader import MultiTaskMobileNetV3Large
-
-        if mlflow_run_id:
-            logger.info("Training with MLflow tracking, run_id=%s", mlflow_run_id)
-            tracker = BaseMLflowTracker(mlflow_run_id)
-            tracker.log_params({
-                "batch_size": 16,
-                "fase1_lr": 0.001,
-                "fase1_epochs": 10,
-                "fase1_optimizer": "Adam",
-                "fase2_lr": 0.00001,
-                "fase2_epochs": 5,
-                "fase2_optimizer": "Adam",
-                "model": "MultiTaskMobileNetV3Large",
-                "backbone_weights": "IMAGENET1K_V1",
-                "accumulation_steps": 2,
-                "seed": 42,
-                "class_balancing": "balance_hongos + class/cereal_weights (CrossEntropyLoss) + WeightedRandomSampler",
-            })
-
-        _tmp_zip: str | None = None
-        local_data_path = data_path
-        if data_path.startswith("s3://"):
-            import boto3
-            from botocore.client import Config as BotoConfig
-            without_prefix = data_path[5:]
-            bucket, _, s3_key = without_prefix.partition("/")
-            s3 = boto3.client(
-                "s3",
-                endpoint_url=os.environ.get("CUSTOM_S3_ENDPOINT"),
-                aws_access_key_id=os.environ.get("AWS_ACCESS_KEY_ID"),
-                aws_secret_access_key=os.environ.get("AWS_SECRET_ACCESS_KEY"),
-                config=BotoConfig(signature_version="s3v4"),
-                region_name=os.environ.get("CUSTOM_REGION", "us-east-1"),
-            )
-            fd, _tmp_zip = tempfile.mkstemp(suffix=".zip")
-            os.close(fd)
-            logger.info("Downloading training data from s3://%s/%s", bucket, s3_key)
-            s3.download_file(bucket, s3_key, _tmp_zip)
-            local_data_path = _tmp_zip
-
-        if not local_data_path.lower().endswith(".zip"):
+        # An s3:// object is always downloaded to a local file and opened as a ZIP.
+        if not (data_path.startswith("s3://") or data_path.lower().endswith(".zip")):
             raise ValueError("data_path debe ser un fichero .zip")
 
-        from app.plugins.ml8_cereals_img_anomaly_detector.model_loader import _safe_device
+        try:
+            with local_file_path(data_path) as local_data_path:
+                return self._train_from_zip(local_data_path, tracker, mlflow_run_id)
+        finally:
+            gc.collect()
 
-        _SEED = 42
-        torch.manual_seed(_SEED)
-        random.seed(_SEED)
-
+    def _train_from_zip(self, zip_path: str, tracker, mlflow_run_id: str) -> TrainResponse:
+        """Two-phase training on the extracted ZIP; uploads the checkpoint to the MLflow run."""
+        torch.manual_seed(_TRAIN_SEED)
+        random.seed(_TRAIN_SEED)
         device = _safe_device()
-        class_to_idx = {c: i for i, c in enumerate(CATEGORY_NAMES)}
-        cereal_to_idx = {c: i for i, c in enumerate(CEREAL_NAMES)}
-        idx_to_class = {v: k for k, v in class_to_idx.items()}
-        idx_to_cereal = {v: k for k, v in cereal_to_idx.items()}
-
-        _train_tfm = transforms.Compose([
-            transforms.Resize((224, 224)),
-            transforms.RandomHorizontalFlip(),
-            transforms.RandomRotation(10),
-            transforms.ToTensor(),
-            transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
-        ])
-        _val_tfm = transforms.Compose([
-            transforms.Resize((224, 224)),
-            transforms.ToTensor(),
-            transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
-        ])
-
-        class _CerealDataset(Dataset):
-            def __init__(self, records, is_train):
-                self.records = records
-                self.tfm = _train_tfm if is_train else _val_tfm
-
-            def __len__(self):
-                return len(self.records)
-
-            def __getitem__(self, idx):
-                img_path, categoria, cereal = self.records[idx]
-                try:
-                    img = Image.open(img_path).convert("RGB")
-                    img = self.tfm(img)
-                except Exception:
-                    img = torch.zeros(3, 224, 224)
-                return img, class_to_idx[categoria], cereal_to_idx[cereal], img_path
 
         tmp_dir = tempfile.mkdtemp(prefix="ml8_train_")
-        try:
-            safe_extract_zip(local_data_path, tmp_dir)
-
-            entries = list(Path(tmp_dir).iterdir())
-            data_root = entries[0] if len(entries) == 1 and entries[0].is_dir() else Path(tmp_dir)
-
-            train_records = _scan_split(data_root, ("train",))
-            val_records = _scan_split(data_root, ("validation", "val"))
-
-            if not train_records:
-                raise ValueError(
-                    "No se encontraron imágenes de entrenamiento. "
-                    "Estructura esperada: {cereal}/train/{categoria}/*.jpg"
-                )
-            if not val_records:
-                random.shuffle(train_records)
-                split_idx = int(len(train_records) * 0.8)
-                val_records = train_records[split_idx:]
-                train_records = train_records[:split_idx]
-                logger.info(
-                    "Sin validación — auto-split 80/20: %d train, %d val",
-                    len(train_records), len(val_records),
-                )
-
-            # Esquema de balanceo real (memoria 6.2 / src/main.py:run_training) — se aplica
-            # SOLO sobre train, nunca sobre validación:
-            #   1) balance_hongos: recorte de la categoría mayoritaria 'hongos'
-            train_records = _balance_hongos(train_records, max_samples_hongos=None, seed=_SEED)
-
-            #   2) class_weights / cereal_weights (inverse frequency, normalizados) para
-            #      CrossEntropyLoss — igual que src/main.py:run_training
-            from collections import Counter
-            cat_counts = Counter(categoria for _, categoria, _ in train_records)
-            cer_counts = Counter(cereal for _, _, cereal in train_records)
-            total_train = len(train_records)
-
-            # max(..., 1): a diferencia del notebook original (que asume las 4 categorías/
-            # cereales siempre presentes en train), aquí el ZIP lo sube un usuario vía API y
-            # una categoría/cereal podría venir ausente — evitamos un ZeroDivisionError en
-            # lugar de que /train devuelva 500 por un dataset de usuario incompleto.
-            class_weights = torch.tensor(
-                [total_train / max(cat_counts.get(c, 0), 1) for c in CATEGORY_NAMES], dtype=torch.float32
+        with removing_dir(tmp_dir):
+            safe_extract_zip(zip_path, tmp_dir)
+            train_records, val_records = _load_records(tmp_dir)
+            # 1) balance_hongos: recorte de la categoría mayoritaria 'hongos' (solo train)
+            train_records = _balance_hongos(
+                train_records, max_samples_hongos=None, seed=_TRAIN_SEED
             )
-            class_weights = class_weights / class_weights.sum() * len(CATEGORY_NAMES)
+            setup = _make_setup(train_records, val_records, device)
+            h1, h2, t1, t2 = _fit(setup, tracker)
 
-            cereal_weights = torch.tensor(
-                [total_train / max(cer_counts.get(c, 0), 1) for c in CEREAL_NAMES], dtype=torch.float32
-            )
-            cereal_weights = cereal_weights / cereal_weights.sum() * len(CEREAL_NAMES)
-
-            #   3) WeightedRandomSampler (balanceo por lote, basado en categoría) — reemplaza
-            #      el shuffle=True plano para que el train_loader muestree igual que el
-            #      pipeline original
-            sample_weights = [1.0 / max(cat_counts.get(categoria, 0), 1) for _, categoria, _ in train_records]
-            sampler = torch.utils.data.WeightedRandomSampler(
-                sample_weights, num_samples=len(sample_weights), replacement=True
+            checkpoint = _checkpoint(setup.model)
+            tracker.log_metrics({
+                "best_val_acc_cat": _best(h2["val_acc_cat"], h1["val_acc_cat"]),
+                "best_val_acc_cer": _best(h2["val_acc_cer"], h1["val_acc_cer"]),
+                "train_samples": len(train_records),
+                "val_samples": len(val_records),
+            })
+            upload_model_to_mlflow(
+                tracker,
+                lambda model_dir: torch.save(checkpoint, os.path.join(model_dir, MODEL_FILENAME)),
+                prefix="ml8_mlflow_",
             )
 
-            train_loader = DataLoader(
-                _CerealDataset(train_records, is_train=True),
-                batch_size=16, sampler=sampler, num_workers=0,
-            )
-            val_loader = DataLoader(
-                _CerealDataset(val_records, is_train=False),
-                batch_size=16, shuffle=False, num_workers=0,
-            )
-            logger.info("Dataset: %d train, %d val", len(train_records), len(val_records))
-
-            os.environ.setdefault("TORCH_HOME", "/tmp/.torch")
-            # Backbone con pesos preentrenados IMAGENET1K_V1 — mismo que
-            # src/training/model.py:_load_backbone y notebook 04_MobileNetV3.ipynb.
-            base = _load_mobilenetv3_backbone()
-            for param in base.parameters():
-                param.requires_grad = False
-            for param in base.classifier.parameters():
-                param.requires_grad = True
-            model = MultiTaskMobileNetV3Large(
-                num_classes=len(CATEGORY_NAMES),
-                num_cereals=len(CEREAL_NAMES),
-                base_model=base,
-            )
-            model.to(device)
-
-            crit_cat = nn.CrossEntropyLoss(weight=class_weights.to(device))
-            crit_cer = nn.CrossEntropyLoss(weight=cereal_weights.to(device))
-
-            # Fase 1: transfer learning (neck + heads)
-            t0 = time.perf_counter()
-            opt1 = torch.optim.Adam(
-                [p for p in model.parameters() if p.requires_grad], lr=0.001
-            )
-            h1 = _run_phase(
-                model, train_loader, val_loader, opt1, crit_cat, crit_cer,
-                device, epochs=10, patience=3, phase_name="Fase 1: Transfer Learning",
-                accumulation_steps=2,
-            )
-            t1 = time.perf_counter() - t0
-            if mlflow_run_id:
-                for ep in range(len(h1["val_acc_cat"])):
-                    tracker.log_metrics({
-                        "fase1_val_acc_cat": h1["val_acc_cat"][ep],
-                        "fase1_val_acc_cer": h1["val_acc_cer"][ep],
-                    }, step=ep)
-            gc.collect()
-
-            # Fase 2: fine-tune completo
-            for param in model.parameters():
-                param.requires_grad = True
-            opt2 = torch.optim.Adam(model.parameters(), lr=0.00001)
-            t0 = time.perf_counter()
-            h2 = _run_phase(
-                model, train_loader, val_loader, opt2, crit_cat, crit_cer,
-                device, epochs=5, patience=3, phase_name="Fase 2: Fine-tuning",
-                accumulation_steps=2,
-            )
-            t2 = time.perf_counter() - t0
-            if mlflow_run_id:
-                for ep in range(len(h2["val_acc_cat"])):
-                    tracker.log_metrics({
-                        "fase2_val_acc_cat": h2["val_acc_cat"][ep],
-                        "fase2_val_acc_cer": h2["val_acc_cer"][ep],
-                    }, step=ep)
-            gc.collect()
-
-            # The retrained checkpoint lives only in its own MLflow run (predict with that
-            # mlflow_run_id); the served base model and its local artifacts are never replaced.
-            checkpoint = {
-                "model_name": "mobilenet_v3_large",
-                "model_state_dict": model.state_dict(),
-                "num_classes": len(CATEGORY_NAMES),
-                "num_cereales": len(CEREAL_NAMES),
-                "class_to_idx": class_to_idx,
-                "cereal_to_idx": cereal_to_idx,
-                "idx_to_class": idx_to_class,
-                "idx_to_cereal": idx_to_cereal,
-            }
-            upload_warning = None
-            if not mlflow_run_id:
-                raise ModelPersistenceError("Sin run de MLflow: el modelo reentrenado no se ha guardado.")
-            if mlflow_run_id:
-                combined_cat_m = h2["val_acc_cat"] or h1["val_acc_cat"]
-                combined_cer_m = h2["val_acc_cer"] or h1["val_acc_cer"]
-                tracker.log_metrics({
-                    "best_val_acc_cat": round(max(combined_cat_m), 1) if combined_cat_m else 0.0,
-                    "best_val_acc_cer": round(max(combined_cer_m), 1) if combined_cer_m else 0.0,
-                    "train_samples": len(train_records),
-                    "val_samples": len(val_records),
-                })
-                try:
-                    mlflow_tmp = tempfile.mkdtemp(prefix="ml8_mlflow_")
-                    torch.save(checkpoint, os.path.join(mlflow_tmp, MODEL_FILENAME))
-                    tracker.upload_artifacts(mlflow_tmp, artifact_path="model")
-                    shutil.rmtree(mlflow_tmp, ignore_errors=True)
-                except Exception as exc:
-                    logger.error("MLflow artifact upload failed: %s", exc)
-                    raise ModelPersistenceError(f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}") from exc
-
-            combined_cat = h2["val_acc_cat"] or h1["val_acc_cat"]
-            combined_cer = h2["val_acc_cer"] or h1["val_acc_cer"]
             return TrainResponse(
                 detail="Entrenamiento completado",
                 train_samples=len(train_records),
@@ -644,13 +672,8 @@ class Ml8CerealsImgAnomalyDetectorPlugin(ModelPluginPort):
                 fase2_epochs=len(h2["val_acc_cat"]),
                 fase1_time_min=round(t1 / 60, 1),
                 fase2_time_min=round(t2 / 60, 1),
-                best_val_acc_cat=round(max(combined_cat), 1) if combined_cat else 0.0,
-                best_val_acc_cer=round(max(combined_cer), 1) if combined_cer else 0.0,
+                best_val_acc_cat=_best(h2["val_acc_cat"], h1["val_acc_cat"]),
+                best_val_acc_cer=_best(h2["val_acc_cer"], h1["val_acc_cer"]),
                 mlflow_run_id=mlflow_run_id,
-                upload_warning=upload_warning,
+                upload_warning=None,
             )
-        finally:
-            shutil.rmtree(tmp_dir, ignore_errors=True)
-            if _tmp_zip and os.path.exists(_tmp_zip):
-                os.unlink(_tmp_zip)
-            gc.collect()

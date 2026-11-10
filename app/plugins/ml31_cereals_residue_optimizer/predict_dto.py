@@ -16,11 +16,18 @@ The optimization objective (minimize_residue|maximize_benefit) is carried in the
 """
 from typing import Annotated, Any, Literal, Union
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import Field
+
+from app.application.dto.plugin_dto import (
+    BatchRequestBase,
+    BatchResponseBase,
+    InlineRequestBase,
+    PluginDTO,
+)
 
 
 # ── inline (optimize / pareto) ─────────────────────────────────────────────
-class PredictInlineRequest(BaseModel):
+class PredictInlineRequest(InlineRequestBase):
     """Single-scenario inline request. All fields have manifest defaults.
 
     ``predict_inline`` dispatches on ``model_key``:
@@ -28,16 +35,16 @@ class PredictInlineRequest(BaseModel):
       - == "pareto": trace the residue-vs-benefit Pareto frontier.
     """
 
-    model_config = ConfigDict(protected_namespaces=())
-    mode: Literal["inline"] = "inline"
     model_key: str = "optimize"  # "optimize" (default) | "pareto"
-    threshold: float | None = None
-    mlflow_run_id: str = ""
 
-    reference_year: int = Field(default=2023, description="Año de referencia (superficies históricas)")
+    reference_year: int = Field(
+        default=2023, description="Año de referencia (superficies históricas)"
+    )
     optimization_mode: Literal["minimize_residue", "maximize_benefit"] = Field(
         default="minimize_residue",
-        description="Objetivo del LP: minimize_residue (Modo A) o maximize_benefit (Modo B) [optimize]",
+        description=(
+            "Objetivo del LP: minimize_residue (Modo A) o maximize_benefit (Modo B) [optimize]"
+        ),
     )
     climate_factor: float = Field(default=1.0, description="Multiplicador sobre los rendimientos")
     expected_spring_rain_mm: float | None = Field(
@@ -48,10 +55,16 @@ class PredictInlineRequest(BaseModel):
         ),
     )
     min_benefit_eur: float | None = Field(
-        default=None, description="Beneficio mínimo exigido (R6, Modo A). Null => se deriva del baseline [optimize]"
+        default=None,
+        description=(
+            "Beneficio mínimo exigido (R6, Modo A). Null => se deriva del baseline [optimize]"
+        ),
     )
     min_benefit_pct_of_baseline: float = Field(
-        default=1.0, description="% del beneficio baseline a preservar cuando min_benefit_eur es null [optimize]"
+        default=1.0,
+        description=(
+            "% del beneficio baseline a preservar cuando min_benefit_eur es null [optimize]"
+        ),
     )
     max_residue_t: float | None = Field(
         default=None, description="Residuo máximo admisible (R7, Modo B) [optimize]"
@@ -63,7 +76,10 @@ class PredictInlineRequest(BaseModel):
     min_regadio_use_pct: float = Field(default=95.0, description="Uso mínimo de regadío (R2b)")
     crop_constraints: dict[str, Any] = Field(
         default_factory=dict,
-        description="Restricciones por cultivo (min_production_t/min_surface_pct/max_surface_pct); clave '_default' como fallback [optimize]",
+        description=(
+            "Restricciones por cultivo (min_production_t/min_surface_pct/max_surface_pct); clave "
+            "'_default' como fallback [optimize]"
+        ),
     )
     price_overrides: dict[str, float] = Field(
         default_factory=dict, description="Sobrescribe precio de grano por cultivo (EUR/kg)"
@@ -72,28 +88,38 @@ class PredictInlineRequest(BaseModel):
         default_factory=dict, description="Sobrescribe costes secano/regadío por cultivo (EUR/ha)"
     )
     total_secano_ha: float | None = Field(
-        default=None, description="Superficie total de secano disponible (override; null => año de referencia) [optimize]"
+        default=None,
+        description=(
+            "Superficie total de secano disponible (override; null => año de referencia) [optimize]"
+        ),
     )
     total_regadio_ha: float | None = Field(
-        default=None, description="Superficie total de regadío disponible (override; null => año de referencia) [optimize]"
+        default=None,
+        description=(
+            "Superficie total de regadío disponible (override; null => año de referencia) "
+            "[optimize]"
+        ),
     )
 
     # pareto-only sweep parameters (ignored by the optimize branch)
-    num_points: int = Field(default=20, description="Nº de puntos del barrido de beneficio [pareto]")
+    num_points: int = Field(
+        default=20, description="Nº de puntos del barrido de beneficio [pareto]"
+    )
     benefit_range_pct_of_max: list[float] = Field(
-        default=[0.50, 1.00], description="Rango [low, high] como fracción del beneficio máximo [pareto]"
+        default=[0.50, 1.00],
+        description="Rango [low, high] como fracción del beneficio máximo [pareto]",
     )
 
 
-class PredictOptimizeResponse(BaseModel):
+class PredictOptimizeResponse(PluginDTO):
     """Optimal crop-allocation plan plus impact metrics vs the historical baseline."""
 
-    model_config = ConfigDict(protected_namespaces=())
     model_id: str
     reference_year: int
     optimization_mode: str
     crop_allocation: dict[str, dict[str, float]] = Field(
-        ..., description="Por cultivo: {secano_ha, regadio_ha, production_t, residue_t, benefit_eur}"
+        ...,
+        description="Por cultivo: {secano_ha, regadio_ha, production_t, residue_t, benefit_eur}",
     )
     total_production_t: float
     total_residue_t: float
@@ -107,7 +133,9 @@ class PredictOptimizeResponse(BaseModel):
     benefit_change_eur: float
     benefit_change_pct: float
     production_change_pct: float
-    solver_status: str = Field(..., description="Estado CBC: OPTIMAL | INFEASIBLE | UNBOUNDED | NOT_SOLVED")
+    solver_status: str = Field(
+        ..., description="Estado CBC: OPTIMAL | INFEASIBLE | UNBOUNDED | NOT_SOLVED"
+    )
     solve_time_seconds: float
     verdict: str = Field(..., description="PASADO/FALLADO según criterios de éxito objetivos")
     sensitivity: list[dict[str, Any]] | None = Field(
@@ -123,27 +151,31 @@ class PredictOptimizeResponse(BaseModel):
 
 
 # ── pareto ──────────────────────────────────────────────────────────────────
-class PredictParetoResponse(BaseModel):
+class PredictParetoResponse(PluginDTO):
     """Pareto frontier: bounds, non-dominated points (in millions) and knee point."""
 
-    model_config = ConfigDict(protected_namespaces=())
     model_id: str
     reference_year: int
     bounds: dict[str, float] = Field(
-        ..., description="{min_residue_t, benefit_at_min_res_eur, max_benefit_eur, residue_at_max_ben_t}"
+        ...,
+        description=(
+            "{min_residue_t, benefit_at_min_res_eur, max_benefit_eur, residue_at_max_ben_t}"
+        ),
     )
     pareto_points: list[dict[str, Any]] = Field(
-        ..., description="Puntos no dominados: {benefit_eur_M, residue_t_M, production_t_M, is_knee}"
+        ...,
+        description="Puntos no dominados: {benefit_eur_M, residue_t_M, production_t_M, is_knee}",
     )
     knee_point: dict[str, float] | None = Field(
-        default=None, description="Mejor compromiso: {benefit_eur, residue_t, production_t} (absoluto)"
+        default=None,
+        description="Mejor compromiso: {benefit_eur, residue_t, production_t} (absoluto)",
     )
     num_sweep_points: int
     num_pareto_points: int
 
 
 # ── batch ───────────────────────────────────────────────────────────────────
-class PredictBatchRequest(BaseModel):
+class PredictBatchRequest(BatchRequestBase):
     """Batch request: a CSV where each row is an optimization scenario.
 
     Recognised columns (all optional; defaults from the optimize contract):
@@ -152,19 +184,11 @@ class PredictBatchRequest(BaseModel):
     surface_tolerance_pct, min_secano_use_pct, min_regadio_use_pct.
     """
 
-    model_config = ConfigDict(protected_namespaces=())
-    mode: Literal["batch"] = "batch"
     data_path: str = Field(..., description="Path to CSV with one optimization scenario per row")
-    mlflow_run_id: str = ""
 
 
-class PredictBatchResponse(BaseModel):
+class PredictBatchResponse(BatchResponseBase):
     """Batch response: one optimization summary dict per scenario row."""
-
-    model_config = ConfigDict(protected_namespaces=())
-    model_id: str
-    predictions: list[dict[str, Any]]
-    output_path: str | None = None
 
 
 PredictRequest = Annotated[

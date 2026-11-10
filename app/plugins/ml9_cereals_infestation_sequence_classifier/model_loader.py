@@ -1,4 +1,8 @@
-"""Loads the ml9 sequence-classifier artifacts (GRU checkpoint + scaler + bundle) via ArtifactStore."""
+"""Loads the ml9 sequence-classifier artifacts (GRU checkpoint + scaler + bundle).
+
+Artifacts are resolved through ArtifactStore.
+"""
+
 from __future__ import annotations
 
 import json
@@ -7,7 +11,10 @@ from pathlib import Path
 from typing import Any
 
 from app.infrastructure.artifact_store import ArtifactStore
-from app.plugins.ml9_cereals_infestation_sequence_classifier._vendor.sequential import load_checkpoint, load_pickle
+from app.plugins.ml9_cereals_infestation_sequence_classifier._vendor.sequential import (
+    load_checkpoint,
+    load_pickle,
+)
 from app.plugins.ml9_cereals_infestation_sequence_classifier.constants import (
     ARTIFACT_FOLDER_NAME,
     BUNDLE_FILENAME,

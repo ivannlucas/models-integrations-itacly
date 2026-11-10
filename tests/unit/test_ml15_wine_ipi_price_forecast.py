@@ -17,6 +17,7 @@ INLINE_PAYLOAD = {
 
 
 def test_health(client):
+    """The health endpoint reports the model as loaded."""
     body = client.get(f"{PREFIX}/health").json()
     assert body["status"] == "ok"
     assert body["model"] == MODEL_ID
@@ -24,11 +25,13 @@ def test_health(client):
 
 
 def test_stats(client):
+    """The stats endpoint returns the model name."""
     body = client.get(f"{PREFIX}/stats").json()
     assert body["model_name"] == MODEL_ID
 
 
 def test_predict_inline(client):
+    """An inline prediction returns a float y_pred with a 6-month horizon."""
     resp = client.post(f"{PREFIX}/predict", json=INLINE_PAYLOAD)
     assert resp.status_code == 200
     body = resp.json()
@@ -48,7 +51,10 @@ def test_predict_inline_missing_feature_maps_to_422(client, fake_plugins):
 
 
 def test_predict_batch(client):
-    resp = client.post(f"{PREFIX}/predict", json={"mode": "batch", "data_path": "/tmp/a15_panel.csv"})
+    """Batch prediction returns one prediction per row."""
+    resp = client.post(
+        f"{PREFIX}/predict", json={"mode": "batch", "data_path": "/tmp/a15_panel.csv"}
+    )
     assert resp.status_code == 200
     body = resp.json()
     assert body["model_id"] == MODEL_ID
@@ -62,8 +68,10 @@ def test_train_without_mlflow_run_id_is_accepted(client):
 
 
 def test_train(client):
+    """The train endpoint returns train and test row counts."""
     resp = client.post(
-        f"{PREFIX}/train", json={"data_path": "/tmp/a15_train.csv", "mlflow_run_id": "run-test-123"},
+        f"{PREFIX}/train",
+        json={"data_path": "/tmp/a15_train.csv", "mlflow_run_id": "run-test-123"},
     )
     assert resp.status_code == 200
     body = resp.json()

@@ -13,6 +13,7 @@ import torch
 from torch import nn
 from torchvision import models
 
+from app.domain.services.torch_device import safe_torch_device
 from app.infrastructure.artifact_store import ArtifactStore
 from app.plugins.ml6_meat_poultry_disease_classification.constants import (
     ARTIFACT_FOLDER_NAME,
@@ -133,15 +134,7 @@ BUILDERS: dict[str, Callable[[int], nn.Module]] = {
 
 def safe_device() -> torch.device:
     """Return CUDA only if a conv actually runs on it (module AND tensor on the GPU)."""
-    if not torch.cuda.is_available():
-        return torch.device("cpu")
-    try:
-        probe = torch.nn.Conv2d(1, 1, 1).cuda()
-        probe(torch.zeros(1, 1, 4, 4).cuda())
-        return torch.device("cuda")
-    except Exception:  # pylint: disable=broad-except
-        logger.warning("CUDA detectada pero no funcional — usando CPU.")
-        return torch.device("cpu")
+    return safe_torch_device()
 
 
 def build_from_checkpoint(name: str, task: str, checkpoint_path, device: torch.device) -> nn.Module:

@@ -23,31 +23,35 @@ Keeping the "optimize" operation inside the "inline"/"batch" modes
 (differentiated by model_key) means the whole upstream flow stays on
 inline/batch and the GA-vs-MLP decision lives here, in the model container.
 """
-from typing import Annotated, Any, Literal, Union
+from typing import Annotated, Literal, Union
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import Field, model_validator
+
+from app.application.dto.plugin_dto import BatchResponseBase, InlineRequestBase, PluginDTO
 
 
-class PredictBatchRequest(BaseModel):
+class PredictBatchRequest(PluginDTO):
     """Batch prediction request: CSV path, dispatched by ``model_key`` like inline."""
 
-    model_config = ConfigDict(protected_namespaces=())
     mode: Literal["batch"] = "batch"
-    data_path: str = Field(..., description="Path to CSV — 5 MLP features, or 3 GA scenario features when model_key='optimize'")
-    model_key: str | None = Field(default=None, description="'optimize' runs the GA per row; omitted/other runs the MLP surrogate")
+    data_path: str = Field(
+        ...,
+        description=(
+            "Path to CSV — 5 MLP features, or 3 GA scenario features when model_key='optimize'"
+        ),
+    )
+    model_key: str | None = Field(
+        default=None,
+        description="'optimize' runs the GA per row; omitted/other runs the MLP surrogate",
+    )
     mlflow_run_id: str = ""
 
 
-class PredictBatchResponse(BaseModel):
+class PredictBatchResponse(BatchResponseBase):
     """Batch prediction response: one prediction dict per input row."""
 
-    model_config = ConfigDict(protected_namespaces=())
-    model_id: str
-    predictions: list[dict[str, Any]]
-    output_path: str | None = None
 
-
-class PredictInlineRequest(BaseModel):
+class PredictInlineRequest(InlineRequestBase):
     """Single-sample request. ``predict_inline`` dispatches by ``model_key``:
 
       - model_key != "optimize" (default): MLP surrogate → needs all 5 features.
@@ -57,13 +61,8 @@ class PredictInlineRequest(BaseModel):
         enforced for the MLP path by the validator below.
     """
 
-    model_config = ConfigDict(protected_namespaces=())
-    mode: Literal["inline"] = "inline"
-    # model_key="optimize" tells predict_inline to dispatch to the GA branch;
-    # any other value (or None) runs the MLP surrogate prediction.
-    model_key: str | None = None
-    threshold: float | None = None
-    mlflow_run_id: str = ""
+    # model_key (from InlineRequestBase): "optimize" tells predict_inline to dispatch to the GA
+    # branch; any other value (or None) runs the MLP surrogate prediction.
 
     # Non-controllable scenario inputs — required by both operations.
     T_in_leche: float = Field(..., description="Temperatura de entrada de la leche cruda (°C)")
@@ -74,21 +73,32 @@ class PredictInlineRequest(BaseModel):
     # mode the GA chooses them, so they are optional here (see validator).
     F_flow: float | None = Field(
         default=None,
-        description="Caudal volumétrico de leche (L/h) — requerido en inline MLP; lo decide el GA en optimize",
+        description=(
+            "Caudal volumétrico de leche (L/h) — requerido en inline MLP; "
+            "lo decide el GA en optimize"
+        ),
     )
     T_servicio: float | None = Field(
         default=None,
-        description="Temperatura del fluido de servicio (°C) — requerido en inline MLP; lo decide el GA en optimize",
+        description=(
+            "Temperatura del fluido de servicio (°C) — requerido en inline MLP; "
+            "lo decide el GA en optimize"
+        ),
     )
 
     # GA reproducibility — used only when model_key == "optimize".
-    seed: int = Field(default=1, description="Semilla del GA para reproducibilidad por escenario (solo optimize)")
+    seed: int = Field(
+        default=1, description="Semilla del GA para reproducibilidad por escenario (solo optimize)"
+    )
 
     @model_validator(mode="after")
     def _require_setpoints_for_mlp(self) -> "PredictInlineRequest":
         """MLP inline needs the two setpoints; the GA optimize path does not."""
         if self.model_key != "optimize":
-            missing = [n for n, v in (("F_flow", self.F_flow), ("T_servicio", self.T_servicio)) if v is None]
+            missing = [
+                n for n, v in (("F_flow", self.F_flow), ("T_servicio", self.T_servicio))
+                if v is None
+            ]
             if missing:
                 raise ValueError(
                     f"En modo inline (MLP) los setpoints {missing} son obligatorios; "
@@ -97,16 +107,15 @@ class PredictInlineRequest(BaseModel):
         return self
 
 
-class PredictInlineResponse(BaseModel):
+class PredictInlineResponse(PluginDTO):
     """Inline prediction response: MLP surrogate outputs in real units."""
 
-    model_config = ConfigDict(protected_namespaces=())
     model_id: str
     E_consumo_pred: float = Field(..., description="Consumo energético total predicho (kW)")
     T_out_pred: float = Field(..., description="Temperatura de salida de la leche predicha (°C)")
 
 
-class PredictOptimizeResponse(BaseModel):
+class PredictOptimizeResponse(PluginDTO):
     """Optimization response: recommended setpoints + predicted outcome.
 
     Returned by ``predict_inline`` when ``model_key == "optimize"``. There is no
@@ -114,7 +123,6 @@ class PredictOptimizeResponse(BaseModel):
     with model_key="optimize".
     """
 
-    model_config = ConfigDict(protected_namespaces=())
     model_id: str
     IA_F_flow: float = Field(..., description="Setpoint óptimo de caudal (L/h)")
     IA_T_servicio: float = Field(..., description="Setpoint óptimo de T de servicio (°C)")

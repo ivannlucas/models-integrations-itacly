@@ -55,7 +55,9 @@ def _ensure_explainability_columns(frame: pd.DataFrame) -> pd.DataFrame:
 
     enriched = frame.copy()
     if "coverage_gap_tons" not in enriched.columns:
-        projected_stock = pd.to_numeric(enriched.get("projected_stock_after_lead_time_tons"), errors="coerce")
+        projected_stock = pd.to_numeric(
+            enriched.get("projected_stock_after_lead_time_tons"), errors="coerce"
+        )
         safety_stock = pd.to_numeric(enriched.get("safety_stock_tons"), errors="coerce")
         enriched["coverage_gap_tons"] = (safety_stock - projected_stock).clip(lower=0.0)
 
@@ -65,7 +67,9 @@ def _ensure_explainability_columns(frame: pd.DataFrame) -> pd.DataFrame:
     enriched["decision_reason"] = "Coverage remains above safety threshold; purchase blocked."
     positive_gap = pd.to_numeric(enriched["coverage_gap_tons"], errors="coerce").fillna(0.0) > 0.0
     buy_mask = flag.eq(1)
-    enriched.loc[buy_mask, "decision_reason"] = "Purchase triggered and quantity optimized under current policy."
+    enriched.loc[buy_mask, "decision_reason"] = (
+        "Purchase triggered and quantity optimized under current policy."
+    )
     enriched.loc[buy_mask & positive_gap, "decision_reason"] = (
         "Projected stock after lead time is below safety stock. "
         "Purchase triggered and quantity optimized under current policy."

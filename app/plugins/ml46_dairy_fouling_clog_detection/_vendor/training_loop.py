@@ -12,14 +12,17 @@ from typing import Dict, List
 
 import numpy as np
 import torch
-import torch.nn as nn
+from torch import nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
 from app.plugins.ml46_dairy_fouling_clog_detection._vendor.common import TrainConfig
-from app.plugins.ml46_dairy_fouling_clog_detection._vendor.evaluation import stage_score_from_severity
+from app.plugins.ml46_dairy_fouling_clog_detection._vendor.evaluation import (
+    stage_score_from_severity,
+)
 
 
+# pylint: disable-next=too-many-arguments,too-many-positional-arguments,too-many-locals
 def train_one_epoch(
     model: nn.Module,
     loader: DataLoader,
@@ -49,18 +52,27 @@ def train_one_epoch(
 
         pred = model(x)
         loss_sev = F.smooth_l1_loss(pred["severity_scaled"], y_severity)
-        loss_stage_raw = F.cross_entropy(pred["stage_logits"], y_stage, weight=stage_weights, reduction="none")
+        loss_stage_raw = F.cross_entropy(
+            pred["stage_logits"], y_stage, weight=stage_weights, reduction="none"
+        )
         loss_stage = (loss_stage_raw * (1.0 + 0.15 * (foul_weight - 1.0))).mean()
 
-        loss_foul_raw = F.binary_cross_entropy_with_logits(pred["foul_h_logit"], y_foul_h, pos_weight=foul_pos_weight, reduction="none")
+        loss_foul_raw = F.binary_cross_entropy_with_logits(
+            pred["foul_h_logit"], y_foul_h, pos_weight=foul_pos_weight, reduction="none"
+        )
         loss_foul = (loss_foul_raw * foul_weight).mean()
 
         loss_actionable_foul_raw = F.binary_cross_entropy_with_logits(
-            pred["actionable_foul_h_logit"], y_actionable_foul_h, pos_weight=actionable_foul_pos_weight, reduction="none"
+            pred["actionable_foul_h_logit"],
+            y_actionable_foul_h,
+            pos_weight=actionable_foul_pos_weight,
+            reduction="none",
         )
         loss_actionable_foul = (loss_actionable_foul_raw * actionable_foul_weight).mean()
 
-        loss_clog_raw = F.binary_cross_entropy_with_logits(pred["clog_h_logit"], y_clog_h, pos_weight=clog_pos_weight, reduction="none")
+        loss_clog_raw = F.binary_cross_entropy_with_logits(
+            pred["clog_h_logit"], y_clog_h, pos_weight=clog_pos_weight, reduction="none"
+        )
         loss_clog = (loss_clog_raw * clog_weight).mean()
 
         loss_ttf_foul = F.smooth_l1_loss(pred["tte_foul_log"], y_ttf_foul)

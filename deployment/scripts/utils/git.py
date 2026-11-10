@@ -1,5 +1,6 @@
 # utils/git.py
 # Description: Shared module for Git operations.
+"""Git helpers shared by the deployment scripts (modified files, commits, PR context)."""
 
 import os
 import subprocess
@@ -32,7 +33,9 @@ def get_modified_files(target_branch="develop"):
 def get_commit_messages(target_branch="develop"):
     """Gets commit messages between the current HEAD and a target branch."""
     # --pretty=format:%s extracts only the subject line of the commit message.
-    commit_messages_str = _run_git_command(f"git log origin/{target_branch}..HEAD --pretty=format:%s")
+    commit_messages_str = _run_git_command(
+        f"git log origin/{target_branch}..HEAD --pretty=format:%s"
+    )
     return commit_messages_str
 
 
@@ -52,7 +55,9 @@ def get_bitbucket_pr_context():
         'bitbucket_repo_full_name': os.getenv('BITBUCKET_REPO_FULL_NAME', ''),
         'bitbucket_commit': os.getenv('BITBUCKET_COMMIT', ''),
         'bitbucket_pr_destination_commit': os.getenv('BITBUCKET_PR_DESTINATION_COMMIT', ''),
-        'bitbucket_repo_is_private': os.getenv('BITBUCKET_REPO_IS_PRIVATE', 'false').lower() == 'true',
+        'bitbucket_repo_is_private': (
+            os.getenv('BITBUCKET_REPO_IS_PRIVATE', 'false').lower() == 'true'
+        ),
         'ci': os.getenv('CI', 'false').lower() == 'true',
         'bitbucket_workspace': os.getenv('BITBUCKET_WORKSPACE', ''),
         'bitbucket_repo_owner': os.getenv('BITBUCKET_REPO_OWNER', ''),

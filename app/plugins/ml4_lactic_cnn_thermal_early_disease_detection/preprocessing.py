@@ -31,7 +31,7 @@ _TRAIN_TRANSFORM = A.Compose([
         translate_percent={"x": (-0.1, 0.1), "y": (-0.1, 0.1)},
         scale=(0.8, 1.2),
         rotate=(-15, 15),
-        border_mode=cv2.BORDER_CONSTANT,
+        border_mode=cv2.BORDER_CONSTANT,  # pylint: disable=no-member  # cv2 C-extension members
         p=0.5,
     ),
     A.RandomBrightnessContrast(brightness_limit=0.2, contrast_limit=0.2, p=0.5),

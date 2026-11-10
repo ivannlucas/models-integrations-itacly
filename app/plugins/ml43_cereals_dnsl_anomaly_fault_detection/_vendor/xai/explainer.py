@@ -3,8 +3,9 @@ Módulo principal XAI: orquestador de explicaciones.
 Integra fuzzy, temporal, fusión y acciones correctivas.
 """
 
-import numpy as np
 from typing import Any, Dict, List, Optional
+
+import numpy as np
 
 from .fuzzy_explainer import FuzzyExplainer
 from .temporal_explainer import TemporalExplainer
@@ -13,7 +14,7 @@ from .corrective_actions import generate_corrective_actions, DEFAULT_ACTION_CONF
 from .utils import infer_semantic_mf_names_from_centers
 
 
-class DNFLExplainer:
+class DNFLExplainer:  # pylint: disable=too-many-instance-attributes
     """
     Orquestador principal para explicabilidad XAI.
 
@@ -25,7 +26,7 @@ class DNFLExplainer:
       5. Reporte final compacto
     """
 
-    def __init__(
+    def __init__(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         self,
         model,
         feature_names_stats: List[str],
@@ -59,7 +60,7 @@ class DNFLExplainer:
                 model,
                 feature_names=self.feature_names_stats,
             )
-        except Exception:
+        except Exception:  # pylint: disable=broad-exception-caught  # semantic MF names are optional
             pass
 
         # Inicializar sub-explainers
@@ -75,7 +76,7 @@ class DNFLExplainer:
             feature_names=self.feature_names_original,
         )
 
-    def explain(
+    def explain(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
         self,
         x_window: np.ndarray,
         s_stats: np.ndarray,
@@ -162,9 +163,13 @@ class DNFLExplainer:
         return {
             "prediction": {
                 "predicted_class": str(action_report.get("state_label", "unconfirmed_alert")),
-                "anomaly_probability": float(prediction.get("ensemble", {}).get("probability", 0.0)),
+                "anomaly_probability": float(
+                    prediction.get("ensemble", {}).get("probability", 0.0)
+                ),
                 "fuzzy_probability": float(prediction.get("fuzzy", {}).get("probability", 0.0)),
-                "temporal_probability": float(prediction.get("temporal", {}).get("probability", 0.0)),
+                "temporal_probability": float(
+                    prediction.get("temporal", {}).get("probability", 0.0)
+                ),
             },
             "explanation": {
                 "fuzzy": fuzzy_report,
@@ -175,7 +180,7 @@ class DNFLExplainer:
             "final_report": final_report,
         }
 
-    def _build_final_report(
+    def _build_final_report(  # pylint: disable=too-many-locals
         self,
         action_report: Dict[str, Any],
     ) -> Dict[str, Any]:

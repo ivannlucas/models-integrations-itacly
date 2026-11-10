@@ -69,7 +69,7 @@ _ACTIVE_VERSIONS: dict[str, str] = {}
 
 def _build_s3_client():
     """Build and return an S3 client configured from environment variables."""
-    import boto3  # type: ignore[import]
+    import boto3  # type: ignore[import]  # pylint: disable=import-outside-toplevel
 
     return boto3.client(
         "s3",
@@ -103,6 +103,41 @@ def _is_directory_marker(obj: dict, objects: list[dict]) -> bool:
         return False
     prefix = key + "/"
     return any(other["Key"].startswith(prefix) for other in objects)
+
+
+def _list_remote_files(s3, bucket: str, remote_prefix: str, version: str) -> list[dict]:
+    """Return the S3 objects of *version* under *remote_prefix*, without folder markers."""
+    # Collect all remote objects under the version prefix
+    paginator = s3.get_paginator("list_objects_v2")
+    objects = [
+        obj
+        for page in paginator.paginate(Bucket=bucket, Prefix=remote_prefix)
+        for obj in page.get("Contents", [])
+    ]
+    if version == BASE_VERSION:
+        # v0 lives at the model root, next to current.json and versions/: those are not its
+        # files.
+        objects = [
+            obj for obj in objects
+            if obj["Key"][len(remote_prefix):].split("/", 1)[0] not in _RESERVED_TOP_LEVEL
+        ]
+    return [obj for obj in objects if not _is_directory_marker(obj, objects)]
+
+
+def _pending_downloads(
+    remote_files: list[dict], remote_prefix: str, local_dir: Path
+) -> list[tuple[str, Path]]:
+    """Return ``(key, local_path)`` for the remote files missing or changed locally."""
+    # Filter to only files that need downloading
+    pending = []
+    for obj in remote_files:
+        relative_path = obj["Key"][len(remote_prefix):]
+        local_path = local_dir / relative_path
+        if _file_needs_download(local_path, obj["Size"]):
+            pending.append((obj["Key"], local_path))
+        else:
+            logger.info("Skipping (unchanged): %s", relative_path)
+    return pending
 
 
 def download_s3_file(s3_uri: str) -> str:
@@ -144,7 +179,9 @@ class ArtifactStore:
     Paths resolve against the active base version (v0 unless the model publishes versions).
     """
 
-    def __init__(self, model_name: str, root: Path | None = None, use_s3: bool | None = None) -> None:
+    def __init__(
+        self, model_name: str, root: Path | None = None, use_s3: bool | None = None
+    ) -> None:
         """Initialize the store for the given model name.
 
         root overrides ARTIFACTS_ROOT and use_s3=False ignores STORAGE_BUCKET (both for tests).
@@ -188,7 +225,9 @@ class ArtifactStore:
         bucket = self._bucket()
         if bucket:
             try:
-                obj = _build_s3_client().get_object(Bucket=bucket, Key=self._remote_root() + relative)
+                obj = _build_s3_client().get_object(
+                    Bucket=bucket, Key=self._remote_root() + relative
+                )
             except ClientError as exc:
                 if exc.response.get("Error", {}).get("Code") in ("NoSuchKey", "404", "NotFound"):
                     return None
@@ -212,8 +251,12 @@ class ArtifactStore:
     @staticmethod
     def _check_version(version: str) -> None:
         """Reject anything that is not v0 or vN (versions end up in local paths and S3 keys)."""
-        if version != BASE_VERSION and not (isinstance(version, str) and _VERSION_RE.fullmatch(version)):
-            raise BaseVersionNotFoundError(f"La versión '{version}' es inválida: debe tener el formato vN.")
+        if version != BASE_VERSION and not (
+            isinstance(version, str) and _VERSION_RE.fullmatch(version)
+        ):
+            raise BaseVersionNotFoundError(
+                f"La versión '{version}' es inválida: debe tener el formato vN."
+            )
 
     def refresh(self) -> str:
         """Read current.json and make its version the active one (v0 if there is none)."""
@@ -381,7 +424,7 @@ class ArtifactStore:
     def _download_all(self) -> None:
         """Download all files of the active version from S3, skipping unchanged ones."""
         try:
-            from tqdm import tqdm  # type: ignore[import]
+            from tqdm import tqdm  # type: ignore[import]  # pylint: disable=import-outside-toplevel
         except ImportError:
             tqdm = None
 
@@ -392,34 +435,15 @@ class ArtifactStore:
         local_dir = self._version_dir(version)
         local_dir.mkdir(parents=True, exist_ok=True)
 
-        # Collect all remote objects under the version prefix
-        paginator = s3.get_paginator("list_objects_v2")
-        objects = [
-            obj
-            for page in paginator.paginate(Bucket=bucket, Prefix=remote_prefix)
-            for obj in page.get("Contents", [])
-        ]
-        if version == BASE_VERSION:
-            # v0 lives at the model root, next to current.json and versions/: those are not its files.
-            objects = [
-                obj for obj in objects
-                if obj["Key"][len(remote_prefix):].split("/", 1)[0] not in _RESERVED_TOP_LEVEL
-            ]
-        remote_files = [obj for obj in objects if not _is_directory_marker(obj, objects)]
+        remote_files = _list_remote_files(s3, bucket, remote_prefix, version)
 
         if not remote_files:
-            logger.warning("No files found in S3 for model: %s (version %s)", self._model_name, version)
+            logger.warning(
+                "No files found in S3 for model: %s (version %s)", self._model_name, version
+            )
             return
 
-        # Filter to only files that need downloading
-        pending = []
-        for obj in remote_files:
-            relative_path = obj["Key"][len(remote_prefix):]
-            local_path = local_dir / relative_path
-            if _file_needs_download(local_path, obj["Size"]):
-                pending.append((obj["Key"], local_path))
-            else:
-                logger.info("Skipping (unchanged): %s", relative_path)
+        pending = _pending_downloads(remote_files, remote_prefix, local_dir)
 
         if not pending:
             logger.info("All artifact files are up-to-date. No download needed.")

@@ -1,13 +1,12 @@
 """Train DTOs for ml36 dairy DNL optimizer MLP retraining."""
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import Field
 
-from app.application.dto.train_dto import MlflowRunId
+from app.application.dto.plugin_dto import PluginDTO, TrainRequestBase, UploadWarning
 
 
-class TrainRequest(BaseModel):
+class TrainRequest(TrainRequestBase):
     """Retraining request: CSV path with the 8 base features + 2 targets."""
 
-    model_config = ConfigDict(protected_namespaces=())
     data_path: str = Field(
         ...,
         description=(
@@ -18,13 +17,11 @@ class TrainRequest(BaseModel):
             "season/month/date column exists; at least 3 cycles."
         ),
     )
-    mlflow_run_id: MlflowRunId
 
 
-class TrainResponse(BaseModel):
+class TrainResponse(PluginDTO):
     """Retraining response: per-target regression metrics on the test split (real units)."""
 
-    model_config = ConfigDict(protected_namespaces=())
     detail: str
     mae_t_out: float = Field(..., description="MAE de T_out (°C) en test")
     mse_t_out: float = Field(..., description="MSE de T_out en test")
@@ -37,8 +34,8 @@ class TrainResponse(BaseModel):
     n_val: int = Field(..., description="Filas de validación (early stopping)")
     n_test: int = Field(..., description="Filas de test (métricas)")
     epochs_executed: int = Field(..., description="Épocas ejecutadas (con early stopping)")
-    best_val_loss: float = Field(..., description="Mejor pérdida MSE de validación (escala normalizada)")
-    training_time_s: float = Field(..., description="Duración del entrenamiento (s)")
-    upload_warning: str | None = Field(
-        default=None, description="Aviso si el modelo reentrenado no se ha guardado en MLflow"
+    best_val_loss: float = Field(
+        ..., description="Mejor pérdida MSE de validación (escala normalizada)"
     )
+    training_time_s: float = Field(..., description="Duración del entrenamiento (s)")
+    upload_warning: UploadWarning = None

@@ -18,14 +18,18 @@ import tempfile
 
 import pytest
 
+from app.domain.services import mlflow_artifacts
 from app.domain.services.exceptions import UserModelUnavailableError
 
 PLUGINS_DIR = pathlib.Path(__file__).resolve().parents[2] / "app" / "plugins"
 # Runtime counters are per-instance bookkeeping, not model state.
-ALLOWED_SELF_ATTRS = ("_predict_count", "_last_predict", "_total_latency", "_n_", "_runtime", "_stats")
+ALLOWED_SELF_ATTRS = (
+    "_predict_count", "_last_predict", "_total_latency", "_n_", "_runtime", "_stats",
+)
 
 
 def _self_assignments(fn: ast.FunctionDef) -> list[str]:
+    """``self.X`` assignment targets in fn, excluding the allowed runtime counters."""
     found = []
     for node in ast.walk(fn):
         if isinstance(node, ast.Assign):
@@ -37,7 +41,8 @@ def _self_assignments(fn: ast.FunctionDef) -> list[str]:
         for target in targets:
             for sub in ast.walk(target):
                 if (isinstance(sub, ast.Attribute) and isinstance(sub.value, ast.Name)
-                        and sub.value.id == "self" and not sub.attr.startswith(ALLOWED_SELF_ATTRS)):
+                        and sub.value.id == "self"
+                        and not sub.attr.startswith(ALLOWED_SELF_ATTRS)):
                     found.append(f"self.{sub.attr} (línea {node.lineno})")
     return found
 
@@ -74,8 +79,11 @@ def _model_state_writes(source: str) -> list[str]:
     return offenders
 
 
-@pytest.mark.parametrize("plugin_file", sorted(PLUGINS_DIR.glob("*/plugin.py")), ids=lambda p: p.parent.name)
+@pytest.mark.parametrize(
+    "plugin_file", sorted(PLUGINS_DIR.glob("*/plugin.py")), ids=lambda p: p.parent.name
+)
 def test_predict_and_stats_never_assign_model_state_on_self(plugin_file):
+    """predict*/stats (and the helpers they call) never store model state on self."""
     offenders = _model_state_writes(plugin_file.read_text(encoding="utf-8"))
     assert not offenders, (
         "predict/stats (and the helpers they call) must resolve the user's model into locals, "
@@ -84,6 +92,7 @@ def test_predict_and_stats_never_assign_model_state_on_self(plugin_file):
 
 
 def test_model_state_check_follows_helpers_and_allows_counters():
+    """The checker follows self.X() helpers transitively and ignores runtime counters."""
     source = """
 class Plugin:
     def predict_batch(self, run_id):
@@ -96,22 +105,31 @@ class Plugin:
     def load(self):
         self._scaler = 1
 """
-    assert _model_state_writes(source) == ["predict_batch → _resolve → _swap: self._model (línea 9)"]
+    assert _model_state_writes(source) == [
+        "predict_batch → _resolve → _swap: self._model (línea 9)"
+    ]
 
 
 def _download_helpers():
+    """Yields a pytest param per ``download_*`` function of each trainable plugin's mlflow_utils."""
     for path in sorted(PLUGINS_DIR.glob("*/mlflow_utils.py")):
         module = importlib.import_module(f"app.plugins.{path.parent.name}.mlflow_utils")
-        if not hasattr(module, "BaseMLflowTracker"):
-            continue  # non-trainable plugins (ml28/ml31/ml33) never touch MLflow
         for name, fn in inspect.getmembers(module, inspect.isfunction):
-            if name.startswith("download_") and fn.__module__ == module.__name__:
+            # Only the require_user_model-wrapped helpers fetch from MLflow; the non-trainable
+            # plugins (ml28/ml31/ml33) keep an undecorated no-op.
+            if (name.startswith("download_") and fn.__module__ == module.__name__
+                    and hasattr(fn, "__wrapped__")):
                 yield pytest.param(module, name, id=f"{path.parent.name}.{name}")
 
 
-@pytest.mark.parametrize("empty_artifact", [False, True], ids=["no_artifact", "incomplete_artifact"])
+@pytest.mark.parametrize(
+    "empty_artifact", [False, True], ids=["no_artifact", "incomplete_artifact"]
+)
 @pytest.mark.parametrize("module,func_name", list(_download_helpers()))
-def test_download_cleans_temp_dir_when_run_has_no_model(module, func_name, empty_artifact, monkeypatch):
+def test_download_cleans_temp_dir_when_run_has_no_model(
+    module, func_name, empty_artifact, monkeypatch
+):
+    """download_*_from_mlflow removes its temp dir when the run has no usable model."""
     created = []
     real_mkdtemp = tempfile.mkdtemp
 
@@ -121,15 +139,21 @@ def test_download_cleans_temp_dir_when_run_has_no_model(module, func_name, empty
         return path
 
     class EmptyRunTracker:
+        """BaseMLflowTracker stand-in whose run never holds a usable model."""
+
         def __init__(self, run_id=""):
             self.run_id = run_id
 
         def download_artifacts(self, dest_dir, artifact_path=""):
+            """Returns "" (nothing downloaded) or an empty ``dest_dir``."""
+            _ = artifact_path
             # "" → MLflow returned nothing; dest_dir → the run exists but lacks the model files.
             return dest_dir if empty_artifact else ""
 
     monkeypatch.setattr(tempfile, "mkdtemp", tracking_mkdtemp)
-    monkeypatch.setattr(module, "BaseMLflowTracker", EmptyRunTracker)
+    # Helpers download through the shared mlflow_artifacts; a few still use the tracker directly.
+    monkeypatch.setattr(mlflow_artifacts, "BaseMLflowTracker", EmptyRunTracker)
+    monkeypatch.setattr(module, "BaseMLflowTracker", EmptyRunTracker, raising=False)
 
     with pytest.raises(UserModelUnavailableError):
         getattr(module, func_name)("run-without-model")
@@ -139,7 +163,9 @@ def test_download_cleans_temp_dir_when_run_has_no_model(module, func_name, empty
     assert not leaked, f"{func_name} left temp dirs behind: {leaked}"
 
 
-@pytest.mark.parametrize("plugin_file", sorted(PLUGINS_DIR.glob("*/plugin.py")), ids=lambda p: p.parent.name)
+@pytest.mark.parametrize(
+    "plugin_file", sorted(PLUGINS_DIR.glob("*/plugin.py")), ids=lambda p: p.parent.name
+)
 def test_train_never_reloads_the_served_model(plugin_file):
     """train() must leave the served model alone: the retrained one lives only in its MLflow run.
 
@@ -148,7 +174,13 @@ def test_train_never_reloads_the_served_model(plugin_file):
     retraining into an error if the base artifacts are briefly unavailable.
     """
     offenders = []
-    for cls in (n for n in ast.parse(plugin_file.read_text(encoding="utf-8")).body if isinstance(n, ast.ClassDef)):
+    tree = ast.parse(plugin_file.read_text(encoding="utf-8"))
+    for cls in (n for n in tree.body if isinstance(n, ast.ClassDef)):
         for fn in (n for n in cls.body if isinstance(n, ast.FunctionDef) and n.name == "train"):
-            offenders += [f"self.{name}()" for name in _self_method_calls(fn) if name in ("load", "_load", "reload")]
-    assert not offenders, f"{plugin_file.parent.name}.train() recarga el modelo servido: {offenders}"
+            offenders += [
+                f"self.{name}()" for name in _self_method_calls(fn)
+                if name in ("load", "_load", "reload")
+            ]
+    assert not offenders, (
+        f"{plugin_file.parent.name}.train() recarga el modelo servido: {offenders}"
+    )

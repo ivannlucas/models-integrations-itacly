@@ -1,4 +1,7 @@
-"""MLflow helper for m45 — download user-trained model from MLflow / upload fine-tuned artifacts."""
+"""MLflow helper for m45.
+
+Downloads the user-trained model from MLflow and uploads fine-tuned artifacts.
+"""
 from __future__ import annotations
 
 import logging
@@ -7,8 +10,8 @@ import os
 import joblib
 import numpy as np
 import torch
-import shutil
 
+from app.domain.services.mlflow_artifacts import download_run_artifacts
 from app.domain.services.mlflow_tracker import BaseMLflowTracker, require_user_model
 from app.plugins.ml45_cereals_dnsl_critical_point_detection._vendor.model import (
     ParallelDeepNeuroFuzzyModel,
@@ -17,6 +20,7 @@ from app.plugins.ml45_cereals_dnsl_critical_point_detection.constants import (
     ARTIFACT_FOLDER_NAME,
     DEFAULT_THRESHOLD,
     MODEL_FILENAME,
+    MODEL_ID,
     SCALER_FILENAME,
     XAI_BACKGROUND_FILENAME,
 )
@@ -29,39 +33,37 @@ def download_user_model_from_mlflow(run_id: str):
     """Download a user fine-tuned m45 model from MLflow.
 
     Returns (model, model_cfg, scaler_x, scaler_num, xai_background, threshold, temp_dir) or None.
-    Caller MUST shutil.rmtree(temp_dir) after inference — use try/finally.
+    Caller MUST remove temp_dir after inference (``removing_dir``).
     """
-    import tempfile
+    loaded = download_run_artifacts(run_id, _load, prefix="mlflow_ml45_")
+    if loaded is None:
+        return None
+    bundle, tmp = loaded
+    return (*bundle, tmp)
 
-    tmp = tempfile.mkdtemp(prefix="mlflow_ml45_")
-    try:
-        local_path = BaseMLflowTracker(run_id).download_artifacts(tmp, artifact_path="model")
-        if not local_path:
-            shutil.rmtree(tmp, ignore_errors=True)
-            return None
 
-        checkpoint_path = os.path.join(local_path, MODEL_FILENAME)
-        checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
-        model_cfg = checkpoint["model_cfg"]
+def _load(local_path: str):
+    """Rebuild model, scalers, XAI background and threshold from a downloaded ``model`` folder."""
+    checkpoint_path = os.path.join(local_path, MODEL_FILENAME)
+    checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+    model_cfg = checkpoint["model_cfg"]
 
-        model = ParallelDeepNeuroFuzzyModel(model_cfg)
-        model.load_state_dict(checkpoint["model_state_dict"])
-        model.eval()
+    model = ParallelDeepNeuroFuzzyModel(model_cfg)
+    model.load_state_dict(checkpoint["model_state_dict"])
+    model.eval()
 
-        scalers = joblib.load(os.path.join(local_path, SCALER_FILENAME))
+    scalers = joblib.load(os.path.join(local_path, SCALER_FILENAME))
 
-        bg_path = os.path.join(local_path, XAI_BACKGROUND_FILENAME)
-        xai_background = np.load(bg_path) if os.path.exists(bg_path) else None
+    bg_path = os.path.join(local_path, XAI_BACKGROUND_FILENAME)
+    xai_background = np.load(bg_path) if os.path.exists(bg_path) else None
 
-        threshold = float(
-            model_cfg.get("training_kwargs", {}).get("threshold", DEFAULT_THRESHOLD)
-        )
-
-        logger.info("Downloaded user model from MLflow run_id=%s", run_id)
-        return model, model_cfg, scalers["scaler_x"], scalers["scaler_num"], xai_background, threshold, tmp
-    except BaseException:
-        shutil.rmtree(tmp, ignore_errors=True)
-        raise
+    threshold = float(
+        model_cfg.get("training_kwargs", {}).get("threshold", DEFAULT_THRESHOLD)
+    )
+    return (
+        model, model_cfg, scalers["scaler_x"], scalers["scaler_num"], xai_background,
+        threshold,
+    )
 
 
 def upload_artifacts_to_mlflow(
@@ -70,13 +72,11 @@ def upload_artifacts_to_mlflow(
     metrics: dict | None = None,
 ) -> str:
     """Upload fine-tuned artifacts to MLflow and return the run_id."""
-    from app.plugins.ml45_cereals_dnsl_critical_point_detection.constants import MODEL_ID
-
     if mlflow_run_id:
         tracker = BaseMLflowTracker(mlflow_run_id)
         tracker.connect(mlflow_run_id)
     else:
-        import mlflow
+        import mlflow  # pylint: disable=import-outside-toplevel
 
         mlflow.set_tracking_uri(BaseMLflowTracker.TRACKING_URI)
         mlflow.set_experiment(ARTIFACT_FOLDER_NAME)

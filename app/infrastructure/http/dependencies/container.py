@@ -3,8 +3,8 @@ Dependency injection container for model plugins.
 Define aquí el ModelContainer, que se encarga de instanciar y cargar el plugin concreto,
 y de proporcionar los casos de uso y el servicio runtime asociados.
 
-Los plugins que declaran BASE_ARTIFACT_FOLDER (ml13, 14, 15, 16, 17, 18, 19, 21, 23, 24) publican cada
-reentreno como nueva versión del modelo base. Para ellos el contenedor serializa /train y
+Los plugins que declaran BASE_ARTIFACT_FOLDER (ml13, 14, 15, 16, 17, 18, 19, 21, 23, 24) publican
+cada reentreno como nueva versión del modelo base. Para ellos el contenedor serializa /train y
 /rollback con un lock, y tras activar una versión crea una instancia nueva del plugin, la carga
 y la sustituye; si no carga, el puntero vuelve a la versión anterior y se sigue sirviendo la
 instancia vieja.
@@ -38,7 +38,7 @@ class _PromotingTrainUseCase:
         return self._container.train(request)
 
 
-class ModelContainer:
+class ModelContainer:  # pylint: disable=too-many-instance-attributes  # DI wiring of use cases
     """Generic DI container for any model plugin.
 
     Wires up use cases and the runtime service around a concrete ModelPluginPort.
@@ -49,16 +49,17 @@ class ModelContainer:
     def __init__(self, plugin: ModelPluginPort, model_id: str = "") -> None:
         """Recibe el plugin concreto y crea los casos de uso."""
         folder = getattr(type(plugin), "BASE_ARTIFACT_FOLDER", None)
-        self._base_store = base_model_publisher._store_for(folder) if folder else None  # pylint: disable=protected-access
+        self._base_store = base_model_publisher._store_for(folder) if folder else None
         self._lock = threading.Lock()
         # Version of the instance being served; the global pointer can be ahead of it
         # while train() publishes and before the fresh instance is swapped in.
         self._served_version: str | None = None
         self._wire(plugin)
-        # Async training (POST /train?wait=false): state on the MLflow run, training in a child process.
-        # Built once, outside _wire(): a base reload must not drop the executor that tracks the running
-        # child (409 busy). The child builds its own plugin instance, so the served one is not needed.
-        # Neither builds anything heavy here: the MLflow client is created lazily, no process starts yet.
+        # Async training (POST /train?wait=false): state on the MLflow run, training in a child
+        # process. Built once, outside _wire(): a base reload must not drop the executor that tracks
+        # the running child (409 busy). The child builds its own plugin instance, so the served one
+        # is not needed. Neither builds anything heavy here: the MLflow client is created lazily, no
+        # process starts yet.
         train_job_store = MLflowTrainJobStore()
         self.submit_train_job_use_case = SubmitTrainJobUseCase(
             plugin, model_id, train_job_store, ProcessTrainExecutor()
@@ -74,7 +75,9 @@ class ModelContainer:
         self.stats_use_case = GetStatsUseCase(
             plugin, base_version_provider=self.base_version if self._base_store else None,
         )
-        self.train_use_case = _PromotingTrainUseCase(self) if self._base_store else TrainModelUseCase(plugin)
+        self.train_use_case = (
+            _PromotingTrainUseCase(self) if self._base_store else TrainModelUseCase(plugin)
+        )
 
     @property
     def promotes_base(self) -> bool:
@@ -99,7 +102,7 @@ class ModelContainer:
         cannot mask the error that triggered the restore."""
         try:
             self._base_store.set_active_version(previous)
-        except Exception:  # pylint: disable=broad-exception-caught
+        except Exception:  # pylint: disable=broad-exception-caught  # never masks the cause
             logger.exception("Could not restore the base pointer to %s", previous)
 
     def _reload_or_restore(self, previous: str) -> None:
@@ -109,7 +112,7 @@ class ModelContainer:
         try:
             fresh = type(self._plugin)()
             fresh.load()
-        except Exception as exc:  # pylint: disable=broad-exception-caught
+        except Exception as exc:
             self._restore_pointer(previous)
             logger.exception("Base version %s of %s does not load; back to %s",
                              failed, type(self._plugin).__name__, previous)
@@ -148,9 +151,17 @@ class ModelContainer:
                 )
             self._base_store.set_active_version(target)
             self._reload_or_restore(current["version"])
-            return {"base_version": self._base_store.version_info(self._served_version), "previous_base_version": current}
+            return {
+                "base_version": self._base_store.version_info(self._served_version),
+                "previous_base_version": current,
+            }
 
     @property
     def service(self) -> ModelRuntimeService:
         """Devuelve el servicio runtime asociado al plugin."""
         return self._service
+
+    @property
+    def plugin(self) -> ModelPluginPort:
+        """Plugin instance currently served (replaced whole when a new base is promoted)."""
+        return self._plugin

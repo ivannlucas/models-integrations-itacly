@@ -10,8 +10,8 @@ from __future__ import annotations
 
 import logging
 import os
-import shutil
 
+from app.domain.services.mlflow_artifacts import download_run_artifacts
 from app.domain.services.mlflow_tracker import BaseMLflowTracker, require_user_model
 from app.plugins.ml7_cereals_grain_pest_detection.constants import (
     ARTIFACT_FOLDER_NAME,
@@ -25,35 +25,26 @@ logger = logging.getLogger(__name__)
 def download_user_model_from_mlflow(run_id: str):
     """Download a user fine-tuned YOLO checkpoint from MLflow.
 
-    Returns (model, temp_dir) or None. Caller MUST shutil.rmtree(temp_dir) after
-    inference — use try/finally.
+    Returns (model, temp_dir) or None. Caller MUST remove temp_dir after inference
+    (``removing_dir``).
     """
-    import tempfile  # noqa: PLC0415
+    return download_run_artifacts(
+        run_id, lambda local_path: _load(local_path, run_id), prefix="mlflow_ml7_grain_",
+    )
 
-    from ultralytics import YOLO  # noqa: PLC0415 — heavy import kept lazy
 
-    tmp = tempfile.mkdtemp(prefix="mlflow_ml7_grain_")
-    try:
-        local_path = BaseMLflowTracker(run_id).download_artifacts(tmp, artifact_path="model")
-        if not local_path:
-            shutil.rmtree(tmp, ignore_errors=True)
-            return None
+def _load(local_path: str, run_id: str):
+    """Load the YOLO checkpoint of a downloaded ``model`` folder (None if it lacks one)."""
+    from ultralytics import YOLO  # noqa: PLC0415 # pylint: disable=import-outside-toplevel
 
-        checkpoint_path = os.path.join(local_path, MODEL_FILENAME)
-        if not os.path.exists(checkpoint_path):
-            logger.warning(
-                "MLflow run_id=%s did not contain %s under artifact_path='model'",
-                run_id, MODEL_FILENAME,
-            )
-            shutil.rmtree(tmp, ignore_errors=True)
-            return None
-
-        model = YOLO(checkpoint_path)
-        logger.info("Downloaded user model from MLflow run_id=%s", run_id)
-        return model, tmp
-    except BaseException:
-        shutil.rmtree(tmp, ignore_errors=True)
-        raise
+    checkpoint_path = os.path.join(local_path, MODEL_FILENAME)
+    if not os.path.exists(checkpoint_path):
+        logger.warning(
+            "MLflow run_id=%s did not contain %s under artifact_path='model'",
+            run_id, MODEL_FILENAME,
+        )
+        return None
+    return YOLO(checkpoint_path)
 
 
 def upload_artifacts_to_mlflow(

@@ -8,6 +8,7 @@ import torch
 from torch import nn
 from torchvision import models
 
+from app.domain.services.torch_device import safe_torch_device
 from app.infrastructure.artifact_store import ArtifactStore
 from app.plugins.ml10_dairy_disease_vector_detection.constants import (
     ARTIFACT_FOLDER_NAME,
@@ -30,14 +31,7 @@ def safe_device() -> torch.device:
     unsupported by the installed PyTorch build (e.g. sm_61), but real ops then fail.
     This probes a tiny conv and falls back to CPU when CUDA is not functional.
     """
-    if not torch.cuda.is_available():
-        return torch.device("cpu")
-    try:
-        torch.nn.Conv2d(1, 1, 1).cuda()(torch.zeros(1, 1, 4, 4).cuda())
-        return torch.device("cuda")
-    except Exception:
-        logger.warning("CUDA detectada pero no funcional para operaciones de red — usando CPU.")
-        return torch.device("cpu")
+    return safe_torch_device()
 
 
 def _build_mobilenetv3_classifier(num_classes: int) -> nn.Module:
@@ -73,11 +67,11 @@ def load_detector_and_classifier(device: torch.device):
             )
 
     # Load class names
-    with open(class_names_path, "r") as fh:
+    with open(class_names_path, "r", encoding="utf-8") as fh:
         class_names: list[str] = json.load(fh)
 
     # Load YOLO detector (lazy import to avoid heavy ultralytics import at module level)
-    from ultralytics import YOLO  # noqa: PLC0415
+    from ultralytics import YOLO  # noqa: PLC0415  # pylint: disable=import-outside-toplevel
     detector = YOLO(str(detector_path))
 
     # Load MobileNetV3 classifier

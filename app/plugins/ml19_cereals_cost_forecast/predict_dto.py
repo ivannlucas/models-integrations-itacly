@@ -6,7 +6,9 @@ bundled with the plugin, not on client-supplied data.
 """
 from typing import Annotated, Literal, Union
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, Field
+
+from app.application.dto.plugin_dto import BatchRequestBase, PluginDTO
 
 _DATE_DESC = (
     "Mes a consultar dentro del dataset de referencia empaquetado (YYYY-MM). Si se omite, se "
@@ -37,43 +39,46 @@ class HorizonResult(BaseModel):
     """Full result (regression + classification + ensemble) for one horizon."""
 
     horizon: int = Field(..., description="1, 2 o 3 (meses)")
-    predicted_for: str = Field(..., description="Mes calendario que predice este horizonte (YYYY-MM)")
+    predicted_for: str = Field(
+        ..., description="Mes calendario que predice este horizonte (YYYY-MM)"
+    )
     reg: RegResult | None = None
     clf: ClfResult | None = None
-    ensemble_signal: int | None = Field(default=None, description="np.sign(signal_reg + signal_clf)")
+    ensemble_signal: int | None = Field(
+        default=None, description="np.sign(signal_reg + signal_clf)"
+    )
     ensemble_str: str | None = Field(default=None, description="LONG | SHORT | FLAT")
     confidence: str | None = Field(
         default=None, description="ALTA (reg y clf coinciden en signo) | BAJA (discrepan)",
     )
 
 
-class PredictInlineRequest(BaseModel):
+class PredictInlineRequest(PluginDTO):
     """Inline request: optional month label to query the bundled reference dataset."""
 
-    model_config = ConfigDict(protected_namespaces=())
     mode: Literal["inline"] = "inline"
     date: str | None = Field(default=None, pattern=r"^\d{4}-\d{2}$", description=_DATE_DESC)
-    mlflow_run_id: str = Field(default="", description="Sin efecto -- ml19 no soporta reentrenamiento")
+    mlflow_run_id: str = Field(
+        default="", description="Sin efecto -- ml19 no soporta reentrenamiento"
+    )
 
 
-class PredictInlineResponse(BaseModel):
+class PredictInlineResponse(PluginDTO):
     """Inline response: multi-horizon ensemble signal for one reference month."""
 
-    model_config = ConfigDict(protected_namespaces=())
     model_id: str
     date_label: str = Field(..., description="Mes 'hoy' usado (fila de referencia), YYYY-MM")
     mapa_month_used: str = Field(
-        ..., description="Mes MAPA real que alimenta las features de esa fila (date_label - 3 meses)",
+        ...,
+        description="Mes MAPA real que alimenta las features de esa fila (date_label - 3 meses)",
     )
     train_cutoff: str = Field(..., description="training_meta.json['train_end']")
     horizons: list[HorizonResult]
 
 
-class PredictBatchRequest(BaseModel):
+class PredictBatchRequest(BatchRequestBase):
     """Batch request: a CSV with a single 'date' column (YYYY-MM), one row per month to query."""
 
-    model_config = ConfigDict(protected_namespaces=())
-    mode: Literal["batch"] = "batch"
     data_path: str = Field(
         ...,
         description=(
@@ -81,7 +86,9 @@ class PredictBatchRequest(BaseModel):
             "dataset de referencia empaquetado que se quieren consultar."
         ),
     )
-    mlflow_run_id: str = Field(default="", description="Sin efecto -- ml19 no soporta reentrenamiento")
+    mlflow_run_id: str = Field(
+        default="", description="Sin efecto -- ml19 no soporta reentrenamiento"
+    )
 
 
 class BatchPrediction(BaseModel):
@@ -94,10 +101,9 @@ class BatchPrediction(BaseModel):
     error: str | None = None
 
 
-class PredictBatchResponse(BaseModel):
+class PredictBatchResponse(PluginDTO):
     """Batch response: one entry per requested month."""
 
-    model_config = ConfigDict(protected_namespaces=())
     model_id: str
     train_cutoff: str
     predictions: list[BatchPrediction]

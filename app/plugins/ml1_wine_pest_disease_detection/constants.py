@@ -17,7 +17,8 @@ ARTIFACT_FOLDER_NAME = "ml1_wine_pest_disease_detection"
 VERSION = "1.0.0"
 FRAMEWORK = "keras3(backend=torch) + ultralytics(YOLOv8) + scikit-learn(RandomForest)"
 
-# --- Artefactos (todos planos en artifacts/ml1_wine_pest_disease_detection/, variante _no_gases_desacoplado) ---
+# --- Artefactos (todos planos en artifacts/ml1_wine_pest_disease_detection/,
+# variante _no_gases_desacoplado) ---
 YOLO_WEIGHTS_FILENAME = "best.pt"
 CLASS_MAPPING_FILENAME = "class_mapping_no_gases.json"
 ENSEMBLE_WEIGHTS_FILENAMES = {
@@ -29,14 +30,16 @@ ENSEMBLE_WEIGHTS_FILENAMES = {
 # desacoplado no se usa nunca (ver inference.run_inference_tabular_only).
 RF_RIESGO_FILENAME = "rf_riesgo_expert_no_gases.joblib"
 
-# --- Clases (orden vinculante -- config.yaml::model_params.classes, coincide con class_mapping_no_gases.json) ---
+# --- Clases (orden vinculante -- config.yaml::model_params.classes, coincide con
+# class_mapping_no_gases.json) ---
 CLASSES = (
     "ALTICA", "BLACK_ROT", "BOTRYTIS", "EMPOASCA", "ERINOSIS", "ESCA_HOJA", "ESCA_RACIMO",
     "HEALTHY_HOJA", "HEALTHY_RACIMO", "ISARIOPSIS", "LOBESIA", "MILDIU", "OIDIO",
     "OIDIO_RACIMO", "RED_MITE",
 )
 HEALTHY_CLASSES = ("HEALTHY_HOJA", "HEALTHY_RACIMO")
-NO_IMAGE_LABEL = "IMAGEN_NO_DISPONIBLE"  # predictor.py::run_inference_tabular_only, modo desacoplado
+# predictor.py::run_inference_tabular_only, modo desacoplado
+NO_IMAGE_LABEL = "IMAGEN_NO_DISPONIBLE"
 
 IMAGE_SIZE = (224, 224)
 # keras/src/applications/efficientnet.py::IMAGENET_STDDEV_RGB -- copiado aqui (modulo privado de
@@ -60,7 +63,8 @@ IGNORED_GAS_COLS = ("CO2_ppm", "VOC_ppb")
 HEALTHY_CONFIDENCE_THRESHOLD = 0.80
 HEALTHY_RISK_DAMPING = 0.6
 
-# --- Hiperparametros de entrenamiento (unicamente los RF tabulares -- ver manifest.training.scope_note) ---
+# --- Hiperparametros de entrenamiento (unicamente los RF tabulares --
+# ver manifest.training.scope_note) ---
 # src/training/train_tabular.py:117-137 -- identicos a get_params() de los RF entregados.
 TRAIN_RF_CLASE_PARAMS = {
     "n_estimators": 200, "max_depth": 15, "min_samples_leaf": 20, "max_features": "log2",
@@ -76,11 +80,17 @@ TRAIN_TEST_SIZE = 0.2  # src/training/train_tabular.py -- holdout 80/20
 METRICS_REPORTED = {
     "clasificacion_deep_ensemble_produccion": {
         "accuracy": 0.9469, "f1_macro": 0.8807, "f1_weighted": 0.9463,
-        "fuente": "models/metrics/classification/report_ensemble_final_no_gases_desacoplado.csv (auditado, support=1470)",
+        "fuente": (
+            "models/metrics/classification/report_ensemble_final_no_gases_desacoplado.csv "
+            "(auditado, support=1470)"
+        ),
     },
     "clasificacion_rf_tabular_sin_gases": {
         "accuracy": 0.11593, "f1_macro": 0.1180,
-        "fuente": "models/metrics/classification/report_rf_tabular_no_gases.csv (auditado, support=100000)",
+        "fuente": (
+            "models/metrics/classification/report_rf_tabular_no_gases.csv "
+            "(auditado, support=100000)"
+        ),
         "nota": "No se usa para clasificar en produccion (modo desacoplado) -- ver known_issues.",
     },
     "regresion_riesgo_deep_ensemble_desacoplado_sin_gases": {
@@ -91,5 +101,9 @@ METRICS_REPORTED = {
         "precision": 0.995, "recall": 1.0, "map50": 0.995, "map50_95": 0.868,
         "fuente": "models/metrics/detection/YOLO/results.csv (auditado, epoca final 50/50)",
     },
-    "kpi_contractual": "Accuracy >= 0.80 (memoria 6.1) -- CUMPLE (0.9469). F1-macro >= 0.85 -- CUMPLE por escaso margen (0.8807). Varias clases minoritarias no llegan a Recall >= 0.85 individualmente (EMPOASCA 0.588, LOBESIA 0.60, OIDIO_RACIMO 0.615).",
+    "kpi_contractual": (
+        "Accuracy >= 0.80 (memoria 6.1) -- CUMPLE (0.9469). F1-macro >= 0.85 -- CUMPLE por "
+        "escaso margen (0.8807). Varias clases minoritarias no llegan a Recall >= 0.85 "
+        "individualmente (EMPOASCA 0.588, LOBESIA 0.60, OIDIO_RACIMO 0.615)."
+    ),
 }

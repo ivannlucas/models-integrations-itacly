@@ -11,18 +11,20 @@ reproduces the audited windows exactly. The preprocessing is the AI team's, unch
 from __future__ import annotations
 
 import logging
-import shutil
-import tempfile
 import time
-from datetime import datetime, timezone
 
 import numpy as np
 import pandas as pd
 
 from app.application.dto.stats_dto import InputField, OutputField, RuntimeStats, StatsResponse
 from app.domain.ports.model_plugin_port import ModelPluginPort
-from app.domain.services.exceptions import ModelNotLoadedError, ModelPersistenceError
-from app.domain.services.mlflow_tracker import BaseMLflowTracker
+from app.domain.services.mlflow_artifacts import (
+    add_mlflow_run_to_stats,
+    removing_dir,
+    require_train_tracker,
+    upload_model_to_mlflow,
+)
+from app.domain.services.plugin_runtime import PluginRuntimeMixin
 from app.infrastructure.artifact_store import local_file_path
 from app.plugins.ml26_wine_sulfite_gru_pso_forecast import (
     model_loader,
@@ -58,16 +60,49 @@ from app.plugins.ml26_wine_sulfite_gru_pso_forecast.train_dto import TrainRespon
 logger = logging.getLogger(__name__)
 
 
-class Ml26WineSulfiteGruPsoForecastPlugin(ModelPluginPort):
+def _load_train_frame(data_path: str) -> pd.DataFrame:
+    """Read the sequential training CSV and check its mandatory columns (incl. KI-01)."""
+    with local_file_path(data_path) as local_path:
+        raw_df = pd.read_csv(local_path)
+    missing = [c for c in TRAIN_HARD_REQUIRED_COLUMNS if c not in raw_df.columns]
+    if missing:
+        raise ValueError(f"CSV falta columnas requeridas: {missing}")
+    target_only = raw_df.get("target_only", pd.Series(False, index=raw_df.index))
+    operational = ~target_only.fillna(False).astype(bool)
+    if raw_df.loc[operational, "stage_progress"].isna().any():
+        raise ValueError(
+            "stage_progress es obligatorio en todas las filas operativas del CSV (KI-01)"
+        )
+    return raw_df
+
+
+def _report_metrics(result: training.TrainResult) -> tuple[dict, dict]:
+    """Validation metrics and (None when there is no test split) test metrics of a retrain."""
+    val, test = result.val_report, result.test_report or {}
+    metrics = {
+        "val_rmse_future_free_sulfite_72h": val[TARGET_SO2]["rmse"],
+        "val_mae_future_free_sulfite_72h": val[TARGET_SO2]["mae"],
+        "val_rmse_underprotection_risk_72h": val[TARGET_RISK]["rmse"],
+        "val_mae_underprotection_risk_72h": val[TARGET_RISK]["mae"],
+        "val_overall_rmse": val["overall_rmse"],
+        "val_overall_mae": val["overall_mae"],
+    }
+    test_metrics = {
+        "test_rmse_future_free_sulfite_72h": test[TARGET_SO2]["rmse"] if test else None,
+        "test_mae_future_free_sulfite_72h": test[TARGET_SO2]["mae"] if test else None,
+        "test_rmse_underprotection_risk_72h": test[TARGET_RISK]["rmse"] if test else None,
+        "test_mae_underprotection_risk_72h": test[TARGET_RISK]["mae"] if test else None,
+    }
+    return metrics, test_metrics
+
+
+class Ml26WineSulfiteGruPsoForecastPlugin(PluginRuntimeMixin, ModelPluginPort):
     """GRU-PSO multitask regressor: free SO2 and underprotection risk at 72 h per wine tank."""
 
     def __init__(self) -> None:
-        """Initialize an unloaded plugin with zeroed runtime counters."""
+        """Initialize an unloaded plugin (runtime counters and latency: mixin defaults)."""
         self._model: model_loader.LoadedModel | None = None
         self._registry: dict = {}
-        self._predict_count: int = 0
-        self._total_latency_ms: float = 0.0
-        self._last_predict_at: str | None = None
 
     # ── lifecycle ─────────────────────────────────────────────────────────────
 
@@ -88,14 +123,12 @@ class Ml26WineSulfiteGruPsoForecastPlugin(ModelPluginPort):
             # @require_user_model raises UserModelUnavailableError (→ 422) when the run has no
             # loadable model: never fall back to the base model.
             return download_user_model_from_mlflow(mlflow_run_id)
-        if self._model is None:
-            raise ModelNotLoadedError("El modelo no está cargado.")
+        self._require_loaded()
         return self._model, None
 
-    def _record(self, started: float) -> None:
-        self._predict_count += 1
-        self._total_latency_ms += (time.perf_counter() - started) * 1000.0
-        self._last_predict_at = datetime.now(tz=timezone.utc).isoformat()
+    def _record_timed(self, started: float) -> None:
+        """Count one served prediction and add its latency since *started*."""
+        self._record_latency((time.perf_counter() - started) * 1000.0)
 
     # ── shared inference ──────────────────────────────────────────────────────
 
@@ -122,9 +155,24 @@ class Ml26WineSulfiteGruPsoForecastPlugin(ModelPluginPort):
             )
         return results, windows
 
+    @staticmethod
+    def _feature_window_prediction(
+        model: model_loader.LoadedModel, feature_window
+    ) -> tuple[LotPrediction, np.ndarray]:
+        """Predict a pre-processed (window, n_features) feature_window; also returns it."""
+        window = preprocessing.validate_feature_window(feature_window, len(model.feature_names))
+        preds = postprocessing.predict_windows(model, window)
+        risk = float(preds[0, 1])
+        prediction = LotPrediction(
+            future_free_sulfite_72h=float(preds[0, 0]),
+            underprotection_risk_72h=risk,
+            risk_band=postprocessing.risk_band(risk),
+        )
+        return prediction, window
+
     # ── predict_inline ────────────────────────────────────────────────────────
 
-    def predict_inline(  # pylint: disable=too-many-locals
+    def predict_inline(
         self,
         *,
         features: dict,
@@ -136,30 +184,21 @@ class Ml26WineSulfiteGruPsoForecastPlugin(ModelPluginPort):
         _ = model_key, threshold  # regression model: no model variants, no decision threshold
         started = time.perf_counter()
         model, user_tmp = self._resolve_model(mlflow_run_id)
-        try:
+        with removing_dir(user_tmp):
             if features.get("feature_window") is not None:
-                window = preprocessing.validate_feature_window(
-                    features["feature_window"], len(model.feature_names)
+                prediction, window = self._feature_window_prediction(
+                    model, features["feature_window"]
                 )
-                preds = postprocessing.predict_windows(model, window)
-                risk = float(preds[0, 1])
-                prediction = LotPrediction(
-                    future_free_sulfite_72h=float(preds[0, 0]),
-                    underprotection_risk_72h=risk,
-                    risk_band=postprocessing.risk_band(risk),
-                )
-                xai = dict(zip(model.feature_names, (float(v) for v in window[0, -1])))
-                xai_window = np.asarray(window[0], dtype=float).tolist()
             else:
                 lots, readings = preprocessing.frames_from_inline(features)
-                predictions, windows = self._lot_predictions(model, lots, readings)
+                predictions, window = self._lot_predictions(model, lots, readings)
                 prediction = predictions[0]
-                # Same contract as the feature_window path: the 22 engineered model features of
-                # the scored window's last step (what the explainability service explains), not
-                # the raw reading columns.
-                xai = dict(zip(model.feature_names, (float(v) for v in windows[0, -1])))
-                xai_window = np.asarray(windows[0], dtype=float).tolist()
-            self._record(started)
+            # Both paths expose the same contract: the 22 engineered model features of the
+            # scored window's last step (what the explainability service explains), not the raw
+            # reading columns.
+            xai = dict(zip(model.feature_names, (float(v) for v in window[0, -1])))
+            xai_window = np.asarray(window[0], dtype=float).tolist()
+            self._record_timed(started)
             logger.info(
                 "predict_inline done — lot=%s so2=%.3f risk=%.3f source=%s",
                 prediction.lot_id,
@@ -175,9 +214,6 @@ class Ml26WineSulfiteGruPsoForecastPlugin(ModelPluginPort):
                 xai_feature_values=xai,
                 xai_feature_window=xai_window,
             )
-        finally:
-            if user_tmp:
-                shutil.rmtree(user_tmp, ignore_errors=True)
 
     # ── predict_batch ─────────────────────────────────────────────────────────
 
@@ -187,12 +223,12 @@ class Ml26WineSulfiteGruPsoForecastPlugin(ModelPluginPort):
         """
         started = time.perf_counter()
         model, user_tmp = self._resolve_model(mlflow_run_id)
-        try:
+        with removing_dir(user_tmp):
             with local_file_path(data_path) as local_path:
                 df = pd.read_csv(local_path)
             lots, readings = preprocessing.frames_from_batch_csv(df)
             predictions, _ = self._lot_predictions(model, lots, readings)
-            self._record(started)
+            self._record_timed(started)
             logger.info("predict_batch done — %d lots, source=%s", len(predictions), model.source)
             return PredictBatchResponse(
                 model_id=MODEL_ID,
@@ -200,15 +236,10 @@ class Ml26WineSulfiteGruPsoForecastPlugin(ModelPluginPort):
                 n_lots=len(predictions),
                 predictions=predictions,
             )
-        finally:
-            if user_tmp:
-                shutil.rmtree(user_tmp, ignore_errors=True)
 
     # ── train ─────────────────────────────────────────────────────────────────
 
-    def train(  # pylint: disable=too-many-locals
-        self, *, data_path: str, mlflow_run_id: str
-    ) -> TrainResponse:
+    def train(self, *, data_path: str, mlflow_run_id: str) -> TrainResponse:
         """Retrain the GRU from scratch with the final PSO configuration (training.py).
 
         Port of the AI team's final training (train_sequence_with_config, seed 7) on a CSV in their
@@ -218,22 +249,11 @@ class Ml26WineSulfiteGruPsoForecastPlugin(ModelPluginPort):
         predict(mlflow_run_id=...)); nothing is written to artifacts/ and the served model in
         memory is unchanged. If it cannot be uploaded, ModelPersistenceError (→ 502).
         """
-        if self._model is None:
-            raise ModelNotLoadedError("El modelo no está cargado.")
-        with local_file_path(data_path) as local_path:
-            raw_df = pd.read_csv(local_path)
-        missing = [c for c in TRAIN_HARD_REQUIRED_COLUMNS if c not in raw_df.columns]
-        if missing:
-            raise ValueError(f"CSV falta columnas requeridas: {missing}")
-        target_only = raw_df.get("target_only", pd.Series(False, index=raw_df.index))
-        operational = ~target_only.fillna(False).astype(bool)
-        if raw_df.loc[operational, "stage_progress"].isna().any():
-            raise ValueError(
-                "stage_progress es obligatorio en todas las filas operativas del CSV (KI-01)"
-            )
+        self._require_loaded()
+        raw_df = _load_train_frame(data_path)
 
         hyperparams = dict(self._model.config)
-        tracker = BaseMLflowTracker(mlflow_run_id)
+        tracker = require_train_tracker(mlflow_run_id)
         tracker.log_params(
             {
                 k: hyperparams[k]
@@ -253,7 +273,12 @@ class Ml26WineSulfiteGruPsoForecastPlugin(ModelPluginPort):
                     "gradient_clip",
                 )
             }
-            | {"optimizer": "AdamW", "loss": "SmoothL1Loss", "mode": "train_sequence_with_config", "seed": TRAINING_SEED}
+            | {
+                "optimizer": "AdamW",
+                "loss": "SmoothL1Loss",
+                "mode": "train_sequence_with_config",
+                "seed": TRAINING_SEED,
+            }
         )
 
         def _on_epoch(epoch: int, train_loss: float, val_rmse: float) -> None:
@@ -261,40 +286,23 @@ class Ml26WineSulfiteGruPsoForecastPlugin(ModelPluginPort):
 
         data = training.prepare_training_data(raw_df, self._model)
         result = training.train_with_config(self._model, data, hyperparams, on_epoch=_on_epoch)
-        val, test = result.val_report, result.test_report or {}
+        metrics, test_metrics = _report_metrics(result)
 
-        metrics = {
-            "val_rmse_future_free_sulfite_72h": val[TARGET_SO2]["rmse"],
-            "val_mae_future_free_sulfite_72h": val[TARGET_SO2]["mae"],
-            "val_rmse_underprotection_risk_72h": val[TARGET_RISK]["rmse"],
-            "val_mae_underprotection_risk_72h": val[TARGET_RISK]["mae"],
-            "val_overall_rmse": val["overall_rmse"],
-            "val_overall_mae": val["overall_mae"],
-        }
-        test_metrics = {
-            "test_rmse_future_free_sulfite_72h": test[TARGET_SO2]["rmse"] if test else None,
-            "test_mae_future_free_sulfite_72h": test[TARGET_SO2]["mae"] if test else None,
-            "test_rmse_underprotection_risk_72h": test[TARGET_RISK]["rmse"] if test else None,
-            "test_mae_underprotection_risk_72h": test[TARGET_RISK]["mae"] if test else None,
-        }
-        mlflow_tmp = tempfile.mkdtemp(prefix="ml26_mlflow_")
-        try:
+        def _write(model_dir: str) -> None:
+            # Logging the final metrics is part of the guarded save, as before: if MLflow
+            # rejects them the retrain is reported as not saved (ModelPersistenceError).
             tracker.log_metrics(metrics | {k: v for k, v in test_metrics.items() if v is not None})
-            model_loader.save_user_model(result.model, mlflow_tmp)
-            tracker.upload_artifacts(mlflow_tmp, artifact_path=MLFLOW_ARTIFACT_PATH)
-        except Exception as exc:
-            logger.error("MLflow upload failed for ml26: %s", exc)
-            raise ModelPersistenceError(
-                f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}"
-            ) from exc
-        finally:
-            shutil.rmtree(mlflow_tmp, ignore_errors=True)
+            model_loader.save_user_model(result.model, model_dir)
+
+        upload_model_to_mlflow(
+            tracker, _write, prefix="ml26_mlflow_", artifact_path=MLFLOW_ARTIFACT_PATH
+        )
 
         logger.info(
             "ml26 train() done — epochs=%d best=%d val_overall_rmse=%.4f run=%s",
             result.epochs_run,
             result.best_epoch,
-            val["overall_rmse"],
+            metrics["val_overall_rmse"],
             mlflow_run_id,
         )
         return TrainResponse(
@@ -368,7 +376,6 @@ class Ml26WineSulfiteGruPsoForecastPlugin(ModelPluginPort):
                 description="bajo / medio / alto (umbrales 0.33 / 0.66)",
             ),
         ]
-        avg = self._total_latency_ms / self._predict_count if self._predict_count else None
         base = StatsResponse(
             model_name=MODEL_ID,
             version=VERSION,
@@ -389,16 +396,7 @@ class Ml26WineSulfiteGruPsoForecastPlugin(ModelPluginPort):
             | {"model_config": dict(self._model.config) if self._model else None},
             runtime_stats=RuntimeStats(
                 total_predictions=self._predict_count,
-                avg_latency_ms=round(avg, 3) if avg is not None else None,
+                avg_latency_ms=self._avg_latency_ms(3),
             ),
         )
-        if mlflow_run_id:
-            try:
-                tracker = BaseMLflowTracker(mlflow_run_id)
-                base.metrics["mlflow"] = {
-                    "params": tracker.get_params(),
-                    "metrics": tracker.get_metrics(),
-                }
-            except Exception as exc:  # pylint: disable=broad-exception-caught
-                logger.warning("Could not fetch MLflow stats for run_id=%s: %s", mlflow_run_id, exc)
-        return base
+        return add_mlflow_run_to_stats(base, mlflow_run_id)

@@ -1,8 +1,9 @@
 """Vendored verbatim from inbox/a45/codigo/src/xai/fusion.py."""
 from __future__ import annotations
 
-import numpy as np
 from typing import Any, Dict, Optional
+
+import numpy as np
 
 
 def _safe_logit_from_prob(p: float, eps: float = 1e-6) -> float:
@@ -50,7 +51,7 @@ def _resolve_lambda_anomaly(model_cfg: Optional[Dict[str, Any]]) -> float:
     return float(np.clip(float(fuzzy_cfg["lambda_anomaly"]), 0.0, 1.0))
 
 
-def fuse_fuzzy_lstm_reports(
+def fuse_fuzzy_lstm_reports(  # pylint: disable=too-many-locals
     fuzzy_report: Dict[str, Any],
     lstm_report: Dict[str, Any],
     model_cfg: Optional[Dict[str, Any]] = None,
@@ -95,7 +96,9 @@ def fuse_fuzzy_lstm_reports(
         "shared_variables": shared,
         "union_variables": union,
         "branch_agreement": branch_agreement,
-        "fuzzy_support_ratio": float(fuzzy_report.get("fuzzy_case_signature", {}).get("support_ratio", 0.0)),
+        "fuzzy_support_ratio": float(
+            fuzzy_report.get("fuzzy_case_signature", {}).get("support_ratio", 0.0)
+        ),
         "lstm_dominant_span_shap": lstm_report.get("dominant_span_shap", "unknown"),
         "lstm_dominant_span_attention": lstm_report.get("dominant_span_attention", "unknown"),
         "lstm_dominant_patterns": lstm_report.get("dominant_patterns", []),
@@ -124,9 +127,15 @@ def fuse_fuzzy_lstm_reports(
             "predicted_class_fuzzy": int(fuzzy_class),
             "fuzzy_probability": float(fuzzy_prob),
             "fuzzy_mode": fuzzy_report.get("fuzzy_mode", "unknown"),
-            "support_ratio": float(fuzzy_report.get("fuzzy_case_signature", {}).get("support_ratio", 0.0)),
-            "dominant_variables": fuzzy_report.get("fuzzy_case_signature", {}).get("dominant_variables", []),
-            "dominant_stats": fuzzy_report.get("fuzzy_case_signature", {}).get("dominant_stats", []),
+            "support_ratio": float(
+                fuzzy_report.get("fuzzy_case_signature", {}).get("support_ratio", 0.0)
+            ),
+            "dominant_variables": fuzzy_report.get("fuzzy_case_signature", {}).get(
+                "dominant_variables", []
+            ),
+            "dominant_stats": fuzzy_report.get("fuzzy_case_signature", {}).get(
+                "dominant_stats", []
+            ),
         },
         "lstm": {
             "predicted_class_dl": int(dl_class),

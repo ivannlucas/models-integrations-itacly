@@ -167,6 +167,7 @@ def build_features_batch(df: pd.DataFrame, horizon: int) -> pd.DataFrame:
     Mirrors prepare_data._build_features: drops blacklist, targets, date;
     one-hot encodes object columns; sorts columns alphabetically.
     """
+    _ = horizon
     drop_cols = set(BLACKLIST)
     drop_cols.add("date")
 
@@ -214,11 +215,11 @@ def prepare_train_test(
 
     y_col = f"target_return_h{horizon}" if task == "regresion" else f"target_class_h{horizon}"
 
-    X_train = build_features_batch(train_df, horizon)
-    X_test_raw = build_features_batch(test_df, horizon)
-    X_test = X_test_raw.reindex(columns=X_train.columns, fill_value=0)
+    x_train = build_features_batch(train_df, horizon)
+    x_test_raw = build_features_batch(test_df, horizon)
+    x_test = x_test_raw.reindex(columns=x_train.columns, fill_value=0)
 
     y_train = train_df[y_col].astype(float if task == "regresion" else int)
     y_test = test_df[y_col].astype(float if task == "regresion" else int)
 
-    return X_train, X_test, y_train, y_test
+    return x_train, x_test, y_train, y_test

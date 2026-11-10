@@ -39,22 +39,33 @@ def run_policy_simulation(
         baseline_gap / simulation_frame["effective_supply_rate"]
     ).round(rounding_decimals)
 
-    realized_requirement = simulation_frame["expected_requirement_tons"] * (1.0 + simulation_frame["expected_waste_rate"])
+    realized_requirement = simulation_frame["expected_requirement_tons"] * (
+        1.0 + simulation_frame["expected_waste_rate"]
+    )
     simulation_frame["excess_tons"] = np.maximum(
         0.0,
-        simulation_frame["current_inventory_tons"] + simulation_frame["order_quantity_tons"] - realized_requirement,
+        simulation_frame["current_inventory_tons"]
+        + simulation_frame["order_quantity_tons"]
+        - realized_requirement,
     ).round(rounding_decimals)
     simulation_frame["stockout_tons"] = np.maximum(
         0.0,
-        realized_requirement - (simulation_frame["current_inventory_tons"] + simulation_frame["order_quantity_tons"]),
+        realized_requirement
+        - (simulation_frame["current_inventory_tons"] + simulation_frame["order_quantity_tons"]),
     ).round(rounding_decimals)
     simulation_frame["baseline_excess_tons"] = np.maximum(
         0.0,
-        simulation_frame["current_inventory_tons"] + simulation_frame["baseline_order_quantity_tons"] - realized_requirement,
+        simulation_frame["current_inventory_tons"]
+        + simulation_frame["baseline_order_quantity_tons"]
+        - realized_requirement,
     ).round(rounding_decimals)
     simulation_frame["baseline_stockout_tons"] = np.maximum(
         0.0,
-        realized_requirement - (simulation_frame["current_inventory_tons"] + simulation_frame["baseline_order_quantity_tons"]),
+        realized_requirement
+        - (
+            simulation_frame["current_inventory_tons"]
+            + simulation_frame["baseline_order_quantity_tons"]
+        ),
     ).round(rounding_decimals)
 
     policy_metrics = compute_policy_metrics(
@@ -66,16 +77,24 @@ def run_policy_simulation(
     summary_metrics = {
         "row_count": int(len(simulation_frame)),
         "triggered_orders": int(simulation_frame["purchase_trigger_flag"].sum()),
-        "total_order_quantity_tons": round(float(simulation_frame["order_quantity_tons"].sum()), rounding_decimals),
+        "total_order_quantity_tons": round(
+            float(simulation_frame["order_quantity_tons"].sum()), rounding_decimals
+        ),
         "total_excess_tons": round(policy_metrics["policy_excess_tons"], rounding_decimals),
         "total_stockout_tons": round(policy_metrics["policy_stockout_tons"], rounding_decimals),
-        "baseline_total_excess_tons": round(policy_metrics["baseline_excess_tons"], rounding_decimals),
-        "baseline_total_stockout_tons": round(policy_metrics["baseline_stockout_tons"], rounding_decimals),
+        "baseline_total_excess_tons": round(
+            policy_metrics["baseline_excess_tons"], rounding_decimals
+        ),
+        "baseline_total_stockout_tons": round(
+            policy_metrics["baseline_stockout_tons"], rounding_decimals
+        ),
         "absolute_excess_reduction_tons": round(
             policy_metrics["absolute_excess_reduction_tons"],
             rounding_decimals,
         ),
-        "aggregate_excess_reduction_pct": round(policy_metrics["aggregate_excess_reduction_pct"], 3),
+        "aggregate_excess_reduction_pct": round(
+            policy_metrics["aggregate_excess_reduction_pct"], 3
+        ),
         "aggregate_stockout_change_pct": round(policy_metrics["aggregate_stockout_change_pct"], 3),
         "guardrail": policy_metrics["guardrail"],
         "stockout_guardrail_pass": policy_metrics["stockout_guardrail_pass"],

@@ -1,14 +1,12 @@
 """Pydantic DTOs for the ml19 /train endpoint."""
-# pylint: disable=too-few-public-methods  # Pydantic DTOs carry no behaviour
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, Field
 
-from app.application.dto.base_version_dto import VersionInfo
+from app.application.dto.plugin_dto import PluginDTO, PromotingUploadWarning, PublishedBaseVersion
 
 
-class TrainRequest(BaseModel):
+class TrainRequest(PluginDTO):
     """Retrain with the AI team's official pipeline on an updated dataset_v7_fe.csv."""
 
-    model_config = ConfigDict(protected_namespaces=())
     data_path: str = Field(
         ...,
         description=(
@@ -28,10 +26,8 @@ class TrainRequest(BaseModel):
     )
 
 
-class SelectedRegMetrics(BaseModel):
+class SelectedRegMetrics(PluginDTO):
     """Walk-forward metrics (out-of-sample, from TRAIN_END) of the selected regressor."""
-
-    model_config = ConfigDict(protected_namespaces=())
 
     model_name: str
     corr: float
@@ -42,10 +38,8 @@ class SelectedRegMetrics(BaseModel):
     r2: float
 
 
-class SelectedClfMetrics(BaseModel):
+class SelectedClfMetrics(PluginDTO):
     """Walk-forward metrics (out-of-sample, from TRAIN_END) of the selected classifier."""
-
-    model_config = ConfigDict(protected_namespaces=())
 
     model_name: str
     acc: float
@@ -63,10 +57,9 @@ class HorizonTrainMetrics(BaseModel):
     clf: SelectedClfMetrics
 
 
-class TrainResponse(BaseModel):
+class TrainResponse(PluginDTO):
     """Walk-forward metrics of the selected models, comparable with memoria Tables 38-39."""
 
-    model_config = ConfigDict(protected_namespaces=())
     detail: str
     horizons: list[HorizonTrainMetrics]
     n_features: int
@@ -77,13 +70,5 @@ class TrainResponse(BaseModel):
     data_end: str
     training_time_s: float
     mlflow_run_id: str = ""
-    upload_warning: str | None = Field(
-        default=None,
-        description=(
-            "Aviso si la subida a MLflow falló; el modelo base se publica igualmente "
-            "(solo un fallo al publicar la base es un 502)"
-        ),
-    )
-    base_version: VersionInfo | None = Field(
-        default=None, description="Versión del modelo base publicada por este reentreno"
-    )
+    upload_warning: PromotingUploadWarning = None
+    base_version: PublishedBaseVersion = None

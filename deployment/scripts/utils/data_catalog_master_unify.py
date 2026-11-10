@@ -50,10 +50,14 @@ def load_validation_schemas(validation_directory: str) -> Dict[str, Dict[str, Di
 
     if not validation_files:
         print(
-            f"Advertencia: No se encontraron archivos '*.json' en el directorio de validación: {validation_directory}")
+            "Advertencia: No se encontraron archivos '*.json' en el directorio de validación: "
+            f"{validation_directory}")
         return validation_schemas
 
-    print(f"\nCargando {len(validation_files)} archivos de validación desde '{validation_directory}'...")
+    print(
+        f"\nCargando {len(validation_files)} archivos de validación desde "
+        f"'{validation_directory}'..."
+    )
 
     for val_file_path in validation_files:
         # Extrae el nombre base, p.ej. 'od_areas' de 'ruta/od_areas.json'
@@ -75,7 +79,10 @@ def load_validation_schemas(validation_directory: str) -> Dict[str, Dict[str, Di
                     }
 
             validation_schemas[base_name] = column_map
-            print(f"  -> Esquema de validación '{base_name}' cargado con {len(column_map)} columnas.")
+            print(
+                f"  -> Esquema de validación '{base_name}' cargado con "
+                f"{len(column_map)} columnas."
+            )
 
         except json.JSONDecodeError as e:
             print(f"    Error al decodificar JSON en {val_file_path}: {e}")
@@ -129,7 +136,8 @@ def _enrich_column(col_auto: Dict[str, Any], val_info: Dict[str, str]) -> Dict[s
     return col_auto
 
 
-def _process_etl_sources(etl_name: str, etl_data: Dict[str, Any], master_catalog: Dict[str, Dict[str, Any]]) -> None:
+def _process_etl_sources(etl_name: str, etl_data: Dict[str, Any],
+                         master_catalog: Dict[str, Dict[str, Any]]) -> None:
     """
     Procesa la sección 'data_sources' de un archivo ETL.
 
@@ -153,7 +161,8 @@ def _process_etl_sources(etl_name: str, etl_data: Dict[str, Any], master_catalog
             master_catalog[source_id]["consumed_by_etls"].append(etl_name)
 
 
-def _process_etl_targets(etl_name: str, etl_data: Dict[str, Any], master_catalog: Dict[str, Dict[str, Any]],
+def _process_etl_targets(etl_name: str, etl_data: Dict[str, Any],
+                         master_catalog: Dict[str, Dict[str, Any]],
                          validation_schemas: Dict[str, Dict[str, Dict[str, str]]]) -> None:
     """
     Procesa la sección 'data_targets' de un archivo ETL.
@@ -198,7 +207,10 @@ def _process_etl_targets(etl_name: str, etl_data: Dict[str, Any], master_catalog
         validation_map = validation_schemas.get(table_name_only)
 
         if validation_map:
-            print(f"    -> Enriqueciendo '{target_id}' usando el esquema de validación '{table_name_only}'.")
+            print(
+                f"    -> Enriqueciendo '{target_id}' usando el esquema de validación "
+                f"'{table_name_only}'."
+            )
             for col_auto in original_lineage:
                 col_name_auto = col_auto.get('column')
                 validation_info = None
@@ -265,7 +277,24 @@ def _write_json_catalog(catalog_data: Dict[str, Dict[str, Any]], filename: str) 
         sys.exit(1)
 
 
-def generate_markdown_catalog(catalog_data: Dict[str, Dict[str, Any]], output_filename: str) -> None:
+def _lineage_row(col: Dict[str, Any]) -> str:
+    """Markdown table row of one column of the schema lineage."""
+    col_name = col.get('column', 'N/A')
+    col_type = col.get('inferred_type', 'N/A')
+    # Escapar el carácter '|' si aparece en la lógica
+    col_description = str(col.get('description', 'N/A')).replace("|", "\\|")
+    col_logic = str(col.get('transformation_logic', 'N/A')).replace("|", "\\|")
+    col_sources = col.get('source_columns', [])
+    col_source_str = f"`{', '.join(col_sources)}`" if col_sources else "N/A"
+
+    return (
+        f"| `{col_name}` | {col_type} | {col_description} | {col_logic} "
+        f"| {col_source_str} |"
+    )
+
+
+def generate_markdown_catalog(
+        catalog_data: Dict[str, Dict[str, Any]], output_filename: str) -> None:
     """
     Genera un archivo Markdown a partir del catálogo maestro.
 
@@ -309,19 +338,12 @@ def generate_markdown_catalog(catalog_data: Dict[str, Dict[str, Any]], output_fi
 
         if schema_lineage:
             md_content.append(
-                "| Columna Destino | Tipo | Descripción | Lógica de Transformación | Columnas Origen |")
+                "| Columna Destino | Tipo | Descripción | Lógica de Transformación "
+                "| Columnas Origen |")
             md_content.append("| :--- | :--- | :--- | :--- | :--- |")
 
             for col in schema_lineage:
-                col_name = col.get('column', 'N/A')
-                col_type = col.get('inferred_type', 'N/A')
-                # Escapar el carácter '|' si aparece en la lógica
-                col_description = str(col.get('description', 'N/A')).replace("|", "\\|")
-                col_logic = str(col.get('transformation_logic', 'N/A')).replace("|", "\\|")
-                col_sources = col.get('source_columns', [])
-                col_source_str = f"`{', '.join(col_sources)}`" if col_sources else "N/A"
-
-                md_content.append(f"| `{col_name}` | {col_type} | {col_description} | {col_logic} | {col_source_str} |")
+                md_content.append(_lineage_row(col))
         else:
             md_content.append("_No hay linaje de columnas definido._")
 
@@ -431,11 +453,17 @@ def main() -> None:
 
     # Validar que ambos directorios existan
     if not os.path.isdir(args.autogen_dir):
-        print(f"Error: El directorio de autogenerados '{args.autogen_dir}' no es un directorio válido.")
+        print(
+            f"Error: El directorio de autogenerados '{args.autogen_dir}' "
+            "no es un directorio válido."
+        )
         sys.exit(1)
 
     if not os.path.isdir(args.validation_dir):
-        print(f"Error: El directorio de validación '{args.validation_dir}' no es un directorio válido.")
+        print(
+            f"Error: El directorio de validación '{args.validation_dir}' "
+            "no es un directorio válido."
+        )
         sys.exit(1)
 
     build_master_catalog(args.autogen_dir, args.validation_dir)

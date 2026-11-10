@@ -32,8 +32,12 @@ SUBSYSTEMS_CONFIG = [
 ]
 
 
-def _canon_subsystem_name(name: str, subsystems_config: Optional[List[Dict[str, Any]]] = None) -> str:
-    valid_names = {str(item["name"]).strip() for item in (subsystems_config or []) if item.get("name")}
+def _canon_subsystem_name(
+    name: str, subsystems_config: Optional[List[Dict[str, Any]]] = None
+) -> str:
+    valid_names = {
+        str(item["name"]).strip() for item in (subsystems_config or []) if item.get("name")
+    }
     name = str(name or "").strip()
     if name not in valid_names:
         raise ValueError(
@@ -52,7 +56,9 @@ def _catalog_key(sub1: str, sub2: str, span: str, subsystems_config):
     return (pair[0], pair[1], str(span or "unknown").strip().lower())
 
 
-def normalize_pcc_catalog(pcc_catalog: Dict, subsystems_config: Optional[List[Dict[str, Any]]] = None) -> Dict:
+def normalize_pcc_catalog(
+    pcc_catalog: Dict, subsystems_config: Optional[List[Dict[str, Any]]] = None
+) -> Dict:
     """Normaliza claves del catálogo para que sub1-sub2 == sub2-sub1."""
     normalized = {}
 
@@ -69,6 +75,7 @@ def normalize_pcc_catalog(pcc_catalog: Dict, subsystems_config: Optional[List[Di
 
 
 def build_pcc_catalog_from_records(records, subsystems_config):
+    """Build the PCC catalog keyed by (subsystem pair, span) from a list of record dicts."""
     catalog = {}
 
     for record in records:
@@ -123,7 +130,8 @@ PCC_CATALOG = {
     ("termico_transferencia", "ventilacion_presion", "medio"): {
         "name": "PCC térmico-ventilación intermedio",
         "message": (
-            "Perfil emergente asociado a transferencia térmica condicionada por ventilación y presión."
+            "Perfil emergente asociado a transferencia térmica condicionada por ventilación y "
+            "presión."
         ),
         "recommendation": (
             "Comprobar estabilidad del flujo de aire, presión estática, velocidad del ventilador "
@@ -258,7 +266,7 @@ def _score_subsystem(
     }
 
 
-def _rank_subsystems(
+def _rank_subsystems(  # pylint: disable=too-many-locals
     rep_fuzzy: Dict[str, Any],
     rep_lstm: Dict[str, Any],
     rep_fusion: Dict[str, Any],
@@ -438,8 +446,10 @@ def _compute_online_state(
     """
     Estados:
       - normal: no supera umbral, no hay PCC catalogado y hay margen suficiente
-      - vigilancia: supera umbral pero no hay PCC catalogado o soporte insuficiente / no supera umbral pero hay PCC catalogado (falso negativo potencial)
-      - criticidad detectada: supera umbral con un margen significativo, hay PCC catalogado y soporte suficiente
+      - vigilancia: supera umbral pero no hay PCC catalogado o soporte insuficiente / no supera
+        umbral pero hay PCC catalogado (falso negativo potencial)
+      - criticidad detectada: supera umbral con un margen significativo, hay PCC catalogado y
+        soporte suficiente
     """
 
     policy = policy or DEFAULT_MONITOR_POLICY
@@ -465,7 +475,7 @@ def _compute_online_state(
     return "Vigilancia"
 
 
-def build_pcc_report(
+def build_pcc_report(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
     fuzzy_report: Dict[str, Any],
     lstm_report: Dict[str, Any],
     fusion_report: Dict[str, Any],
@@ -473,6 +483,7 @@ def build_pcc_report(
     pcc_catalog: Optional[Dict[Tuple[str, str, str], Dict[str, Any]]] = None,
     monitor_policy: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
+    """Match the dominant subsystem pair against the PCC catalog and build the monitor report."""
 
     subsystems = subsystems or SUBSYSTEMS_CONFIG
     pcc_catalog = pcc_catalog or PCC_CATALOG
@@ -489,13 +500,20 @@ def build_pcc_report(
     prob = safe_float(pred.get("ensemble_prob", np.nan), default=np.nan)
     margin = safe_float(abs(prob - threshold) if np.isfinite(prob) else np.nan, default=np.nan)
 
-    fuzzy_top = [str(v) for v, _ in (fuzzy_report.get("fuzzy_case_signature", {}).get("dominant_variables", []) or [])]
+    fuzzy_top = [
+        str(v)
+        for v, _ in (
+            fuzzy_report.get("fuzzy_case_signature", {}).get("dominant_variables", []) or []
+        )
+    ]
     lstm_top = [
         str(row.get("feature"))
         for row in (lstm_report.get("top_variables", []) or [])
         if row.get("feature") is not None
     ]
-    shared_vars = [str(v) for v in (fusion_report.get("agreement", {}).get("shared_variables", []) or [])]
+    shared_vars = [
+        str(v) for v in (fusion_report.get("agreement", {}).get("shared_variables", []) or [])
+    ]
     dominant_span = str(lstm_report.get("dominant_span_shap", "unknown")).lower()
     support_ratio = safe_float(
         fuzzy_report.get("fuzzy_case_signature", {}).get("support_ratio"),
@@ -552,10 +570,15 @@ def build_pcc_report(
         message = pcc_match.get("message")
     elif state == "Vigilancia":
         recommendation = "Se recomienda vigilancia reforzada y seguimiento."
-        message = "No se identifica un perfil catalogado de criticidad, pero hay indicios de anomalia."
+        message = (
+            "No se identifica un perfil catalogado de criticidad, pero hay indicios de anomalia."
+        )
     else:
         recommendation = "Mantener monitorizacion ordinaria."
-        message = "No se identifica un perfil catalogado de criticidad y no hay indicios fuertes de anomalia."
+        message = (
+            "No se identifica un perfil catalogado de criticidad y no hay indicios fuertes de "
+            "anomalia."
+        )
 
     return {
         "state": state,

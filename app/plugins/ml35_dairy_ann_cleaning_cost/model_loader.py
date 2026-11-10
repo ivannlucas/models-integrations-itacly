@@ -3,7 +3,7 @@ import logging
 
 import joblib
 import torch
-import torch.nn as nn
+from torch import nn
 
 from app.infrastructure.artifact_store import ArtifactStore
 from app.plugins.ml35_dairy_ann_cleaning_cost.constants import (
@@ -37,6 +37,7 @@ class PasteurizationANN(nn.Module):
         )
 
     def forward(self, x):
+        """Return the predicted (scaled) water consumption for the batch *x*."""
         return self.network(x)
 
 
@@ -51,8 +52,8 @@ def load_artifacts():
     )
     model.eval()
 
-    scaler_X = joblib.load(_store.path(SCALER_X_FILENAME))
+    scaler_x = joblib.load(_store.path(SCALER_X_FILENAME))
     scaler_y = joblib.load(_store.path(SCALER_Y_FILENAME))
 
     logger.info("ml35 artifacts loaded — ANN + scaler_X + scaler_y")
-    return model, scaler_X, scaler_y
+    return model, scaler_x, scaler_y

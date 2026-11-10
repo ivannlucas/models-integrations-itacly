@@ -1,5 +1,8 @@
-"""Feature engineering for the ml36 MLP — port of ga_model_pipeline._build_feature_matrix_for_individual."""
-# pylint: disable=invalid-name
+"""Feature engineering for the ml36 MLP.
+
+Port of ga_model_pipeline._build_feature_matrix_for_individual.
+"""
+
 from __future__ import annotations
 
 import numpy as np

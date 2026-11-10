@@ -4,12 +4,14 @@ from app.domain.services.exceptions import InvalidImageError
 PREFIX = "/models/ml4-lactic-cnn-thermal-early-disease-detection"
 
 _TINY_PNG_B64 = (
-    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwADhQGAWjR9awAAAABJRU5ErkJggg=="
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQ"
+    "DwADhQGAWjR9awAAAABJRU5ErkJggg=="
 )
 INLINE_PAYLOAD = {"mode": "inline", "image_base64": _TINY_PNG_B64}
 
 
 def test_health(client):
+    """GET /health reports the model as ok and loaded."""
     body = client.get(f"{PREFIX}/health").json()
     assert body["status"] == "ok"
     assert body["model"] == "ml4-lactic-cnn-thermal-early-disease-detection"
@@ -17,11 +19,13 @@ def test_health(client):
 
 
 def test_stats(client):
+    """GET /stats returns the model name."""
     body = client.get(f"{PREFIX}/stats").json()
     assert body["model_name"] == "ml4-lactic-cnn-thermal-early-disease-detection"
 
 
 def test_predict_inline(client):
+    """Inline /predict returns a valid class, index and confidence."""
     resp = client.post(f"{PREFIX}/predict", json=INLINE_PAYLOAD)
     assert resp.status_code == 200
     body = resp.json()
@@ -32,13 +36,17 @@ def test_predict_inline(client):
 
 
 def test_predict_batch(client):
+    """Batch /predict returns 200 with the model id."""
     resp = client.post(f"{PREFIX}/predict", json={"mode": "batch", "data_path": "/tmp/thermal.zip"})
     assert resp.status_code == 200
     assert resp.json()["model_id"] == "ml4-lactic-cnn-thermal-early-disease-detection"
 
 
 def test_predict_inline_invalid_image_maps_to_422(client, fake_plugins):
-    fake_plugins["ml4-lactic-cnn-thermal-early-disease-detection"].raise_on_inline = InvalidImageError("bad")
+    """InvalidImageError from the plugin maps to HTTP 422."""
+    fake_plugins["ml4-lactic-cnn-thermal-early-disease-detection"].raise_on_inline = (
+        InvalidImageError("bad")
+    )
     resp = client.post(f"{PREFIX}/predict", json=INLINE_PAYLOAD)
     assert resp.status_code == 422
 

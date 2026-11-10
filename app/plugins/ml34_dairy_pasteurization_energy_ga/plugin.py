@@ -5,30 +5,34 @@ Inline mode predicts (E_consumo, T_out_leche) with the MLP digital twin.
 Optimize mode runs the GA v4 per scenario: minimizes the specific consumption
 E_consumo/F_flow subject to the food-safety constraint T_out >= 72.3 °C.
 
-Attribute/variable names like _scaler_X intentionally mirror the original
+Response field names like E_consumo_pred intentionally mirror the original
 codebase and its artifacts.
 """
-# pylint: disable=invalid-name
 from __future__ import annotations
 
+import copy
+import json
 import logging
 import os
-import shutil
-from datetime import datetime, timezone
 from typing import Any
 
+import joblib
 import numpy as np
 import pandas as pd
 import torch
 
-from app.application.dto.stats_dto import InputField, OutputField, RuntimeStats, StatsResponse
+from app.application.dto.stats_dto import InputField, OutputField, StatsResponse
 from app.domain.ports.model_plugin_port import ModelPluginPort
-from app.domain.services.exceptions import (
-    ModelNotLoadedError,
-    ModelPersistenceError,
-    ThermalSafetyViolationError,
+from app.domain.services.batch_rows import row_error_capture
+from app.domain.services.exceptions import ThermalSafetyViolationError
+from app.domain.services.mlflow_artifacts import (
+    add_mlflow_run_to_stats,
+    removing_dir,
+    require_train_tracker,
+    upload_model_to_mlflow,
 )
-from app.domain.services.mlflow_tracker import BaseMLflowTracker
+from app.domain.services.plugin_runtime import PluginRuntimeMixin
+from app.domain.services.xai_values import xai_feature_values
 from app.infrastructure.artifact_store import local_file_path
 from app.plugins.ml34_dairy_pasteurization_energy_ga.constants import (
     FEATURES,
@@ -74,51 +78,112 @@ from app.plugins.ml34_dairy_pasteurization_energy_ga.train_dto import TrainRespo
 logger = logging.getLogger(__name__)
 
 
-def _xai_values_from_features(data: dict) -> dict[str, float] | None:
-    """Build xai_feature_values from a predict_batch row dict.
+def _ga_best_individual(ctx: tuple, *, t_in: float, t_ciclo: float, delta_p: float, seed: int):
+    """Run the GA v4 for one scenario (``ctx = (model, scaler_X, scaler_y)``); best individual."""
+    model, scaler_x, scaler_y = ctx
+    toolbox = setup_ga_toolbox()
+    hof = run_ga_single(
+        toolbox, T_in_leche=t_in, t_ciclo=t_ciclo, Delta_P=delta_p,
+        model=model, scaler_X=scaler_x, scaler_y=scaler_y,
+        seed=seed,
+    )
+    return hof[0]
 
-    Without this, predict_batch rows only carry row/E_consumo_pred/T_out_pred —
-    the platform's XAI-context builder filters those out as known output columns,
-    is left with zero input features, and silently skips calling the explain
-    service (no error, no request — just no explanation). See
-    ml35_dairy_ann_cleaning_cost's _xai_values_from_features for the same fix.
+
+def _load_train_frame(data_path: str) -> pd.DataFrame:
+    """Read the training CSV and check it has the 5 features and the 2 targets."""
+    with local_file_path(data_path) as local_path:
+        df = pd.read_csv(local_path)
+    missing = [c for c in FEATURES + TARGETS if c not in df.columns]
+    if missing:
+        raise ValueError(f"CSV falta columnas requeridas: {missing}")
+    return df
+
+
+def _temporal_holdout(x_scaled: np.ndarray, y_scaled: np.ndarray) -> tuple:
+    """Split off the last 15% of rows for early stopping: (x_tr, y_tr, x_val, y_val).
+
+    With fewer than 10 rows there is no hold-out and the training set is also the
+    validation set.
     """
-    xai: dict[str, float] = {}
-    for f in FEATURES:
-        val = data.get(f)
-        if val is not None and pd.notna(val):
-            try:
-                xai[f] = float(val)
-            except (TypeError, ValueError):
-                pass
-    return xai or None
+    n = len(x_scaled)
+    n_val = max(1, int(n * 0.15)) if n >= 10 else 0
+    if n_val:
+        return x_scaled[:-n_val], y_scaled[:-n_val], x_scaled[-n_val:], y_scaled[-n_val:]
+    return x_scaled, y_scaled, x_scaled, y_scaled
 
 
-class Ml34DairyPasteurizationEnergyGaPlugin(ModelPluginPort):
+def _target_metrics(y_real: np.ndarray, y_pred: np.ndarray) -> dict[str, float]:
+    """RMSE, MAE and R² per target (keys ``rmse_<target>``, ``mae_<target>``, ``r2_<target>``)."""
+    metrics: dict[str, float] = {}
+    for i, target in enumerate(TARGETS):
+        err = y_real[:, i] - y_pred[:, i]
+        rmse = float(np.sqrt(np.mean(err ** 2)))
+        mae = float(np.mean(np.abs(err)))
+        ss_res = float(np.sum(err ** 2))
+        ss_tot = float(np.sum((y_real[:, i] - np.mean(y_real[:, i])) ** 2))
+        r2 = float(1 - ss_res / ss_tot) if ss_tot else 0.0
+        metrics[f"rmse_{target}"] = rmse
+        metrics[f"mae_{target}"] = mae
+        metrics[f"r2_{target}"] = r2
+    return metrics
+
+
+def _train_one_epoch(model, loader, optimizer, criterion) -> None:
+    """One pass over the training batches (train mode, Adam step per batch)."""
+    model.train()
+    for x_batch, y_batch in loader:
+        optimizer.zero_grad()
+        loss = criterion(model(x_batch), y_batch)
+        loss.backward()
+        optimizer.step()
+
+
+def _train_with_early_stopping(model, loader, *, optimizer, criterion, val: tuple) -> int:
+    """Train up to TRAIN_EPOCHS epochs, stopping after TRAIN_PATIENCE without improvement.
+
+    ``val`` is ``(x_val_t, y_val_t)``. Leaves ``model`` with the weights of the best
+    validation epoch and returns the number of epochs executed.
+    """
+    x_val_t, y_val_t = val
+    best_val = float("inf")
+    best_state = copy.deepcopy(model.state_dict())
+    no_improve = 0
+    epochs_executed = 0
+    for epoch in range(TRAIN_EPOCHS):
+        _train_one_epoch(model, loader, optimizer, criterion)
+        model.eval()
+        with torch.no_grad():
+            val_loss = criterion(model(x_val_t), y_val_t).item()
+        if val_loss < best_val:
+            best_val = val_loss
+            best_state = copy.deepcopy(model.state_dict())
+            no_improve = 0
+        else:
+            no_improve += 1
+        epochs_executed = epoch + 1
+        if no_improve >= TRAIN_PATIENCE:
+            break
+
+    model.load_state_dict(best_state)
+    return epochs_executed
+
+
+class Ml34DairyPasteurizationEnergyGaPlugin(PluginRuntimeMixin, ModelPluginPort):
     """MLP digital twin + DEAP single-objective GA for pasteurization setpoints."""
 
     def __init__(self) -> None:
         self._model: Any = None
-        self._scaler_X: Any = None
+        self._scaler_x: Any = None
         self._scaler_y: Any = None
         self._config: dict | None = None
-        self._predict_count: int = 0
-        self._last_predict_at: str | None = None
 
     def load(self) -> None:
-        self._model, self._scaler_X, self._scaler_y, self._config = load_artifacts()
+        self._model, self._scaler_x, self._scaler_y, self._config = load_artifacts()
         logger.info("Ml34DairyPasteurizationEnergyGaPlugin loaded: %s", MODEL_ID)
 
     def is_loaded(self) -> bool:
         return self._model is not None
-
-    def _require_loaded(self) -> None:
-        if self._model is None:
-            raise ModelNotLoadedError("El modelo no está cargado.")
-
-    def _record(self) -> None:
-        self._predict_count += 1
-        self._last_predict_at = datetime.now(tz=timezone.utc).isoformat()
 
     # ── predict_inline ────────────────────────────────────────────────────────
 
@@ -132,8 +197,10 @@ class Ml34DairyPasteurizationEnergyGaPlugin(ModelPluginPort):
         """
         if not mlflow_run_id:
             self._require_loaded()
-            return (self._model, self._scaler_X, self._scaler_y), None
-        model, scaler_x, scaler_y, _config, user_temp_dir = download_user_model_from_mlflow(mlflow_run_id)
+            return (self._model, self._scaler_x, self._scaler_y), None
+        model, scaler_x, scaler_y, _config, user_temp_dir = download_user_model_from_mlflow(
+            mlflow_run_id
+        )
         return (model, scaler_x, scaler_y), user_temp_dir
 
     def predict_inline(
@@ -148,22 +215,19 @@ class Ml34DairyPasteurizationEnergyGaPlugin(ModelPluginPort):
         if mlflow_run_id:
             logger.info("predict_inline — using user model from MLflow run_id=%s", mlflow_run_id)
         ctx, user_temp_dir = self._resolve_model(mlflow_run_id)
-        try:
+        with removing_dir(user_temp_dir):
             if model_key == "optimize":
                 result = self._run_optimize(features, ctx)
             else:
                 result = self._run_predict(features, ctx)
             self._record()
             return result
-        finally:
-            if user_temp_dir:
-                shutil.rmtree(user_temp_dir, ignore_errors=True)
 
     def _run_predict(self, features: dict, ctx: tuple) -> PredictInlineResponse:
         """MLP surrogate single-sample inference in real units."""
-        model, scaler_X, scaler_y = ctx
+        model, scaler_x, scaler_y = ctx
         e_consumo, t_out = predict_scenario(
-            model, scaler_X, scaler_y,
+            model, scaler_x, scaler_y,
             float(features["T_in_leche"]), float(features["F_flow"]),
             float(features["T_servicio"]), float(features["t_ciclo"]),
             float(features["Delta_P"]),
@@ -176,23 +240,15 @@ class Ml34DairyPasteurizationEnergyGaPlugin(ModelPluginPort):
 
     def _run_optimize(self, features: dict, ctx: tuple) -> PredictOptimizeResponse:
         """Run the single-objective GA for one scenario (deterministic per seed)."""
-        model, scaler_X, scaler_y = ctx
         t_in = float(features["T_in_leche"])
         delta_p = float(features["Delta_P"])
         t_ciclo = float(features["t_ciclo"])
         seed = int(features.get("seed", 1))
 
-        toolbox = setup_ga_toolbox()
-        hof = run_ga_single(
-            toolbox, T_in_leche=t_in, t_ciclo=t_ciclo, Delta_P=delta_p,
-            model=model, scaler_X=scaler_X, scaler_y=scaler_y,
-            seed=seed,
-        )
-
-        best = hof[0]
+        best = _ga_best_individual(ctx, t_in=t_in, t_ciclo=t_ciclo, delta_p=delta_p, seed=seed)
         f_flow, t_servicio = float(best[0]), float(best[1])
         e_consumo, t_out = predict_scenario(
-            model, scaler_X, scaler_y,
+            *ctx,
             t_in, f_flow, t_servicio, t_ciclo, delta_p,
         )
         specific = e_consumo / max(f_flow, 1.0)
@@ -236,7 +292,7 @@ class Ml34DairyPasteurizationEnergyGaPlugin(ModelPluginPort):
         if mlflow_run_id:
             logger.info("predict_batch — using user model from MLflow run_id=%s", mlflow_run_id)
         ctx, user_temp_dir = self._resolve_model(mlflow_run_id)
-        try:
+        with removing_dir(user_temp_dir):
             with local_file_path(data_path) as local_path:
                 df = pd.read_csv(local_path)
 
@@ -250,10 +306,9 @@ class Ml34DairyPasteurizationEnergyGaPlugin(ModelPluginPort):
                 "predict_batch done — %d rows, model_key=%s, mlflow=%s",
                 len(predictions), model_key or "(estimate)", bool(mlflow_run_id),
             )
-            return PredictBatchResponse(model_id=MODEL_ID, predictions=predictions, output_path=None)
-        finally:
-            if user_temp_dir:
-                shutil.rmtree(user_temp_dir, ignore_errors=True)
+            return PredictBatchResponse(
+                model_id=MODEL_ID, predictions=predictions, output_path=None
+            )
 
     def _predict_batch_estimate(self, df: pd.DataFrame, ctx: tuple) -> list[dict]:
         """MLP surrogate inference, one row of the CSV = one scenario."""
@@ -262,18 +317,15 @@ class Ml34DairyPasteurizationEnergyGaPlugin(ModelPluginPort):
             raise ValueError(f"CSV falta columnas requeridas: {missing}")
         predictions: list[dict] = []
         for idx, row in df.iterrows():
-            try:
+            with row_error_capture(predictions, {"row": int(idx)}, what=f"fila {idx}"):
                 row_dict = row.to_dict()
                 pred = self._run_predict(row_dict, ctx)
                 predictions.append({
                     "row": int(idx),
                     "E_consumo_pred": pred.E_consumo_pred,
                     "T_out_pred": pred.T_out_pred,
-                    "xai_feature_values": _xai_values_from_features(row_dict),
+                    "xai_feature_values": xai_feature_values(row_dict, FEATURES) or None,
                 })
-            except Exception as exc:  # pylint: disable=broad-exception-caught
-                logger.warning("Error en fila %s: %s", idx, exc)
-                predictions.append({"row": int(idx), "error": str(exc)})
         return predictions
 
     def _predict_batch_optimize(self, df: pd.DataFrame, ctx: tuple) -> list[dict]:
@@ -299,147 +351,66 @@ class Ml34DairyPasteurizationEnergyGaPlugin(ModelPluginPort):
         has_seed_col = "seed" in df.columns
         predictions: list[dict] = []
         for idx, row in df.iterrows():
-            try:
-                t_in, delta_p, t_ciclo = float(row["T_in_leche"]), float(row["Delta_P"]), float(row["t_ciclo"])
+            with row_error_capture(predictions, {"row": int(idx)}, what=f"fila {idx} (optimize)"):
+                t_in, delta_p, t_ciclo = (
+                    float(row["T_in_leche"]), float(row["Delta_P"]), float(row["t_ciclo"])
+                )
                 seed = int(row["seed"]) if has_seed_col and pd.notna(row["seed"]) else 1 + int(idx)
-                features = {"T_in_leche": t_in, "Delta_P": delta_p, "t_ciclo": t_ciclo, "seed": seed}
+                features = {
+                    "T_in_leche": t_in, "Delta_P": delta_p, "t_ciclo": t_ciclo, "seed": seed
+                }
                 pred = self._run_optimize(features, ctx).model_dump()
-                pred.update({"row": int(idx), "T_in_leche": t_in, "Delta_P": delta_p, "t_ciclo": t_ciclo})
+                pred.update({
+                    "row": int(idx), "T_in_leche": t_in, "Delta_P": delta_p, "t_ciclo": t_ciclo
+                })
                 predictions.append(pred)
-            except Exception as exc:  # pylint: disable=broad-exception-caught
-                logger.warning("Error en fila %s (optimize): %s", idx, exc)
-                predictions.append({"row": int(idx), "error": str(exc)})
         return predictions
 
     # ── train ─────────────────────────────────────────────────────────────────
 
-    def train(self, *, data_path: str, mlflow_run_id: str) -> TrainResponse:  # noqa: C901  # pylint: disable=too-many-locals,too-many-statements,too-many-branches
+    def train(self, *, data_path: str, mlflow_run_id: str) -> TrainResponse:
         """Fine-tune the MLP on user data (5 features + 2 targets required).
 
         Follows the original training recipe (src/main.py::train): Adam
         lr=0.0005, MSELoss over both targets, batch_size=128, max 300 epochs
         with early-stopping patience 15 monitored on a temporal 15% hold-out.
         """
-        import copy  # pylint: disable=import-outside-toplevel
-        import json  # pylint: disable=import-outside-toplevel
-        import tempfile  # pylint: disable=import-outside-toplevel
-        import joblib  # pylint: disable=import-outside-toplevel
-        from torch import nn, optim  # pylint: disable=import-outside-toplevel
-        from torch.utils.data import (  # pylint: disable=import-outside-toplevel
-            DataLoader,
-            TensorDataset,
-        )
+        # The retrained model lives only in its own MLflow run (predict with that
+        # mlflow_run_id); the served base model and its local artifacts are never replaced.
+        tracker = require_train_tracker(mlflow_run_id)
+        tracker.log_params({
+            "epochs_max": TRAIN_EPOCHS, "lr": TRAIN_LR, "optimizer": "Adam",
+            "batch_size": TRAIN_BATCH_SIZE, "patience": TRAIN_PATIENCE,
+        })
 
-        if mlflow_run_id:
-            tracker: BaseMLflowTracker | None = BaseMLflowTracker(mlflow_run_id)
-            tracker.log_params({
-                "epochs_max": TRAIN_EPOCHS, "lr": TRAIN_LR, "optimizer": "Adam",
-                "batch_size": TRAIN_BATCH_SIZE, "patience": TRAIN_PATIENCE,
-            })
-        else:
-            tracker = None
-
-        with local_file_path(data_path) as local_path:
-            df = pd.read_csv(local_path)
-        missing = [c for c in FEATURES + TARGETS if c not in df.columns]
-        if missing:
-            raise ValueError(f"CSV falta columnas requeridas: {missing}")
+        df = _load_train_frame(data_path)
 
         self._require_loaded()
         torch.manual_seed(TRAIN_SEED)
         np.random.seed(TRAIN_SEED)
 
-        x_scaled = self._scaler_X.transform(df[FEATURES].values)
+        x_scaled = self._scaler_x.transform(df[FEATURES].values)
         y_scaled = self._scaler_y.transform(df[TARGETS].values)
-
-        # Temporal hold-out for early stopping (last 15% of rows)
-        n = len(df)
-        n_val = max(1, int(n * 0.15)) if n >= 10 else 0
-        if n_val:
-            x_tr, y_tr = x_scaled[:-n_val], y_scaled[:-n_val]
-            x_val, y_val = x_scaled[-n_val:], y_scaled[-n_val:]
-        else:
-            x_tr, y_tr = x_scaled, y_scaled
-            x_val, y_val = x_scaled, y_scaled
-
-        # Clone weights into a new model instance to avoid mutating the live model
-        fine_model = build_model_from_config(self._config)
-        fine_model.load_state_dict(self._model.state_dict())
-        fine_model.train()
-
-        optimizer = optim.Adam(fine_model.parameters(), lr=TRAIN_LR)
-        criterion = nn.MSELoss()
-        loader = DataLoader(
-            TensorDataset(torch.FloatTensor(x_tr), torch.FloatTensor(y_tr)),
-            batch_size=TRAIN_BATCH_SIZE, shuffle=True,
-            generator=torch.Generator().manual_seed(TRAIN_SEED),
-        )
-        x_val_t = torch.FloatTensor(x_val)
-        y_val_t = torch.FloatTensor(y_val)
-
-        best_val = float("inf")
-        best_state = copy.deepcopy(fine_model.state_dict())
-        no_improve = 0
-        epochs_executed = 0
-        for epoch in range(TRAIN_EPOCHS):
-            fine_model.train()
-            for x_batch, y_batch in loader:
-                optimizer.zero_grad()
-                loss = criterion(fine_model(x_batch), y_batch)
-                loss.backward()
-                optimizer.step()
-            fine_model.eval()
-            with torch.no_grad():
-                val_loss = criterion(fine_model(x_val_t), y_val_t).item()
-            if val_loss < best_val:
-                best_val = val_loss
-                best_state = copy.deepcopy(fine_model.state_dict())
-                no_improve = 0
-            else:
-                no_improve += 1
-            epochs_executed = epoch + 1
-            if no_improve >= TRAIN_PATIENCE:
-                break
-
-        fine_model.load_state_dict(best_state)
-        fine_model.eval()
+        fine_model, epochs_executed = self._fine_tune(*_temporal_holdout(x_scaled, y_scaled))
 
         with torch.no_grad():
             y_pred_scaled = fine_model(torch.FloatTensor(x_scaled)).numpy()
-        y_pred = self._scaler_y.inverse_transform(y_pred_scaled)
-        y_real = df[TARGETS].values
+        metrics = _target_metrics(
+            df[TARGETS].values, self._scaler_y.inverse_transform(y_pred_scaled)
+        )
 
-        metrics: dict[str, float] = {}
-        for i, target in enumerate(TARGETS):
-            err = y_real[:, i] - y_pred[:, i]
-            rmse = float(np.sqrt(np.mean(err ** 2)))
-            mae = float(np.mean(np.abs(err)))
-            ss_res = float(np.sum(err ** 2))
-            ss_tot = float(np.sum((y_real[:, i] - np.mean(y_real[:, i])) ** 2))
-            r2 = float(1 - ss_res / ss_tot) if ss_tot else 0.0
-            metrics[f"rmse_{target}"] = rmse
-            metrics[f"mae_{target}"] = mae
-            metrics[f"r2_{target}"] = r2
+        tracker.log_metrics({**metrics, "n_samples": len(df)})
 
-        # The retrained model lives only in its own MLflow run (predict with that
-        # mlflow_run_id); the served base model and its local artifacts are never replaced.
-        upload_warning = None
-        if not tracker:
-            raise ModelPersistenceError("Sin run de MLflow: el modelo reentrenado no se ha guardado.")
-        if tracker:
-            tracker.log_metrics({**metrics, "n_samples": len(df)})
-            try:
-                mlflow_tmp = tempfile.mkdtemp(prefix="ml34_mlflow_")
-                torch.save(fine_model.state_dict(), os.path.join(mlflow_tmp, MODEL_FILENAME))
-                with open(os.path.join(mlflow_tmp, MODEL_CONFIG_FILENAME), "w", encoding="utf-8") as f:
-                    json.dump(self._config, f, indent=4)
-                joblib.dump(self._scaler_X, os.path.join(mlflow_tmp, SCALER_X_FILENAME))
-                joblib.dump(self._scaler_y, os.path.join(mlflow_tmp, SCALER_Y_FILENAME))
-                tracker.upload_artifacts(mlflow_tmp, artifact_path="model")
-                shutil.rmtree(mlflow_tmp, ignore_errors=True)
-            except Exception as exc:  # pylint: disable=broad-exception-caught
-                logger.error("MLflow artifact upload failed: %s", exc)
-                raise ModelPersistenceError(f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}") from exc
+        def _write(model_dir: str) -> None:
+            torch.save(fine_model.state_dict(), os.path.join(model_dir, MODEL_FILENAME))
+            with open(
+                os.path.join(model_dir, MODEL_CONFIG_FILENAME), "w", encoding="utf-8"
+            ) as f:
+                json.dump(self._config, f, indent=4)
+            joblib.dump(self._scaler_x, os.path.join(model_dir, SCALER_X_FILENAME))
+            joblib.dump(self._scaler_y, os.path.join(model_dir, SCALER_Y_FILENAME))
+
+        upload_model_to_mlflow(tracker, _write, prefix="ml34_mlflow_")
 
         logger.info(
             "train() done — mae_E=%.2f r2_E=%.4f n=%d epochs=%d mlflow=%s",
@@ -456,8 +427,38 @@ class Ml34DairyPasteurizationEnergyGaPlugin(ModelPluginPort):
             r2_T_out_leche=round(metrics["r2_T_out_leche"], 4),
             n_samples=int(len(df)),
             epochs_executed=int(epochs_executed),
-            upload_warning=upload_warning,
+            upload_warning=None,
         )
+
+    def _fine_tune(self, x_tr, y_tr, x_val, y_val) -> tuple[Any, int]:
+        """Fine-tune a copy of the served MLP (never the live model) with early stopping.
+
+        Returns ``(model with the best validation weights, epochs executed)``.
+        """
+        from torch import nn, optim  # pylint: disable=import-outside-toplevel
+        from torch.utils.data import (  # pylint: disable=import-outside-toplevel
+            DataLoader,
+            TensorDataset,
+        )
+
+        # Clone weights into a new model instance to avoid mutating the live model
+        fine_model = build_model_from_config(self._config)
+        fine_model.load_state_dict(self._model.state_dict())
+        fine_model.train()
+
+        optimizer = optim.Adam(fine_model.parameters(), lr=TRAIN_LR)
+        criterion = nn.MSELoss()
+        loader = DataLoader(
+            TensorDataset(torch.FloatTensor(x_tr), torch.FloatTensor(y_tr)),
+            batch_size=TRAIN_BATCH_SIZE, shuffle=True,
+            generator=torch.Generator().manual_seed(TRAIN_SEED),
+        )
+        epochs_executed = _train_with_early_stopping(
+            fine_model, loader, optimizer=optimizer, criterion=criterion,
+            val=(torch.FloatTensor(x_val), torch.FloatTensor(y_val)),
+        )
+        fine_model.eval()
+        return fine_model, epochs_executed
 
     # ── stats ─────────────────────────────────────────────────────────────────
 
@@ -538,19 +539,6 @@ class Ml34DairyPasteurizationEnergyGaPlugin(ModelPluginPort):
                 "aviso": "Métricas calculadas sobre datos sintéticos (simulador físico); "
                          "validación con datos reales de planta pendiente.",
             },
-            runtime_stats=RuntimeStats(
-                total_predictions=self._predict_count,
-                avg_latency_ms=None,
-            ),
+            runtime_stats=self._runtime_stats(),
         )
-        if mlflow_run_id:
-            try:
-                tracker = BaseMLflowTracker(mlflow_run_id)
-                base.metrics["mlflow"] = {
-                    "params": tracker.get_params(),
-                    "metrics": tracker.get_metrics(),
-                }
-                logger.info("Stats enriched with MLflow data for run_id=%s", mlflow_run_id)
-            except Exception as exc:  # pylint: disable=broad-exception-caught
-                logger.warning("Could not fetch MLflow stats for run_id=%s: %s", mlflow_run_id, exc)
-        return base
+        return add_mlflow_run_to_stats(base, mlflow_run_id)

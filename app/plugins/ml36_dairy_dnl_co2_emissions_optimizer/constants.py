@@ -85,4 +85,13 @@ SPLIT_SEED = 42
 CYCLE_COL_CANDIDATES = ["cycle_id", "Cycle_id", "cycle", "Cycle", "ciclo", "Ciclo", "id_ciclo"]
 SEASON_COL_CANDIDATES = ["season", "Season", "estacion", "estación", "Estacion", "Estación"]
 MONTH_COL_CANDIDATES = ["month", "Month", "mes", "Mes"]
-DATE_COL_CANDIDATES = ["timestamp", "Timestamp", "date", "Date", "fecha", "Fecha", "datetime", "Datetime"]
+DATE_COL_CANDIDATES = [
+    "timestamp",
+    "Timestamp",
+    "date",
+    "Date",
+    "fecha",
+    "Fecha",
+    "datetime",
+    "Datetime",
+]

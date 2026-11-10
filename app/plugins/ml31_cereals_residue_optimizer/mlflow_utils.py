@@ -21,4 +21,3 @@ def download_user_model_from_mlflow(run_id: str):
             "user-trained artifact; ignoring and using the fixed reference data.",
             run_id,
         )
-    return None

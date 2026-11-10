@@ -24,11 +24,12 @@ class TrainJobStatus(str, Enum):
 
     @property
     def is_terminal(self) -> bool:
+        """True once the job has finished (succeeded or failed)."""
         return self in (TrainJobStatus.SUCCEEDED, TrainJobStatus.FAILED)
 
 
 @dataclass(frozen=True)
-class TrainJobRecord:
+class TrainJobRecord:  # pylint: disable=too-many-instance-attributes  # plain record of job fields
     """One training job. Times are epoch seconds; ``updated_at`` doubles as the heartbeat.
 
     ``http_status`` (failed only) is the code the synchronous /train would have answered.

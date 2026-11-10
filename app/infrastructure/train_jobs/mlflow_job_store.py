@@ -1,7 +1,8 @@
 """Async training job state stored on the MLflow run itself (job_id = run_id).
 
-Tags ``async_train.*`` hold status and timestamps (any replica can read them, they survive restarts);
-the plugin's TrainResponse goes to the ``async_train/result.json`` artifact of the same run.
+Tags ``async_train.*`` hold status and timestamps (any replica can read them, they survive
+restarts); the plugin's TrainResponse goes to the ``async_train/result.json`` artifact of the
+same run.
 """
 from __future__ import annotations
 
@@ -32,19 +33,23 @@ _NOT_FOUND = "RESOURCE_DOES_NOT_EXIST"
 
 @contextmanager
 def _mlflow_errors(job_id: str):
-    """Translate MLflow/transport failures into domain errors (missing run → 400, MLflow or network → 503).
+    """Translate MLflow/transport failures into domain errors.
+
+    Missing run → 400, MLflow or network → 503.
 
     Only network errors are "MLflow not reachable": a local file error (e.g. reading a downloaded
     artifact) is not retryable and must not be reported as one.
     """
-    from mlflow.exceptions import MlflowException
+    from mlflow.exceptions import MlflowException  # pylint: disable=import-outside-toplevel
     try:
         yield
     except MlflowException as exc:
         if getattr(exc, "error_code", "") == _NOT_FOUND:
             raise TrainJobRunNotFoundError(f"El run {job_id} no existe en MLflow") from exc
         raise TrainJobStoreUnavailableError(f"MLflow: {exc}") from exc
-    except (requests.exceptions.RequestException, ConnectionError, TimeoutError, socket.gaierror) as exc:
+    except (
+        requests.exceptions.RequestException, ConnectionError, TimeoutError, socket.gaierror
+    ) as exc:
         raise TrainJobStoreUnavailableError(f"MLflow no accesible: {exc}") from exc
 
 
@@ -63,8 +68,9 @@ class MLflowTrainJobStore(TrainJobStorePort):
 
     @property
     def client(self):
+        """MLflow client, built lazily on first use."""
         if self._client is None:
-            from mlflow.tracking import MlflowClient
+            from mlflow.tracking import MlflowClient  # pylint: disable=import-outside-toplevel
             self._client = MlflowClient(tracking_uri=self._tracking_uri)
         return self._client
 
@@ -88,7 +94,10 @@ class MLflowTrainJobStore(TrainJobStorePort):
             result=self._load_result(job_id) if status is TrainJobStatus.SUCCEEDED else None,
             error=tags.get(f"{TAG_PREFIX}error") or None,
             error_type=tags.get(f"{TAG_PREFIX}error_type") or None,
-            http_status=int(tags[f"{TAG_PREFIX}http_status"]) if tags.get(f"{TAG_PREFIX}http_status") else None,
+            http_status=(
+                int(tags[f"{TAG_PREFIX}http_status"])
+                if tags.get(f"{TAG_PREFIX}http_status") else None
+            ),
         )
 
     def save(self, record: TrainJobRecord) -> None:
@@ -97,7 +106,9 @@ class MLflowTrainJobStore(TrainJobStorePort):
 
     def _save(self, record: TrainJobRecord) -> None:
         if record.result is not None:
-            self.client.log_text(record.job_id, json.dumps(record.result, ensure_ascii=False), RESULT_ARTIFACT)
+            self.client.log_text(
+                record.job_id, json.dumps(record.result, ensure_ascii=False), RESULT_ARTIFACT
+            )
         tags = {
             "model_id": record.model_id,
             "submitted_at": str(record.submitted_at),
@@ -120,25 +131,31 @@ class MLflowTrainJobStore(TrainJobStorePort):
 
     def _load_result(self, job_id: str) -> dict:
         # Download the folder, not the file: the platform's S3 proxy answers the listing of
-        # "async_train/result.json/" as if it were a folder, so MLflow "downloads" the lone file as an
-        # empty directory (IsADirectoryError). The folder listing returns result.json as a file.
+        # "async_train/result.json/" as if it were a folder, so MLflow "downloads" the lone file as
+        # an empty directory (IsADirectoryError). The folder listing returns result.json as a file.
         with tempfile.TemporaryDirectory() as tmp:
             try:
                 with _mlflow_errors(job_id):
-                    local = os.path.join(self.client.download_artifacts(job_id, RESULT_DIR, tmp), RESULT_FILE)
-            except TrainJobRunNotFoundError as exc:  # the run exists (it has job tags): the artifact does not
+                    local = os.path.join(
+                        self.client.download_artifacts(job_id, RESULT_DIR, tmp), RESULT_FILE
+                    )
+            # The run exists (it has job tags): the artifact does not.
+            except TrainJobRunNotFoundError as exc:
                 raise TrainJobResultUnreadableError(
-                    f"El entrenamiento {job_id} terminó (succeeded) pero MLflow no tiene {RESULT_ARTIFACT}: {exc}"
+                    f"El entrenamiento {job_id} terminó (succeeded) pero MLflow no tiene "
+                    f"{RESULT_ARTIFACT}: {exc}"
                 ) from exc
             except OSError as exc:  # network errors already became TrainJobStoreUnavailableError
                 raise TrainJobResultUnreadableError(
-                    f"El entrenamiento {job_id} terminó (succeeded) pero no se pudo descargar {RESULT_ARTIFACT}: "
+                    f"El entrenamiento {job_id} terminó (succeeded) pero no se pudo descargar "
+                    f"{RESULT_ARTIFACT}: "
                     f"{type(exc).__name__}: {exc}"
                 ) from exc
             if not os.path.isfile(local):
                 found = "una carpeta" if os.path.isdir(local) else "nada"
                 raise TrainJobResultUnreadableError(
-                    f"El entrenamiento {job_id} terminó (succeeded) pero al descargar {RESULT_ARTIFACT} "
+                    f"El entrenamiento {job_id} terminó (succeeded) pero al descargar "
+                    f"{RESULT_ARTIFACT} "
                     f"de MLflow se obtiene {found} en vez del fichero"
                 )
             try:
@@ -146,5 +163,6 @@ class MLflowTrainJobStore(TrainJobStorePort):
                     return json.load(fh)
             except (OSError, ValueError) as exc:
                 raise TrainJobResultUnreadableError(
-                    f"El entrenamiento {job_id} terminó (succeeded) pero {RESULT_ARTIFACT} no se puede leer: {exc}"
+                    f"El entrenamiento {job_id} terminó (succeeded) pero {RESULT_ARTIFACT} "
+                    f"no se puede leer: {exc}"
                 ) from exc

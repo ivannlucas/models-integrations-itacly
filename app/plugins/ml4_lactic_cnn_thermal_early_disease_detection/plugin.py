@@ -13,27 +13,29 @@ import csv
 import io
 import logging
 import os
-import shutil
 import tempfile
 import time
-from datetime import datetime, timezone
+from typing import Any
 
 import torch
-from typing import Any
 from PIL import Image
 from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score, roc_auc_score
 from sklearn.model_selection import train_test_split
 from torch import nn
 from torch.utils.data import DataLoader, Dataset
 
-from app.application.dto.stats_dto import InputField, OutputField, RuntimeStats, StatsResponse
+from app.application.dto.stats_dto import InputField, OutputField, StatsResponse
 from app.domain.ports.model_plugin_port import ModelPluginPort
-from app.domain.services.exceptions import (
-    InvalidImageError,
-    ModelNotLoadedError,
-    ModelPersistenceError,
+from app.domain.services.batch_rows import row_error_capture
+from app.domain.services.exceptions import InvalidImageError
+from app.domain.services.image_cam import compute_and_encode_cam
+from app.domain.services.mlflow_artifacts import (
+    add_mlflow_run_to_stats,
+    removing_dir,
+    require_train_tracker,
+    upload_model_to_mlflow,
 )
-from app.domain.services.mlflow_tracker import BaseMLflowTracker
+from app.domain.services.plugin_runtime import PluginRuntimeMixin
 from app.infrastructure.archive import safe_extract_zip
 from app.infrastructure.artifact_store import local_file_path
 from app.plugins.ml4_lactic_cnn_thermal_early_disease_detection.constants import (
@@ -62,10 +64,7 @@ from app.plugins.ml4_lactic_cnn_thermal_early_disease_detection.mlflow_utils imp
     download_user_model_from_mlflow,
 )
 from app.plugins.ml4_lactic_cnn_thermal_early_disease_detection.model_loader import load_model
-from app.plugins.ml4_lactic_cnn_thermal_early_disease_detection.postprocessing import (
-    compute_and_encode_cam,
-    decode_logits,
-)
+from app.plugins.ml4_lactic_cnn_thermal_early_disease_detection.postprocessing import decode_logits
 from app.plugins.ml4_lactic_cnn_thermal_early_disease_detection.predict_dto import (
     PredictBatchResponse,
     PredictInlineResponse,
@@ -78,6 +77,26 @@ from app.plugins.ml4_lactic_cnn_thermal_early_disease_detection.preprocessing im
 from app.plugins.ml4_lactic_cnn_thermal_early_disease_detection.train_dto import TrainResponse
 
 logger = logging.getLogger(__name__)
+
+# Hyperparameters logged to the retrain's MLflow run (manifest.training, see constants.py).
+_TRAIN_PARAMS = {
+    "optimizer": "adam",
+    "learning_rate": TRAIN_LEARNING_RATE,
+    "weight_decay": TRAIN_WEIGHT_DECAY,
+    "batch_size": TRAIN_BATCH_SIZE,
+    "loss": "focal_loss",
+    "focal_alpha": FOCAL_ALPHA,
+    "focal_gamma": FOCAL_GAMMA,
+    "scheduler": "reduce_on_plateau",
+    "scheduler_factor": SCHEDULER_FACTOR,
+    "scheduler_patience": SCHEDULER_PATIENCE,
+    "early_stopping_patience": TRAIN_EARLY_STOPPING_PATIENCE,
+    "max_epochs": TRAIN_MAX_EPOCHS,
+    "image_size": 224,
+    "backbone": BACKBONE,
+    "dropout": DROPOUT,
+    "seed": TRAIN_SEED,
+}
 
 
 class _FocalLoss(nn.Module):
@@ -118,15 +137,184 @@ class _ThermalImageDataset(Dataset):
         return loader(self.paths[idx]), self.labels[idx]
 
 
-class Ml4LacticCnnThermalEarlyDiseaseDetectionPlugin(ModelPluginPort):
+def _read_inline_image(features: dict) -> tuple[bytes, list[str]]:
+    """Return the image bytes of an inline request and which feature carried them."""
+    if features.get("image_path"):
+        path = features["image_path"]
+        if os.path.splitext(path)[1].lower() not in IMAGE_EXTENSIONS:
+            raise InvalidImageError(
+                f"Extensión no soportada. Usa {sorted(IMAGE_EXTENSIONS)}"
+            )
+        with open(path, "rb") as fh:
+            return fh.read(), ["image_path"]
+    if features.get("image_base64"):
+        return base64.b64decode(features["image_base64"]), ["image_base64"]
+    raise InvalidImageError("features debe contener 'image_path' o 'image_base64'")
+
+
+def _inline_heatmap(model, feature_map, result: dict, image_bytes: bytes) -> str | None:
+    """CAM overlay of the inline image, or None if it cannot be built."""
+    try:
+        source_image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+        return compute_and_encode_cam(
+            feature_map, model.classifier[1].weight,
+            result["predicted_class_index"], source_image,
+        )
+    except Exception as exc:  # pylint: disable=broad-exception-caught  # heatmap is auxiliary: never fail the prediction for it
+        logger.warning("ml4 inline CAM failed: %s", exc)
+        return None
+
+
+def _make_loaders(paths: list[str], labels: list[int]) -> tuple[DataLoader, DataLoader, int, int]:
+    """Stratified train/val split (seeded) and its loaders; returns (train, val, n_train, n_val)."""
+    train_paths, val_paths, train_labels, val_labels = train_test_split(
+        paths, labels, test_size=TRAIN_VAL_SPLIT, stratify=labels, random_state=TRAIN_SEED,
+    )
+    train_loader = DataLoader(
+        _ThermalImageDataset(train_paths, train_labels, is_train=True),
+        batch_size=TRAIN_BATCH_SIZE, shuffle=True,
+    )
+    val_loader = DataLoader(
+        _ThermalImageDataset(val_paths, val_labels, is_train=False),
+        batch_size=TRAIN_BATCH_SIZE, shuffle=False,
+    )
+    return train_loader, val_loader, len(train_paths), len(val_paths)
+
+
+def _train_epoch(model, train_loader, criterion, optimizer, device) -> None:
+    """One optimisation pass over the training split."""
+    model.train()
+    for imgs, lbls in train_loader:
+        imgs, lbls = imgs.to(device), lbls.to(device)
+        optimizer.zero_grad()
+        loss = criterion(model(imgs), lbls)
+        loss.backward()
+        optimizer.step()
+
+
+def _single_subdir_or_self(folder: str) -> str:
+    """The only entry of ``folder`` when it is a directory (ZIP with a root folder), else folder."""
+    entries = os.listdir(folder)
+    if len(entries) == 1 and os.path.isdir(os.path.join(folder, entries[0])):
+        return os.path.join(folder, entries[0])
+    return folder
+
+
+def _predict_batch_image(model, device, root: str, fname: str, idx: int) -> dict:
+    """Classify one batch image (with its CAM); the caller turns errors into rows."""
+    with open(os.path.join(root, fname), "rb") as fh:
+        image_bytes = fh.read()
+    tensor = preprocess_image(image_bytes).to(device)
+    with torch.no_grad():
+        logits, feature_map = model(tensor, return_features=True)
+    result = decode_logits(logits)
+    row = {"filename": fname, **result}
+    image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+    row["heatmap_url"] = compute_and_encode_cam(
+        feature_map, model.classifier[1].weight,
+        result["predicted_class_index"], image,
+    )
+    if idx == 0 or result["predicted_class_index"] != 0:
+        # Echo the first image back so the platform can request a real
+        # GradCAM explanation for the batch (mirrors the inline flow,
+        # which has a single image_path to read from — batch has none
+        # once this temp dir is removed below). Non-healthy images
+        # (class index != 0) are echoed too so their instances carry
+        # the source image; healthy ones stay out to keep the payload small.
+        row["image_base64"] = base64.b64encode(image_bytes).decode("ascii")
+    return row
+
+
+def _read_labeled_images(data_root: str) -> tuple[list[str], list[int]]:
+    """Read ID_Labels.csv (TIDS layout) and resolve every labeled image path."""
+    csv_path = os.path.join(data_root, "ID_Labels.csv")
+    if not os.path.exists(csv_path):
+        raise ValueError(
+            "data_path debe contener 'ID_Labels.csv' con columnas 'ID' y 'label' "
+            "(0=Healthy, 1=SCM), igual que el dataset TIDS original."
+        )
+
+    paths: list[str] = []
+    labels: list[int] = []
+    with open(csv_path, newline="", encoding="utf-8") as fh:
+        reader = csv.DictReader(fh)
+        missing = {"ID", "label"} - set(reader.fieldnames or [])
+        if missing:
+            raise ValueError(
+                f"ID_Labels.csv no contiene las columnas requeridas: {sorted(missing)}"
+            )
+        for row in reader:
+            img_id = str(row["ID"]).strip()
+            label = int(row["label"])
+            folder = "SCM" if label == 1 else "healthy"
+            img_path = os.path.join(data_root, "TIDS_cropped", folder, f"{img_id}.jpg")
+            if not os.path.exists(img_path):
+                raise ValueError(f"Imagen no encontrada para ID={img_id}: {img_path}")
+            paths.append(img_path)
+            labels.append(label)
+    return paths, labels
+
+
+def _load_training_set(data_path: str, tmp_dir: str) -> tuple[list[str], list[int]]:
+    """Resolve the training folder (extracting a ZIP into ``tmp_dir``) and read its labels."""
+    with local_file_path(data_path) as local_path:
+        if os.path.isfile(local_path) and local_path.lower().endswith(".zip"):
+            safe_extract_zip(local_path, tmp_dir)
+            data_root = _single_subdir_or_self(tmp_dir)
+        else:
+            data_root = local_path
+        paths, labels = _read_labeled_images(data_root)
+
+    if len(paths) < MIN_TRAIN_SAMPLES:
+        raise ValueError(
+            f"Se requieren al menos {MIN_TRAIN_SAMPLES} imágenes etiquetadas para "
+            f"reentrenar; se encontraron {len(paths)}."
+        )
+    return paths, labels
+
+
+def _validation_epoch(model, val_loader, criterion, device) -> tuple[float, float]:
+    """Mean validation loss and binary F1 of one epoch."""
+    model.eval()
+    val_true, val_pred, val_loss_total = [], [], 0.0
+    with torch.no_grad():
+        for imgs, lbls in val_loader:
+            imgs, lbls = imgs.to(device), lbls.to(device)
+            logits = model(imgs)
+            val_loss_total += criterion(logits, lbls).item()
+            val_pred.extend(torch.argmax(logits, dim=1).cpu().tolist())
+            val_true.extend(lbls.cpu().tolist())
+    val_loss = val_loss_total / max(len(val_loader), 1)
+    return val_loss, f1_score(val_true, val_pred, average="binary", zero_division=0)
+
+
+def _final_scores(model, val_loader, device) -> dict:
+    """Accuracy/precision/recall/F1/AUC of the best model on the validation split."""
+    val_true, val_pred, val_prob = [], [], []
+    with torch.no_grad():
+        for imgs, lbls in val_loader:
+            imgs = imgs.to(device)
+            probs = torch.softmax(model(imgs), dim=1)
+            val_pred.extend(torch.argmax(probs, dim=1).cpu().tolist())
+            val_true.extend(lbls.tolist())
+            val_prob.extend(probs[:, 1].cpu().tolist())
+
+    return {
+        "accuracy": accuracy_score(val_true, val_pred),
+        "precision": precision_score(val_true, val_pred, average="binary", zero_division=0),
+        "recall": recall_score(val_true, val_pred, average="binary", zero_division=0),
+        "f1": f1_score(val_true, val_pred, average="binary", zero_division=0),
+        "auc": roc_auc_score(val_true, val_prob) if len(set(val_true)) > 1 else None,
+    }
+
+
+class Ml4LacticCnnThermalEarlyDiseaseDetectionPlugin(PluginRuntimeMixin, ModelPluginPort):
     """EfficientNet-B0 binary classifier (Healthy / SCM) on thermal udder images."""
 
     def __init__(self) -> None:
-        """Initialize an unloaded plugin with empty runtime counters."""
+        """Initialize an unloaded plugin (runtime counters start at the mixin defaults)."""
         self._model = None
         self._device = None
-        self._predict_count: int = 0
-        self._last_predict_at: str | None = None
 
     def load(self) -> None:
         """Load the EfficientNet checkpoint."""
@@ -137,22 +325,12 @@ class Ml4LacticCnnThermalEarlyDiseaseDetectionPlugin(ModelPluginPort):
         """Return True if the model is loaded."""
         return self._model is not None
 
-    def _require_loaded(self) -> None:
-        """Raise ModelNotLoadedError if the model is not loaded."""
-        if self._model is None:
-            raise ModelNotLoadedError("El modelo no está cargado.")
-
     def _infer_image(self, image_bytes: bytes) -> dict:
         """Preprocess image bytes, run the model and decode the prediction dict."""
         tensor = preprocess_image(image_bytes).to(self._device)
         with torch.no_grad():
             logits = self._model(tensor)
         return decode_logits(logits)
-
-    def _record(self) -> None:
-        """Update runtime counters after a prediction."""
-        self._predict_count += 1
-        self._last_predict_at = datetime.now(tz=timezone.utc).isoformat()
 
     def _resolve_model(self, mlflow_run_id: str) -> tuple[Any, Any, str | None]:
         """Return (model, device, temp_dir) to serve this request.
@@ -167,7 +345,7 @@ class Ml4LacticCnnThermalEarlyDiseaseDetectionPlugin(ModelPluginPort):
             return self._model, self._device, None
         return download_user_model_from_mlflow(mlflow_run_id)
 
-    def predict_inline(  # pylint: disable=too-many-locals
+    def predict_inline(
         self,
         *,
         features: dict,
@@ -179,66 +357,38 @@ class Ml4LacticCnnThermalEarlyDiseaseDetectionPlugin(ModelPluginPort):
         if mlflow_run_id:
             logger.info("predict_inline — using MLflow user model run_id=%s", mlflow_run_id)
         model, device, user_temp_dir = self._resolve_model(mlflow_run_id)
-        try:
-            if features.get("image_path"):
-                path = features["image_path"]
-                if os.path.splitext(path)[1].lower() not in IMAGE_EXTENSIONS:
-                    raise InvalidImageError(
-                        f"Extensión no soportada. Usa {sorted(IMAGE_EXTENSIONS)}"
-                    )
-                with open(path, "rb") as fh:
-                    image_bytes = fh.read()
-                used = ["image_path"]
-            elif features.get("image_base64"):
-                image_bytes = base64.b64decode(features["image_base64"])
-                used = ["image_base64"]
-            else:
-                raise InvalidImageError("features debe contener 'image_path' o 'image_base64'")
+        with removing_dir(user_temp_dir):
+            image_bytes, used = _read_inline_image(features)
 
             tensor = preprocess_image(image_bytes).to(device)
             with torch.no_grad():
                 logits, feature_map = model(tensor, return_features=True)
             result = decode_logits(logits)
-            heatmap_url = None
-            try:
-                source_image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
-                heatmap_url = compute_and_encode_cam(
-                    feature_map, model.classifier[1].weight,
-                    result["predicted_class_index"], source_image,
-                )
-            except Exception as exc:  # heatmap is auxiliary: never fail the prediction for it
-                logger.warning("ml4 inline CAM failed: %s", exc)
+            heatmap_url = _inline_heatmap(model, feature_map, result, image_bytes)
             self._record()
             return PredictInlineResponse(
                 model_id=MODEL_ID, threshold=threshold, features_used=used,
                 heatmap_url=heatmap_url, **result,
             )
-        finally:
-            if user_temp_dir:
-                shutil.rmtree(user_temp_dir, ignore_errors=True)
 
-    def predict_batch(  # pylint: disable=too-many-locals
+    def predict_batch(
         self, *, data_path: str, mlflow_run_id: str = "",
     ) -> PredictBatchResponse:
         """Classify every thermal image in a directory or ZIP (local path or ``s3://`` URI)."""
         if mlflow_run_id:
             logger.info("predict_batch — using MLflow user model run_id=%s", mlflow_run_id)
         model, device, user_temp_dir = self._resolve_model(mlflow_run_id)
-        try:
+        with removing_dir(user_temp_dir):
             temp_dir: str | None = None
             predictions: list[dict] = []
             with local_file_path(data_path) as local_data_path:
                 image_dir = local_data_path
                 if local_data_path.lower().endswith(".zip"):
                     temp_dir = tempfile.mkdtemp(prefix="ml4_thermal_batch_")
-                    safe_extract_zip(local_data_path, temp_dir)
-                    entries = os.listdir(temp_dir)
-                    if len(entries) == 1 and os.path.isdir(os.path.join(temp_dir, entries[0])):
-                        image_dir = os.path.join(temp_dir, entries[0])
-                    else:
-                        image_dir = temp_dir
-
-                try:
+                with removing_dir(temp_dir):
+                    if temp_dir:
+                        safe_extract_zip(local_data_path, temp_dir)
+                        image_dir = _single_subdir_or_self(temp_dir)
                     image_files = sorted(
                         (root, fname)
                         for root, _, files in os.walk(image_dir)
@@ -246,45 +396,18 @@ class Ml4LacticCnnThermalEarlyDiseaseDetectionPlugin(ModelPluginPort):
                         if os.path.splitext(fname)[1].lower() in IMAGE_EXTENSIONS
                     )
                     for idx, (root, fname) in enumerate(image_files):
-                        try:
-                            with open(os.path.join(root, fname), "rb") as fh:
-                                image_bytes = fh.read()
-                            tensor = preprocess_image(image_bytes).to(device)
-                            with torch.no_grad():
-                                logits, feature_map = model(tensor, return_features=True)
-                            result = decode_logits(logits)
-                            row = {"filename": fname, **result}
-                            image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
-                            row["heatmap_url"] = compute_and_encode_cam(
-                                feature_map, model.classifier[1].weight,
-                                result["predicted_class_index"], image,
+                        # one bad image never fails the batch
+                        with row_error_capture(predictions, {"filename": fname}, what=fname):
+                            predictions.append(
+                                _predict_batch_image(model, device, root, fname, idx)
                             )
-                            if idx == 0 or result["predicted_class_index"] != 0:
-                                # Echo the first image back so the platform can request a real
-                                # GradCAM explanation for the batch (mirrors the inline flow,
-                                # which has a single image_path to read from — batch has none
-                                # once this temp dir is removed below). Non-healthy images
-                                # (class index != 0) are echoed too so their instances carry
-                                # the source image; healthy ones stay out to keep the payload small.
-                                row["image_base64"] = base64.b64encode(image_bytes).decode("ascii")
-                            predictions.append(row)
-                        except Exception as exc:
-                            predictions.append({"filename": fname, "error": str(exc)})
-                finally:
-                    if temp_dir:
-                        shutil.rmtree(temp_dir, ignore_errors=True)
 
             self._record()
             return PredictBatchResponse(
                 model_id=MODEL_ID, predictions=predictions, output_path=None,
             )
-        finally:
-            if user_temp_dir:
-                shutil.rmtree(user_temp_dir, ignore_errors=True)
 
-    def train(  # pylint: disable=too-many-locals,too-many-branches,too-many-statements
-        self, *, data_path: str, mlflow_run_id: str,
-    ) -> TrainResponse:
+    def train(self, *, data_path: str, mlflow_run_id: str) -> TrainResponse:
         """Fine-tune a fresh clone of the served EfficientNet-B0 on user-labeled thermal images.
 
         Follows the original recipe exactly (manifest.training in inbox/a04/manifest.yaml):
@@ -294,187 +417,86 @@ class Ml4LacticCnnThermalEarlyDiseaseDetectionPlugin(ModelPluginPort):
         model_loader.py is never overwritten (predict with this run's mlflow_run_id to use it).
         """
         self._require_loaded()
-        tracker = BaseMLflowTracker(mlflow_run_id)
-        tracker.log_params({
-            "optimizer": "adam",
-            "learning_rate": TRAIN_LEARNING_RATE,
-            "weight_decay": TRAIN_WEIGHT_DECAY,
-            "batch_size": TRAIN_BATCH_SIZE,
-            "loss": "focal_loss",
-            "focal_alpha": FOCAL_ALPHA,
-            "focal_gamma": FOCAL_GAMMA,
-            "scheduler": "reduce_on_plateau",
-            "scheduler_factor": SCHEDULER_FACTOR,
-            "scheduler_patience": SCHEDULER_PATIENCE,
-            "early_stopping_patience": TRAIN_EARLY_STOPPING_PATIENCE,
-            "max_epochs": TRAIN_MAX_EPOCHS,
-            "image_size": 224,
-            "backbone": BACKBONE,
-            "dropout": DROPOUT,
-            "seed": TRAIN_SEED,
-        })
+        tracker = require_train_tracker(mlflow_run_id)
+        tracker.log_params(_TRAIN_PARAMS)
 
         t0 = time.perf_counter()
         tmp_dir = tempfile.mkdtemp(prefix="ml4_train_")
-        try:
-            with local_file_path(data_path) as local_path:
-                if os.path.isfile(local_path) and local_path.lower().endswith(".zip"):
-                    safe_extract_zip(local_path, tmp_dir)
-                    entries = os.listdir(tmp_dir)
-                    data_root = (
-                        os.path.join(tmp_dir, entries[0])
-                        if len(entries) == 1 and os.path.isdir(os.path.join(tmp_dir, entries[0]))
-                        else tmp_dir
-                    )
-                else:
-                    data_root = local_path
+        with removing_dir(tmp_dir):
+            paths, labels = _load_training_set(data_path, tmp_dir)
+            train_loader, val_loader, n_train, n_val = _make_loaders(paths, labels)
 
-                csv_path = os.path.join(data_root, "ID_Labels.csv")
-                if not os.path.exists(csv_path):
-                    raise ValueError(
-                        "data_path debe contener 'ID_Labels.csv' con columnas 'ID' y 'label' "
-                        "(0=Healthy, 1=SCM), igual que el dataset TIDS original."
-                    )
-
-                paths: list[str] = []
-                labels: list[int] = []
-                with open(csv_path, newline="", encoding="utf-8") as fh:
-                    reader = csv.DictReader(fh)
-                    missing = {"ID", "label"} - set(reader.fieldnames or [])
-                    if missing:
-                        raise ValueError(
-                            f"ID_Labels.csv no contiene las columnas requeridas: {sorted(missing)}"
-                        )
-                    for row in reader:
-                        img_id = str(row["ID"]).strip()
-                        label = int(row["label"])
-                        folder = "SCM" if label == 1 else "healthy"
-                        img_path = os.path.join(data_root, "TIDS_cropped", folder, f"{img_id}.jpg")
-                        if not os.path.exists(img_path):
-                            raise ValueError(f"Imagen no encontrada para ID={img_id}: {img_path}")
-                        paths.append(img_path)
-                        labels.append(label)
-
-            if len(paths) < MIN_TRAIN_SAMPLES:
-                raise ValueError(
-                    f"Se requieren al menos {MIN_TRAIN_SAMPLES} imágenes etiquetadas para "
-                    f"reentrenar; se encontraron {len(paths)}."
-                )
-
-            train_paths, val_paths, train_labels, val_labels = train_test_split(
-                paths, labels, test_size=TRAIN_VAL_SPLIT, stratify=labels, random_state=TRAIN_SEED,
-            )
-            train_loader = DataLoader(
-                _ThermalImageDataset(train_paths, train_labels, is_train=True),
-                batch_size=TRAIN_BATCH_SIZE, shuffle=True,
-            )
-            val_loader = DataLoader(
-                _ThermalImageDataset(val_paths, val_labels, is_train=False),
-                batch_size=TRAIN_BATCH_SIZE, shuffle=False,
-            )
-
-            # Clone the served weights into a brand-new instance — self._model is never mutated
-            # in-place until training finishes, so a concurrent predict never sees a half-trained
-            # model (plugin-integration skill, "train() — patrón de reentrenamiento").
-            torch.manual_seed(TRAIN_SEED)
-            model = copy.deepcopy(self._model).to(self._device)
-            criterion = _FocalLoss(alpha=FOCAL_ALPHA, gamma=FOCAL_GAMMA)
-            optimizer = torch.optim.Adam(
-                model.parameters(), lr=TRAIN_LEARNING_RATE, weight_decay=TRAIN_WEIGHT_DECAY,
-            )
-            scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-                optimizer, mode="min", factor=SCHEDULER_FACTOR, patience=SCHEDULER_PATIENCE,
-                min_lr=SCHEDULER_MIN_LR,
-            )
-
-            best_f1, best_state, patience_counter = -1.0, None, 0
-            for epoch in range(TRAIN_MAX_EPOCHS):
-                model.train()
-                for imgs, lbls in train_loader:
-                    imgs, lbls = imgs.to(self._device), lbls.to(self._device)
-                    optimizer.zero_grad()
-                    loss = criterion(model(imgs), lbls)
-                    loss.backward()
-                    optimizer.step()
-
-                model.eval()
-                val_true, val_pred, val_loss_total = [], [], 0.0
-                with torch.no_grad():
-                    for imgs, lbls in val_loader:
-                        imgs, lbls = imgs.to(self._device), lbls.to(self._device)
-                        logits = model(imgs)
-                        val_loss_total += criterion(logits, lbls).item()
-                        val_pred.extend(torch.argmax(logits, dim=1).cpu().tolist())
-                        val_true.extend(lbls.cpu().tolist())
-                val_loss = val_loss_total / max(len(val_loader), 1)
-                scheduler.step(val_loss)
-                val_f1 = f1_score(val_true, val_pred, average="binary", zero_division=0)
-                tracker.log_metrics({"val_loss": val_loss, "val_f1": val_f1}, step=epoch)
-
-                if val_f1 > best_f1:
-                    best_f1, patience_counter = val_f1, 0
-                    best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
-                else:
-                    patience_counter += 1
-                    if patience_counter >= TRAIN_EARLY_STOPPING_PATIENCE:
-                        logger.info("ml4 train(): early stopping at epoch %d", epoch + 1)
-                        break
-
-            if best_state is not None:
-                model.load_state_dict(best_state)
-            model.eval()
-
-            val_true, val_pred, val_prob = [], [], []
-            with torch.no_grad():
-                for imgs, lbls in val_loader:
-                    imgs = imgs.to(self._device)
-                    probs = torch.softmax(model(imgs), dim=1)
-                    val_pred.extend(torch.argmax(probs, dim=1).cpu().tolist())
-                    val_true.extend(lbls.tolist())
-                    val_prob.extend(probs[:, 1].cpu().tolist())
-
-            accuracy = accuracy_score(val_true, val_pred)
-            precision = precision_score(val_true, val_pred, average="binary", zero_division=0)
-            recall = recall_score(val_true, val_pred, average="binary", zero_division=0)
-            f1 = f1_score(val_true, val_pred, average="binary", zero_division=0)
-            auc = roc_auc_score(val_true, val_prob) if len(set(val_true)) > 1 else None
+            model = self._fine_tune(train_loader, val_loader, tracker)
+            scores = _final_scores(model, val_loader, self._device)
 
             tracker.log_metrics({
-                "accuracy": accuracy, "precision": precision, "recall": recall, "f1": f1,
-                "auc": auc if auc is not None else 0.0,
-                "n_train": len(train_paths), "n_val": len(val_paths),
+                "accuracy": scores["accuracy"], "precision": scores["precision"],
+                "recall": scores["recall"], "f1": scores["f1"],
+                "auc": scores["auc"] if scores["auc"] is not None else 0.0,
+                "n_train": n_train, "n_val": n_val,
             })
 
             # Persisted ONLY to this MLflow run — the fixed base artifact filename used by
             # model_loader.py is never touched, so predict/stats without mlflow_run_id keeps
             # serving the original AI-team checkpoint.
-            upload_warning = None
-            mlflow_tmp = tempfile.mkdtemp(prefix="ml4_mlflow_upload_")
-            try:
-                ckpt_path = os.path.join(mlflow_tmp, MODEL_FILENAME)
-                torch.save({"model_state_dict": model.state_dict()}, ckpt_path)
-                tracker.upload_artifacts(mlflow_tmp, artifact_path="model")
-            except Exception as exc:
-                logger.error("ml4 train(): MLflow artifact upload failed: %s", exc)
-                raise ModelPersistenceError(f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}") from exc
-            finally:
-                shutil.rmtree(mlflow_tmp, ignore_errors=True)
+            def _write(model_dir: str) -> None:
+                torch.save(
+                    {"model_state_dict": model.state_dict()},
+                    os.path.join(model_dir, MODEL_FILENAME),
+                )
+
+            upload_model_to_mlflow(tracker, _write, prefix="ml4_mlflow_upload_")
 
             return TrainResponse(
                 detail="Reentrenamiento completado",
-                accuracy=accuracy,
-                precision=precision,
-                recall=recall,
-                f1=f1,
-                auc=auc,
-                n_train=len(train_paths),
-                n_val=len(val_paths),
+                **scores,
+                n_train=n_train,
+                n_val=n_val,
                 training_time_s=round(time.perf_counter() - t0, 2),
                 mlflow_run_id=mlflow_run_id,
-                upload_warning=upload_warning,
+                upload_warning=None,
             )
-        finally:
-            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    def _fine_tune(self, train_loader, val_loader, tracker):
+        """Fine-tune a clone of the served model with early stopping on the validation F1.
+
+        Returns the clone with the best epoch's weights loaded, in eval mode.
+        """
+        # Clone the served weights into a brand-new instance — self._model is never mutated
+        # in-place until training finishes, so a concurrent predict never sees a half-trained
+        # model (plugin-integration skill, "train() — patrón de reentrenamiento").
+        torch.manual_seed(TRAIN_SEED)
+        model = copy.deepcopy(self._model).to(self._device)
+        criterion = _FocalLoss(alpha=FOCAL_ALPHA, gamma=FOCAL_GAMMA)
+        optimizer = torch.optim.Adam(
+            model.parameters(), lr=TRAIN_LEARNING_RATE, weight_decay=TRAIN_WEIGHT_DECAY,
+        )
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer, mode="min", factor=SCHEDULER_FACTOR, patience=SCHEDULER_PATIENCE,
+            min_lr=SCHEDULER_MIN_LR,
+        )
+
+        best_f1, best_state, patience_counter = -1.0, None, 0
+        for epoch in range(TRAIN_MAX_EPOCHS):
+            _train_epoch(model, train_loader, criterion, optimizer, self._device)
+
+            val_loss, val_f1 = _validation_epoch(model, val_loader, criterion, self._device)
+            scheduler.step(val_loss)
+            tracker.log_metrics({"val_loss": val_loss, "val_f1": val_f1}, step=epoch)
+
+            if val_f1 > best_f1:
+                best_f1, patience_counter = val_f1, 0
+                best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
+            else:
+                patience_counter += 1
+                if patience_counter >= TRAIN_EARLY_STOPPING_PATIENCE:
+                    logger.info("ml4 train(): early stopping at epoch %d", epoch + 1)
+                    break
+
+        if best_state is not None:
+            model.load_state_dict(best_state)
+        model.eval()
+        return model
 
     def stats(self, mlflow_run_id: str = "") -> StatsResponse:
         """Return model metadata and runtime statistics."""
@@ -510,16 +532,6 @@ class Ml4LacticCnnThermalEarlyDiseaseDetectionPlugin(ModelPluginPort):
                             )),
             ],
             metrics={},
-            runtime_stats=RuntimeStats(total_predictions=self._predict_count, avg_latency_ms=None),
+            runtime_stats=self._runtime_stats(),
         )
-        if mlflow_run_id:
-            try:
-                tracker = BaseMLflowTracker(mlflow_run_id)
-                base.metrics["mlflow"] = {
-                    "params": tracker.get_params(),
-                    "metrics": tracker.get_metrics(),
-                }
-                logger.info("Stats enriched with MLflow data for run_id=%s", mlflow_run_id)
-            except Exception as exc:
-                logger.warning("Could not fetch MLflow stats for run_id=%s: %s", mlflow_run_id, exc)
-        return base
+        return add_mlflow_run_to_stats(base, mlflow_run_id)

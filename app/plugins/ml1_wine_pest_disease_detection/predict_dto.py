@@ -1,8 +1,9 @@
 """Pydantic request/response DTOs for the ml1 vineyard pest/disease ``/predict`` endpoint."""
 from typing import Annotated, Literal, Union
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, Field
 
+from app.application.dto.plugin_dto import BatchRequestBase, PluginDTO
 from app.plugins.ml1_wine_pest_disease_detection.constants import SENSOR_COLS
 
 _SENSORS_DESC = (
@@ -11,10 +12,9 @@ _SENSORS_DESC = (
 )
 
 
-class PredictInlineRequest(BaseModel):
+class PredictInlineRequest(PluginDTO):
     """Inline request: one sample — optional image + required sensor telemetry."""
 
-    model_config = ConfigDict(protected_namespaces=())
     mode: Literal["inline"] = "inline"
     image_base64: str | None = Field(
         default=None,
@@ -24,18 +24,25 @@ class PredictInlineRequest(BaseModel):
         ),
     )
     sensors: dict[str, float] = Field(..., description=_SENSORS_DESC)
-    mlflow_run_id: str = Field(default="", description="MLflow run ID de los RandomForest reentrenados por el usuario")
+    mlflow_run_id: str = Field(
+        default="", description="MLflow run ID de los RandomForest reentrenados por el usuario"
+    )
 
 
-class PredictBatchRequest(BaseModel):
+class PredictBatchRequest(BatchRequestBase):
     """Batch request: a ZIP containing one CSV (Path_Imagen + sensor columns) and the images
     it references (at the ZIP root or under an images/ subfolder — both are searched by
     filename), the same contract as the original --input CSV + images_dir."""
 
-    model_config = ConfigDict(protected_namespaces=())
-    mode: Literal["batch"] = "batch"
-    data_path: str = Field(..., description="Ruta local o s3:// a un ZIP con el CSV de entrada y las imagenes referenciadas")
-    mlflow_run_id: str = Field(default="", description="MLflow run ID de los RandomForest reentrenados por el usuario")
+    data_path: str = Field(
+        ...,
+        description=(
+            "Ruta local o s3:// a un ZIP con el CSV de entrada y las imagenes referenciadas"
+        ),
+    )
+    mlflow_run_id: str = Field(
+        default="", description="MLflow run ID de los RandomForest reentrenados por el usuario"
+    )
 
 
 PredictRequest = Annotated[
@@ -44,13 +51,16 @@ PredictRequest = Annotated[
 ]
 
 
-class PredictInlineResponse(BaseModel):
+class PredictInlineResponse(PluginDTO):
     """Inline response: predicted pathology/pest class, confidence and epidemiological risk."""
 
-    model_config = ConfigDict(protected_namespaces=())
     model_id: str
-    enfermedad: str = Field(..., description="Una de las 15 clases, o IMAGEN_NO_DISPONIBLE si no se aporto imagen")
-    confianza: float = Field(..., description="Probabilidad softmax de la clase ganadora [0, 1]; 0.0 sin imagen")
+    enfermedad: str = Field(
+        ..., description="Una de las 15 clases, o IMAGEN_NO_DISPONIBLE si no se aporto imagen"
+    )
+    confianza: float = Field(
+        ..., description="Probabilidad softmax de la clase ganadora [0, 1]; 0.0 sin imagen"
+    )
     riesgo: float = Field(..., description="Indice de riesgo epidemiologico [0, 1]")
     metodo: str = Field(..., description="HIBRIDO_ENSAMBLE | RIESGO_TABULAR_EXPERT")
 
@@ -67,10 +77,9 @@ class BatchPrediction(BaseModel):
     error: str | None = None
 
 
-class PredictBatchResponse(BaseModel):
+class PredictBatchResponse(PluginDTO):
     """Batch response: one prediction per input CSV row."""
 
-    model_config = ConfigDict(protected_namespaces=())
     model_id: str
     predictions: list[BatchPrediction]
     n_rows: int

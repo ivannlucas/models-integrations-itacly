@@ -1,7 +1,7 @@
 """Static configuration for the ml3 wine disease/pest Deep Ensemble plugin."""
 
-# Los textos de tratamiento son literales de config.yaml (verbatim), no se pueden partir.
-# pylint: disable=line-too-long
+# Los textos de tratamiento son literales de config.yaml (verbatim): los largos se parten en
+# varias líneas por concatenación implícita, sin cambiar ni un carácter del texto.
 
 MODEL_ID = "ml3-wine-disease-pest-forecast"
 ARTIFACT_FOLDER_NAME = "ml3_wine_disease_pest_forecast"
@@ -58,7 +58,9 @@ TARGET_CLASS_LABEL = "Etiqueta_Num"
 TARGET_REG_COLUMN = "Grado_Infeccion"
 STRATIFY_COLUMN = "Etiqueta_Clase"
 
-TRAIN_HARD_REQUIRED_COLUMNS = [DATE_COLUMN, SERIES_COLUMN, TARGET_CLASS_COLUMN, TARGET_REG_COLUMN] + RAW_FIXED_COLUMNS
+TRAIN_HARD_REQUIRED_COLUMNS = [
+    DATE_COLUMN, SERIES_COLUMN, TARGET_CLASS_COLUMN, TARGET_REG_COLUMN
+] + RAW_FIXED_COLUMNS
 
 # manifest.yaml -> training.hyperparams (config.yaml -> split)
 TRAIN_TEST_SIZE = 0.30
@@ -82,64 +84,129 @@ TREATMENT_KNOWLEDGE_BASE = {
         "Recomendación": "Mantener monitorización habitual. No requiere intervención.",
     },
     "LOBESIA": {
-        "Químico": "Impregnar bien racimos. Bacillus thuringiensis (inicio eclosión), clorpirifos, fenoxicarb, flufenoxuron, metoxifenocide, tebufenocide.",
-        "Biológico": "Crysopa carnea, Dybrachys spp., Coccinélidos (poca trascendencia en campaña). Mejor acción parasitaria en invierno sobre crisálidas.",
-        "Biotecnológico": "Confusión sexual (Isonet L / Quant Lb) a 500/350 difusores/ha. Alternativa: Puffers (4-8 aerosoles/ha) sincronizados con vuelo.",
+        "Químico": (
+            "Impregnar bien racimos. Bacillus thuringiensis (inicio eclosión), clorpirifos, "
+            "fenoxicarb, flufenoxuron, metoxifenocide, tebufenocide."
+        ),
+        "Biológico": (
+            "Crysopa carnea, Dybrachys spp., Coccinélidos (poca trascendencia en campaña). Mejor "
+            "acción parasitaria en invierno sobre crisálidas."
+        ),
+        "Biotecnológico": (
+            "Confusión sexual (Isonet L / Quant Lb) a 500/350 difusores/ha. Alternativa: Puffers "
+            "(4-8 aerosoles/ha) sincronizados con vuelo."
+        ),
         "Cultural": "Poda en verde para ventilar racimos y exponerlos a insecticidas.",
     },
     "EMPOASCA": {
-        "Químico": "Tratar focos de larvas/ninfas. Acrinatrin (uva de mesa), clorpirifos, flufenoxuron, imidacloprid.",
+        "Químico": (
+            "Tratar focos de larvas/ninfas. Acrinatrin (uva de mesa), clorpirifos, flufenoxuron, "
+            "imidacloprid."
+        ),
         "Biológico": "Anagrus atomus (baja eficiencia en vid).",
         "Biotecnológico": "Placas amarillas engomadas en perímetros e interior de parcela.",
-        "Cultural": "Eliminar malas hierbas en invierno (hospedantes). Controlar el vigor para evitar brotación excesivamente tierna.",
+        "Cultural": (
+            "Eliminar malas hierbas en invierno (hospedantes). Controlar el vigor para evitar "
+            "brotación excesivamente tierna."
+        ),
     },
     "ALTICA": {
-        "Químico": "Generalmente controlado por tratamientos para Lobesia. Específicos: Lambda cihalotrin y clorpirifos.",
+        "Químico": (
+            "Generalmente controlado por tratamientos para Lobesia. Específicos: Lambda cihalotrin "
+            "y clorpirifos."
+        ),
         "Biológico": "Depredador Zicrona coerulea (chinche azul) y polífagos.",
         "Biotecnológico": "No establecido.",
-        "Cultural": "Refugios trampa al final del verano (sacos/paja en el tronco) para capturar y destruir adultos invernantes. Mantener terreno limpio.",
+        "Cultural": (
+            "Refugios trampa al final del verano (sacos/paja en el tronco) para capturar y "
+            "destruir adultos invernantes. Mantener terreno limpio."
+        ),
     },
     "RED_MITE": {
-        "Químico": "Mojar brotes/madera en invierno. En otoño, mojar haz de las hojas. Aceite mineral (ovicida), acrinatrin, dicofol, fenbutestan, piridaben.",
-        "Biológico": "Fitoséidos espontáneos (ej. Phytoseiulus persimilis) si no se usan químicos agresivos.",
+        "Químico": (
+            "Mojar brotes/madera en invierno. En otoño, mojar haz de las hojas. Aceite mineral "
+            "(ovicida), acrinatrin, dicofol, fenbutestan, piridaben."
+        ),
+        "Biológico": (
+            "Fitoséidos espontáneos (ej. Phytoseiulus persimilis) si no se usan químicos agresivos."
+        ),
         "Biotecnológico": "No establecido.",
-        "Cultural": "Eliminar puestas de invierno mediante poda. Controlar vigor. Evitar frutales aislados cercanos a la parcela.",
+        "Cultural": (
+            "Eliminar puestas de invierno mediante poda. Controlar vigor. Evitar frutales aislados "
+            "cercanos a la parcela."
+        ),
     },
     "ERINOSIS": {
-        "Químico": "Raramente necesario. Azufre (mismo que Oidio) suele bastar. Dicofol en casos severos de raza de yemas (estados fenológicos C/D y G/H).",
+        "Químico": (
+            "Raramente necesario. Azufre (mismo que Oidio) suele bastar. Dicofol en casos severos "
+            "de raza de yemas (estados fenológicos C/D y G/H)."
+        ),
         "Biológico": "Fitoséidos depredadores (Typhlodromus pyri, T. phialatus).",
         "Biotecnológico": "No establecido.",
-        "Cultural": "Quemar restos de poda infectados. No usar yemas de plantas enfermas para reproducción.",
+        "Cultural": (
+            "Quemar restos de poda infectados. No usar yemas de plantas enfermas para reproducción."
+        ),
     },
     "ESCA": {
-        "Químico": "Solo preventivo post-poda en heridas (cubiet, quinosol, tebuconazol+resinas). Inútil si la planta ya está contaminada.",
+        "Químico": (
+            "Solo preventivo post-poda en heridas (cubiet, quinosol, tebuconazol+resinas). Inútil "
+            "si la planta ya está contaminada."
+        ),
         "Biológico": "No establecido.",
         "Biotecnológico": "No establecido.",
-        "Cultural": "Poda hasta madera sana y aplicar mastic. Podar cepas enfermas al final. Desinfectar herramientas. Marcar cepas en vegetativo. Técnica de abrir la cruz con cuña (aerobiosis).",
+        "Cultural": (
+            "Poda hasta madera sana y aplicar mastic. Podar cepas enfermas al final. Desinfectar "
+            "herramientas. Marcar cepas en vegetativo. Técnica de abrir la cruz con cuña "
+            "(aerobiosis)."
+        ),
     },
     "OIDIO": {
-        "Químico": "Mojar adecuadamente racimos. Poda/deshojado previo. Azufre y fungicidas antioídio específicos.",
+        "Químico": (
+            "Mojar adecuadamente racimos. Poda/deshojado previo. Azufre y fungicidas antioídio "
+            "específicos."
+        ),
         "Biológico": "No establecido.",
         "Biotecnológico": "No establecido.",
-        "Cultural": "Deshojado basal del sarmiento (2-3 hojas). Eliminar brotes secundarios sin fruto. Control del vigor vegetativo excesivo.",
+        "Cultural": (
+            "Deshojado basal del sarmiento (2-3 hojas). Eliminar brotes secundarios sin fruto. "
+            "Control del vigor vegetativo excesivo."
+        ),
     },
     "MILDIU": {
-        "Químico": "Hasta tamaño guisante: Sistémicos/penetrantes. Desde envero: De contacto. Preventivo al inicio de floración.",
+        "Químico": (
+            "Hasta tamaño guisante: Sistémicos/penetrantes. Desde envero: De contacto. Preventivo "
+            "al inicio de floración."
+        ),
         "Biológico": "No establecido.",
         "Biotecnológico": "No establecido.",
-        "Cultural": "Buena aireación (deshojados y podas en verde). Controlar microclima en plantaciones bajo plástico.",
+        "Cultural": (
+            "Buena aireación (deshojados y podas en verde). Controlar microclima en plantaciones "
+            "bajo plástico."
+        ),
     },
     "BOTRYTIS": {
-        "Químico": "Preventivos fijos o Método 15-15 (humedad/temp). Boscalida, ciprodinil, fenhexamida, fludioxonil, pirimetanil.",
+        "Químico": (
+            "Preventivos fijos o Método 15-15 (humedad/temp). Boscalida, ciprodinil, fenhexamida, "
+            "fludioxonil, pirimetanil."
+        ),
         "Biológico": "No establecido.",
         "Biotecnológico": "No establecido.",
-        "Cultural": "Deshojado manual/mecánico de racimos. Control estricto de polilla/oídio (puertas de entrada). Evitar exceso de nitrógeno.",
+        "Cultural": (
+            "Deshojado manual/mecánico de racimos. Control estricto de polilla/oídio (puertas de "
+            "entrada). Evitar exceso de nitrógeno."
+        ),
     },
     "BLACK_ROT": {
-        "Químico": "Preventivo desde brotación a tamaño guisante. Alternar contacto (Mancozeb, folpet) con sistémicos (Miclobutanil, triazoles).",
+        "Químico": (
+            "Preventivo desde brotación a tamaño guisante. Alternar contacto (Mancozeb, folpet) "
+            "con sistémicos (Miclobutanil, triazoles)."
+        ),
         "Biológico": "No establecido.",
         "Biotecnológico": "Sistemas IoT / Modelos predictivos de humedad foliar (Spotts).",
-        "Cultural": "Eliminación obligatoria y quema de 'momias' (uvas secas del año anterior). Deshojado/espergurado para aireación.",
+        "Cultural": (
+            "Eliminación obligatoria y quema de 'momias' (uvas secas del año anterior). "
+            "Deshojado/espergurado para aireación."
+        ),
     },
 }
 

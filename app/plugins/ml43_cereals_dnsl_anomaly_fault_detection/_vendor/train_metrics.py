@@ -94,14 +94,14 @@ def rule_corr_mean(
     if rule_activations is None or rule_activations.dim() != 2:
         return 0.0
 
-    B, R = rule_activations.shape
-    if B < 2 or R < 2:
+    batch_size, n_rules = rule_activations.shape
+    if batch_size < 2 or n_rules < 2:
         return 0.0
 
     x = rule_activations - rule_activations.mean(dim=0, keepdim=True)
     std = x.std(dim=0, keepdim=True, unbiased=False).clamp_min(eps)
     x = x / std
-    corr = (x.T @ x) / B
+    corr = (x.T @ x) / batch_size
 
-    mask = ~torch.eye(R, dtype=torch.bool, device=corr.device)
+    mask = ~torch.eye(n_rules, dtype=torch.bool, device=corr.device)
     return float(corr[mask].abs().mean().detach().cpu())

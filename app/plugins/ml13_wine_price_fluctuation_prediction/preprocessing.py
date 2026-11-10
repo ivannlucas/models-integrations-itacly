@@ -69,8 +69,9 @@ def parse_campaign_date(row: pd.Series) -> datetime | None:
         week = int(row[WEEK_COLUMN])
         real_year = year_start if week >= 31 else year_end
         return datetime.strptime(f"{real_year}-W{week:02d}-1", "%G-W%V-%u")
-    except Exception:  # pylint: disable=broad-exception-caught
-        # Same as the original ETL: unparseable rows are dropped downstream.
+    except (KeyError, TypeError, ValueError, OverflowError):
+        # Same as the original ETL: unparseable rows are dropped downstream. Values come from a
+        # CSV/JSON row, so int()/strptime() can only fail with these (None/NA, text, nan, inf…).
         return None
 
 

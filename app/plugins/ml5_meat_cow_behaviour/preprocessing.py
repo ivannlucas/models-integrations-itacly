@@ -20,11 +20,11 @@ def decode_frames_base64(frames_b64: list[str]) -> np.ndarray:
         try:
             img_bytes = base64.b64decode(b64)
             arr = np.frombuffer(img_bytes, dtype=np.uint8)
-            img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+            img = cv2.imdecode(arr, cv2.IMREAD_COLOR)  # pylint: disable=no-member
             if img is None:
                 raise InvalidImageError(f"Frame {i} could not be decoded — invalid image bytes.")
-            img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-            img = cv2.resize(img, (CROP_SIZE, CROP_SIZE))
+            img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)  # pylint: disable=no-member
+            img = cv2.resize(img, (CROP_SIZE, CROP_SIZE))  # pylint: disable=no-member
             frames.append(img)
         except InvalidImageError:
             raise
@@ -76,5 +76,5 @@ def extract_cow_roi(frame_bgr: np.ndarray, bbox: list[float]) -> np.ndarray:
     if x2 <= x1 or y2 <= y1:
         return np.zeros((CROP_SIZE, CROP_SIZE, 3), dtype=np.uint8)
 
-    roi = cv2.resize(frame_bgr[y1:y2, x1:x2], (CROP_SIZE, CROP_SIZE))
-    return cv2.cvtColor(roi, cv2.COLOR_BGR2RGB)
+    roi = cv2.resize(frame_bgr[y1:y2, x1:x2], (CROP_SIZE, CROP_SIZE))  # pylint: disable=no-member
+    return cv2.cvtColor(roi, cv2.COLOR_BGR2RGB)  # pylint: disable=no-member

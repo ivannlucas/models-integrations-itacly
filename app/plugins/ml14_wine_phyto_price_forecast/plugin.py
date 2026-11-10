@@ -12,18 +12,16 @@ the officially approved one).
 from __future__ import annotations
 
 import logging
-import shutil
 import tempfile
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
 
-from app.application.dto.stats_dto import InputField, OutputField, RuntimeStats, StatsResponse
+from app.application.dto.stats_dto import InputField, OutputField, StatsResponse
 from app.domain.ports.model_plugin_port import ModelPluginPort
-from app.domain.services.exceptions import ModelNotLoadedError
-from app.domain.services.mlflow_tracker import BaseMLflowTracker
+from app.domain.services.mlflow_artifacts import mlflow_run_summary, removing_dir
+from app.domain.services.plugin_runtime import PluginRuntimeMixin
 from app.infrastructure.artifact_store import local_file_path
 from app.infrastructure.base_model_publisher import persist_retrained_bundle
 from app.plugins.ml14_wine_phyto_price_forecast import model_loader, preprocessing, training
@@ -57,7 +55,7 @@ from app.plugins.ml14_wine_phyto_price_forecast.train_dto import TrainResponse
 logger = logging.getLogger(__name__)
 
 
-class Ml14WinePhytoPriceForecastPlugin(ModelPluginPort):
+class Ml14WinePhytoPriceForecastPlugin(PluginRuntimeMixin, ModelPluginPort):
     """GRU plugin for the national phytosanitary price index (t+16 weeks)."""
 
     BASE_ARTIFACT_FOLDER = ARTIFACT_FOLDER_NAME   # every /train publishes the new base model
@@ -65,8 +63,6 @@ class Ml14WinePhytoPriceForecastPlugin(ModelPluginPort):
     def __init__(self) -> None:
         """Initialize an unloaded plugin with empty runtime counters."""
         self._bundle: dict | None = None
-        self._predict_count: int = 0
-        self._last_predict_at: str | None = None
 
     # ── lifecycle ─────────────────────────────────────────────────────────────
 
@@ -79,24 +75,16 @@ class Ml14WinePhytoPriceForecastPlugin(ModelPluginPort):
         """Return True once the artifact bundle is loaded."""
         return self._bundle is not None
 
-    def _require_loaded(self) -> None:
-        if not self.is_loaded():
-            raise ModelNotLoadedError("El modelo no está cargado.")
-
     def _resolve_bundle(self, mlflow_run_id: str) -> tuple[dict, str | None]:
         """Return (bundle, temp_dir) as locals — never stored on self (shared across requests).
 
         A run without a loadable model raises UserModelUnavailableError (→ 422): never fall
-        back silently to the base model. The caller must rmtree temp_dir in a finally block.
+        back silently to the base model. The caller must remove temp_dir (``removing_dir``).
         """
         if mlflow_run_id:
             return download_user_model_from_mlflow(mlflow_run_id)
         self._require_loaded()
         return self._bundle, None
-
-    def _record_prediction(self) -> None:
-        self._predict_count += 1
-        self._last_predict_at = datetime.now(tz=timezone.utc).isoformat()
 
     # ── predict_inline ────────────────────────────────────────────────────────
 
@@ -111,12 +99,9 @@ class Ml14WinePhytoPriceForecastPlugin(ModelPluginPort):
         """Predict the national phytosanitary price index at t+16 weeks from a raw history."""
         _ = model_key, threshold
         bundle, user_tmp = self._resolve_bundle(mlflow_run_id)
-        try:
+        with removing_dir(user_tmp):
             r = preprocessing.run_inference(bundle, features["rows"])
-        finally:
-            if user_tmp:
-                shutil.rmtree(user_tmp, ignore_errors=True)
-        self._record_prediction()
+        self._record()
         logger.info(
             "predict_inline done — last_observed_date=%s predicted_price=%.4f count=%d",
             r["last_observed_date"], r["predicted_price"], self._predict_count,
@@ -146,17 +131,14 @@ class Ml14WinePhytoPriceForecastPlugin(ModelPluginPort):
         inbox/a14/manifest.yaml known_issues).
         """
         bundle, user_tmp = self._resolve_bundle(mlflow_run_id)
-        try:
+        with removing_dir(user_tmp):
             with local_file_path(data_path) as local_path:
                 df = pd.read_csv(local_path)
             rows: list[dict[str, Any]] = df.to_dict(orient="records")
             r = preprocessing.run_inference(bundle, rows)
-        finally:
-            if user_tmp:
-                shutil.rmtree(user_tmp, ignore_errors=True)
         r["model_id"] = MODEL_ID
         r["model_used"] = MODEL_NAME
-        self._record_prediction()
+        self._record()
         logger.info(
             "predict_batch done — last_observed_date=%s predicted_price=%.4f count=%d",
             r["last_observed_date"], r["predicted_price"], self._predict_count,
@@ -184,7 +166,7 @@ class Ml14WinePhytoPriceForecastPlugin(ModelPluginPort):
                   "epochs_max": TRAIN_EPOCHS, "batch_size": TRAIN_BATCH_SIZE,
                   "test_ratio": TEST_RATIO, "n_seeds": TRAIN_N_SEEDS,
                   "canonical_seed": TRAIN_SEED_BASE, "target_mode": "drift_residual_h"}
-        try:
+        with removing_dir(artifact_tmp):
             model_loader.save_user_bundle(Path(artifact_tmp), result.model, result.feature_columns,
                                           result.input_scaler, result.target_scaler)
             persisted = persist_retrained_bundle(
@@ -193,8 +175,6 @@ class Ml14WinePhytoPriceForecastPlugin(ModelPluginPort):
                 upload_to_mlflow=lambda: upload_artifacts_to_mlflow(
                     artifact_tmp, mlflow_run_id, metrics=result.metrics, params=params),
             )
-        finally:
-            shutil.rmtree(artifact_tmp, ignore_errors=True)
 
         return TrainResponse(
             detail=("GRU reentrenada con el procedimiento del equipo de IA (semilla 42; métricas "
@@ -207,8 +187,7 @@ class Ml14WinePhytoPriceForecastPlugin(ModelPluginPort):
     def _metrics_with_run(mlflow_run_id: str) -> dict:
         metrics = dict(METRICS_REPORTED)
         if mlflow_run_id:
-            tracker = BaseMLflowTracker(mlflow_run_id)
-            metrics["mlflow"] = {"params": tracker.get_params(), "metrics": tracker.get_metrics()}
+            metrics["mlflow"] = mlflow_run_summary(mlflow_run_id)
         return metrics
 
     # ── stats ─────────────────────────────────────────────────────────────────
@@ -230,11 +209,28 @@ class Ml14WinePhytoPriceForecastPlugin(ModelPluginPort):
             ),
         ]
         outputs = [
-            OutputField(name="predicted_price", type="float", description="PROTECCION_FITO predicho a horizon_weeks vista (índice base 2020=100)."),
-            OutputField(name="current_price", type="float", description="PROTECCION_FITO de la última fila del histórico aportado."),
-            OutputField(name="drift_baseline", type="float", description="Baseline lineal de drift — referencia frente a la que el GRU compara en el test reportado (ver manifest)."),
+            OutputField(
+                name="predicted_price", type="float",
+                description=(
+                    "PROTECCION_FITO predicho a horizon_weeks vista (índice base 2020=100)."
+                ),
+            ),
+            OutputField(
+                name="current_price", type="float",
+                description="PROTECCION_FITO de la última fila del histórico aportado.",
+            ),
+            OutputField(
+                name="drift_baseline", type="float",
+                description=(
+                    "Baseline lineal de drift — referencia frente a la que el GRU compara en el "
+                    "test reportado (ver manifest)."
+                ),
+            ),
             OutputField(name="horizon_weeks", type="int", description=f"Siempre {HORIZON_WEEKS}."),
-            OutputField(name="prediction_date", type="date", description="last_observed_date + horizon_weeks."),
+            OutputField(
+                name="prediction_date", type="date",
+                description="last_observed_date + horizon_weeks.",
+            ),
         ]
         return StatsResponse(
             model_name=MODEL_ID,
@@ -252,8 +248,5 @@ class Ml14WinePhytoPriceForecastPlugin(ModelPluginPort):
             inputs=inputs,
             outputs=outputs,
             metrics=self._metrics_with_run(mlflow_run_id),
-            runtime_stats=RuntimeStats(
-                total_predictions=self._predict_count,
-                avg_latency_ms=None,
-            ),
+            runtime_stats=self._runtime_stats(),
         )

@@ -24,6 +24,7 @@ INLINE_PAYLOAD = {"mode": "inline", "rows": [_ROW] * 24}
 
 
 def test_health(client):
+    """/health reports status ok, the model id and loaded=True."""
     body = client.get(f"{PREFIX}/health").json()
     assert body["status"] == "ok"
     assert body["model"] == MODEL_ID
@@ -31,10 +32,12 @@ def test_health(client):
 
 
 def test_stats(client):
+    """/stats reports the model id as model_name."""
     assert client.get(f"{PREFIX}/stats").json()["model_name"] == MODEL_ID
 
 
 def test_predict_inline(client):
+    """Inline /predict returns a GRU forecast with the expected fields and types."""
     resp = client.post(f"{PREFIX}/predict", json=INLINE_PAYLOAD)
     assert resp.status_code == 200
     body = resp.json()
@@ -47,7 +50,8 @@ def test_predict_inline(client):
 
 
 def test_predict_inline_too_few_rows_rejected(client):
-    """rows below the DTO min_length (24 = feature_lookback 12 + seq_len 12) must fail Pydantic validation."""
+    """rows below the DTO min_length (24 = feature_lookback 12 + seq_len 12) must fail
+    Pydantic validation."""
     payload = {"mode": "inline", "rows": [_ROW] * 23}
     resp = client.post(f"{PREFIX}/predict", json=payload)
     assert resp.status_code == 422
@@ -57,7 +61,8 @@ def test_predict_inline_insufficient_data_maps_to_422(client, fake_plugins):
     """InsufficientDataError raised by the plugin (invalid/duplicate/non-weekly dates, nulls,
     or too few rows surviving feature derivation) must map to HTTP 422, not 500."""
     fake_plugins[MODEL_ID].raise_on_inline = InsufficientDataError(
-        "Historial insuficiente para inferencia: registros_recibidos=23, registros_minimos_requeridos=24."
+        "Historial insuficiente para inferencia: registros_recibidos=23, "
+        "registros_minimos_requeridos=24."
     )
     resp = client.post(f"{PREFIX}/predict", json=INLINE_PAYLOAD)
     assert resp.status_code == 422
@@ -65,7 +70,10 @@ def test_predict_inline_insufficient_data_maps_to_422(client, fake_plugins):
 
 
 def test_predict_batch(client):
-    resp = client.post(f"{PREFIX}/predict", json={"mode": "batch", "data_path": "/tmp/a14_history.csv"})
+    """Batch /predict returns one prediction per row, made with the GRU."""
+    resp = client.post(
+        f"{PREFIX}/predict", json={"mode": "batch", "data_path": "/tmp/a14_history.csv"}
+    )
     assert resp.status_code == 200
     body = resp.json()
     assert body["model_id"] == MODEL_ID
@@ -74,7 +82,10 @@ def test_predict_batch(client):
 
 
 def test_train_returns_200_with_metrics(client):
-    resp = client.post(f"{PREFIX}/train", json={"data_path": "/tmp/x.csv", "mlflow_run_id": "test-run-id"})
+    """/train returns 200 with the RMSE/drift/skill metrics."""
+    resp = client.post(
+        f"{PREFIX}/train", json={"data_path": "/tmp/x.csv", "mlflow_run_id": "test-run-id"}
+    )
     assert resp.status_code == 200
     body = resp.json()
     assert {"rmse", "rmse_std", "drift_rmse", "beats_drift", "skill_score", "n_test"} <= body.keys()

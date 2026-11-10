@@ -14,6 +14,7 @@ import logging
 import os
 import shutil
 import zipfile
+from typing import NamedTuple
 
 from app.domain.services.exceptions import ArchiveLimitExceededError
 
@@ -48,6 +49,59 @@ def _member_path(dest_real: str, name: str) -> str:
     return path
 
 
+class _Limits(NamedTuple):
+    total: int
+    files: int
+    ratio: int
+
+
+def _check_members(members: list[zipfile.ZipInfo], dest_dir: str, limits: _Limits) -> None:
+    """Reject the ZIP up front by its declared file count, size and the free disk space."""
+    if len(members) > limits.files:
+        raise ArchiveLimitExceededError(
+            f"El ZIP contiene {len(members)} ficheros; el máximo es {limits.files} "
+            "(ARCHIVE_MAX_FILES)."
+        )
+    declared = sum(m.file_size for m in members)
+    if declared > limits.total:
+        raise ArchiveLimitExceededError(
+            f"El ZIP ocupa {declared / GIB:.1f} GiB descomprimido; el máximo es "
+            f"{limits.total / GIB:.1f} GiB (ARCHIVE_MAX_TOTAL_BYTES)."
+        )
+    os.makedirs(dest_dir, exist_ok=True)
+    free = shutil.disk_usage(dest_dir).free
+    if declared > free:
+        raise ArchiveLimitExceededError(
+            f"No hay espacio en disco para descomprimir el ZIP ({declared / GIB:.1f} GiB "
+            f"necesarios, {free / GIB:.1f} GiB libres)."
+        )
+
+
+def _copy_member(
+    zf: zipfile.ZipFile, member: zipfile.ZipInfo, target: str, limits: _Limits, written_total: int
+) -> int:
+    """Stream *member* into *target* within the limits; return the updated *written_total*."""
+    # Count what is really written: the sizes in the ZIP headers are not trusted.
+    member_cap = max(member.compress_size * limits.ratio, RATIO_EXEMPT_BYTES)
+    written = 0
+    with zf.open(member) as src, open(target, "wb") as dst:
+        while chunk := src.read(_CHUNK):
+            written += len(chunk)
+            written_total += len(chunk)
+            if written > member_cap:
+                raise ArchiveLimitExceededError(
+                    f"'{member.filename}' se expande más de {limits.ratio}x su tamaño "
+                    "comprimido (posible zip bomb, ARCHIVE_MAX_RATIO)."
+                )
+            if written_total > limits.total:
+                raise ArchiveLimitExceededError(
+                    f"El ZIP supera {limits.total / GIB:.1f} GiB descomprimido "
+                    "(ARCHIVE_MAX_TOTAL_BYTES)."
+                )
+            dst.write(chunk)
+    return written_total
+
+
 def safe_extract_zip(zip_path: str, dest_dir: str) -> None:
     """Extract *zip_path* into *dest_dir* within the size, file-count and ratio limits.
 
@@ -55,9 +109,11 @@ def safe_extract_zip(zip_path: str, dest_dir: str) -> None:
     (→ 400 in /train) when the file is not a valid ZIP. Partially extracted files are left in
     *dest_dir*; callers already extract into a temp dir that they remove in ``finally``.
     """
-    max_total = _limit("ARCHIVE_MAX_TOTAL_BYTES", DEFAULT_MAX_TOTAL_BYTES)
-    max_files = _limit("ARCHIVE_MAX_FILES", DEFAULT_MAX_FILES)
-    max_ratio = _limit("ARCHIVE_MAX_RATIO", DEFAULT_MAX_RATIO)
+    limits = _Limits(
+        total=_limit("ARCHIVE_MAX_TOTAL_BYTES", DEFAULT_MAX_TOTAL_BYTES),
+        files=_limit("ARCHIVE_MAX_FILES", DEFAULT_MAX_FILES),
+        ratio=_limit("ARCHIVE_MAX_RATIO", DEFAULT_MAX_RATIO),
+    )
     try:
         zf = zipfile.ZipFile(zip_path, "r")
     except zipfile.BadZipFile as exc:
@@ -65,23 +121,7 @@ def safe_extract_zip(zip_path: str, dest_dir: str) -> None:
 
     with zf:
         members = [m for m in zf.infolist() if not m.is_dir()]
-        if len(members) > max_files:
-            raise ArchiveLimitExceededError(
-                f"El ZIP contiene {len(members)} ficheros; el máximo es {max_files} (ARCHIVE_MAX_FILES)."
-            )
-        declared = sum(m.file_size for m in members)
-        if declared > max_total:
-            raise ArchiveLimitExceededError(
-                f"El ZIP ocupa {declared / GIB:.1f} GiB descomprimido; el máximo es "
-                f"{max_total / GIB:.1f} GiB (ARCHIVE_MAX_TOTAL_BYTES)."
-            )
-        os.makedirs(dest_dir, exist_ok=True)
-        free = shutil.disk_usage(dest_dir).free
-        if declared > free:
-            raise ArchiveLimitExceededError(
-                f"No hay espacio en disco para descomprimir el ZIP ({declared / GIB:.1f} GiB "
-                f"necesarios, {free / GIB:.1f} GiB libres)."
-            )
+        _check_members(members, dest_dir, limits)
 
         dest_real = os.path.realpath(dest_dir)
         written_total = 0
@@ -91,22 +131,7 @@ def safe_extract_zip(zip_path: str, dest_dir: str) -> None:
                 os.makedirs(target, exist_ok=True)
                 continue
             os.makedirs(os.path.dirname(target), exist_ok=True)
-            # Count what is really written: the sizes in the ZIP headers are not trusted.
-            member_cap = max(member.compress_size * max_ratio, RATIO_EXEMPT_BYTES)
-            written = 0
-            with zf.open(member) as src, open(target, "wb") as dst:
-                while chunk := src.read(_CHUNK):
-                    written += len(chunk)
-                    written_total += len(chunk)
-                    if written > member_cap:
-                        raise ArchiveLimitExceededError(
-                            f"'{member.filename}' se expande más de {max_ratio}x su tamaño "
-                            "comprimido (posible zip bomb, ARCHIVE_MAX_RATIO)."
-                        )
-                    if written_total > max_total:
-                        raise ArchiveLimitExceededError(
-                            f"El ZIP supera {max_total / GIB:.1f} GiB descomprimido "
-                            "(ARCHIVE_MAX_TOTAL_BYTES)."
-                        )
-                    dst.write(chunk)
-    logger.info("Extracted %d files (%.1f MiB) from %s", len(members), written_total / 1024 ** 2, zip_path)
+            written_total = _copy_member(zf, member, target, limits, written_total)
+    logger.info(
+        "Extracted %d files (%.1f MiB) from %s", len(members), written_total / 1024 ** 2, zip_path
+    )

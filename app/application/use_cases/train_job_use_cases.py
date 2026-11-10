@@ -65,9 +65,12 @@ class SubmitTrainJobUseCase:
                 self._sync_running -= 1
 
     def execute(self, request: Any) -> TrainJobRecord:
+        """Queue an async training job keyed by mlflow_run_id (idempotent) and return its record."""
         job_id = (getattr(request, "mlflow_run_id", "") or "").strip()
         if not job_id:
-            raise ValueError("mlflow_run_id es obligatorio en el entrenamiento asíncrono: es el job_id")
+            raise ValueError(
+                "mlflow_run_id es obligatorio en el entrenamiento asíncrono: es el job_id"
+            )
         with self._lock:
             existing = self._store.get(job_id)
             if existing is not None:
@@ -76,7 +79,9 @@ class SubmitTrainJobUseCase:
                 # Idempotent: a redelivered request (e.g. Celery) never starts a second training.
                 return existing
             if self._sync_running or self._executor.is_busy():
-                raise TrainJobBusyError(f"Ya hay un entrenamiento en curso del modelo {self._model_id}")
+                raise TrainJobBusyError(
+                    f"Ya hay un entrenamiento en curso del modelo {self._model_id}"
+                )
             now = self._clock()
             record = TrainJobRecord(
                 job_id=job_id, model_id=self._model_id, status=TrainJobStatus.QUEUED,
@@ -90,11 +95,16 @@ class SubmitTrainJobUseCase:
                     train_kwargs=build_train_kwargs(self._plugin, request),
                     store=self._store,
                 )
-            except Exception as exc:
-                logger.exception("Could not start training job %s for model '%s'", job_id, self._model_id)
+            except Exception as exc:  # pylint: disable=broad-exception-caught  # recorded as a failed job
+                logger.exception(
+                    "Could not start training job %s for model '%s'", job_id, self._model_id
+                )
                 failed = replace(
-                    record, status=TrainJobStatus.FAILED, updated_at=self._clock(),
-                    error=f"No se pudo lanzar el proceso de entrenamiento: {exc}", error_type=type(exc).__name__,
+                    record,
+                    status=TrainJobStatus.FAILED,
+                    updated_at=self._clock(),
+                    error=f"No se pudo lanzar el proceso de entrenamiento: {exc}",
+                    error_type=type(exc).__name__,
                     http_status=train_error_http_status(exc),
                 )
                 self._store.save(failed)
@@ -119,7 +129,9 @@ class GetTrainJobUseCase:
         self._store = store
         self._clock = clock
         self._stale_after_s = (
-            stale_after_s if stale_after_s is not None else float(os.getenv("TRAIN_JOB_STALE_AFTER_S", "600"))
+            stale_after_s
+            if stale_after_s is not None
+            else float(os.getenv("TRAIN_JOB_STALE_AFTER_S", "600"))
         )
         self._max_duration_s = (
             max_duration_s if max_duration_s is not None
@@ -127,6 +139,7 @@ class GetTrainJobUseCase:
         )
 
     def execute(self, job_id: str) -> TrainJobRecord | None:
+        """Return the job (None if unknown/other model), marking timed-out or lost jobs failed."""
         record = self._store.get(job_id)
         if record is None or record.model_id != self._model_id:
             return None
@@ -141,14 +154,21 @@ class GetTrainJobUseCase:
             )
         elif now - record.updated_at > self._stale_after_s:
             record = replace(
-                record, status=TrainJobStatus.FAILED, updated_at=now, error_type=LOST_ERROR_TYPE, http_status=500,
+                record,
+                status=TrainJobStatus.FAILED,
+                updated_at=now,
+                error_type=LOST_ERROR_TYPE,
+                http_status=500,
                 error=(
-                    f"El proceso de entrenamiento dejó de dar señales hace más de {int(self._stale_after_s)} s "
+                    "El proceso de entrenamiento dejó de dar señales hace más de "
+                    f"{int(self._stale_after_s)} s "
                     "(reinicio del pod o proceso terminado por el sistema)."
                 ),
             )
         else:
             return record
         self._store.save(record)
-        logger.warning("Training job %s for model '%s' marked as %s", job_id, self._model_id, record.error_type)
+        logger.warning(
+            "Training job %s for model '%s' marked as %s", job_id, self._model_id, record.error_type
+        )
         return record

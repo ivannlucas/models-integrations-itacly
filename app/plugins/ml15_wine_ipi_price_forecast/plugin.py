@@ -22,13 +22,12 @@ from typing import Any
 import joblib
 import pandas as pd
 
-from app.application.dto.stats_dto import InputField, OutputField, RuntimeStats, StatsResponse
+from app.application.dto.stats_dto import InputField, OutputField, StatsResponse
 from app.domain.ports.model_plugin_port import ModelPluginPort
-from app.domain.services.exceptions import (
-    MissingRequiredFeatureError,
-    ModelNotLoadedError,
-)
+from app.domain.services.exceptions import MissingRequiredFeatureError
+from app.domain.services.mlflow_artifacts import add_mlflow_run_to_stats, removing_dir
 from app.domain.services.mlflow_tracker import BaseMLflowTracker
+from app.domain.services.plugin_runtime import PluginRuntimeMixin
 from app.infrastructure.artifact_store import local_file_path
 from app.infrastructure.base_model_publisher import persist_retrained_bundle
 from app.plugins.ml15_wine_ipi_price_forecast import history, model_loader, preprocessing, training
@@ -54,7 +53,60 @@ from app.plugins.ml15_wine_ipi_price_forecast.train_dto import TrainResponse
 logger = logging.getLogger(__name__)
 
 
-class Ml15WineIpiPriceForecastPlugin(ModelPluginPort):
+def _derived_row_meta(date: pd.Timestamp, derived_row: pd.Series, horizon: int) -> dict:
+    """Origin/target dates and feature status of one derived simple-history row."""
+    origin_date, target_date = preprocessing.resolve_origin_target_dates(
+        {"date": date.strftime("%Y-%m-%d")}, horizon,
+    )
+    status, notes = history.feature_status([note for _, note in derived_row["_notes"]])
+    return {
+        "origin_date": origin_date, "target_date": target_date,
+        "feature_status": status, "feature_notes": notes,
+    }
+
+
+def _check_reference_copy(field: str, path: str, current: pd.DataFrame, copy_path: str) -> None:
+    """Copy a reference CSV to copy_path and check it carries the current history's columns."""
+    try:
+        with local_file_path(path) as local_path:
+            shutil.copyfile(local_path, copy_path)
+        frame = history.load_monthly_csv(copy_path)
+    except Exception as exc:
+        raise ValueError(
+            f"{field}: no se puede leer como histórico mensual ({exc})."
+        ) from exc
+    missing = [col for col in current.columns if col not in frame.columns]
+    if missing:
+        raise ValueError(
+            f"{field}: faltan las columnas del histórico vigente {missing}."
+        )
+
+
+def _train_warning(mlflow_warning: str | None, *, renewed: bool) -> str | None:
+    """The train() upload_warning: MLflow failure and/or inherited reference histories."""
+    warnings = [mlflow_warning] if mlflow_warning else []
+    if not renewed:
+        warnings.append(
+            "No se han renovado los históricos exógenos de referencia (reference_prices_path / "
+            "reference_financial_path): el modelo base nuevo hereda los de la versión anterior."
+        )
+    return " ".join(warnings) or None
+
+
+def _read_csv(path: str) -> pd.DataFrame:
+    """Read a CSV given as a local or s3:// path."""
+    with local_file_path(path) as local_path:
+        return pd.read_csv(local_path)
+
+
+def _write_bundle(bundle_dir: str, payload: dict, references: list[tuple[str, str]]) -> None:
+    """Write the retrained payload and the validated reference CSV copies (canonical names)."""
+    joblib.dump(payload, f"{bundle_dir}/{MODEL_FILENAME}")
+    for copy_path, filename in references:
+        shutil.copyfile(copy_path, f"{bundle_dir}/{filename}")
+
+
+class Ml15WineIpiPriceForecastPlugin(PluginRuntimeMixin, ModelPluginPort):
     """Ridge regression plugin for the national phytosanitary price index (t+6)."""
 
     BASE_ARTIFACT_FOLDER = ARTIFACT_FOLDER_NAME   # every /train publishes the new base model
@@ -62,8 +114,6 @@ class Ml15WineIpiPriceForecastPlugin(ModelPluginPort):
     def __init__(self) -> None:
         """Initialize an unloaded plugin with empty runtime counters."""
         self._payload: dict | None = None
-        self._predict_count: int = 0
-        self._last_predict_at: str | None = None
 
     # ── lifecycle ─────────────────────────────────────────────────────────────
 
@@ -75,14 +125,6 @@ class Ml15WineIpiPriceForecastPlugin(ModelPluginPort):
     def is_loaded(self) -> bool:
         """Return True once the artifact payload is loaded."""
         return self._payload is not None
-
-    def _require_loaded(self) -> None:
-        if not self.is_loaded():
-            raise ModelNotLoadedError("El modelo no está cargado.")
-
-    def _record_prediction(self) -> None:
-        self._predict_count += 1
-        self._last_predict_at = datetime.now(tz=timezone.utc).isoformat()
 
     def _resolve_payload(self, mlflow_run_id: str) -> tuple[dict, str | None]:
         """Return (payload, temp_dir_to_cleanup). temp_dir is None for the fixed artifact."""
@@ -104,19 +146,20 @@ class Ml15WineIpiPriceForecastPlugin(ModelPluginPort):
         horizon = int(payload["horizon"])
         try:
             values, meta = preprocessing.resolve_feature_row(
-                row, feature_columns, CALENDAR_DERIVED_COLUMNS, target_column=str(payload["target_column"]),
+                row, feature_columns, CALENDAR_DERIVED_COLUMNS,
+                target_column=str(payload["target_column"]),
             )
         except ValueError as exc:
             raise MissingRequiredFeatureError(str(exc)) from exc
-        X = pd.DataFrame([values])[feature_columns]
+        x_df = pd.DataFrame([values])[feature_columns]
 
         origin_date, target_date = preprocessing.resolve_origin_target_dates(row, horizon)
         return {
             "feature_columns": feature_columns,
             "horizon": horizon,
-            "X": X,
-            "y_pred": float(payload["model"].predict(X)[0]),
-            "y_anchor": float(X.iloc[0][str(payload["anchor_column"])]),
+            "X": x_df,
+            "y_pred": float(payload["model"].predict(x_df)[0]),
+            "y_anchor": float(x_df.iloc[0][str(payload["anchor_column"])]),
             "origin_date": origin_date,
             "target_date": target_date,
             **meta,
@@ -136,9 +179,9 @@ class Ml15WineIpiPriceForecastPlugin(ModelPluginPort):
         _ = model_key, threshold
         self._require_loaded()
         payload, tmp = self._resolve_payload(mlflow_run_id)
-        try:
+        with removing_dir(tmp):
             r = self._predict_row(payload, features)
-            self._record_prediction()
+            self._record()
             logger.info(
                 "predict_inline done — origin_date=%s y_pred=%.4f count=%d",
                 r["origin_date"], r["y_pred"], self._predict_count,
@@ -154,16 +197,17 @@ class Ml15WineIpiPriceForecastPlugin(ModelPluginPort):
                 y_true=r["y_true"],
                 feature_status=r["feature_status"],
                 feature_notes=r["feature_notes"],
-                xai_feature_values={col: float(r["X"].iloc[0][col]) for col in r["feature_columns"]},
+                xai_feature_values={
+                    col: float(r["X"].iloc[0][col]) for col in r["feature_columns"]
+                },
             )
-        finally:
-            if tmp:
-                shutil.rmtree(tmp, ignore_errors=True)
 
     # ── predict_batch ─────────────────────────────────────────────────────────
 
     @staticmethod
-    def _resolve_batch_dates(df: pd.DataFrame) -> tuple[list[pd.Timestamp | None], list[dict[str, Any]], dict[int, str]]:
+    def _resolve_batch_dates(
+        df: pd.DataFrame,
+    ) -> tuple[list[pd.Timestamp | None], list[dict[str, Any]], dict[int, str]]:
         """Resolve each row's origin date + collect (date, value) override points.
 
         Returns (dates, user_points, row_errors) — dates[i] is None where the row's date
@@ -188,7 +232,9 @@ class Ml15WineIpiPriceForecastPlugin(ModelPluginPort):
 
         return dates, user_points, row_errors
 
-    def _predict_simple_history_batch(self, payload: dict, df: pd.DataFrame) -> list[dict[str, Any]]:
+    def _predict_simple_history_batch(
+        self, payload: dict, df: pd.DataFrame
+    ) -> list[dict[str, Any]]:
         """Batch-predict a simple date(+year/month)+IPI-value history CSV — e.g. the AI
         team's own data/input/ipi_history.csv (date,year,month,ipi_national_current) — one
         prediction per row. Merges the WHOLE file into the bundled reference history first
@@ -207,19 +253,25 @@ class Ml15WineIpiPriceForecastPlugin(ModelPluginPort):
 
         valid_idx = [i for i, d in enumerate(dates) if d is not None]
         if valid_idx:
-            self._fill_batch_predictions(payload, dates, valid_idx, prices_df, financial_df, predictions)
+            self._fill_batch_predictions(
+                payload, dates, valid_idx,
+                reference=(prices_df, financial_df), predictions=predictions,
+            )
         return predictions
 
     @staticmethod
     def _fill_batch_predictions(
-        payload: dict, dates: list[pd.Timestamp], valid_idx: list[int],
-        prices_df: pd.DataFrame, financial_df: pd.DataFrame, predictions: list,
+        payload: dict, dates: list[pd.Timestamp], valid_idx: list[int], *,
+        reference: tuple[pd.DataFrame, pd.DataFrame], predictions: list,
     ) -> None:
-        """Derive features + predict for every valid_idx row, writing into predictions in place."""
+        """Derive features + predict for every valid_idx row, writing into predictions in place.
+
+        reference is the (prices_df, financial_df) history the features are derived from.
+        """
         feature_columns = list(payload["feature_columns"])
         horizon = int(payload["horizon"])
         try:
-            derived = history.derive_feature_rows([dates[i] for i in valid_idx], prices_df, financial_df)
+            derived = history.derive_feature_rows([dates[i] for i in valid_idx], *reference)
             y_pred = payload["model"].predict(derived[feature_columns])
         except ValueError as exc:
             for row_idx in valid_idx:
@@ -228,20 +280,17 @@ class Ml15WineIpiPriceForecastPlugin(ModelPluginPort):
 
         anchor_column = str(payload["anchor_column"])
         for pos, row_idx in enumerate(valid_idx):
-            origin_date, target_date = preprocessing.resolve_origin_target_dates(
-                {"date": dates[row_idx].strftime("%Y-%m-%d")}, horizon,
-            )
-            status, notes = history.feature_status([note for _, note in derived.iloc[pos]["_notes"]])
+            meta = _derived_row_meta(dates[row_idx], derived.iloc[pos], horizon)
             predictions[row_idx] = {
                 "row": row_idx,
-                "origin_date": origin_date,
-                "target_date": target_date,
+                "origin_date": meta["origin_date"],
+                "target_date": meta["target_date"],
                 "horizon": horizon,
                 "y_pred": float(y_pred[pos]),
                 "y_anchor": float(derived.iloc[pos][anchor_column]),
                 "y_true": derived.iloc[pos]["y_true"],
-                "feature_status": status,
-                "feature_notes": notes,
+                "feature_status": meta["feature_status"],
+                "feature_notes": meta["feature_notes"],
                 "model_id": MODEL_ID,
             }
 
@@ -255,7 +304,7 @@ class Ml15WineIpiPriceForecastPlugin(ModelPluginPort):
         """
         self._require_loaded()
         payload, tmp = self._resolve_payload(mlflow_run_id)
-        try:
+        with removing_dir(tmp):
             with local_file_path(data_path) as local_path:
                 df = pd.read_csv(local_path)
 
@@ -283,21 +332,21 @@ class Ml15WineIpiPriceForecastPlugin(ModelPluginPort):
                         logger.warning("Error en fila %s: %s", idx, exc)
                         predictions.append({"row": int(idx), "error": str(exc)})
 
-            self._record_prediction()
+            self._record()
             logger.info(
                 "predict_batch done — %d filas, mlflow=%s", len(predictions), bool(mlflow_run_id),
             )
             return PredictBatchResponse(
-                model_id=MODEL_ID, predictions=predictions, n_predictions=len(predictions), output_path=None,
+                model_id=MODEL_ID, predictions=predictions, n_predictions=len(predictions),
+                output_path=None,
             )
-        finally:
-            if tmp:
-                shutil.rmtree(tmp, ignore_errors=True)
 
     # ── train (retraining with the original procedure) ────────────────────────
 
     @staticmethod
-    def _validated_reference_csvs(prices_path: str, financial_path: str) -> list[tuple[str, str]]:
+    def _validated_reference_csvs(
+        prices_path: str, financial_path: str
+    ) -> list[tuple[str, str]]:
         """Check the optional reference CSVs against the current ones' columns, before training.
 
         Returns [(local copy, canonical filename)] to add to the new base bundle; [] if none
@@ -307,8 +356,8 @@ class Ml15WineIpiPriceForecastPlugin(ModelPluginPort):
             return []
         if not (prices_path and financial_path):
             raise ValueError(
-                "reference_prices_path y reference_financial_path se indican juntos: el histórico de "
-                "referencia del modelo base se renueva entero."
+                "reference_prices_path y reference_financial_path se indican juntos: "
+                "el histórico de referencia del modelo base se renueva entero."
             )
         # Compare raw file against raw file: load_reference_data() derives extra columns.
         current_prices_path, current_financial_path = model_loader.reference_data_paths()
@@ -318,20 +367,16 @@ class Ml15WineIpiPriceForecastPlugin(ModelPluginPort):
         try:
             for field, path, current, filename in (
                 ("reference_prices_path", prices_path, current_prices, REFERENCE_PRICES_FILENAME),
-                ("reference_financial_path", financial_path, current_financial, REFERENCE_FINANCIAL_FILENAME),
+                (
+                    "reference_financial_path", financial_path, current_financial,
+                    REFERENCE_FINANCIAL_FILENAME,
+                ),
             ):
                 fd, copy_path = tempfile.mkstemp(suffix=".csv")
                 os.close(fd)
-                checked.append((copy_path, filename))  # registered first so the cleanup below sees it
-                try:
-                    with local_file_path(path) as local_path:
-                        shutil.copyfile(local_path, copy_path)
-                    frame = history.load_monthly_csv(copy_path)
-                except Exception as exc:  # pylint: disable=broad-exception-caught
-                    raise ValueError(f"{field}: no se puede leer como histórico mensual ({exc}).") from exc
-                missing = [col for col in current.columns if col not in frame.columns]
-                if missing:
-                    raise ValueError(f"{field}: faltan las columnas del histórico vigente {missing}.")
+                # registered first so the cleanup below sees it
+                checked.append((copy_path, filename))
+                _check_reference_copy(field, path, current, copy_path)
         except BaseException:
             for copy_path, _ in checked:
                 if os.path.exists(copy_path):
@@ -355,59 +400,52 @@ class Ml15WineIpiPriceForecastPlugin(ModelPluginPort):
         """
         self._require_loaded()
         references = self._validated_reference_csvs(reference_prices_path, reference_financial_path)
-        with local_file_path(data_path) as local_path:
-            df = pd.read_csv(local_path)
-
-        result = training.train_model(df)
-        model = result["model"]
-        metrics = result["metrics"]
-
-        new_payload = dict(self._payload)
-        new_payload.update({
-            "model": model,
-            "model_params": {"alpha": ALPHA},
-            "trained_at": datetime.now(tz=timezone.utc).isoformat(),
-            "n_training_rows": result["n_train"],
-            "train_end_date": str(result["train_end_date"].date()),
-            "training_origin_start": str(result["train_origin_start"].date()),
-            "training_origin_end": str(result["train_origin_end"].date()),
-        })
-
-        tracker = BaseMLflowTracker(mlflow_run_id)
-        bundle_dir = tempfile.mkdtemp(prefix="ml15_train_")
+        # The reference copies are removed whatever happens next (bad CSV, training error…).
         try:
-            joblib.dump(new_payload, f"{bundle_dir}/{MODEL_FILENAME}")
-            for copy_path, filename in references:
-                shutil.copyfile(copy_path, f"{bundle_dir}/{filename}")
+            result = training.train_model(_read_csv(data_path))
+            metrics = result["metrics"]
 
-            def _upload_to_mlflow() -> None:
-                tracker.log_params({"model_kind": "ridge", "alpha": ALPHA})
-                tracker.log_metrics({k: v for k, v in metrics.items() if v is not None})
-                tracker.upload_artifacts(bundle_dir, artifact_path="model")
+            new_payload = dict(self._payload)
+            new_payload.update({
+                "model": result["model"],
+                "model_params": {"alpha": ALPHA},
+                "trained_at": datetime.now(tz=timezone.utc).isoformat(),
+                "n_training_rows": result["n_train"],
+                "train_end_date": str(result["train_end_date"].date()),
+                "training_origin_start": str(result["train_origin_start"].date()),
+                "training_origin_end": str(result["train_origin_end"].date()),
+            })
 
-            persisted = persist_retrained_bundle(
-                bundle_dir, artifact_folder=ARTIFACT_FOLDER_NAME, data_path=data_path,
-                metrics=metrics, mlflow_run_id=mlflow_run_id, upload_to_mlflow=_upload_to_mlflow,
-            )
+            tracker = BaseMLflowTracker(mlflow_run_id)
+            bundle_dir = tempfile.mkdtemp(prefix="ml15_train_")
+            with removing_dir(bundle_dir):
+                _write_bundle(bundle_dir, new_payload, references)
+
+                def _upload_to_mlflow() -> None:
+                    tracker.log_params({"model_kind": "ridge", "alpha": ALPHA})
+                    tracker.log_metrics({k: v for k, v in metrics.items() if v is not None})
+                    tracker.upload_artifacts(bundle_dir, artifact_path="model")
+
+                persisted = persist_retrained_bundle(
+                    bundle_dir, artifact_folder=ARTIFACT_FOLDER_NAME, data_path=data_path,
+                    metrics=metrics, mlflow_run_id=mlflow_run_id,
+                    upload_to_mlflow=_upload_to_mlflow,
+                )
         finally:
-            shutil.rmtree(bundle_dir, ignore_errors=True)
-            for copy_path, _ in references:
-                os.unlink(copy_path)
+            for reference in references:
+                os.unlink(reference[0])
 
-        warnings = [persisted.upload_warning] if persisted.upload_warning else []
-        if not references:
-            warnings.append(
-                "No se han renovado los históricos exógenos de referencia (reference_prices_path / "
-                "reference_financial_path): el modelo base nuevo hereda los de la versión anterior."
-            )
-        upload_warning = " ".join(warnings) or None
+        upload_warning = _train_warning(persisted.upload_warning, renewed=bool(references))
 
         logger.info(
             "ml15 train() done — n_train=%d n_test=%d rmse=%s mlflow_run_id=%s",
             result["n_train"], result["n_test"], metrics["rmse"], mlflow_run_id,
         )
         return TrainResponse(
-            detail=f"Reentrenamiento completado (Ridge, procedimiento original). Modelo base {persisted.base_version['version']}.",
+            detail=(
+                "Reentrenamiento completado (Ridge, procedimiento original). "
+                f"Modelo base {persisted.base_version['version']}."
+            ),
             n_train_rows=result["n_train"],
             n_test_rows=result["n_test"],
             train_end_date=str(result["train_end_date"].date()),
@@ -431,20 +469,43 @@ class Ml15WineIpiPriceForecastPlugin(ModelPluginPort):
         inputs = [
             InputField(
                 name="ipi_national_current", type="float",
-                description="Último IPI fitosanitario nacional observado en el mes de origen (índice base 2020=100).",
+                description=(
+                    "Último IPI fitosanitario nacional observado en el mes de origen (índice base "
+                    "2020=100)."
+                ),
             ),
             *[
                 InputField(
                     name=f"ipi_national_lag_{i}", type="float",
-                    description=f"IPI fitosanitario nacional observado {i} mes(es) antes del mes de origen.",
+                    description=(
+                        f"IPI fitosanitario nacional observado {i} mes(es) antes del mes de "
+                        "origen."
+                    ),
                 )
                 for i in range(1, 7)
             ],
-            InputField(name="chem_sector_lag_11", type="float", description="Índice sectorial químico retardado 11 meses (base 2020=100)."),
-            InputField(name="copper_lag_14", type="float", description="Precio del cobre retardado 14 meses (base 2020=100)."),
-            InputField(name="eur_usd_lag_17", type="float", description="Tipo de cambio EUR/USD retardado 17 meses (base 2020=100)."),
-            InputField(name="oil_brent_lag_12", type="float", description="Precio del petróleo Brent retardado 12 meses (base 2020=100)."),
-            InputField(name="usa_lag_1", type="float", description="Índice de precios de pesticidas de EE.UU. retardado 1 mes (base 2020=100)."),
+            InputField(
+                name="chem_sector_lag_11", type="float",
+                description="Índice sectorial químico retardado 11 meses (base 2020=100).",
+            ),
+            InputField(
+                name="copper_lag_14", type="float",
+                description="Precio del cobre retardado 14 meses (base 2020=100).",
+            ),
+            InputField(
+                name="eur_usd_lag_17", type="float",
+                description="Tipo de cambio EUR/USD retardado 17 meses (base 2020=100).",
+            ),
+            InputField(
+                name="oil_brent_lag_12", type="float",
+                description="Precio del petróleo Brent retardado 12 meses (base 2020=100).",
+            ),
+            InputField(
+                name="usa_lag_1", type="float",
+                description=(
+                    "Índice de precios de pesticidas de EE.UU. retardado 1 mes (base 2020=100)."
+                ),
+            ),
             InputField(
                 name="month_sin", type="float", default=None,
                 description="sin(2*pi*mes/12) — se deriva de 'date'/'origin_date' si se omite.",
@@ -455,27 +516,53 @@ class Ml15WineIpiPriceForecastPlugin(ModelPluginPort):
             ),
             InputField(
                 name="quarter", type="int", default=None,
-                description="Trimestre natural (1-4) — se deriva de 'date'/'origin_date' si se omite.",
+                description=(
+                    "Trimestre natural (1-4) — se deriva de 'date'/'origin_date' si se omite."
+                ),
             ),
             InputField(
                 name="is_spring_risk", type="int", default=None,
-                description="1 si el mes es abril/mayo/junio (riesgo fúngico primaveral), 0 en otro caso — se deriva si se omite.",
+                description=(
+                    "1 si el mes es abril/mayo/junio (riesgo fúngico primaveral), 0 en otro caso "
+                    "— se deriva si se omite."
+                ),
             ),
             InputField(
                 name="date", type="str", default=None,
-                description="Fecha de origen (YYYY-MM-DD), alias 'origin_date'. Opcional si ya se aportan las 4 variables de calendario.",
+                description=(
+                    "Fecha de origen (YYYY-MM-DD), alias 'origin_date'. Opcional si ya se aportan "
+                    "las 4 variables de calendario."
+                ),
             ),
         ]
         outputs = [
-            OutputField(name="y_pred", type="float", description="IPI fitosanitario nacional predicho a t+6 (índice base 2020=100)."),
-            OutputField(name="y_anchor", type="float", description="ipi_national_current usado como ancla."),
-            OutputField(name="target_date", type="date", description="origin_date + 6 meses, si origin_date es derivable."),
-            OutputField(name="y_true", type="float", description="IPI real en target_date si ya se conoce; null si es futuro."),
+            OutputField(
+                name="y_pred", type="float",
+                description="IPI fitosanitario nacional predicho a t+6 (índice base 2020=100).",
+            ),
+            OutputField(
+                name="y_anchor", type="float",
+                description="ipi_national_current usado como ancla.",
+            ),
+            OutputField(
+                name="target_date", type="date",
+                description="origin_date + 6 meses, si origin_date es derivable.",
+            ),
+            OutputField(
+                name="y_true", type="float",
+                description="IPI real en target_date si ya se conoce; null si es futuro.",
+            ),
             OutputField(
                 name="feature_status", type="str",
-                description="exact | exogenous_last_available (alguna exógena usó el último dato disponible).",
+                description=(
+                    "exact | exogenous_last_available (alguna exógena usó el último dato "
+                    "disponible)."
+                ),
             ),
-            OutputField(name="feature_notes", type="str", description="Detalle del desfase de cada exógena; vacío si exact."),
+            OutputField(
+                name="feature_notes", type="str",
+                description="Detalle del desfase de cada exógena; vacío si exact.",
+            ),
         ]
         base = StatsResponse(
             model_name=MODEL_ID,
@@ -493,16 +580,6 @@ class Ml15WineIpiPriceForecastPlugin(ModelPluginPort):
             inputs=inputs,
             outputs=outputs,
             metrics={**METRICS_REPORTED, "feature_columns": feature_columns},
-            runtime_stats=RuntimeStats(
-                total_predictions=self._predict_count,
-                avg_latency_ms=None,
-            ),
+            runtime_stats=self._runtime_stats(),
         )
-        if mlflow_run_id:
-            try:
-                tracker = BaseMLflowTracker(mlflow_run_id)
-                base.metrics["mlflow"] = {"params": tracker.get_params(), "metrics": tracker.get_metrics()}
-                logger.info("Stats enriched with MLflow data for run_id=%s", mlflow_run_id)
-            except Exception as exc:  # pylint: disable=broad-exception-caught
-                logger.warning("Could not fetch MLflow stats for run_id=%s: %s", mlflow_run_id, exc)
-        return base
+        return add_mlflow_run_to_stats(base, mlflow_run_id)

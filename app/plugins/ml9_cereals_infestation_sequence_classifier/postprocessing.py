@@ -25,22 +25,26 @@ from app.plugins.ml9_cereals_infestation_sequence_classifier.constants import (
 _SORT_COLUMNS = [GROUP_COLUMN, "timestamp_end", "window_index"]
 
 
-def clean_scalar(value: Any) -> Any:  # pylint: disable=too-many-return-statements
+def _is_missing(value: Any) -> bool:
+    """True for NaN/±inf floats, NaT and any other scalar pandas considers missing."""
+    if isinstance(value, float) and not math.isfinite(value):
+        return True
+    return value is pd.NaT or (
+        value is not None and not isinstance(value, (str, bool)) and pd.isna(value)
+    )
+
+
+def clean_scalar(value: Any) -> Any:
     """Convert numpy/pandas scalars into plain JSON-serializable Python values."""
     if isinstance(value, pd.Timestamp):
         return value.isoformat()
     if isinstance(value, np.integer):
         return int(value)
-    if isinstance(value, np.floating):
-        fv = float(value)
-        return None if not math.isfinite(fv) else fv
     if isinstance(value, np.bool_):
         return bool(value)
-    if isinstance(value, float) and not math.isfinite(value):
-        return None
-    if value is pd.NaT or (value is not None and not isinstance(value, (str, bool)) and pd.isna(value)):
-        return None
-    return value
+    if isinstance(value, np.floating):
+        value = float(value)
+    return None if _is_missing(value) else value
 
 
 def serialize_records(df: pd.DataFrame) -> list[dict[str, Any]]:
@@ -48,7 +52,9 @@ def serialize_records(df: pd.DataFrame) -> list[dict[str, Any]]:
     return [{k: clean_scalar(v) for k, v in rec.items()} for rec in df.to_dict(orient="records")]
 
 
-def run_inference(checkpoint: dict, scaler: Any, x_seq: np.ndarray, *, batch_size: int = 128) -> np.ndarray:
+def run_inference(
+    checkpoint: dict, scaler: Any, x_seq: np.ndarray, *, batch_size: int = 128
+) -> np.ndarray:
     """Scale the windows with the fitted StandardScaler and return softmax probabilities.
 
     Same two steps as the delivered predictor's run_inference(): transform_sequences() flattens the
@@ -58,7 +64,9 @@ def run_inference(checkpoint: dict, scaler: Any, x_seq: np.ndarray, *, batch_siz
     if len(x_seq) == 0:
         return np.zeros((0, len(CLASS_LABELS)), dtype=np.float32)
     x_scaled = transform_sequences(scaler, x_seq)
-    return predict_sequence_proba(checkpoint["model"], x_scaled, batch_size=batch_size, device="cpu")
+    return predict_sequence_proba(
+        checkpoint["model"], x_scaled, batch_size=batch_size, device="cpu"
+    )
 
 
 def label_for(pred_class: int) -> str:
@@ -70,7 +78,7 @@ def label_for(pred_class: int) -> str:
     return CLASS_LABELS.get(int(pred_class), f"clase_{int(pred_class)}")
 
 
-def build_predictions_frame(
+def build_predictions_frame(  # pylint: disable=too-many-arguments
     window_meta: pd.DataFrame,
     proba: np.ndarray,
     y_seq: np.ndarray | None,

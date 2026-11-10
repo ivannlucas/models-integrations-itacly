@@ -1,10 +1,11 @@
 """Vendored verbatim from inbox/a45/codigo/src/xai/fuzzy_explainer.py."""
 from __future__ import annotations
 
+from collections import Counter, defaultdict
+from typing import Any, Dict, List, Optional
+
 import numpy as np
 import torch
-from typing import Any, Dict, List, Optional
-from collections import Counter, defaultdict
 
 from app.plugins.ml45_cereals_dnsl_critical_point_detection._vendor.xai.utils import (
     safe_float,
@@ -30,7 +31,7 @@ def _compute_rule_effects(
     }
 
 
-def _build_rule_antecedents(
+def _build_rule_antecedents(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
     feature_names: List[str],
     stats: Optional[List[str]],
     alpha_probs: np.ndarray,
@@ -101,7 +102,7 @@ class FuzzyExplainer:
         self.mf_semantics = mf_semantics
         self.stats_creation = list(stats_creation) if stats_creation else None
 
-    def explain_sample(
+    def explain_sample(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals,too-many-branches,too-many-statements
         self,
         x_window: np.ndarray,
         s_stats: np.ndarray,

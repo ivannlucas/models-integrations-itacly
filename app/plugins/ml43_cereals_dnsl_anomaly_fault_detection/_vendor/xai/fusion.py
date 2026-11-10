@@ -2,8 +2,9 @@
 Modulo de fusion: combinacion de explicaciones fuzzy y temporal.
 """
 
-import numpy as np
 from typing import Any, Dict, Optional
+
+import numpy as np
 
 
 def _safe_logit_from_prob(p: float, eps: float = 1e-6) -> float:
@@ -15,14 +16,18 @@ def _safe_logit_from_prob(p: float, eps: float = 1e-6) -> float:
 def _resolve_lambda_anomaly(model_cfg: Optional[Dict[str, Any]]) -> float:
     """Resuelve el peso de fusion fuzzy/temporal."""
     if model_cfg is None:
-        raise ValueError("model_cfg debe contener 'fuzzy.lambda_anomaly' para resolver el peso de fusion.")
+        raise ValueError(
+            "model_cfg debe contener 'fuzzy.lambda_anomaly' para resolver el peso de fusion."
+        )
     lam = model_cfg.get("fuzzy", {}).get("lambda_anomaly")
     if lam is None:
-        raise ValueError("model_cfg debe contener 'fuzzy.lambda_anomaly' para resolver el peso de fusion.")
+        raise ValueError(
+            "model_cfg debe contener 'fuzzy.lambda_anomaly' para resolver el peso de fusion."
+        )
     return float(np.clip(float(lam), 0.0, 1.0))
 
 
-def fuse_fuzzy_temporal_reports(
+def fuse_fuzzy_temporal_reports(  # pylint: disable=too-many-locals
     fuzzy_report: Dict[str, Any],
     temporal_report: Dict[str, Any],
     model_cfg: Optional[Dict[str, Any]] = None,
@@ -53,7 +58,9 @@ def fuse_fuzzy_temporal_reports(
     temporal_prob = float(temporal_report.get("probability", 0.0))
     temporal_class = int(temporal_report.get("predicted_class", 0))
 
-    threshold = float(fuzzy_report.get("decision_threshold", temporal_report.get("decision_threshold", 0.5)))
+    threshold = float(
+        fuzzy_report.get("decision_threshold", temporal_report.get("decision_threshold", 0.5))
+    )
     lambda_anom = _resolve_lambda_anomaly(model_cfg)
 
     logit_fuzzy = float(fuzzy_report.get("logit", _safe_logit_from_prob(fuzzy_prob)))

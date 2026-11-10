@@ -59,7 +59,9 @@ DROP_COLS = {
                       "T_cond_sat", "T_cab_meas", "P_suc_bar"],
     "aireado": ["run_id", "time_min", "fault_id", "fault"],
 }
-METADATA_COLS = ["run_id", "time_min", "fault_id", "fault", "fault_numeric", "prediction", "confidence"]
+METADATA_COLS = [
+    "run_id", "time_min", "fault_id", "fault", "fault_numeric", "prediction", "confidence"
+]
 
 # Raw sensor columns required per system (manifest inputs.fixed; run_id/time_min listed apart)
 RAW_INPUT_COLUMNS = {
@@ -139,7 +141,9 @@ METRICS_REPORTED = {
         "precision_macro": 0.94,
         "recall_macro": 0.94,
         "per_run_accuracy": 0.95,
-        "problem_classes": "COND_FOUL_SEVERE (f1=0.62) y NON_CONDENSABLES (f1=0.63) se confunden entre sí",
+        "problem_classes": (
+            "COND_FOUL_SEVERE (f1=0.62) y NON_CONDENSABLES (f1=0.63) se confunden entre sí"
+        ),
     },
     "synthetic_data_warning": (
         "Dataset de refrigeración simulado (Kaggle, refrigerador de propósito general) y de "

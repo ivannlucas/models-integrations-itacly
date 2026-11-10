@@ -49,8 +49,15 @@ class PredictModelUseCase:
         """Execute the prediction, routing to batch or inline mode based on the request."""
         mlflow_run_id = getattr(request, "mlflow_run_id", "")
         if request.mode == "batch":
-            logger.info("Executing batch prediction, data_path=%s, mlflow_run_id=%s", request.data_path, mlflow_run_id or "(standard)")
-            batch_kwargs: dict[str, Any] = {"data_path": request.data_path, "mlflow_run_id": mlflow_run_id}
+            logger.info(
+                "Executing batch prediction, data_path=%s, mlflow_run_id=%s",
+                request.data_path,
+                mlflow_run_id or "(standard)",
+            )
+            batch_kwargs: dict[str, Any] = {
+                "data_path": request.data_path,
+                "mlflow_run_id": mlflow_run_id,
+            }
             # Only ml34's predict_batch declares model_key (GA-vs-MLP dispatch, mirrors
             # predict_inline below) — every other plugin's predict_batch is
             # (*, data_path, mlflow_run_id) with no **kwargs, so pass it conditionally.
@@ -68,16 +75,21 @@ class PredictModelUseCase:
                     batch_kwargs[opt] = getattr(request, opt)
             result = self._plugin.predict_batch(**batch_kwargs)
         else:
-            logger.info("Executing inline prediction, mlflow_run_id=%s", mlflow_run_id or "(standard)")
-            features = request.model_dump(exclude={"mode", "model_key", "threshold", "mlflow_run_id", "data_path"})
+            logger.info(
+                "Executing inline prediction, mlflow_run_id=%s", mlflow_run_id or "(standard)"
+            )
+            features = request.model_dump(
+                exclude={"mode", "model_key", "threshold", "mlflow_run_id", "data_path"}
+            )
             kwargs: dict[str, Any] = {
                 "features": features,
                 "model_key": getattr(request, "model_key", None),
                 "threshold": getattr(request, "threshold", None),
                 "mlflow_run_id": mlflow_run_id,
             }
-            # Only ml47_dairy_dnsl_pasteurization_fault_detection's predict_inline declares data_path —
-            # every other plugin's signature is (*, features, model_key, threshold, mlflow_run_id)
+            # Only ml47_dairy_dnsl_pasteurization_fault_detection's predict_inline declares
+            # data_path — every other plugin's signature is
+            # (*, features, model_key, threshold, mlflow_run_id)
             # with no **kwargs, so passing data_path unconditionally raised TypeError for them.
             if "data_path" in inspect.signature(self._plugin.predict_inline).parameters:
                 kwargs["data_path"] = getattr(request, "data_path", None)
@@ -86,4 +98,6 @@ class PredictModelUseCase:
         # by_alias=True: some response models (e.g. ml45) declare fields with `alias=...` and no
         # `populate_by_name`, so they only validate from alias-keyed input — dumping by field name
         # would make model_validate reject its own model's data as "field required".
-        return type(result).model_validate(_to_jsonable(result.model_dump(mode="python", by_alias=True)))
+        return type(result).model_validate(
+            _to_jsonable(result.model_dump(mode="python", by_alias=True))
+        )

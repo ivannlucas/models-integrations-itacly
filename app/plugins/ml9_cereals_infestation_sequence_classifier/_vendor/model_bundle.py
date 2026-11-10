@@ -37,9 +37,10 @@ def merge_runtime_config_with_bundle(cfg: dict[str, Any], bundle: dict[str, Any]
 
 
 def align_feature_columns(
-    X: pd.DataFrame,
+    X: pd.DataFrame,  # pylint: disable=invalid-name  # vendored API name
     expected_feature_columns: list[str] | None,
 ) -> tuple[pd.DataFrame, list[str]]:
+    """Reorder *X* to the expected feature columns, raising if any are missing or extra."""
     if not expected_feature_columns:
         return X, X.columns.tolist()
 
@@ -51,6 +52,8 @@ def align_feature_columns(
             parts.append(f"faltan columnas esperadas: {missing}")
         if extra:
             parts.append(f"hay columnas nuevas no vistas por el modelo: {extra}")
-        raise ValueError("No se puede alinear el dataset con el modelo guardado: " + " | ".join(parts))
+        raise ValueError(
+            "No se puede alinear el dataset con el modelo guardado: " + " | ".join(parts)
+        )
 
     return X.loc[:, expected_feature_columns].copy(), list(expected_feature_columns)

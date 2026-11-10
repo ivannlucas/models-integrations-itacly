@@ -1,3 +1,4 @@
+"""Constantes de ml48: identificadores, ficheros de artefactos, sensores e hiperparámetros."""
 import os
 
 MODEL_ID = "ml48-dairy-dnsl-critical-point-detection"
@@ -63,7 +64,8 @@ TARGET_COLUMNS = ["Target_Fouling", "Target_Valvula", "Target_Bomba", "Target_Ac
 LEGACY_TARGET_COLUMNS = ["Fouling", "Valvula", "Bomba", "Acumulador"]
 
 # mode="fine_tune" (por defecto) — fine_tuning.* de config/config.yaml, usado por
-# src/fine_tuning/fine_tuner.py (backbone congelado, solo las 4 cabezas, LR = learning_rate / lr_divisor).
+# src/fine_tuning/fine_tuner.py (backbone congelado, solo las 4 cabezas,
+# LR = learning_rate / lr_divisor).
 FINE_TUNE_HYPERPARAMS = {
     "epochs": 50,
     "patience": 7,

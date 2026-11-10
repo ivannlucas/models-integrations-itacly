@@ -28,7 +28,9 @@ _CARRY_FORWARD_COLS = ("CONSUMO X CAPITA", "PENETRACION (%)", "Poblacion", "Rent
 
 def _normalize_col_name(name: str) -> str:
     normalized = str(name).strip().upper()
-    normalized = "".join(c for c in unicodedata.normalize("NFKD", normalized) if not unicodedata.combining(c))
+    normalized = "".join(
+        c for c in unicodedata.normalize("NFKD", normalized) if not unicodedata.combining(c)
+    )
     normalized = re.sub(r"[^A-Z0-9 ]+", " ", normalized)
     return " ".join(normalized.split())
 
@@ -73,7 +75,8 @@ def build_raw_dataframe(rows: list[dict]) -> pd.DataFrame:
     invalid = int(df[DATE_COL].isna().sum())
     if invalid:
         raise InsufficientRowsError(
-            f"La columna '{DATE_COL}' contiene {invalid} valores no parseables (formato esperado YYYY-MM-DD)."
+            f"La columna '{DATE_COL}' contiene {invalid} valores no parseables "
+            "(formato esperado YYYY-MM-DD)."
         )
     if not resolve_target_column(df):
         df[TARGET_COL] = np.nan
@@ -81,6 +84,7 @@ def build_raw_dataframe(rows: list[dict]) -> pd.DataFrame:
 
 
 def add_time_features(df: pd.DataFrame) -> pd.DataFrame:
+    """Add month and its cyclic sin/cos encoding (12-month period) from the date column."""
     out = df.copy()
     out["month"] = out[DATE_COL].dt.month
     out["month_sin"] = np.sin(2 * np.pi * out["month"] / 12.0)
@@ -89,6 +93,7 @@ def add_time_features(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def add_own_price_feature(df: pd.DataFrame) -> pd.DataFrame:
+    """Add the own-price feature: the target price column coerced to numeric."""
     out = df.copy()
     out[OWN_PRICE_FEATURE] = pd.to_numeric(out[TARGET_COL], errors="coerce")
     return out
@@ -124,19 +129,25 @@ def add_spatial_lags(df: pd.DataFrame) -> pd.DataFrame:
         )
         agg = (
             lag_input.groupby([DATE_COL, PRODUCTO_COL, CCAA_COL], as_index=False)
-            .agg(LAG_CONSUMO_VECINOS=("CONSUMO_VECINA", "mean"), LAG_PRECIO_VECINOS=("PRECIO_VECINA", "mean"))
+            .agg(
+                LAG_CONSUMO_VECINOS=("CONSUMO_VECINA", "mean"),
+                LAG_PRECIO_VECINOS=("PRECIO_VECINA", "mean"),
+            )
         )
         out = out.merge(agg, on=[DATE_COL, PRODUCTO_COL, CCAA_COL], how="left")
     else:
         out["LAG_CONSUMO_VECINOS"] = np.nan
         out["LAG_PRECIO_VECINOS"] = np.nan
 
-    out["LAG_CONSUMO_VECINOS"] = out["LAG_CONSUMO_VECINOS"].fillna(out["CONSUMO X CAPITA"]).fillna(0.0)
+    out["LAG_CONSUMO_VECINOS"] = (
+        out["LAG_CONSUMO_VECINOS"].fillna(out["CONSUMO X CAPITA"]).fillna(0.0)
+    )
     out["LAG_PRECIO_VECINOS"] = out["LAG_PRECIO_VECINOS"].fillna(out[TARGET_COL]).fillna(0.0)
     return out
 
 
 def fill_numeric(df: pd.DataFrame, cols: list[str]) -> pd.DataFrame:
+    """Forward-fill *cols* within each CCAA, then fill the rest with the column median (or 0)."""
     out = df.copy()
     for col in cols:
         out[col] = out.groupby(CCAA_COL)[col].transform(lambda s: s.ffill())

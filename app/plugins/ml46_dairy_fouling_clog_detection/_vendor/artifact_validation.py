@@ -23,7 +23,9 @@ def _jsonable(value: Any) -> Any:
     if is_dataclass(value):
         return _jsonable(asdict(value))
     if isinstance(value, Mapping):
-        return {str(k): _jsonable(v) for k, v in sorted(value.items(), key=lambda item: str(item[0]))}
+        return {
+            str(k): _jsonable(v) for k, v in sorted(value.items(), key=lambda item: str(item[0]))
+        }
     if isinstance(value, (list, tuple, set)):
         return [_jsonable(v) for v in value]
     if isinstance(value, float) and (math.isnan(value) or math.isinf(value)):
@@ -38,11 +40,16 @@ def payload_sha256(payload: Any) -> str:
 
 
 def feature_names_hash(feature_names: Sequence[str]) -> str:
+    """SHA-256 of the feature-name list (names coerced to str), order-sensitive."""
     return payload_sha256([str(name) for name in feature_names])
 
 
-def validate_feature_artifacts(artifacts: Any, scenario: str, feature_names: Sequence[str]) -> dict[str, Any]:
-    """Structural sanity check on a loaded FeatureArtifacts bundle — raises ValueError on failure."""
+def validate_feature_artifacts(
+    artifacts: Any, scenario: str, feature_names: Sequence[str]
+) -> dict[str, Any]:
+    """Structural sanity check on a loaded FeatureArtifacts bundle — raises ValueError on
+    failure.
+    """
     errors: list[str] = []
     numeric_names = list(getattr(artifacts, "numeric_feature_names", []) or [])
     medians = getattr(artifacts, "medians", {}) or {}
@@ -75,7 +82,9 @@ def validate_feature_artifacts(artifacts: Any, scenario: str, feature_names: Seq
         errors.append(f"Unknown scenario '{scenario}'. Expected 'full' or 'no_clock'.")
     if selected_names and full_names and not set(selected_names).issubset(set(full_names)):
         missing_from_full = sorted(set(selected_names) - set(full_names))
-        errors.append(f"Selected features are not a subset of full features: {missing_from_full[:10]}")
+        errors.append(
+            f"Selected features are not a subset of full features: {missing_from_full[:10]}"
+        )
 
     report = {
         "scenario": scenario,
@@ -105,7 +114,9 @@ def validate_policy_artifact(policy: Mapping[str, Any], scenario: str) -> dict[s
     }
     missing = sorted(required - set(policy.keys()))
     if missing:
-        raise ValueError(f"Policy thresholds for scenario '{scenario}' are incomplete. Missing keys: {missing}")
+        raise ValueError(
+            f"Policy thresholds for scenario '{scenario}' are incomplete. Missing keys: {missing}"
+        )
     return {
         "scenario": scenario,
         "policy_hash": payload_sha256(dict(policy)),

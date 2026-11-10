@@ -20,23 +20,20 @@ def safe_device():
     Ultralytics does its own independent ``torch.cuda.is_available()`` check when
     ``device=`` is not passed explicitly, so every ``model.predict()``/``model.train()``
     call in this plugin must pass this resolved device explicitly — never rely on
-    ultralytics' own default resolution (same pattern as ml10_dairy_disease_vector_detection/model_loader.py).
+    ultralytics' own default resolution (same pattern as
+    ml10_dairy_disease_vector_detection/model_loader.py).
     """
-    import torch  # noqa: PLC0415 — heavy import kept lazy
+    # Lazy: importing this module must not import torch (ultralytics/torch load on demand).
+    from app.domain.services.torch_device import (  # noqa: PLC0415 # pylint: disable=import-outside-toplevel
+        safe_torch_device,
+    )
 
-    if not torch.cuda.is_available():
-        return torch.device("cpu")
-    try:
-        torch.nn.Conv2d(1, 1, 1).cuda()(torch.zeros(1, 1, 4, 4).cuda())
-        return torch.device("cuda")
-    except Exception:  # pylint: disable=broad-exception-caught
-        logger.warning("CUDA detectada pero no funcional para operaciones de red — usando CPU.")
-        return torch.device("cpu")
+    return safe_torch_device()
 
 
 def load_yolo():
     """Load the YOLO best.pt checkpoint (downloads from S3 if configured)."""
-    from ultralytics import YOLO  # noqa: PLC0415 — heavy import kept lazy
+    from ultralytics import YOLO  # noqa: PLC0415 # pylint: disable=import-outside-toplevel
 
     model_path = _store.path(MODEL_FILENAME)
     model = YOLO(str(model_path))

@@ -1,11 +1,13 @@
 """Pydantic DTOs for ml21 (ESP-CEREAL) /train endpoint."""
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import Field
+
+from app.application.dto.plugin_dto import PluginDTO
 
 from app.application.dto.base_version_dto import VersionInfo
 
 
-class TrainRequest(BaseModel):
-    model_config = ConfigDict(protected_namespaces=())
+class TrainRequest(PluginDTO):
+    """Body of POST /train: training CSV path and optional MLflow run."""
     data_path: str = Field(
         ..., description="Path to CSV with raw panel rows + target columns"
     )
@@ -19,8 +21,8 @@ class TrainRequest(BaseModel):
     )
 
 
-class TrainResponse(BaseModel):
-    model_config = ConfigDict(protected_namespaces=())
+class TrainResponse(PluginDTO):
+    """Result of /train: per-horizon metrics and the new base model version."""
     detail: str
     mae_h1: float | None = None
     mae_h2: float | None = None

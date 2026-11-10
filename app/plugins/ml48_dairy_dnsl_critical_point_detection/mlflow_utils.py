@@ -1,13 +1,14 @@
+"""Integración con MLflow de ml48: descarga del modelo del usuario y subida de artefactos."""
 from __future__ import annotations
 
 import logging
 import os
-import shutil
 
 import joblib
 import numpy as np
 import torch
 
+from app.domain.services.mlflow_artifacts import download_run_artifacts
 from app.domain.services.mlflow_tracker import BaseMLflowTracker, require_user_model
 from app.plugins.ml48_dairy_dnsl_critical_point_detection.constants import (
     ARTIFACT_FOLDER_NAME,
@@ -29,39 +30,41 @@ def download_user_model_from_mlflow(run_id: str):
     """Descarga un modelo reentrenado por el usuario desde MLflow.
 
     Devuelve (model, scaler, feature_cols, ts1_mean_train, shap_background, temp_dir); si el run no
-    tiene un modelo completo, @require_user_model lanza UserModelUnavailableError (nunca el modelo base).
-    El caller DEBE hacer shutil.rmtree(temp_dir) tras la inferencia (try/finally).
+    tiene un modelo completo, @require_user_model lanza UserModelUnavailableError (nunca el
+    modelo base).
+    El caller DEBE borrar temp_dir tras la inferencia (``removing_dir``).
     """
-    import tempfile
-    tmp = tempfile.mkdtemp(prefix="mlflow_ml48_")
-    try:
-        local_path = BaseMLflowTracker(run_id).download_artifacts(tmp, artifact_path="model")
-        if not local_path:
-            shutil.rmtree(tmp, ignore_errors=True)
-            return None
+    loaded = download_run_artifacts(run_id, _load, prefix="mlflow_ml48_")
+    if loaded is None:
+        return None
+    bundle, tmp = loaded
+    return (*bundle, tmp)
 
-        from app.plugins.ml48_dairy_dnsl_critical_point_detection.model_loader import CNN_Pasteurizer
 
-        scaler = joblib.load(os.path.join(local_path, SCALER_FILENAME))
-        feature_cols = joblib.load(os.path.join(local_path, FEATURE_COLUMNS_FILENAME))
-        ts1_mean_train = joblib.load(os.path.join(local_path, TS1_MEAN_FILENAME))
+def _load(local_path: str):
+    """Rebuild (model, scaler, feature_cols, ts1_mean_train, shap_background) from ``model``."""
+    # Lazy: model_loader crea el ArtifactStore al importarse.
+    from app.plugins.ml48_dairy_dnsl_critical_point_detection.model_loader import (  # pylint: disable=import-outside-toplevel
+        CNN_Pasteurizer,
+    )
 
-        # Arquitectura reconstruida a partir de feature_columns (n canales), no asumida fija.
-        model = CNN_Pasteurizer(n_sensors=len(feature_cols), n_classes=N_CLASSES,
-                                dropout_prob=TRAIN_HYPERPARAMS["dropout_rate"])
-        model.load_state_dict(
-            torch.load(os.path.join(local_path, MODEL_FILENAME), map_location="cpu", weights_only=True)
+    scaler = joblib.load(os.path.join(local_path, SCALER_FILENAME))
+    feature_cols = joblib.load(os.path.join(local_path, FEATURE_COLUMNS_FILENAME))
+    ts1_mean_train = joblib.load(os.path.join(local_path, TS1_MEAN_FILENAME))
+
+    # Arquitectura reconstruida a partir de feature_columns (n canales), no asumida fija.
+    model = CNN_Pasteurizer(n_sensors=len(feature_cols), n_classes=N_CLASSES,
+                            dropout_prob=TRAIN_HYPERPARAMS["dropout_rate"])
+    model.load_state_dict(
+        torch.load(
+            os.path.join(local_path, MODEL_FILENAME), map_location="cpu", weights_only=True
         )
-        model.eval()
+    )
+    model.eval()
 
-        bg_path = os.path.join(local_path, SHAP_BACKGROUND_FILENAME)
-        shap_background = np.load(bg_path) if os.path.exists(bg_path) else None
-
-        logger.info("Downloaded user model from MLflow run_id=%s", run_id)
-        return model, scaler, feature_cols, ts1_mean_train, shap_background, tmp
-    except BaseException:
-        shutil.rmtree(tmp, ignore_errors=True)
-        raise
+    bg_path = os.path.join(local_path, SHAP_BACKGROUND_FILENAME)
+    shap_background = np.load(bg_path) if os.path.exists(bg_path) else None
+    return model, scaler, feature_cols, ts1_mean_train, shap_background
 
 
 def upload_artifacts_to_mlflow(
@@ -83,7 +86,7 @@ def _upload_with_uri(
     mlflow_run_id: str = "",
     metrics: dict | None = None,
 ) -> str:
-    import mlflow
+    import mlflow  # pylint: disable=import-outside-toplevel  # heavy optional dependency
 
     def make_tracker(run_id: str) -> BaseMLflowTracker:
         t = BaseMLflowTracker(run_id)

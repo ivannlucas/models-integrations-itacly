@@ -22,14 +22,14 @@ inbox manifest's known_issues) is intentionally not exposed by this plugin.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
 from typing import Any
 
 import pandas as pd
 
-from app.application.dto.stats_dto import InputField, OutputField, RuntimeStats, StatsResponse
+from app.application.dto.stats_dto import InputField, OutputField, StatsResponse
 from app.domain.ports.model_plugin_port import ModelPluginPort
-from app.domain.services.exceptions import ModelNotLoadedError, TrainingNotSupportedError
+from app.domain.services.exceptions import TrainingNotSupportedError
+from app.domain.services.plugin_runtime import PluginRuntimeMixin
 from app.infrastructure.artifact_store import local_file_path
 from app.plugins.ml33_cereals_reuse_strategy_optimizer.constants import (
     DEFAULT_ANIMAL_FEED_CAPACITY_T,
@@ -59,13 +59,11 @@ from app.plugins.ml33_cereals_reuse_strategy_optimizer.predict_dto import (
 logger = logging.getLogger(__name__)
 
 
-class Ml33CerealsReuseStrategyOptimizerPlugin(ModelPluginPort):
+class Ml33CerealsReuseStrategyOptimizerPlugin(PluginRuntimeMixin, ModelPluginPort):
     """Deterministic MILP optimizer for cereal reuse-strategy assignment."""
 
     def __init__(self) -> None:
         self._loaded = False
-        self._predict_count: int = 0
-        self._last_predict_at: str | None = None
 
     def load(self) -> None:
         self._loaded = load_artifacts()
@@ -74,19 +72,13 @@ class Ml33CerealsReuseStrategyOptimizerPlugin(ModelPluginPort):
     def is_loaded(self) -> bool:
         return self._loaded
 
-    def _require_loaded(self) -> None:
-        if not self.is_loaded():
-            raise ModelNotLoadedError("El modelo no está cargado.")
-
-    def _record(self) -> None:
-        self._predict_count += 1
-        self._last_predict_at = datetime.now(tz=timezone.utc).isoformat()
-
     @staticmethod
     def _build_engine(features: dict) -> ExactEmissionsOptimizer:
         """Assemble the exact optimizer from request execution parameters."""
         capacities = {
-            "Animal feed": float(features.get("animal_feed_capacity", DEFAULT_ANIMAL_FEED_CAPACITY_T)),
+            "Animal feed": float(
+                features.get("animal_feed_capacity", DEFAULT_ANIMAL_FEED_CAPACITY_T)
+            ),
             "Composting": float(features.get("composting_capacity", DEFAULT_COMPOSTING_CAPACITY_T)),
             "Biochar": float(features.get("biochar_capacity", DEFAULT_BIOCHAR_CAPACITY_T)),
             "Biomass combustion": float(
@@ -224,32 +216,51 @@ class Ml33CerealsReuseStrategyOptimizerPlugin(ModelPluginPort):
             task_type="optimization",
             framework=FRAMEWORK,
             inputs=[
-                InputField(name="generated_volume_tons", type="float", description="Volumen del lote (t) [inline/batch]"),
-                InputField(name="moisture_pct", type="float", description="Humedad del lote (%) [inline/batch]"),
-                InputField(name="subproduct_type", type="str", description="Categoría del subproducto [inline/batch]"),
-                InputField(name="season", type="str", description="Estación; validada pero no usada por la fórmula de emisiones [inline/batch]"),
+                InputField(name="generated_volume_tons", type="float",
+                           description="Volumen del lote (t) [inline/batch]"),
+                InputField(name="moisture_pct", type="float",
+                           description="Humedad del lote (%) [inline/batch]"),
+                InputField(name="subproduct_type", type="str",
+                           description="Categoría del subproducto [inline/batch]"),
+                InputField(name="season", type="str",
+                           description=("Estación; validada pero no usada por la fórmula de "
+                                        "emisiones [inline/batch]")),
                 InputField(name="lots_per_day", type="int", default=DEFAULT_LOTS_PER_DAY,
                            description="Lotes antes de resetear capacidades [inline]"),
-                InputField(name="animal_feed_capacity", type="float", default=DEFAULT_ANIMAL_FEED_CAPACITY_T,
+                InputField(name="animal_feed_capacity", type="float",
+                           default=DEFAULT_ANIMAL_FEED_CAPACITY_T,
                            description="Capacidad diaria 'Animal feed' (t) [inline]"),
-                InputField(name="composting_capacity", type="float", default=DEFAULT_COMPOSTING_CAPACITY_T,
+                InputField(name="composting_capacity", type="float",
+                           default=DEFAULT_COMPOSTING_CAPACITY_T,
                            description="Capacidad diaria 'Composting' (t) [inline]"),
-                InputField(name="biochar_capacity", type="float", default=DEFAULT_BIOCHAR_CAPACITY_T,
+                InputField(name="biochar_capacity", type="float",
+                           default=DEFAULT_BIOCHAR_CAPACITY_T,
                            description="Capacidad diaria 'Biochar' (t) [inline]"),
-                InputField(name="biomass_combustion_capacity", type="float", default=DEFAULT_BIOMASS_COMBUSTION_CAPACITY_T,
+                InputField(name="biomass_combustion_capacity", type="float",
+                           default=DEFAULT_BIOMASS_COMBUSTION_CAPACITY_T,
                            description="Capacidad diaria 'Biomass combustion' (t) [inline]"),
                 InputField(name="fallback_strategy", type="str", default=DEFAULT_FALLBACK_STRATEGY,
-                           description="Estrategia de guarda si el MILP no puede colocar un lote [inline]"),
+                           description=("Estrategia de guarda si el MILP no puede colocar "
+                                        "un lote [inline]")),
             ],
             outputs=[
-                OutputField(name="ai_assigned_strategy", type="str", description="Estrategia de reutilización asignada al lote"),
-                OutputField(name="ai_assignment_source", type="str", description="exact_min_emissions | capacity_fallback"),
-                OutputField(name="ai_is_fallback", type="bool", description="True si se usó la guarda defensiva en vez del MILP"),
-                OutputField(name="estimated_emissions_kg", type="float", description="Emisión de CO2 estimada del lote bajo la estrategia asignada"),
+                OutputField(name="ai_assigned_strategy", type="str",
+                            description="Estrategia de reutilización asignada al lote"),
+                OutputField(name="ai_assignment_source", type="str",
+                            description="exact_min_emissions | capacity_fallback"),
+                OutputField(name="ai_is_fallback", type="bool",
+                            description="True si se usó la guarda defensiva en vez del MILP"),
+                OutputField(name="estimated_emissions_kg", type="float",
+                            description=("Emisión de CO2 estimada del lote bajo la estrategia "
+                                         "asignada")),
                 OutputField(name="candidates", type="list",
-                            description="Emisión estimada de las 4 estrategias candidatas (exacta, no SHAP) — explica por qué se eligió ai_assigned_strategy [inline; solo fila 0 en batch]"),
-                OutputField(name="distribution", type="dict", description="Conteo/% por estrategia asignada (agregado)"),
-                OutputField(name="capacity_fallback_count", type="int", description="Nº de lotes resueltos por guarda defensiva"),
+                            description=("Emisión estimada de las 4 estrategias candidatas "
+                                         "(exacta, no SHAP) — explica por qué se eligió "
+                                         "ai_assigned_strategy [inline; solo fila 0 en batch]")),
+                OutputField(name="distribution", type="dict",
+                            description="Conteo/% por estrategia asignada (agregado)"),
+                OutputField(name="capacity_fallback_count", type="int",
+                            description="Nº de lotes resueltos por guarda defensiva"),
             ],
             metrics={
                 # models/metrics/inference_evaluation_report.json del delivery — split de
@@ -265,10 +276,10 @@ class Ml33CerealsReuseStrategyOptimizerPlugin(ModelPluginPort):
                 "stochastic_total_reduction_pct_p05": 27.27,
                 "stochastic_total_reduction_pct_p50": 27.66,
                 "stochastic_total_reduction_pct_p95": 28.04,
-                "nota": "Dataset sintético (CTGAN + reglas causales); reducción medida contra baseline sintético, no operación real.",
+                "nota": (
+                    "Dataset sintético (CTGAN + reglas causales); reducción medida contra "
+                    "baseline sintético, no operación real."
+                ),
             },
-            runtime_stats=RuntimeStats(
-                total_predictions=self._predict_count,
-                avg_latency_ms=None,
-            ),
+            runtime_stats=self._runtime_stats(),
         )

@@ -22,6 +22,7 @@ import copy
 import logging
 import os
 import random
+from dataclasses import dataclass
 from typing import Callable
 
 import torch
@@ -68,12 +69,10 @@ def _images_in(folder: str) -> list[str]:
     )
 
 
-def split_dataset(  # pylint: disable=too-many-locals
-    data_root: str, task: str,
-) -> dict[str, list[Sample]]:
-    """Split a raw dataset (one sub-folder per class) exactly like ensure_data_splits.
+def _class_folders(data_root: str, task: str) -> tuple[list[str], dict[int, str]]:
+    """Sub-folders of ``data_root`` (sorted) and ``{class index: folder}`` of the task's classes.
 
-    Raises ValueError when a class is missing or too small to give every split one image.
+    Raises ValueError when a class folder is missing.
     """
     folders = sorted(
         (d for d in os.listdir(data_root) if os.path.isdir(os.path.join(data_root, d))),
@@ -87,6 +86,28 @@ def split_dataset(  # pylint: disable=too-many-locals
             f"data_path debe contener una subcarpeta por clase del ensemble '{task}' ({expected}); "
             f"faltan: {missing}. Encontradas: {folders}"
         )
+    return folders, found
+
+
+def _check_split_sizes(
+    found: dict[int, str], per_folder: dict[str, dict[str, list[str]]], task: str,
+) -> None:
+    """Raise ValueError when a class leaves some split (train/val/test) without images."""
+    for idx, folder in found.items():
+        counts = {part: len(files) for part, files in per_folder[folder].items()}
+        if min(counts.values()) < 1:
+            raise ValueError(
+                f"La clase '{CLASS_NAMES[task][idx]}' ({folder}) tiene muy pocas imágenes para el "
+                f"split 70/15/15 (train/val/test = {counts}); hacen falta al menos 7 por clase."
+            )
+
+
+def split_dataset(data_root: str, task: str) -> dict[str, list[Sample]]:
+    """Split a raw dataset (one sub-folder per class) exactly like ensure_data_splits.
+
+    Raises ValueError when a class is missing or too small to give every split one image.
+    """
+    folders, found = _class_folders(data_root, task)
 
     rng = random.Random(TRAIN_SEED)
     total = sum(TRAIN_SPLIT.values())
@@ -103,13 +124,7 @@ def split_dataset(  # pylint: disable=too-many-locals
             "test": images[n_train + n_val:],
         }
 
-    for idx, folder in found.items():
-        counts = {part: len(files) for part, files in per_folder[folder].items()}
-        if min(counts.values()) < 1:
-            raise ValueError(
-                f"La clase '{CLASS_NAMES[task][idx]}' ({folder}) tiene muy pocas imágenes para el "
-                f"split 70/15/15 (train/val/test = {counts}); hacen falta al menos 7 por clase."
-            )
+    _check_split_sizes(found, per_folder, task)
 
     # ImageFolder order: class folders by name, then files by name.
     splits: dict[str, list[Sample]] = {}
@@ -156,7 +171,54 @@ def make_loaders(
     }
 
 
-def train_model(  # pylint: disable=too-many-locals,too-many-statements
+def _run_epoch_phase(model: nn.Module, loader: DataLoader, phase: str, step: tuple) -> tuple:
+    """One train/val pass of trainer.py::train_model: ``(epoch loss, epoch accuracy)``.
+
+    ``step`` is ``(optimizer, criterion, device)``; weights are only updated in "train".
+    """
+    optimizer, criterion, device = step
+    model.train(phase == "train")
+    running_loss, running_corrects = 0.0, 0
+    for inputs, labels in loader:
+        inputs, labels = inputs.to(device), labels.to(device)
+        optimizer.zero_grad()
+        with torch.set_grad_enabled(phase == "train"):
+            outputs = model(inputs)
+            _, preds = torch.max(outputs, 1)
+            loss = criterion(outputs, labels)
+            if phase == "train":
+                loss.backward()
+                optimizer.step()
+        running_loss += loss.item() * inputs.size(0)
+        running_corrects += int(torch.sum(preds == labels.data))
+    size = len(loader.dataset)
+    return running_loss / size, running_corrects / size
+
+
+@dataclass
+class _EarlyStopping:
+    """Best checkpoint by val accuracy (strictly greater) + early stop on val loss."""
+
+    best_state: dict
+    best_acc: float = 0.0
+    best_val_loss: float = float("inf")
+    epochs_no_improve: int = 0
+    stop: bool = False
+
+    def update(self, model: nn.Module, epoch_acc: float, epoch_loss: float) -> None:
+        """Account for one validation pass."""
+        if epoch_acc > self.best_acc:
+            self.best_acc = epoch_acc
+            self.best_state = copy.deepcopy(model.state_dict())
+        if self.best_val_loss - epoch_loss > TRAIN_MIN_DELTA:
+            self.best_val_loss, self.epochs_no_improve = epoch_loss, 0
+        else:
+            self.epochs_no_improve += 1
+            if self.epochs_no_improve >= TRAIN_PATIENCE:
+                self.stop = True
+
+
+def train_model(
     model: nn.Module, loaders: dict[str, DataLoader], hyperparams: dict, device: torch.device,
     log_epoch: Callable[[int, dict], None] | None = None,
 ) -> tuple[nn.Module, float, int]:
@@ -164,55 +226,30 @@ def train_model(  # pylint: disable=too-many-locals,too-many-statements
 
     Returns ``(best model, best val accuracy, epochs run)``.
     """
-    sizes = {part: len(loader.dataset) for part, loader in loaders.items()}
     optimizer = optim.Adam(model.parameters(), lr=hyperparams["learning_rate"],
                            weight_decay=hyperparams["weight_decay"])
-    criterion = nn.CrossEntropyLoss()
+    step = (optimizer, nn.CrossEntropyLoss(), device)
     scheduler = lr_scheduler.StepLR(optimizer, step_size=TRAIN_STEP_SIZE, gamma=TRAIN_GAMMA)
 
-    best_state = copy.deepcopy(model.state_dict())
-    best_acc, best_val_loss = 0.0, float("inf")
-    epochs_no_improve, early_stop, epochs_run = 0, False, 0
+    tracker = _EarlyStopping(best_state=copy.deepcopy(model.state_dict()))
+    epochs_run = 0
     for epoch in range(1, TRAIN_EPOCHS + 1):
-        if early_stop:
+        if tracker.stop:
             break
         epochs_run = epoch
         epoch_log: dict[str, float] = {}
         for phase in ("train", "val"):
-            model.train() if phase == "train" else model.eval()  # pylint: disable=expression-not-assigned
-            running_loss, running_corrects = 0.0, 0
-            for inputs, labels in loaders[phase]:
-                inputs, labels = inputs.to(device), labels.to(device)
-                optimizer.zero_grad()
-                with torch.set_grad_enabled(phase == "train"):
-                    outputs = model(inputs)
-                    _, preds = torch.max(outputs, 1)
-                    loss = criterion(outputs, labels)
-                    if phase == "train":
-                        loss.backward()
-                        optimizer.step()
-                running_loss += loss.item() * inputs.size(0)
-                running_corrects += int(torch.sum(preds == labels.data))
+            epoch_loss, epoch_acc = _run_epoch_phase(model, loaders[phase], phase, step)
             if phase == "train":
                 scheduler.step()
-            epoch_loss = running_loss / sizes[phase]
-            epoch_acc = running_corrects / sizes[phase]
             epoch_log[f"{phase}_loss"], epoch_log[f"{phase}_acc"] = epoch_loss, epoch_acc
             if phase == "val":
-                if epoch_acc > best_acc:
-                    best_acc = epoch_acc
-                    best_state = copy.deepcopy(model.state_dict())
-                if best_val_loss - epoch_loss > TRAIN_MIN_DELTA:
-                    best_val_loss, epochs_no_improve = epoch_loss, 0
-                else:
-                    epochs_no_improve += 1
-                    if epochs_no_improve >= TRAIN_PATIENCE:
-                        early_stop = True
+                tracker.update(model, epoch_acc, epoch_loss)
         if log_epoch:
             log_epoch(epoch, epoch_log)
-    model.load_state_dict(best_state)
+    model.load_state_dict(tracker.best_state)
     model.eval()
-    return model, float(best_acc), epochs_run
+    return model, float(tracker.best_acc), epochs_run
 
 
 def predict_loader(model: nn.Module, loader: DataLoader, device: torch.device) -> list[int]:

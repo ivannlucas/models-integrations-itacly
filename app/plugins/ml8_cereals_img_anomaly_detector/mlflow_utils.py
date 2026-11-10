@@ -1,18 +1,19 @@
 """MLflow helper for ml8 cereals — download user-trained model from MLflow."""
 from __future__ import annotations
 
-import logging
 import os
 
 import torch
-import shutil
 
-from app.domain.services.mlflow_tracker import BaseMLflowTracker, require_user_model
+from app.domain.services.mlflow_artifacts import download_run_artifacts
+from app.domain.services.mlflow_tracker import require_user_model
 from app.plugins.ml8_cereals_img_anomaly_detector.constants import (
     MODEL_FILENAME,
 )
-
-logger = logging.getLogger(__name__)
+from app.plugins.ml8_cereals_img_anomaly_detector.model_loader import (
+    MultiTaskMobileNetV3Large,
+    _safe_device,
+)
 
 
 @require_user_model
@@ -20,41 +21,30 @@ def download_user_model_from_mlflow(run_id: str):
     """Download a user-trained MultiTaskMobileNetV3Large from MLflow.
 
     Returns (model_bundle_dict, temp_dir).
-    Caller MUST shutil.rmtree(temp_dir) after inference.
+    Caller MUST remove temp_dir after inference (``removing_dir``).
     """
-    import tempfile
-    tmp = tempfile.mkdtemp(prefix="mlflow_ml8_")
-    try:
-        local_path = BaseMLflowTracker(run_id).download_artifacts(tmp, artifact_path="model")
-        if not local_path:
-            shutil.rmtree(tmp, ignore_errors=True)
-            return None
+    return download_run_artifacts(run_id, _load, prefix="mlflow_ml8_")
 
-        from app.plugins.ml8_cereals_img_anomaly_detector.model_loader import MultiTaskMobileNetV3Large, _safe_device
 
-        checkpoint_path = os.path.join(local_path, MODEL_FILENAME)
-        checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+def _load(local_path: str) -> dict:
+    """Rebuild the model bundle from a downloaded ``model`` folder."""
+    checkpoint_path = os.path.join(local_path, MODEL_FILENAME)
+    checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
 
-        device = _safe_device()
-        model = MultiTaskMobileNetV3Large(
-            num_classes=len(checkpoint["idx_to_class"]),
-            num_cereals=len(checkpoint["idx_to_cereal"]),
-        )
-        model.load_state_dict(checkpoint["model_state_dict"])
-        model.to(device)
-        model.eval()
+    device = _safe_device()
+    model = MultiTaskMobileNetV3Large(
+        num_classes=len(checkpoint["idx_to_class"]),
+        num_cereals=len(checkpoint["idx_to_cereal"]),
+    )
+    model.load_state_dict(checkpoint["model_state_dict"])
+    model.to(device)
+    model.eval()
 
-        bundle = {
-            "model": model,
-            "device": device,
-            "image_size": 224,
-            "idx_to_class": checkpoint["idx_to_class"],
-            "idx_to_cereal": checkpoint["idx_to_cereal"],
-            "model_id": "ml8-cereals-img-anomaly-detector",
-        }
-
-        logger.info("Downloaded user model from MLflow run_id=%s", run_id)
-        return bundle, tmp
-    except BaseException:
-        shutil.rmtree(tmp, ignore_errors=True)
-        raise
+    return {
+        "model": model,
+        "device": device,
+        "image_size": 224,
+        "idx_to_class": checkpoint["idx_to_class"],
+        "idx_to_cereal": checkpoint["idx_to_cereal"],
+        "model_id": "ml8-cereals-img-anomaly-detector",
+    }

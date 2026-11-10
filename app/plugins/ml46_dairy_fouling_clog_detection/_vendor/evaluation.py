@@ -4,9 +4,11 @@ Kept: window-level metrics, alert-policy application (explanations + consolidati
 default_policy. Dropped vs. the original: calibrate_policy/evaluate_policy/
 match_alerts_to_events/event_metrics_from_matches/build_event_table/save_confusion_matrices
 (event-level policy recalibration against a fresh val/test asset split) — the plugin serves
-and fine-tunes the already-calibrated no_clock policy (models/metrics/no_clock_policy_thresholds.json)
+and fine-tunes the already-calibrated no_clock policy
+(models/metrics/no_clock_policy_thresholds.json)
 instead of recalibrating it per manifest known_issues.
 """
+
 from __future__ import annotations
 
 from typing import Any, Dict, List, Mapping, Optional
@@ -18,40 +20,63 @@ from sklearn.metrics import balanced_accuracy_score, f1_score, mean_absolute_err
 from torch import nn
 from torch.utils.data import DataLoader
 
-from app.plugins.ml46_dairy_fouling_clog_detection._vendor.common import TrainConfig, safe_binary_auc_ap, stage_to_label
+from app.plugins.ml46_dairy_fouling_clog_detection._vendor.common import (
+    TrainConfig,
+    safe_binary_auc_ap,
+    stage_to_label,
+)
 from app.plugins.ml46_dairy_fouling_clog_detection._vendor.datasets import AssetSequence
 
 
 def window_metrics_from_preds(df: pd.DataFrame, cfg: TrainConfig) -> Dict[str, float]:
     """Compute window-level regression/classification metrics against true_* columns."""
+    _ = cfg
     out: Dict[str, float] = {}
     out["severity_rmse"] = float(np.sqrt(np.mean((df["true_severity"] - df["pred_severity"]) ** 2)))
     out["severity_mae"] = float(mean_absolute_error(df["true_severity"], df["pred_severity"]))
     out["stage_accuracy"] = float((df["pred_stage"] == df["true_stage"]).mean())
     out["stage_macro_f1"] = float(f1_score(df["true_stage"], df["pred_stage"], average="macro"))
-    out["stage_balanced_accuracy"] = float(balanced_accuracy_score(df["true_stage"], df["pred_stage"]))
+    out["stage_balanced_accuracy"] = float(
+        balanced_accuracy_score(df["true_stage"], df["pred_stage"])
+    )
 
     auc, ap = safe_binary_auc_ap(df["true_foul_h"].to_numpy(), df["p_foul_h"].to_numpy())
     out["watch_foul_auc"] = auc
     out["watch_foul_ap"] = ap
-    out["watch_foul_f1"] = float(f1_score(df["true_foul_h"], (df["p_foul_h"] >= 0.5).astype(int), zero_division=0))
+    out["watch_foul_f1"] = float(
+        f1_score(df["true_foul_h"], (df["p_foul_h"] >= 0.5).astype(int), zero_division=0)
+    )
     out["foul_h_auc"] = out["watch_foul_auc"]
     out["foul_h_ap"] = out["watch_foul_ap"]
     out["foul_h_f1"] = out["watch_foul_f1"]
 
     if "true_actionable_foul_h" in df.columns and "p_actionable_foul_h" in df.columns:
-        auc, ap = safe_binary_auc_ap(df["true_actionable_foul_h"].to_numpy(), df["p_actionable_foul_h"].to_numpy())
+        auc, ap = safe_binary_auc_ap(
+            df["true_actionable_foul_h"].to_numpy(), df["p_actionable_foul_h"].to_numpy()
+        )
         out["actionable_foul_auc"] = auc
         out["actionable_foul_ap"] = ap
-        out["actionable_foul_f1"] = float(f1_score(df["true_actionable_foul_h"], (df["p_actionable_foul_h"] >= 0.5).astype(int), zero_division=0))
+        out["actionable_foul_f1"] = float(
+            f1_score(
+                df["true_actionable_foul_h"],
+                (df["p_actionable_foul_h"] >= 0.5).astype(int),
+                zero_division=0,
+            )
+        )
 
     auc, ap = safe_binary_auc_ap(df["true_clog_h"].to_numpy(), df["p_clog_h"].to_numpy())
     out["clog_h_auc"] = auc
     out["clog_h_ap"] = ap
-    out["clog_h_f1"] = float(f1_score(df["true_clog_h"], (df["p_clog_h"] >= 0.5).astype(int), zero_division=0))
+    out["clog_h_f1"] = float(
+        f1_score(df["true_clog_h"], (df["p_clog_h"] >= 0.5).astype(int), zero_division=0)
+    )
 
-    out["tte_foul_mae_min"] = float(mean_absolute_error(df["true_tte_foul_min"], df["pred_tte_foul_min"]))
-    out["tte_clog_mae_min"] = float(mean_absolute_error(df["true_tte_clog_min"], df["pred_tte_clog_min"]))
+    out["tte_foul_mae_min"] = float(
+        mean_absolute_error(df["true_tte_foul_min"], df["pred_tte_foul_min"])
+    )
+    out["tte_clog_mae_min"] = float(
+        mean_absolute_error(df["true_tte_clog_min"], df["pred_tte_clog_min"])
+    )
     out["ttu_mae_min"] = float(mean_absolute_error(df["true_ttu_min"], df["pred_ttu_min"]))
     return out
 
@@ -65,6 +90,7 @@ def stage_score_from_severity(severity_scaled: torch.Tensor, cfg: TrainConfig) -
     return score
 
 
+# pylint: disable-next=too-many-locals
 def predict_loader(
     model: nn.Module,
     loader: DataLoader,
@@ -80,12 +106,28 @@ def predict_loader(
             pred = model(x)
             p_stage = torch.softmax(pred["stage_logits"], dim=-1).detach().cpu().numpy()
             p_foul_h = torch.sigmoid(pred["foul_h_logit"]).detach().cpu().numpy()
-            p_actionable_foul_h = torch.sigmoid(pred["actionable_foul_h_logit"]).detach().cpu().numpy()
+            p_actionable_foul_h = (
+                torch.sigmoid(pred["actionable_foul_h_logit"]).detach().cpu().numpy()
+            )
             p_clog_h = torch.sigmoid(pred["clog_h_logit"]).detach().cpu().numpy()
-            pred_sev = (pred["severity_scaled"].detach().cpu().numpy() / cfg.severity_scale()).clip(min=0.0)
-            pred_ttf_foul = np.expm1(np.clip(pred["tte_foul_log"].detach().cpu().numpy(), 0.0, np.log1p(cfg.tte_fouling_cap_min)))
-            pred_ttf_clog = np.expm1(np.clip(pred["tte_clog_log"].detach().cpu().numpy(), 0.0, np.log1p(cfg.tte_clog_cap_min)))
-            pred_ttu = np.expm1(np.clip(pred["ttu_log"].detach().cpu().numpy(), 0.0, np.log1p(cfg.ttu_cap_min)))
+            pred_sev = (pred["severity_scaled"].detach().cpu().numpy() / cfg.severity_scale()).clip(
+                min=0.0
+            )
+            pred_ttf_foul = np.expm1(
+                np.clip(
+                    pred["tte_foul_log"].detach().cpu().numpy(),
+                    0.0,
+                    np.log1p(cfg.tte_fouling_cap_min),
+                )
+            )
+            pred_ttf_clog = np.expm1(
+                np.clip(
+                    pred["tte_clog_log"].detach().cpu().numpy(), 0.0, np.log1p(cfg.tte_clog_cap_min)
+                )
+            )
+            pred_ttu = np.expm1(
+                np.clip(pred["ttu_log"].detach().cpu().numpy(), 0.0, np.log1p(cfg.ttu_cap_min))
+            )
 
             for i, sequence_id in enumerate(batch["sequence_id"]):
                 end_idx = int(batch["end_idx"][i])
@@ -119,8 +161,12 @@ def predict_loader(
                         "true_tte_foul_min": float(seq.y_ttf_foul[end_idx]),
                         "true_tte_clog_min": float(seq.y_ttf_clog[end_idx]),
                         "true_ttu_min": float(seq.y_ttu[end_idx]),
-                        "pred_tte_foul_min": float(np.clip(pred_ttf_foul[i], 0.0, cfg.tte_fouling_cap_min)),
-                        "pred_tte_clog_min": float(np.clip(pred_ttf_clog[i], 0.0, cfg.tte_clog_cap_min)),
+                        "pred_tte_foul_min": float(
+                            np.clip(pred_ttf_foul[i], 0.0, cfg.tte_fouling_cap_min)
+                        ),
+                        "pred_tte_clog_min": float(
+                            np.clip(pred_ttf_clog[i], 0.0, cfg.tte_clog_cap_min)
+                        ),
                         "pred_ttu_min": float(np.clip(pred_ttu[i], 0.0, cfg.ttu_cap_min)),
                         "flow_kg_s": float(meta["flow_kg_s"]),
                         "dP_kPa": float(meta["dP_kPa"]),
@@ -138,11 +184,22 @@ def predict_loader(
                         "fault_type": str(meta["fault_type"]),
                     }
                 )
-    return pd.DataFrame(rows).sort_values(["asset_id", "timestamp", "sequence_id"]).reset_index(drop=True)
+    return (
+        pd.DataFrame(rows)
+        .sort_values(["asset_id", "timestamp", "sequence_id"])
+        .reset_index(drop=True)
+    )
 
 
-def add_explanations(pred_df: pd.DataFrame, policy: Mapping[str, float], predicate_thresholds: Mapping[str, float], cfg: TrainConfig) -> pd.DataFrame:
+# pylint: disable-next=too-many-locals,too-many-branches,too-many-statements
+def add_explanations(
+    pred_df: pd.DataFrame,
+    policy: Mapping[str, float],
+    predicate_thresholds: Mapping[str, float],
+    cfg: TrainConfig,
+) -> pd.DataFrame:
     """Combine probabilities/severity/predicates into an operator-facing status per window."""
+    _ = cfg
     df = pred_df.copy()
 
     statuses: List[str] = []
@@ -194,14 +251,20 @@ def add_explanations(pred_df: pd.DataFrame, policy: Mapping[str, float], predica
                 (r.get("p_actionable_foul_h", 0.0) >= policy["actionable_foul_prob_thr"])
                 or (
                     (r["p_foul_h"] >= policy["watch_foul_prob_thr"])
-                    and ((r["pred_severity"] >= policy["severity_advanced_thr"]) or (r["pred_stage"] >= 2))
+                    and (
+                        (r["pred_severity"] >= policy["severity_advanced_thr"])
+                        or (r["pred_stage"] >= 2)
+                    )
                 )
             )
             and (r["pred_ttu_min"] <= policy["foul_urgency_ttu"])
         )
 
         clogging = int(
-            ((r["p_clog_h"] >= policy["clog_prob_thr"]) or (r["pred_tte_clog_min"] <= policy["tau_clog"]))
+            (
+                (r["p_clog_h"] >= policy["clog_prob_thr"])
+                or (r["pred_tte_clog_min"] <= policy["tau_clog"])
+            )
             and (r["pred_ttu_min"] <= policy["tau_unplanned"])
         )
 
@@ -273,12 +336,16 @@ def consolidate_alerts(pred_df: pd.DataFrame, cooldown_min: int) -> pd.DataFrame
         return cand.reset_index(drop=True)
 
     cand["timestamp"] = pd.to_datetime(cand["timestamp"], utc=True, errors="coerce")
-    cand = cand.dropna(subset=["timestamp"]).sort_values(["asset_id", "alert_type", "timestamp"]).copy()
+    cand = (
+        cand.dropna(subset=["timestamp"])
+        .sort_values(["asset_id", "alert_type", "timestamp"])
+        .copy()
+    )
     gap_min = max(float(cooldown_min), 1.0)
     episodes: List[Dict[str, Any]] = []
     episode_counter = 0
 
-    for (asset_id, alert_type), g in cand.groupby(["asset_id", "alert_type"], sort=False):
+    for (_asset_id, _alert_type), g in cand.groupby(["asset_id", "alert_type"], sort=False):
         g = g.sort_values("timestamp")
         current_indices: List[int] = []
         last_ts: Optional[pd.Timestamp] = None
@@ -301,20 +368,26 @@ def consolidate_alerts(pred_df: pd.DataFrame, cooldown_min: int) -> pd.DataFrame
     return out.sort_values(["asset_id", "alert_type", "timestamp"]).reset_index(drop=True)
 
 
-def _alert_episode_row(cand: pd.DataFrame, indices: List[int], episode_counter: int, gap_min: float) -> Dict[str, Any]:
+def _alert_episode_row(
+    cand: pd.DataFrame, indices: List[int], episode_counter: int, gap_min: float
+) -> Dict[str, Any]:
     """Build one consolidated episode row (first signal's data + episode-level metadata)."""
     ep = cand.loc[indices].copy()
     first = ep.iloc[0].to_dict()
-    first.update({
-        "alert_episode_id": f"AE{episode_counter:06d}",
-        "alert_start_time": ep["timestamp"].iloc[0],
-        "alert_end_time": ep["timestamp"].iloc[-1],
-        "last_signal_timestamp": ep["timestamp"].iloc[-1],
-        "n_signals": int(len(ep)),
-        "episode_duration_min": float((ep["timestamp"].iloc[-1] - ep["timestamp"].iloc[0]).total_seconds() / 60.0),
-        "episode_gap_min_used": gap_min,
-        "is_alert_episode": 1,
-    })
+    first.update(
+        {
+            "alert_episode_id": f"AE{episode_counter:06d}",
+            "alert_start_time": ep["timestamp"].iloc[0],
+            "alert_end_time": ep["timestamp"].iloc[-1],
+            "last_signal_timestamp": ep["timestamp"].iloc[-1],
+            "n_signals": int(len(ep)),
+            "episode_duration_min": float(
+                (ep["timestamp"].iloc[-1] - ep["timestamp"].iloc[0]).total_seconds() / 60.0
+            ),
+            "episode_gap_min_used": gap_min,
+            "is_alert_episode": 1,
+        }
+    )
     return first
 
 

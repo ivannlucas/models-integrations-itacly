@@ -8,7 +8,10 @@ import pandas as pd
 import pytest
 
 from app.plugins.ml15_wine_ipi_price_forecast import history
-from app.plugins.ml15_wine_ipi_price_forecast.constants import CALENDAR_DERIVED_COLUMNS, FEATURE_COLUMNS
+from app.plugins.ml15_wine_ipi_price_forecast.constants import (
+    CALENDAR_DERIVED_COLUMNS,
+    FEATURE_COLUMNS,
+)
 from app.plugins.ml15_wine_ipi_price_forecast.preprocessing import (
     build_feature_frame,
     build_feature_row,
@@ -34,6 +37,7 @@ def test_build_feature_row_derives_calendar_features_from_date():
 
 
 def test_build_feature_row_non_spring_month_has_zero_risk_flag():
+    """A non-spring month (January) gets quarter 1 and a zero spring-risk flag."""
     row = {**_BASE_ROW, "date": "2025-01-01"}
     resolved = build_feature_row(row, FEATURE_COLUMNS, CALENDAR_DERIVED_COLUMNS)
     assert resolved["quarter"] == 1
@@ -56,6 +60,7 @@ def test_build_feature_row_missing_feature_without_date_raises_value_error_namin
 
 
 def test_build_feature_row_missing_date_and_calendar_raises_value_error():
+    """Without date nor calendar features the row fails naming 'date'."""
     with pytest.raises(ValueError, match="date"):
         build_feature_row(dict(_BASE_ROW), FEATURE_COLUMNS, CALENDAR_DERIVED_COLUMNS)
 
@@ -78,7 +83,7 @@ def test_build_feature_row_derives_missing_feature_from_history_when_date_given(
     """A feature missing from the row, but resolvable via the bundled reference history
     (mocked here), must be filled in automatically instead of raising — this is the fix for
     the reported bug where a simple date+ipi_national_current input failed."""
-    monkeypatch.setattr(history, "load_reference_data", lambda: _synthetic_reference_data())
+    monkeypatch.setattr(history, "load_reference_data", _synthetic_reference_data)
 
     row = {"date": "2025-01-01"}  # nothing else -- not even ipi_national_current
     resolved = build_feature_row(row, FEATURE_COLUMNS, CALENDAR_DERIVED_COLUMNS)
@@ -88,7 +93,8 @@ def test_build_feature_row_derives_missing_feature_from_history_when_date_given(
 
 
 def test_build_feature_row_explicit_ipi_national_current_overrides_bundled_history(monkeypatch):
-    monkeypatch.setattr(history, "load_reference_data", lambda: _synthetic_reference_data())
+    """An explicit ipi_national_current overrides the bundled history for that month only."""
+    monkeypatch.setattr(history, "load_reference_data", _synthetic_reference_data)
 
     row = {"date": "2025-01-01", "ipi_national_current": 999.0}
     resolved = build_feature_row(row, FEATURE_COLUMNS, CALENDAR_DERIVED_COLUMNS)
@@ -99,6 +105,7 @@ def test_build_feature_row_explicit_ipi_national_current_overrides_bundled_histo
 
 
 def test_build_feature_row_history_derivation_failure_raises_clear_value_error(monkeypatch):
+    """A failure loading the reference history becomes a clear ValueError."""
     def _raise():
         raise FileNotFoundError("reference CSV not found")
 
@@ -109,6 +116,7 @@ def test_build_feature_row_history_derivation_failure_raises_clear_value_error(m
 
 
 def test_build_feature_frame_is_column_ordered():
+    """build_feature_frame returns a one-row DataFrame ordered by FEATURE_COLUMNS."""
     row = {**_BASE_ROW, "date": "2025-01-01"}
     frame = build_feature_frame(row, FEATURE_COLUMNS, CALENDAR_DERIVED_COLUMNS)
     assert isinstance(frame, pd.DataFrame)
@@ -117,12 +125,14 @@ def test_build_feature_frame_is_column_ordered():
 
 
 def test_resolve_origin_target_dates_shifts_by_horizon():
+    """Origin is normalised to the first of the month and target shifted by the horizon."""
     origin, target = resolve_origin_target_dates({"date": "2025-01-15"}, horizon=6)
     assert origin == "2025-01-01"  # normalised to first-of-month
     assert target == "2025-07-01"
 
 
 def test_resolve_origin_target_dates_none_when_no_date():
+    """Without a date both origin and target are None."""
     origin, target = resolve_origin_target_dates({}, horizon=6)
     assert origin is None
     assert target is None

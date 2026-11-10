@@ -1,4 +1,8 @@
-"""MLflow helpers for ml43-cereals-dnsl-anomaly-fault-detection — download/upload user-trained model bundles."""
+"""MLflow helpers for ml43-cereals-dnsl-anomaly-fault-detection.
+
+Download/upload of user-trained model bundles.
+"""
+
 from __future__ import annotations
 
 import logging
@@ -7,8 +11,8 @@ import pickle
 
 import numpy as np
 import torch
-import shutil
 
+from app.domain.services.mlflow_artifacts import download_run_artifacts
 from app.domain.services.mlflow_tracker import BaseMLflowTracker, require_user_model
 from app.plugins.ml43_cereals_dnsl_anomaly_fault_detection.constants import (
     ARTIFACT_FOLDER_NAME,
@@ -17,7 +21,10 @@ from app.plugins.ml43_cereals_dnsl_anomaly_fault_detection.constants import (
     SCALER_FILENAME,
     XAI_BACKGROUND_FILENAME,
 )
-from app.plugins.ml43_cereals_dnsl_anomaly_fault_detection.model_loader import build_explainer, build_model
+from app.plugins.ml43_cereals_dnsl_anomaly_fault_detection.model_loader import (
+    build_explainer,
+    build_model,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -27,41 +34,43 @@ def download_user_model_from_mlflow(run_id: str):
     """Download a user-trained model bundle from MLflow.
 
     Returns (model, model_cfg, scaler_x, scaler_num, xai_background, explainer, temp_dir),
-    or None if the run has no artifacts. Caller MUST shutil.rmtree(temp_dir) after
-    inference — use try/finally.
+    or None if the run has no artifacts. Caller MUST remove temp_dir after inference
+    (``removing_dir``).
     """
-    import tempfile
+    loaded = download_run_artifacts(run_id, _load, prefix="mlflow_ml43_cereals_")
+    if loaded is None:
+        return None
+    bundle, tmp = loaded
+    return (*bundle, tmp)
 
-    tmp = tempfile.mkdtemp(prefix="mlflow_ml43_cereals_")
-    try:
-        local_path = BaseMLflowTracker(run_id).download_artifacts(tmp, artifact_path="model")
-        if not local_path:
-            shutil.rmtree(tmp, ignore_errors=True)
-            return None
 
-        checkpoint = torch.load(
-            os.path.join(local_path, MODEL_FILENAME), map_location="cpu", weights_only=False,
-        )
-        model_cfg = checkpoint["model_cfg"]
-        model = build_model(model_cfg)
-        model.load_state_dict(checkpoint["model_state_dict"])
-        model.eval()
+def _load(local_path: str):
+    """Rebuild model, scalers, XAI background and explainer from a downloaded ``model`` folder."""
+    checkpoint = torch.load(
+        os.path.join(local_path, MODEL_FILENAME), map_location="cpu", weights_only=False,
+    )
+    model_cfg = checkpoint["model_cfg"]
+    model = build_model(model_cfg)
+    model.load_state_dict(checkpoint["model_state_dict"])
+    model.eval()
 
-        with open(os.path.join(local_path, SCALER_FILENAME), "rb") as f:
-            scaler_dict = pickle.load(f)
+    with open(os.path.join(local_path, SCALER_FILENAME), "rb") as f:
+        scaler_dict = pickle.load(f)
 
-        xai_background = None
-        bg_path = os.path.join(local_path, XAI_BACKGROUND_FILENAME)
-        if os.path.exists(bg_path):
-            xai_background = np.load(bg_path)
+    xai_background = None
+    bg_path = os.path.join(local_path, XAI_BACKGROUND_FILENAME)
+    if os.path.exists(bg_path):
+        xai_background = np.load(bg_path)
 
-        explainer = build_explainer(model, model_cfg)
-
-        logger.info("Downloaded user model from MLflow run_id=%s", run_id)
-        return model, model_cfg, scaler_dict.get("scaler_x"), scaler_dict.get("scaler_num"), xai_background, explainer, tmp
-    except BaseException:
-        shutil.rmtree(tmp, ignore_errors=True)
-        raise
+    explainer = build_explainer(model, model_cfg)
+    return (
+        model,
+        model_cfg,
+        scaler_dict.get("scaler_x"),
+        scaler_dict.get("scaler_num"),
+        xai_background,
+        explainer,
+    )
 
 
 def get_calibrated_threshold(run_id: str, default: float) -> float:
@@ -76,20 +85,22 @@ def get_calibrated_threshold(run_id: str, default: float) -> float:
     """
     try:
         metrics = BaseMLflowTracker(run_id).get_metrics()
-    except Exception as exc:  # pylint: disable=broad-exception-caught
+    except Exception as exc:  # pylint: disable=broad-exception-caught  # any MLflow failure -> default
         logger.warning("Could not fetch decision_threshold for run_id=%s: %s", run_id, exc)
         return default
     value = metrics.get("decision_threshold")
     return float(value) if isinstance(value, (int, float)) else default
 
 
-def upload_artifacts_to_mlflow(artifact_dir: str, mlflow_run_id: str = "", metrics: dict | None = None) -> str:
+def upload_artifacts_to_mlflow(
+    artifact_dir: str, mlflow_run_id: str = "", metrics: dict | None = None
+) -> str:
     """Upload training artifacts to MLflow and return the run_id.
 
     If mlflow_run_id is provided, logs to that existing run. Otherwise starts a
     new run under the ml43-cereals-dnsl-anomaly-fault-detection experiment.
     """
-    import mlflow
+    import mlflow  # pylint: disable=import-outside-toplevel
 
     mlflow.set_tracking_uri(BaseMLflowTracker.TRACKING_URI)
 

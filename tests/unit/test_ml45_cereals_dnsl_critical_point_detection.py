@@ -1,5 +1,26 @@
 """Endpoint tests for ``ml45-cereals-dnsl-critical-point-detection``."""
+from pathlib import Path
+from unittest.mock import patch
+
+import numpy as np
+import pandas as pd
+import pytest
+import torch
+
 from app.domain.services.exceptions import InsufficientWindowHistoryError
+from app.plugins.ml45_cereals_dnsl_critical_point_detection.constants import (
+    DEFAULT_THRESHOLD,
+    SENSOR_COLUMNS,
+    SEQUENCE_LENGTH,
+    STATS_CREATION,
+)
+from app.plugins.ml45_cereals_dnsl_critical_point_detection.plugin import (
+    Ml45CerealsDnslCriticalPointDetectionPlugin,
+    _validate_saved_artifact,
+)
+from app.plugins.ml45_cereals_dnsl_critical_point_detection.postprocessing import explain_window
+
+_PLUGIN_MOD = "app.plugins.ml45_cereals_dnsl_critical_point_detection.plugin"
 
 PREFIX = "/models/ml45-cereals-dnsl-critical-point-detection"
 MODEL_ID = "ml45-cereals-dnsl-critical-point-detection"
@@ -16,7 +37,10 @@ _SENSOR_ROW = {
     "ambient_temp": [15.0] * 240,
     "ambient_humidity": [50.0] * 240,
     "setpoint_temp": [75.0] * 240,
-    "timestamp": [f"2029-01-01 00:{i:02d}:00" if i < 60 else f"2029-01-01 0{i // 60}:{i % 60:02d}:00" for i in range(240)],
+    "timestamp": [
+        f"2029-01-01 00:{i:02d}:00" if i < 60 else f"2029-01-01 0{i // 60}:{i % 60:02d}:00"
+        for i in range(240)
+    ],
     "cycle_id": 1,
 }
 
@@ -24,6 +48,7 @@ INLINE_PAYLOAD = {"mode": "inline", **_SENSOR_ROW}
 
 
 def test_health(client):
+    """GET /health reports the model as loaded and ok."""
     body = client.get(f"{PREFIX}/health").json()
     assert body["status"] == "ok"
     assert body["model"] == MODEL_ID
@@ -31,18 +56,15 @@ def test_health(client):
 
 
 def test_stats(client):
+    """GET /stats returns the model name."""
     body = client.get(f"{PREFIX}/stats").json()
     assert body["model_name"] == MODEL_ID
 
 
 def test_stats_without_mlflow_run_id_exposes_only_the_unified_metric_keys():
     """Modelo 43-45 audit, metrics unification: the base/served-model metrics dict must
-    contain exactly the same unified key set as ml43_cereals_dnsl_anomaly_fault_detection's own stats() (no
-    legacy selected_threshold/bare fallo_f1-only naming)."""
-    from app.plugins.ml45_cereals_dnsl_critical_point_detection.plugin import (
-        Ml45CerealsDnslCriticalPointDetectionPlugin,
-    )
-
+    contain exactly the same unified key set as ml43_cereals_dnsl_anomaly_fault_detection's
+    own stats() (no legacy selected_threshold/bare fallo_f1-only naming)."""
     resp = Ml45CerealsDnslCriticalPointDetectionPlugin().stats()
 
     assert set(resp.metrics.keys()) == {
@@ -52,6 +74,7 @@ def test_stats_without_mlflow_run_id_exposes_only_the_unified_metric_keys():
 
 
 def test_predict_inline(client):
+    """An inline predict returns the unified label, probability and state fields only."""
     resp = client.post(f"{PREFIX}/predict", json=INLINE_PAYLOAD)
     assert resp.status_code == 200
     body = resp.json()
@@ -77,6 +100,7 @@ def test_predict_inline_missing_sensor_rejected(client):
 
 
 def test_predict_batch(client):
+    """A batch predict returns one prediction row without the dropped fields."""
     resp = client.post(f"{PREFIX}/predict", json={"mode": "batch", "data_path": "/tmp/fake.csv"})
     assert resp.status_code == 200
     body = resp.json()
@@ -96,6 +120,7 @@ def test_predict_batch_insufficient_window_history_maps_to_422(client, fake_plug
 
 
 def test_train(client):
+    """POST /train returns train/test window counts and echoes the MLflow run id."""
     resp = client.post(
         f"{PREFIX}/train", json={"data_path": "/tmp/train.csv", "mlflow_run_id": "test-run-id"}
     )
@@ -111,6 +136,7 @@ def test_train(client):
 
 
 def test_train_requires_mlflow_run_id(client):
+    """POST /train without mlflow_run_id is rejected with 422."""
     resp = client.post(f"{PREFIX}/train", json={"data_path": "/tmp/train.csv"})
     assert resp.status_code == 422
 
@@ -127,6 +153,7 @@ class _FakeExplainerReport:
         }
 
     def explain(self, **_kwargs):
+        """Return the canned explainer result."""
         return self._result
 
 
@@ -137,8 +164,6 @@ def test_explain_window_drops_duplicate_and_derivable_fields():
     kept fields) must not appear in the row explain_window() builds — 'Estado
     interpretativo'/'Evidencia'/'Recomendacion' (real, non-duplicate content) must survive
     untouched."""
-    from app.plugins.ml45_cereals_dnsl_critical_point_detection.postprocessing import explain_window
-
     explainer = _FakeExplainerReport(
         anomaly_probability=0.61,
         final_report={
@@ -150,7 +175,9 @@ def test_explain_window_drops_duplicate_and_derivable_fields():
             "Recomendacion": "Detener el secadero y revisar humedad de grano.",
         },
     )
-    row = explain_window(explainer, x_window=None, s_stats=None, xai_background="not-none", threshold=0.73)
+    row = explain_window(
+        explainer, x_window=None, s_stats=None, xai_background="not-none", threshold=0.73
+    )
 
     assert row["predicted_anomaly_label"] == "No Fallo"  # 0.61 < 0.73
     assert row["anomaly_probability"] == 0.61
@@ -169,11 +196,6 @@ def _build_synthetic_dryer_csv(cycle_labels, rows_per_cycle=240):
     rows (one window per cycle at SEQUENCE_LENGTH=240), labeled NORMAL or a real fault
     name from config.yaml's fault_types. FAULT cycles get all 11 sensors shifted by
     +50 so the two classes are trivially separable."""
-    import numpy as np
-    import pandas as pd
-
-    from app.plugins.ml45_cereals_dnsl_critical_point_detection.constants import SENSOR_COLUMNS
-
     rng = np.random.default_rng(7)
     frames = []
     for cycle_idx, label in enumerate(cycle_labels):
@@ -196,10 +218,6 @@ def _build_ml45_model_cfg():
     """model: section from a45-dnsl-cereals-deteccion-puntos-criticos/config/config.yaml,
     plus the input/sequence/stats dims train() derives from the data — matches what a
     real served checkpoint's model_cfg would contain."""
-    from app.plugins.ml45_cereals_dnsl_critical_point_detection.constants import (
-        DEFAULT_THRESHOLD, SENSOR_COLUMNS, SEQUENCE_LENGTH, STATS_CREATION,
-    )
-
     return {
         "lstm": {
             "hidden_size": 64, "num_layers": 1, "dropout": 0.25,
@@ -229,27 +247,25 @@ class TestTrainFaithfulPipeline:
     threshold back into that same key before saving the checkpoint."""
 
     def _train_once(self, tmp_path, cycle_labels, *, epoch_limit=None):
-        from unittest.mock import patch
-
-        import numpy as np
-        import torch
-
-        from app.plugins.ml45_cereals_dnsl_critical_point_detection.plugin import (
-            Ml45CerealsDnslCriticalPointDetectionPlugin,
-        )
-
+        """Run plugin.train() on a synthetic CSV and capture the saved checkpoints."""
         df = _build_synthetic_dryer_csv(cycle_labels)
         csv_path = tmp_path / "dryer_train.csv"
         df.to_csv(csv_path, index=False)
 
         plugin = Ml45CerealsDnslCriticalPointDetectionPlugin()
-        plugin._model = object()  # only needs to be non-None for _require_loaded()
-        plugin._model_cfg = _build_ml45_model_cfg()
+        # Public load() path with fake artifacts: the model only needs to be non-None for
+        # _require_loaded(); no scalers/XAI background, and the default 0.73 threshold.
+        with patch(f"{_PLUGIN_MOD}._store"), patch(
+            f"{_PLUGIN_MOD}.load_artifacts",
+            return_value=(object(), _build_ml45_model_cfg(), None, None, None, 0.73),
+        ):
+            plugin.load()
 
         saved_checkpoints = []
         real_torch_save = torch.save
 
         def _capture_torch_save(obj, path, *a, **kw):
+            """Record checkpoints with a model_cfg, then save them for real."""
             if isinstance(obj, dict) and "model_cfg" in obj:
                 saved_checkpoints.append(obj)
             return real_torch_save(obj, path, *a, **kw)
@@ -258,15 +274,15 @@ class TestTrainFaithfulPipeline:
         torch.manual_seed(0)
 
         with patch(
-            "app.plugins.ml45_cereals_dnsl_critical_point_detection.plugin.upload_artifacts_to_mlflow",
+            f"{_PLUGIN_MOD}.upload_artifacts_to_mlflow",
             return_value="fake-m45-run-id",
         ), patch(
-            "app.plugins.ml45_cereals_dnsl_critical_point_detection.plugin.torch.save",
+            f"{_PLUGIN_MOD}.torch.save",
             side_effect=_capture_torch_save,
         ):
             if epoch_limit is not None:
                 with patch(
-                    "app.plugins.ml45_cereals_dnsl_critical_point_detection.plugin.TRAIN_NUM_EPOCHS",
+                    f"{_PLUGIN_MOD}.TRAIN_NUM_EPOCHS",
                     epoch_limit,
                 ):
                     resp = plugin.train(data_path=str(csv_path), mlflow_run_id="")
@@ -310,12 +326,6 @@ def test_stats_overwrites_legacy_keys_with_the_real_run_values():
     exact unified key names TEST_METRICS itself uses, and stats() no longer needs a
     separate legacy-key alias map — it overwrites base.metrics directly (modelo 43-45
     audit, metrics unification)."""
-    from unittest.mock import patch
-
-    from app.plugins.ml45_cereals_dnsl_critical_point_detection.plugin import (
-        Ml45CerealsDnslCriticalPointDetectionPlugin,
-    )
-
     plugin = Ml45CerealsDnslCriticalPointDetectionPlugin()
     with patch(
         "app.plugins.ml45_cereals_dnsl_critical_point_detection.plugin.BaseMLflowTracker"
@@ -345,42 +355,36 @@ def test_stats_overwrites_legacy_keys_with_the_real_run_values():
 
 class TestValidateSavedArtifact:
     """Point 6 (0-byte artifacts): unit coverage for the helper itself, mirroring
-    ml43_cereals_dnsl_anomaly_fault_detection's plugin.py::_validate_saved_artifact tests — same helper, copied
-    into this plugin's train() to catch a 0-byte/corrupt save before it ever reaches
-    MLflow (and, from there, the platform's model listing)."""
+    ml43_cereals_dnsl_anomaly_fault_detection's plugin.py::_validate_saved_artifact tests —
+    same helper, copied into this plugin's train() to catch a 0-byte/corrupt save before it
+    ever reaches MLflow (and, from there, the platform's model listing)."""
 
     def test_raises_on_missing_file(self, tmp_path):
-        from app.plugins.ml45_cereals_dnsl_critical_point_detection.plugin import _validate_saved_artifact
-
-        import pytest
+        """A missing artifact file is reported as empty."""
         with pytest.raises(ValueError, match="vacío"):
             _validate_saved_artifact(tmp_path / "missing.pt", loader=lambda p: None)
 
     def test_raises_on_zero_byte_file(self, tmp_path):
-        from app.plugins.ml45_cereals_dnsl_critical_point_detection.plugin import _validate_saved_artifact
-
-        import pytest
+        """A zero-byte artifact file is reported as empty."""
         path = tmp_path / "empty.pkl"
         path.write_bytes(b"")
         with pytest.raises(ValueError, match="vacío"):
-            _validate_saved_artifact(path, loader=lambda p: open(p, "rb").read())
+            _validate_saved_artifact(path, loader=lambda p: Path(p).read_bytes())
 
     def test_raises_on_a_nonempty_but_corrupt_file(self, tmp_path):
-        from app.plugins.ml45_cereals_dnsl_critical_point_detection.plugin import _validate_saved_artifact
-
-        import pytest
+        """A non-empty file the loader cannot read is reported as corrupt."""
         path = tmp_path / "corrupt.pkl"
         path.write_bytes(b"not actually a pickle stream")
 
         def _loader(p):
+            _ = p
             raise ValueError("bad magic number")
 
         with pytest.raises(ValueError, match="corrupto"):
             _validate_saved_artifact(path, loader=_loader)
 
     def test_passes_for_a_real_readable_artifact(self, tmp_path):
-        from app.plugins.ml45_cereals_dnsl_critical_point_detection.plugin import _validate_saved_artifact
-
+        """A non-empty readable artifact passes validation."""
         path = tmp_path / "ok.bin"
         path.write_bytes(b"not empty")
         _validate_saved_artifact(path, loader=lambda p: p.read_bytes())  # does not raise

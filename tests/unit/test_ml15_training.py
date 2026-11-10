@@ -15,11 +15,11 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from app.plugins.ml15_wine_ipi_price_forecast import history, training
+from app.plugins.ml15_wine_ipi_price_forecast import history, model_loader, training
 from app.plugins.ml15_wine_ipi_price_forecast import plugin as plugin_mod
 from app.plugins.ml15_wine_ipi_price_forecast.constants import (
-    ANCHOR_COLUMN, FEATURE_COLUMNS, MODEL_FILENAME, REFERENCE_FINANCIAL_FILENAME, REFERENCE_PRICES_FILENAME,
-    TARGET_COLUMN, TEST_MONTHS, VALIDATION_MONTHS,
+    ANCHOR_COLUMN, FEATURE_COLUMNS, MODEL_FILENAME, REFERENCE_FINANCIAL_FILENAME,
+    REFERENCE_PRICES_FILENAME, TARGET_COLUMN, TEST_MONTHS, VALIDATION_MONTHS,
 )
 
 CODE = Path(__file__).resolve().parents[2] / "inbox" / "a15" / "codigo"
@@ -41,6 +41,7 @@ def _panel(n_months=60, start="2018-01-01", seed=0) -> pd.DataFrame:
 
 
 def test_split_follows_the_original_structure_anchored_to_the_last_origin():
+    """split_dates reproduces the delivered config.yaml split anchored to the last origin."""
     dates = training.split_dates(pd.Timestamp("2026-01-01"))
     assert dates == {
         "train_end": pd.Timestamp("2023-12-01"), "val_start": pd.Timestamp("2024-01-01"),
@@ -50,16 +51,22 @@ def test_split_follows_the_original_structure_anchored_to_the_last_origin():
 
 
 def test_train_uses_only_rows_whose_target_is_before_validation():
+    """Training only uses origins whose target falls before validation; test counts observed
+    targets."""
     df = _panel()
     result = training.train_model(df)
     dates = training.split_dates(pd.Timestamp(df["date"].iloc[-1]))
     assert result["train_origin_end"] + pd.DateOffset(months=6) <= dates["train_end"]
     assert result["n_train"] == 60 - TEST_MONTHS - VALIDATION_MONTHS - 6
     assert result["n_test"] == TEST_MONTHS - 6  # test origins with an observed target
-    assert result["metrics"]["rmse"] is not None and result["baseline_persistence"]["rmse"] is not None
+    assert (
+        result["metrics"]["rmse"] is not None
+        and result["baseline_persistence"]["rmse"] is not None
+    )
 
 
 def test_feature_nans_become_zero_and_extra_columns_are_ignored():
+    """Feature NaNs are tolerated and extra columns are ignored by the model."""
     df = _panel()
     df.loc[3, "copper_lag_14"] = np.nan
     df["unexpected_numeric"] = 1.0
@@ -68,20 +75,25 @@ def test_feature_nans_become_zero_and_extra_columns_are_ignored():
 
 
 def test_no_evaluable_test_rows_gives_null_metrics_not_nan():
+    """Without evaluable test rows every metric is None, not NaN."""
     df = _panel()
     df.loc[df.index[-TEST_MONTHS:], TARGET_COLUMN] = np.nan
     result = training.train_model(df)
     assert result["n_test"] == 0 and all(v is None for v in result["metrics"].values())
 
 
-@pytest.mark.parametrize("bad,match", [("short", "Histórico insuficiente"), ("no_target", "ipi_national_t_plus_6")])
+@pytest.mark.parametrize(
+    "bad,match", [("short", "Histórico insuficiente"), ("no_target", "ipi_national_t_plus_6")]
+)
 def test_invalid_training_csv_is_a_clear_error(bad, match):
+    """A too-short or target-less panel raises a clear ValueError."""
     df = _panel(n_months=30) if bad == "short" else _panel().drop(columns=[TARGET_COLUMN])
     with pytest.raises(ValueError, match=match):
         training.train_model(df)
 
 
 def test_retraining_reproduces_the_delivered_artifact_and_final_evaluation():
+    """Retraining on the delivered panel reproduces the delivered model and metrics exactly."""
     panel = CODE / "data" / "processed" / "model_ready_panel.csv"
     if not panel.exists():
         pytest.skip("inbox/a15/codigo not present")
@@ -96,33 +108,53 @@ def test_retraining_reproduces_the_delivered_artifact_and_final_evaluation():
     assert ours.steps[-1][1].intercept_ == theirs.steps[-1][1].intercept_
     for key in ("rmse", "mae", "mape_pct", "r2", "mda_pct"):
         assert result["metrics"][key] == pytest.approx(expected["model"][key], rel=1e-9)
-        assert result["baseline_persistence"][key] == pytest.approx(expected["baseline_persistence"][key], rel=1e-9)
+        assert result["baseline_persistence"][key] == pytest.approx(
+            expected["baseline_persistence"][key], rel=1e-9
+        )
 
 
 # ── plugin.train: MLflow only ──────────────────────────────────────────────────
 
-@pytest.fixture
-def instance():
-    plugin = plugin_mod.Ml15WineIpiPriceForecastPlugin()
-    plugin._payload = {  # pylint: disable=protected-access
-        "model": object(), "feature_columns": list(FEATURE_COLUMNS), "target_column": TARGET_COLUMN,
-        "anchor_column": ANCHOR_COLUMN, "horizon": 6, "model_name": "Ridge",
+@pytest.fixture(name="payload")
+def fixture_payload():
+    """Stub loaded payload (Ridge, horizon 6); a test may swap its "model"."""
+    return {
+        "model": object(), "feature_columns": list(FEATURE_COLUMNS),
+        "target_column": TARGET_COLUMN, "anchor_column": ANCHOR_COLUMN, "horizon": 6,
+        "model_name": "Ridge",
     }
+
+
+@pytest.fixture(name="instance")
+def fixture_instance(payload, monkeypatch):
+    """ml15 plugin loaded with the stub payload (the fixed artifact lives in S3)."""
+    plugin = plugin_mod.Ml15WineIpiPriceForecastPlugin()
+    with monkeypatch.context() as patch:
+        patch.setattr(model_loader, "load_artifact", lambda: payload)
+        plugin.load()
     return plugin
 
 
-def test_train_publishes_the_new_base_and_uploads_to_the_run(instance, monkeypatch, tmp_path, isolated_base_store):
+def test_train_publishes_the_new_base_and_uploads_to_the_run(
+    instance, monkeypatch, tmp_path, isolated_base_store,
+):
+    """/train publishes v1 as the new base and uploads the payload to the MLflow run."""
     csv = tmp_path / "panel.csv"
     _panel().to_csv(csv, index=False)
     store = tmp_path / "mlflow"
     tracker = MagicMock()
-    tracker.upload_artifacts.side_effect = lambda d, artifact_path: shutil.copytree(d, store / artifact_path)
+    tracker.upload_artifacts.side_effect = (
+        lambda d, artifact_path: shutil.copytree(d, store / artifact_path)
+    )
     monkeypatch.setattr(plugin_mod, "BaseMLflowTracker", MagicMock(return_value=tracker))
 
     resp = instance.train(data_path=str(csv), mlflow_run_id="run-1")
     assert resp.n_train_rows == 29 and resp.n_test_rows == 7 and resp.train_end_date == "2020-11-01"
     payload = joblib.load(store / "model" / MODEL_FILENAME)
-    assert payload["feature_columns"] == list(FEATURE_COLUMNS) and payload["train_end_date"] == "2020-11-01"
+    assert (
+        payload["feature_columns"] == list(FEATURE_COLUMNS)
+        and payload["train_end_date"] == "2020-11-01"
+    )
     assert resp.base_version.version == "v1" and resp.base_version.mlflow_run_id == "run-1"
     v1 = isolated_base_store / "ml15_wine_ipi_price_forecast" / "versions" / "v1"
     assert joblib.load(v1 / MODEL_FILENAME)["train_end_date"] == "2020-11-01"
@@ -130,6 +162,7 @@ def test_train_publishes_the_new_base_and_uploads_to_the_run(instance, monkeypat
 
 
 def test_train_without_run_publishes_the_base(instance, tmp_path):
+    """/train without a run still publishes v1 as the base."""
     csv = tmp_path / "panel.csv"
     _panel().to_csv(csv, index=False)
     resp = instance.train(data_path=str(csv), mlflow_run_id="")
@@ -137,6 +170,7 @@ def test_train_without_run_publishes_the_base(instance, tmp_path):
 
 
 def test_mlflow_failure_is_a_warning(instance, monkeypatch, tmp_path):
+    """An MLflow upload failure becomes upload_warning; the base is still published."""
     csv = tmp_path / "panel.csv"
     _panel().to_csv(csv, index=False)
     tracker = MagicMock(upload_artifacts=MagicMock(side_effect=ConnectionError("mlflow caído")))
@@ -145,8 +179,8 @@ def test_mlflow_failure_is_a_warning(instance, monkeypatch, tmp_path):
     assert "mlflow caído" in resp.upload_warning and resp.base_version.version == "v1"
 
 
-@pytest.fixture
-def reference_env(monkeypatch, tmp_path):
+@pytest.fixture(name="reference_env")
+def fixture_reference_env(monkeypatch, tmp_path):
     """Synthetic 'current' reference CSVs + a tracked mkstemp dir (to detect leaked temp copies)."""
     dates = pd.date_range("2023-01-01", periods=6, freq="MS").strftime("%Y-%m-%d")
     current_prices = tmp_path / "cur_prices.csv"
@@ -160,12 +194,17 @@ def reference_env(monkeypatch, tmp_path):
     real_mkstemp = plugin_mod.tempfile.mkstemp
     monkeypatch.setattr(
         plugin_mod.tempfile, "mkstemp",
-        lambda suffix="", **kw: real_mkstemp(suffix=suffix, dir=str(temp_dir) if suffix == ".csv" else None, **kw),
+        lambda suffix="", **kw: real_mkstemp(
+            suffix=suffix, dir=str(temp_dir) if suffix == ".csv" else None, **kw
+        ),
     )
     return current_prices, current_financial, temp_dir
 
 
-def test_reference_csvs_travel_with_the_new_base(instance, tmp_path, isolated_base_store, reference_env):
+def test_reference_csvs_travel_with_the_new_base(
+    instance, tmp_path, isolated_base_store, reference_env,
+):
+    """Given reference CSVs are published with the new base and no temp copies leak."""
     current_prices, current_financial, temp_dir = reference_env
     csv = tmp_path / "panel.csv"
     _panel().to_csv(csv, index=False)
@@ -173,33 +212,60 @@ def test_reference_csvs_travel_with_the_new_base(instance, tmp_path, isolated_ba
     resp = instance.train(data_path=str(csv), reference_prices_path=str(current_prices),
                           reference_financial_path=str(current_financial))
     v1 = isolated_base_store / "ml15_wine_ipi_price_forecast" / "versions" / "v1"
-    assert (v1 / REFERENCE_PRICES_FILENAME).exists() and (v1 / REFERENCE_FINANCIAL_FILENAME).exists()
+    assert (
+        (v1 / REFERENCE_PRICES_FILENAME).exists()
+        and (v1 / REFERENCE_FINANCIAL_FILENAME).exists()
+    )
     assert resp.upload_warning is None
-    assert list(temp_dir.iterdir()) == []
+    assert not list(temp_dir.iterdir())
 
 
-def test_reference_csv_with_wrong_columns_is_rejected_before_training(instance, tmp_path, monkeypatch, reference_env):
+def test_reference_csv_with_wrong_columns_is_rejected_before_training(
+    instance, tmp_path, monkeypatch, reference_env,
+):
+    """A reference CSV with wrong columns is rejected before training, with no temp leaks."""
     current_prices, _, temp_dir = reference_env
     train_model = MagicMock(side_effect=AssertionError("must not train"))
     monkeypatch.setattr(plugin_mod.training, "train_model", train_model)
     bad = tmp_path / "bad.csv"
     pd.DataFrame({"date": ["2024-01-01"], "x": [1]}).to_csv(bad, index=False)
     with pytest.raises(ValueError, match="faltan las columnas"):
-        instance.train(data_path=str(tmp_path / "panel.csv"), reference_prices_path=str(current_prices),
+        instance.train(data_path=str(tmp_path / "panel.csv"),
+                       reference_prices_path=str(current_prices),
                        reference_financial_path=str(bad))
     train_model.assert_not_called()
-    assert list(temp_dir.iterdir()) == []
+    assert not list(temp_dir.iterdir())
 
 
-def test_missing_reference_csv_is_a_value_error_naming_the_field(instance, tmp_path, reference_env):
+def test_missing_reference_csv_is_a_value_error_naming_the_field(
+    instance, tmp_path, reference_env,
+):
+    """A missing reference CSV raises ValueError naming the field, with no temp leaks."""
     current_prices, _, temp_dir = reference_env
     with pytest.raises(ValueError, match="reference_financial_path"):
-        instance.train(data_path=str(tmp_path / "panel.csv"), reference_prices_path=str(current_prices),
+        instance.train(data_path=str(tmp_path / "panel.csv"),
+                       reference_prices_path=str(current_prices),
                        reference_financial_path=str(tmp_path / "nope.csv"))
-    assert list(temp_dir.iterdir()) == []
+    assert not list(temp_dir.iterdir())
+
+
+def test_reference_copies_are_removed_when_training_fails(
+    instance, tmp_path, monkeypatch, reference_env,
+):
+    """Valid reference CSVs but a training error: the validated temp copies are still removed."""
+    current_prices, current_financial, temp_dir = reference_env
+    monkeypatch.setattr(plugin_mod.training, "train_model",
+                        MagicMock(side_effect=ValueError("panel sin filas de test")))
+    csv = tmp_path / "panel.csv"
+    _panel().to_csv(csv, index=False)
+    with pytest.raises(ValueError, match="panel sin filas de test"):
+        instance.train(data_path=str(csv), reference_prices_path=str(current_prices),
+                       reference_financial_path=str(current_financial))
+    assert not list(temp_dir.iterdir())
 
 
 def test_only_one_reference_csv_is_rejected(instance, tmp_path):
+    """Passing only one of the two reference CSVs is rejected."""
     with pytest.raises(ValueError, match="juntos"):
         instance.train(data_path=str(tmp_path / "panel.csv"), reference_prices_path="/tmp/p.csv")
 
@@ -208,7 +274,10 @@ def test_only_one_reference_csv_is_rejected(instance, tmp_path):
 
 def _reference(monkeypatch):
     dates = pd.date_range("2023-01-01", periods=24, freq="MS")
-    prices = pd.DataFrame({"date": dates, "spain": [100.0 + i for i in range(24)], "usa": [200.0] * 22 + [None, None]})
+    prices = pd.DataFrame({
+        "date": dates, "spain": [100.0 + i for i in range(24)],
+        "usa": [200.0] * 22 + [None, None],
+    })
     fin_dates = pd.date_range("2020-01-01", periods=72, freq="MS")
     financial = pd.DataFrame({"date": fin_dates, "chem_sector_avg": 50.0, "copper_avg": 10.0,
                               "oil_brent_avg": 70.0, "eur_usd_avg": 1.1})
@@ -216,24 +285,33 @@ def _reference(monkeypatch):
                         lambda: (prices, history.reindex_financial_to_base_2020(financial)))
 
 
-def test_prediction_metadata_follows_the_original(instance, monkeypatch):
+def test_prediction_metadata_follows_the_original(instance, payload, monkeypatch):
+    """y_true, feature_status and feature_notes follow the original predictor.py."""
     _reference(monkeypatch)
     model = MagicMock(predict=MagicMock(return_value=np.array([110.0])))
-    instance._payload["model"] = model  # pylint: disable=protected-access
+    payload["model"] = model
 
     known = instance.predict_inline(features={"origin_date": "2023-12"})
-    assert known.origin_date == "2023-12-01" and known.y_true == 117.0 and known.feature_status == "exact"
+    assert (
+        known.origin_date == "2023-12-01"
+        and known.y_true == 117.0
+        and known.feature_status == "exact"
+    )
 
     # usa for 2024-11 is missing -> last available (2024-10), like predictor.py's note.
     late = instance.predict_inline(features={"origin_date": "2024-12-01"})
     assert late.y_true is None and late.feature_status == "exogenous_last_available"
     assert late.feature_notes == (
-        "usa_lag_1: se usa USA 2024-10-01 como último dato disponible para 2024-11-01; desfase=1 mes"
+        "usa_lag_1: se usa USA 2024-10-01 como último dato disponible para 2024-11-01; "
+        "desfase=1 mes"
     )
 
 
-def test_origin_date_wins_over_date_like_the_original(instance, monkeypatch):
+def test_origin_date_wins_over_date_like_the_original(instance, payload, monkeypatch):
+    """origin_date takes precedence over date, like the original."""
     _reference(monkeypatch)
-    instance._payload["model"] = MagicMock(predict=MagicMock(return_value=np.array([110.0])))  # pylint: disable=protected-access
+    payload["model"] = MagicMock(
+        predict=MagicMock(return_value=np.array([110.0]))
+    )
     resp = instance.predict_inline(features={"origin_date": "2023-12-01", "date": "2023-08-01"})
     assert resp.origin_date == "2023-12-01"

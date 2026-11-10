@@ -15,6 +15,7 @@ INLINE_PAYLOAD = {
 
 
 def test_health(client):
+    """/health reports status ok, the model id and loaded=True."""
     body = client.get(f"{PREFIX}/health").json()
     assert body["status"] == "ok"
     assert body["model"] == "ml17-meat-market-price-analysis"
@@ -22,10 +23,12 @@ def test_health(client):
 
 
 def test_stats(client):
+    """/stats reports the model id as model_name."""
     assert client.get(f"{PREFIX}/stats").json()["model_name"] == "ml17-meat-market-price-analysis"
 
 
 def test_predict_inline(client):
+    """Inline /predict returns the prediction, y_pred and the base date."""
     resp = client.post(f"{PREFIX}/predict", json=INLINE_PAYLOAD)
     assert resp.status_code == 200
     body = resp.json()
@@ -36,11 +39,13 @@ def test_predict_inline(client):
 
 
 def test_predict_inline_missing_required(client):
+    """Inline /predict without the required features answers 422."""
     resp = client.post(f"{PREFIX}/predict", json={"mode": "inline", "date": "2023-01-01"})
     assert resp.status_code == 422
 
 
 def test_predict_batch(client):
+    """Batch /predict returns 200 with the official_v1_4 line."""
     resp = client.post(
         f"{PREFIX}/predict", json={"mode": "batch", "data_path": "/tmp/pork.csv"}
     )
@@ -51,6 +56,7 @@ def test_predict_batch(client):
 
 
 def test_train_returns_200_with_metrics(client):
+    """/train returns 200 with mae, rmse and n_samples."""
     resp = client.post(
         f"{PREFIX}/train", json={"data_path": "/tmp/x.csv", "mlflow_run_id": "test-run-id"}
     )

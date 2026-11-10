@@ -19,22 +19,25 @@ from app.plugins.ml3_wine_disease_pest_forecast.constants import (
 logger = logging.getLogger(__name__)
 
 
-# El nombre X_tensor es el del código entregado (predictor.py::predecir_ensemble).
-# pylint: disable=invalid-name,too-many-locals
+def _run_models(models: list, x_tensor: np.ndarray) -> tuple[list, list]:
+    """Class probabilities and severity regression of every network, in model order."""
+    preds_clases_prob, preds_regresion = [], []
+    for mod in models:
+        p_class, p_reg = mod.predict(x_tensor, verbose=0)
+        preds_clases_prob.append(p_class)
+        preds_regresion.append(p_reg)
+    return preds_clases_prob, preds_regresion
 
 
 def predict_ensemble(
-    models: list, X_tensor: np.ndarray, label_encoder, class_names: list[str],
+    models: list, x_tensor: np.ndarray, label_encoder, class_names: list[str],
 ) -> dict:
-    """Run the three networks on *X_tensor* and return the ensemble prediction dict.
+    """Run the three networks on *x_tensor* and return the ensemble prediction dict.
 
+    ``x_tensor`` is ``X_tensor`` in the delivered predictor.py::predecir_ensemble.
     Returns ``{diagnostico_ia, confianza_clasificacion, grado_severidad, probabilidades_clases}``.
     """
-    preds_clases_prob, preds_regresion = [], []
-    for mod in models:
-        p_class, p_reg = mod.predict(X_tensor, verbose=0)
-        preds_clases_prob.append(p_class)
-        preds_regresion.append(p_reg)
+    preds_clases_prob, preds_regresion = _run_models(models, x_tensor)
 
     media_probs = np.mean(preds_clases_prob, axis=0)
     clases_finales_idx = int(np.argmax(media_probs, axis=1)[0])

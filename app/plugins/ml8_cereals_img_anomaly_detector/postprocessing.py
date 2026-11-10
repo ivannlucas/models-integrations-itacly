@@ -1,3 +1,4 @@
+"""Response builders and thumbnail encoding for ml8-cereals-img-anomaly-detector."""
 import base64
 import io
 
@@ -23,7 +24,7 @@ def encode_image_base64(image: Image.Image) -> str:
     w, h = img.size
     if max(w, h) > MAX_THUMBNAIL_SIZE:
         scale = MAX_THUMBNAIL_SIZE / max(w, h)
-        img = img.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
+        img = img.resize((int(w * scale), int(h * scale)), Image.LANCZOS)  # pylint: disable=no-member
 
     buf = io.BytesIO()
     img.save(buf, format="JPEG", quality=JPEG_QUALITY)
@@ -37,6 +38,7 @@ def build_inline_response(
     idx_to_cereal: dict,
     model_id: str,
 ) -> dict:
+    """Softmax both heads and return the top category/cereal with their probabilities."""
     prob_cat = F.softmax(logits_categoria.detach(), dim=-1).squeeze(0)
     prob_cer = F.softmax(logits_cereal.detach(), dim=-1).squeeze(0)
 
@@ -61,6 +63,7 @@ def build_inline_response(
 
 
 def build_batch_response(predictions: list[dict], model_id: str) -> dict:
+    """Wrap per-image predictions into the batch response payload."""
     return {
         "model_id": model_id,
         "predictions": predictions,

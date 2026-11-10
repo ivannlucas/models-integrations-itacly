@@ -1,22 +1,30 @@
+"""Pydantic DTOs for the ml8-cereals-img-anomaly-detector /predict endpoint."""
 from typing import Annotated, Literal, Union
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import Field
+
+from app.application.dto.plugin_dto import (
+    BatchRequestBase,
+    BatchResponseBase,
+    PluginDTO,
+    UserModelRunId,
+)
 
 
-class PredictInlineRequest(BaseModel):
-    model_config = ConfigDict(protected_namespaces=())
+class PredictInlineRequest(PluginDTO):
+    """Inline prediction request: one base64-encoded image."""
+
     mode: Literal["inline"] = "inline"
     image_base64: str = Field(..., description="Base64-encoded image (JPEG, PNG or BMP)")
-    mlflow_run_id: str = Field(default="", description="MLflow run ID for user-trained model")
+    mlflow_run_id: UserModelRunId = ""
 
 
-class PredictBatchRequest(BaseModel):
-    model_config = ConfigDict(protected_namespaces=())
-    mode: Literal["batch"] = "batch"
+class PredictBatchRequest(BatchRequestBase):
+    """Batch prediction request: ZIP of images."""
+
     data_path: str = Field(
         ..., description="Path to a ZIP file containing images inside the container"
     )
-    mlflow_run_id: str = ""
 
 
 PredictRequest = Annotated[
@@ -25,8 +33,9 @@ PredictRequest = Annotated[
 ]
 
 
-class PredictInlineResponse(BaseModel):
-    model_config = ConfigDict(protected_namespaces=())
+class PredictInlineResponse(PluginDTO):
+    """Inline prediction: predicted category and cereal with their probabilities."""
+
     model_id: str
     categoria: str
     cereal: str
@@ -36,11 +45,10 @@ class PredictInlineResponse(BaseModel):
     probabilidades_cereal: dict[str, float]
 
 
-class PredictBatchResponse(BaseModel):
-    model_config = ConfigDict(protected_namespaces=())
-    model_id: str
+class PredictBatchResponse(BatchResponseBase):
+    """Batch prediction: one result (or error) per image."""
+
     predictions: list[dict]
-    output_path: str | None = None
     mlflow_run_id: str = ""
     model_train_id: str = ""
 

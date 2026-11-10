@@ -1,5 +1,6 @@
 # scripts/review_pull_request.py
 # Purpose: Validate Pull Request (PR) rules according to project conventions.
+"""Validate Pull Request rules (branches, commits, changelog, version, repo) for the CI."""
 
 import os
 import re
@@ -7,16 +8,18 @@ import sys
 from typing import Dict, Any, Tuple
 
 # Centralized imports
-from git import get_pr_context
+from git import get_pr_context  # pylint: disable=no-name-in-module  # sibling git.py, not GitPython
 
-from ui import log_message, Colors, STATUS_COLORS  # Use shared UI module
+from ui import log_message, Colors, STATUS_COLORS  # pylint: disable=import-error  # shared UI module
 
 # --- CONFIGURATION ---
 REPO_ROOT = os.getcwd()
 MAIN_BRANCHES = ['master', 'develop', 'staging']
 WORK_BRANCHES = ['feature', 'fix', 'bugfix', 'hotfix', 'release']
 ALLOWED_BRANCH_TYPES = MAIN_BRANCHES + WORK_BRANCHES
-CONVENTIONAL_COMMIT_TYPES = {'feat', 'fix', 'build', 'chore', 'ci', 'docs', 'style', 'refactor', 'perf', 'test'}
+CONVENTIONAL_COMMIT_TYPES = {
+    'feat', 'fix', 'build', 'chore', 'ci', 'docs', 'style', 'refactor', 'perf', 'test'
+}
 CRITICAL_SEVERITY = 'Alta'
 MEDIUM_SEVERITY = 'Media'
 LOW_SEVERITY = 'Baja'
@@ -94,7 +97,10 @@ def check_branch_name_structure(branch: str) -> Tuple[bool, str]:
             # Structure: type/TICKET-description
             if re.match(r'^[A-Z0-9]+[0-9]{2}-[0-9]+-.*', name_part):
                 return True, f"Branch name '{branch}' follows the required structure."
-        return False, f"Work branch name '{branch}' does not follow the 'type/TICKET-description' structure."
+        return False, (
+            f"Work branch name '{branch}' does not follow the "
+            "'type/TICKET-description' structure."
+        )
 
     return False, f"Unknown branch type '{branch_type}' in '{branch}'."
 
@@ -137,7 +143,9 @@ def check_version_consistency(context: Dict[str, Any]) -> Tuple[bool, str]:
     if version_file == version_changelog:
         return True, f"Version {version_file} is consistent in .VERSION and changelog."
 
-    return False, f"Version inconsistency: .VERSION='{version_file}', changelog='v{version_changelog}'."
+    return False, (
+        f"Version inconsistency: .VERSION='{version_file}', changelog='v{version_changelog}'."
+    )
 
 
 def check_conventional_commits(context: Dict[str, Any]) -> Tuple[bool, str]:
@@ -181,15 +189,60 @@ def check_is_private_repo(context: Dict[str, Any]) -> Tuple[bool, str]:
 
 
 RULES = [
-    {"name": "Source Branch Type", "category": "PR Configuration", "critically": MEDIUM_SEVERITY, "func": check_source_branch_type},
-    {"name": "Source Branch Name", "category": "PR Configuration", "critically": MEDIUM_SEVERITY, "func": check_source_branch_name},
-    {"name": "Destination Branch Type", "category": "PR Configuration", "critically": MEDIUM_SEVERITY, "func": check_destination_branch_type},
-    {"name": "Destination Branch Name", "category": "PR Configuration", "critically": MEDIUM_SEVERITY, "func": check_destination_branch_name},
-    {"name": "Commit Format (Conventional)", "category": "Commits", "critically": MEDIUM_SEVERITY, "func": check_conventional_commits},
-    {"name": "Changelog Entry (README)", "category": "Files", "critically": LOW_SEVERITY, "func": check_readme_changelog_entry},
-    {"name": "Version Consistency", "category": "Files", "critically": CRITICAL_SEVERITY, "func": check_version_consistency},
-    {"name": "Repository Name", "category": "Repository Configuration", "critically": MEDIUM_SEVERITY, "func": check_repo_name},
-    {"name": "Repository Privacy", "category": "Repository Configuration", "critically": CRITICAL_SEVERITY, "func": check_is_private_repo},
+    {
+        "name": "Source Branch Type",
+        "category": "PR Configuration",
+        "critically": MEDIUM_SEVERITY,
+        "func": check_source_branch_type,
+    },
+    {
+        "name": "Source Branch Name",
+        "category": "PR Configuration",
+        "critically": MEDIUM_SEVERITY,
+        "func": check_source_branch_name,
+    },
+    {
+        "name": "Destination Branch Type",
+        "category": "PR Configuration",
+        "critically": MEDIUM_SEVERITY,
+        "func": check_destination_branch_type,
+    },
+    {
+        "name": "Destination Branch Name",
+        "category": "PR Configuration",
+        "critically": MEDIUM_SEVERITY,
+        "func": check_destination_branch_name,
+    },
+    {
+        "name": "Commit Format (Conventional)",
+        "category": "Commits",
+        "critically": MEDIUM_SEVERITY,
+        "func": check_conventional_commits,
+    },
+    {
+        "name": "Changelog Entry (README)",
+        "category": "Files",
+        "critically": LOW_SEVERITY,
+        "func": check_readme_changelog_entry,
+    },
+    {
+        "name": "Version Consistency",
+        "category": "Files",
+        "critically": CRITICAL_SEVERITY,
+        "func": check_version_consistency,
+    },
+    {
+        "name": "Repository Name",
+        "category": "Repository Configuration",
+        "critically": MEDIUM_SEVERITY,
+        "func": check_repo_name,
+    },
+    {
+        "name": "Repository Privacy",
+        "category": "Repository Configuration",
+        "critically": CRITICAL_SEVERITY,
+        "func": check_is_private_repo,
+    },
 ]
 
 
@@ -219,7 +272,7 @@ def main():
                 "message": message,
                 "critically": rule["critically"]
             })
-    except Exception as e:
+    except Exception as e:  # pylint: disable=broad-exception-caught  # any rule error aborts the CI step
         log_message(f"Unrecoverable error while executing rules: {e}", "ERROR")
         sys.exit(1)
 
@@ -234,7 +287,10 @@ def main():
         full_rule_text = f"{res['rule']:<35} (Critically: {res['critically']})"
         message = f"-> {res['message']}" if res['status'] == 'FAIL' else ""
 
-        print(f"  [{status_color}{res['status']:<4}{Colors.ENDC}] {full_rule_text:<55} {Colors.YELLOW}{message}{Colors.ENDC}")
+        print(
+            f"  [{status_color}{res['status']:<4}{Colors.ENDC}] {full_rule_text:<55} "
+            f"{Colors.YELLOW}{message}{Colors.ENDC}"
+        )
 
     # Final summary and exit status
     log_message("END OF REPORT", "HEADER")
@@ -243,10 +299,17 @@ def main():
         log_message(f"RESULT: FAILED. Found {critical_failures} critical error(s).", "ERROR")
         sys.exit(1)
     elif total_failures > MAX_FAILURES_ALLOWED:
-        log_message(f"RESULT: FAILED. Found {total_failures} failures. Exceeded threshold of {MAX_FAILURES_ALLOWED}.", "ERROR")
+        log_message(
+            f"RESULT: FAILED. Found {total_failures} failures. "
+            f"Exceeded threshold of {MAX_FAILURES_ALLOWED}.",
+            "ERROR",
+        )
         sys.exit(1)
     elif total_failures > 0:
-        log_message(f"RESULT: PASSED WITH WARNINGS. Found {total_failures} non-critical failure(s).", "WARNING")
+        log_message(
+            f"RESULT: PASSED WITH WARNINGS. Found {total_failures} non-critical failure(s).",
+            "WARNING",
+        )
     else:
         log_message("RESULT: PASSED. All rules were met.", "SUCCESS")
 

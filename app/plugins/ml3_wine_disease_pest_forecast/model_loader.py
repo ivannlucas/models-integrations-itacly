@@ -27,7 +27,7 @@ def _load_models(paths: list) -> list[Any]:
     """Load a list of Keras ``.keras`` checkpoints (self-contained architecture)."""
     # TensorFlow is imported lazily so the plugin modules stay light for unit tests.
     # pylint: disable=import-outside-toplevel,no-name-in-module
-    from tensorflow.keras.models import load_model
+    from tensorflow.keras.models import load_model  # pylint: disable=import-error
 
     return [load_model(_store.path(name)) for name in paths]
 
@@ -55,7 +55,7 @@ def load_user_artifacts(local_path: str) -> tuple[list[Any], Any, Any, list[str]
     ensemble output dimension matches the retrained models.
     """
     # pylint: disable=import-outside-toplevel,no-name-in-module
-    from tensorflow.keras.models import load_model
+    from tensorflow.keras.models import load_model  # pylint: disable=import-error
 
     models = [load_model(f"{local_path}/{name}") for name in MODEL_FILENAMES]
     scaler = joblib.load(f"{local_path}/{SCALER_FILENAME}")

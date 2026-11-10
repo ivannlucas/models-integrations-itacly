@@ -1,8 +1,10 @@
 """Unit tests for ArtifactStore — local_dir property, path resolution, and download."""
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 
+import app.infrastructure.artifact_store as store_mod
 from app.infrastructure.artifact_store import ARTIFACTS_ROOT, ArtifactStore, _file_needs_download
 
 
@@ -16,17 +18,16 @@ def test_local_dir_returns_correct_path():
 
 def test_path_returns_local_path_when_file_exists(tmp_path):
     """path() returns the correct Path when the file already exists locally."""
-    (tmp_path / "model.pkl").write_bytes(b"data")
-    store = ArtifactStore("my_model")
-    store._local_dir = tmp_path
-    assert store.path("model.pkl") == tmp_path / "model.pkl"
+    (tmp_path / "my_model").mkdir()
+    (tmp_path / "my_model" / "model.pkl").write_bytes(b"data")
+    store = ArtifactStore("my_model", root=tmp_path)
+    assert store.path("model.pkl") == tmp_path / "my_model" / "model.pkl"
 
 
 def test_path_raises_file_not_found_when_missing_and_no_s3(monkeypatch, tmp_path):
     """path() raises FileNotFoundError when the file is absent and STORAGE_BUCKET is unset."""
     monkeypatch.delenv("STORAGE_BUCKET", raising=False)
-    store = ArtifactStore("my_model")
-    store._local_dir = tmp_path
+    store = ArtifactStore("my_model", root=tmp_path)
     with pytest.raises(FileNotFoundError):
         store.path("missing.pkl")
 
@@ -66,11 +67,6 @@ def test_download_skips_slashless_folder_markers_of_the_s3_proxy(monkeypatch, tm
     """The platform's S3 proxy lists each uploaded folder as a 0-byte key without a trailing slash
     (real ml41 listing below). Downloading it as a file broke every nested path with
     FileExistsError, so ml41 could never load its checkpoints."""
-    from pathlib import Path
-    from unittest.mock import MagicMock
-
-    import app.infrastructure.artifact_store as store_mod
-
     prefix = "artifacts/fixed/ml41/"
     listing = {
         prefix + "vit_tiny_fan": 0,
@@ -84,7 +80,9 @@ def test_download_skips_slashless_folder_markers_of_the_s3_proxy(monkeypatch, tm
     s3.get_paginator.return_value.paginate.return_value = [
         {"Contents": [{"Key": k, "Size": v} for k, v in listing.items()]}
     ]
-    s3.download_file.side_effect = lambda bucket, key, path: Path(path).write_bytes(b"x" * listing[key])
+    s3.download_file.side_effect = (
+        lambda bucket, key, path: Path(path).write_bytes(b"x" * listing[key])
+    )
     monkeypatch.setattr(store_mod, "_build_s3_client", lambda: s3)
     monkeypatch.setenv("STORAGE_BUCKET", "xai")
     store = store_mod.ArtifactStore("ml41")

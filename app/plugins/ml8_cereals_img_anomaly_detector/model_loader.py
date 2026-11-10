@@ -1,9 +1,11 @@
+"""Artifact loader for ml8-cereals-img-anomaly-detector: multitask CNN checkpoint + label maps."""
 import logging
 
 import torch
-import torch.nn as nn
+from torch import nn
 from torchvision import models
 
+from app.domain.services.torch_device import safe_torch_device
 from app.infrastructure.artifact_store import ArtifactStore
 from app.plugins.ml8_cereals_img_anomaly_detector.constants import (
     ARTIFACT_FOLDER_NAME,
@@ -20,15 +22,7 @@ _store = ArtifactStore(ARTIFACT_FOLDER_NAME)
 
 def _safe_device() -> torch.device:
     """Return CUDA device only if it can actually execute model operations."""
-    if not torch.cuda.is_available():
-        return torch.device("cpu")
-    try:
-        probe = torch.nn.Conv2d(1, 1, 1).cuda()
-        probe(torch.zeros(1, 1, 4, 4).cuda())
-        return torch.device("cuda")
-    except Exception:
-        logger.warning("CUDA detectada pero no funcional para operaciones de red neuronal — usando CPU.")
-        return torch.device("cpu")
+    return safe_torch_device()
 
 
 class MultiTaskMobileNetV3Large(nn.Module):
@@ -53,6 +47,7 @@ class MultiTaskMobileNetV3Large(nn.Module):
         self.classifier_cereal = nn.Linear(num_features, num_cereals)
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """Return the (categoría, cereal) logits for the image batch *x*."""
         x = self.features(x)
         x = self.avgpool(x)
         x = torch.flatten(x, 1)
@@ -72,6 +67,7 @@ class _MultiTaskEfficientNetB0(nn.Module):
         self.classifier_cereal = nn.Linear(num_features, num_cereals)
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """Return the (categoría, cereal) logits for the image batch *x*."""
         x = self.features(x)
         x = self.avgpool(x)
         x = torch.flatten(x, 1)
@@ -90,6 +86,7 @@ class _MultiTaskResNet18(nn.Module):
         self.classifier_cereal = nn.Linear(num_features, num_cereals)
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """Return the (categoría, cereal) logits for the image batch *x*."""
         x = self.features(x)
         x = torch.flatten(x, 1)
         x = self.dropout(x)
@@ -124,8 +121,12 @@ def load_model_bundle() -> dict:
             "CATEGORY_NAMES/CEREAL_NAMES o las etiquetas saldrán mal.",
             MODEL_FILENAME,
         )
-    idx_to_class: dict = checkpoint.get("idx_to_class", {i: n for i, n in enumerate(CATEGORY_NAMES)})
-    idx_to_cereal: dict = checkpoint.get("idx_to_cereal", {i: n for i, n in enumerate(CEREAL_NAMES)})
+    idx_to_class: dict = checkpoint.get(
+        "idx_to_class", dict(enumerate(CATEGORY_NAMES))
+    )
+    idx_to_cereal: dict = checkpoint.get(
+        "idx_to_cereal", dict(enumerate(CEREAL_NAMES))
+    )
     # Las claves pueden llegar como str tras un round-trip JSON; normalizamos a int.
     idx_to_class = {int(k): v for k, v in idx_to_class.items()}
     idx_to_cereal = {int(k): v for k, v in idx_to_cereal.items()}

@@ -1,3 +1,4 @@
+"""Constantes de ml47: identificadores, artefactos, sensores e hiperparámetros."""
 import os
 
 MODEL_ID = "ml47-dairy-dnsl-pasteurization-fault-detection"

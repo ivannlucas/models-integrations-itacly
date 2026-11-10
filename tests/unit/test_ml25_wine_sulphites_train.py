@@ -8,13 +8,15 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from app.plugins.ml25_wine_sulphites.mlflow_utils import download_user_predictor_from_mlflow
+from app.plugins.ml25_wine_sulphites.model_loader import get_artifacts_dir
 from app.plugins.ml25_wine_sulphites.plugin import Ml25WineSulphitesPlugin
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 
-@pytest.fixture()
-def wine_csv(tmp_path: Path) -> Path:
+@pytest.fixture(name="wine_csv")
+def fixture_wine_csv(tmp_path: Path) -> Path:
     """Minimal wine-quality CSV (30 rows) sufficient for RF training."""
     rng = np.random.default_rng(42)
     n = 30
@@ -46,7 +48,7 @@ def _train(csv_path: Path, artifacts_dir: Path) -> dict:
     with patch(
         "app.plugins.ml25_wine_sulphites.model_loader.get_artifacts_dir",
         return_value=artifacts_dir,
-    ), patch("app.plugins.ml25_wine_sulphites.plugin.BaseMLflowTracker"):
+    ), patch("app.domain.services.mlflow_artifacts.BaseMLflowTracker"):
         return plugin.train(data_path=str(csv_path), mlflow_run_id="test-run-id")
 
 
@@ -65,7 +67,7 @@ def test_train_echoes_mlflow_run_id(wine_csv, tmp_path):
     with patch(
         "app.plugins.ml25_wine_sulphites.model_loader.get_artifacts_dir",
         return_value=tmp_path,
-    ), patch("app.plugins.ml25_wine_sulphites.plugin.BaseMLflowTracker") as tracker_cls:
+    ), patch("app.domain.services.mlflow_artifacts.BaseMLflowTracker") as tracker_cls:
         result = plugin.train(data_path=str(wine_csv), mlflow_run_id="run-abc123")
 
     assert result.mlflow_run_id == "run-abc123"
@@ -74,8 +76,8 @@ def test_train_echoes_mlflow_run_id(wine_csv, tmp_path):
 
 # ── contrato de columnas del CSV de entrenamiento ─────────────────────────────
 
-@pytest.fixture()
-def wine_csv_underscores(wine_csv: Path, tmp_path: Path) -> Path:
+@pytest.fixture(name="wine_csv_underscores")
+def fixture_wine_csv_underscores(wine_csv: Path, tmp_path: Path) -> Path:
     """El mismo CSV con los nombres de columna que documenta la plataforma.
 
     El esquema que la UI le ensena al usuario para modelo-25 usa guiones bajos
@@ -151,14 +153,14 @@ def _train_capturing_upload(csv_path: Path, artifacts_dir: Path):
     plugin.load = MagicMock()
     uploaded: dict[str, bytes] = {}
 
-    def _capture(local_dir, artifact_path):  # pylint: disable=unused-argument
+    def _capture(local_dir, **_kwargs):
         for f in Path(local_dir).iterdir():
             uploaded[f.name] = f.read_bytes()
 
     with patch(
         "app.plugins.ml25_wine_sulphites.model_loader.get_artifacts_dir",
         return_value=artifacts_dir,
-    ), patch("app.plugins.ml25_wine_sulphites.plugin.BaseMLflowTracker") as tracker_cls:
+    ), patch("app.domain.services.mlflow_artifacts.BaseMLflowTracker") as tracker_cls:
         tracker_cls.return_value.upload_artifacts.side_effect = _capture
         result = plugin.train(data_path=str(csv_path), mlflow_run_id="run-abc123")
     return plugin.load, uploaded, result
@@ -169,7 +171,7 @@ def test_train_never_writes_to_base_artifacts_dir(wine_csv, tmp_path):
     base_dir = tmp_path / "base"
     base_dir.mkdir()
     _train_capturing_upload(wine_csv, base_dir)
-    assert list(base_dir.iterdir()) == []
+    assert not list(base_dir.iterdir())
 
 
 def test_train_uploads_models_and_metadata_to_mlflow(wine_csv, tmp_path):
@@ -195,8 +197,6 @@ def test_retrained_model_round_trips_through_mlflow(wine_csv, tmp_path):
     them ("UnpicklingError: STACK_GLOBAL requires str"), so every prediction with a retrained
     modelo-25 failed. The other tests mock the whole download and never caught it.
     """
-    from app.plugins.ml25_wine_sulphites.mlflow_utils import download_user_predictor_from_mlflow
-
     _, uploaded, _ = _train_capturing_upload(wine_csv, tmp_path / "base")
 
     def _download(dest_dir, artifact_path):
@@ -206,9 +206,11 @@ def test_retrained_model_round_trips_through_mlflow(wine_csv, tmp_path):
             (model_dir / name).write_bytes(content)
         return str(model_dir)
 
-    with patch("app.plugins.ml25_wine_sulphites.mlflow_utils.BaseMLflowTracker") as tracker_cls:
+    with patch("app.domain.services.mlflow_artifacts.BaseMLflowTracker") as tracker_cls:
         tracker_cls.return_value.download_artifacts.side_effect = _download
-        model_qual, model_bound, metadata, temp_dir = download_user_predictor_from_mlflow("run-abc123")
+        model_qual, model_bound, metadata, temp_dir = download_user_predictor_from_mlflow(
+            "run-abc123"
+        )
 
     try:
         for model in (model_qual, model_bound):
@@ -222,7 +224,6 @@ def test_retrained_model_round_trips_through_mlflow(wine_csv, tmp_path):
 
 def test_get_artifacts_dir_points_to_ml25_wine_sulphites():
     """get_artifacts_dir() returns a path whose final component is 'ml25_wine_sulphites'."""
-    from app.plugins.ml25_wine_sulphites.model_loader import get_artifacts_dir
     assert get_artifacts_dir().name == "ml25_wine_sulphites"
 
 

@@ -3,12 +3,12 @@ from __future__ import annotations
 
 import logging
 import os
-import shutil
-import tempfile
+from functools import partial
 
 import joblib
 
-from app.domain.services.mlflow_tracker import BaseMLflowTracker, require_user_model
+from app.domain.services.mlflow_artifacts import download_run_artifacts
+from app.domain.services.mlflow_tracker import require_user_model
 from app.plugins.ml15_wine_ipi_price_forecast.constants import MODEL_FILENAME
 
 logger = logging.getLogger(__name__)
@@ -21,30 +21,21 @@ def download_user_model_from_mlflow(run_id: str):
     """Download a user-retrained artifact payload from MLflow.
 
     Returns (payload, temp_dir), or None if the download fails or the artifact is incomplete.
-    Caller MUST shutil.rmtree(temp_dir) after inference — use try/finally.
+    Caller MUST remove temp_dir after inference (``removing_dir``).
     """
-    tmp = tempfile.mkdtemp(prefix="mlflow_ml15_")
-    try:
-        local_path = BaseMLflowTracker(run_id).download_artifacts(tmp, artifact_path="model")
-        if not local_path:
-            shutil.rmtree(tmp, ignore_errors=True)
-            return None
+    return download_run_artifacts(run_id, partial(_load, run_id=run_id), prefix="mlflow_ml15_")
 
-        artifact_path = os.path.join(local_path, MODEL_FILENAME)
-        if not os.path.exists(artifact_path):
-            logger.error("MLflow run %s does not contain %s", run_id, MODEL_FILENAME)
-            shutil.rmtree(tmp, ignore_errors=True)
-            return None
 
-        payload = joblib.load(artifact_path)
-        missing = [key for key in _REQUIRED_PAYLOAD_KEYS if key not in payload]
-        if missing:
-            logger.error("MLflow run %s artifact is missing keys: %s", run_id, missing)
-            shutil.rmtree(tmp, ignore_errors=True)
-            return None
+def _load(local_path: str, *, run_id: str) -> dict | None:
+    """Load the payload from a downloaded ``model`` folder, or None if it is incomplete."""
+    artifact_path = os.path.join(local_path, MODEL_FILENAME)
+    if not os.path.exists(artifact_path):
+        logger.error("MLflow run %s does not contain %s", run_id, MODEL_FILENAME)
+        return None
 
-        logger.info("Downloaded user model from MLflow run_id=%s", run_id)
-        return payload, tmp
-    except BaseException:
-        shutil.rmtree(tmp, ignore_errors=True)
-        raise
+    payload = joblib.load(artifact_path)
+    missing = [key for key in _REQUIRED_PAYLOAD_KEYS if key not in payload]
+    if missing:
+        logger.error("MLflow run %s artifact is missing keys: %s", run_id, missing)
+        return None
+    return payload

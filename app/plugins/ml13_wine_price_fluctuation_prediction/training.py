@@ -138,7 +138,23 @@ def _split_trainval_test(df_features: pd.DataFrame) -> tuple[pd.DataFrame, pd.Da
     return df_features.iloc[:-TEST_SIZE].copy(), df_features.iloc[-TEST_SIZE:].copy()
 
 
-def walk_forward_cv(df_trainval: pd.DataFrame) -> dict:  # pylint: disable=too-many-locals
+def _fold_metrics(
+    x_df: pd.DataFrame, y: np.ndarray, tr: np.ndarray, va: np.ndarray,
+    per_model: dict[str, list[dict[str, float]]],
+) -> None:
+    """Fit the fold's scaler, LogReg and XGBoost on tr and append their metrics on va."""
+    y_tr, y_va = y[tr], y[va]
+    scaler = StandardScaler().fit(x_df.iloc[tr].values)
+    x_tr = scaler.transform(x_df.iloc[tr].values)
+    x_va = scaler.transform(x_df.iloc[va].values)
+
+    logreg = build_logistic_model().fit(x_tr, y_tr)
+    per_model["logreg"].append(compute_metrics(y_va, logreg.predict_proba(x_va)[:, 1]))
+    xgb = build_xgboost_model(scale_pos_weight=_scale_pos_weight(y_tr)).fit(x_tr, y_tr)
+    per_model["xgboost"].append(compute_metrics(y_va, xgb.predict_proba(x_va)[:, 1]))
+
+
+def walk_forward_cv(df_trainval: pd.DataFrame) -> dict:
     """training.py::train_with_walk_forward on the train+val block."""
     x_df = df_trainval[FEATURE_COLUMNS]
     y = df_trainval["target"].values.astype(int)
@@ -146,18 +162,10 @@ def walk_forward_cv(df_trainval: pd.DataFrame) -> dict:  # pylint: disable=too-m
 
     splits = adaptive_walk_forward_splits(len(x_df), y, N_FOLDS, GAP)
     for fold, (tr, va) in enumerate(splits, start=1):
-        y_tr, y_va = y[tr], y[va]
-        if len(np.unique(y_tr)) < 2:
+        if len(np.unique(y[tr])) < 2:
             logger.info("Fold %d: una sola clase en train, se omite", fold)
             continue
-        scaler = StandardScaler().fit(x_df.iloc[tr].values)
-        x_tr = scaler.transform(x_df.iloc[tr].values)
-        x_va = scaler.transform(x_df.iloc[va].values)
-
-        logreg = build_logistic_model().fit(x_tr, y_tr)
-        per_model["logreg"].append(compute_metrics(y_va, logreg.predict_proba(x_va)[:, 1]))
-        xgb = build_xgboost_model(scale_pos_weight=_scale_pos_weight(y_tr)).fit(x_tr, y_tr)
-        per_model["xgboost"].append(compute_metrics(y_va, xgb.predict_proba(x_va)[:, 1]))
+        _fold_metrics(x_df, y, tr, va, per_model)
 
     if not per_model["logreg"] or not per_model["xgboost"]:
         raise ValueError(

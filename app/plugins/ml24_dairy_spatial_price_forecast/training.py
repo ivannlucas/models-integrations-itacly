@@ -34,7 +34,6 @@ Plugin adaptations, all deliberate:
 * Artifacts are written to a temp dir that the caller publishes as the new base model version
   (and uploads to the MLflow run when given), never to artifacts/ directly.
 """
-# pylint: disable=line-too-long  # repo limit is 120 (.flake8), enforced by flake8
 from __future__ import annotations
 
 import json
@@ -84,6 +83,13 @@ from app.plugins.ml24_dairy_spatial_price_forecast.constants import (
 
 logger = logging.getLogger(__name__)
 
+# Private helpers of the delivered train.py, reused unchanged by train_horizon.
+# pylint: disable=protected-access
+_select_feature_blocks = vendor_train._select_feature_blocks
+_score_train_stage = vendor_train._score_train_stage
+_evaluate_stage = vendor_train._evaluate_stage
+# pylint: enable=protected-access
+
 
 @dataclass
 class HorizonResult:
@@ -128,7 +134,8 @@ def default_split_years(series: pd.DataFrame) -> tuple[int, int]:
     complete = sorted(int(year) for year, n in months.items() if n == 12)
     if not complete:
         raise ValueError(
-            f"La serie no tiene ningún año con los 12 meses del precio de '{ANCHOR_PRODUCT}': no se pueden "
+            f"La serie no tiene ningún año con los 12 meses del precio de '{ANCHOR_PRODUCT}': no "
+            f"se pueden "
             "fijar los años de validación y test."
         )
     return complete[-1] - 1, complete[-1]
@@ -152,7 +159,8 @@ def build_release_panels(series: pd.DataFrame, max_year: int) -> dict[str, pd.Da
     the round trip does not change any value, so the frames are passed directly.
     """
     anchor = build_product_panel(
-        series=series, anchor_product=ANCHOR_PRODUCT, context_products=[], include_spain=INCLUDE_SPAIN,
+        series=series, anchor_product=ANCHOR_PRODUCT, context_products=[],
+        include_spain=INCLUDE_SPAIN,
         min_year=ANCHOR_PANEL_MIN_YEAR, max_year=max_year, add_context_derivatives=False,
     )
     context = build_product_panel(
@@ -164,7 +172,7 @@ def build_release_panels(series: pd.DataFrame, max_year: int) -> dict[str, pd.Da
 
 
 def prepare_frame(config, horizon_cfg, panels, spatial_weights, monthly_exog):
-    """train.py::_prepare_frame with the panel/exogenous frames passed in instead of read from disk."""
+    """train.py::_prepare_frame with the panel/exogenous frames passed in, not read from disk."""
     training_cfg = config["training"]
     panel = panels[horizon_cfg["panel_key"]].copy()
     panel["period_dt"] = pd.to_datetime(panel["period_dt"])
@@ -195,7 +203,8 @@ def prepare_frame(config, horizon_cfg, panels, spatial_weights, monthly_exog):
         )
     anchor_feature_pool: list[str] = []
     if horizon_cfg.get("use_anchor_extra_metrics", False):
-        anchor_feature_pool = filter_anchor_extra_feature_cols(full_feature_cols, training_cfg["target_col"])
+        anchor_feature_pool = filter_anchor_extra_feature_cols(full_feature_cols,
+                                                               training_cfg["target_col"])
     context_feature_pool: list[str] = []
     if horizon_cfg.get("use_context_features", False):
         context_feature_pool = filter_context_feature_cols(
@@ -203,7 +212,10 @@ def prepare_frame(config, horizon_cfg, panels, spatial_weights, monthly_exog):
             panel_columns=panel.columns.tolist(),
             target_col=training_cfg["target_col"],
         )
-    return frame, base_feature_cols, categorical_cols, input_exog_lag_cols, anchor_feature_pool, context_feature_pool
+    return (
+        frame, base_feature_cols, categorical_cols, input_exog_lag_cols, anchor_feature_pool,
+        context_feature_pool,
+    )
 
 
 def _split(frame: pd.DataFrame, training_cfg: dict) -> dict[str, pd.DataFrame]:
@@ -225,9 +237,11 @@ def _check_splits(horizon: int, parts: dict[str, pd.DataFrame], training_cfg: di
     empty = [name for name in ("train", "validation", "test") if parts[name].empty]
     if empty:
         raise ValueError(
-            f"h={horizon}: particiones vacías {empty}. El CSV debe cubrir las ventanas de validación "
+            f"h={horizon}: particiones vacías {empty}. El CSV debe cubrir las ventanas de "
+            f"validación "
             f"({training_cfg['validation_start']}..{training_cfg['validation_end']}) y test "
-            f"({training_cfg['test_start']}..{training_cfg['test_end']}) por fecha objetivo, además del "
+            f"({training_cfg['test_start']}..{training_cfg['test_end']}) por fecha objetivo, "
+            f"además del "
             "histórico previo con el retraso de publicación de 12 meses."
         )
 
@@ -244,7 +258,8 @@ def _stage_metrics(metrics_df: pd.DataFrame) -> dict:
     }
 
 
-def train_final_artifact(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
+# pylint: disable-next=too-many-arguments,too-many-positional-arguments,too-many-locals
+def train_final_artifact(  # signature and body mirror train.py::_train_final_artifact
     frame, base_feature_cols, categorical_cols, selection, horizon_cfg, config,
 ):
     """train.py::_train_final_artifact, returning the model and metadata instead of saving them."""
@@ -257,7 +272,9 @@ def train_final_artifact(  # pylint: disable=too-many-arguments,too-many-positio
         selected_anchor_features=selected_anchor,
         selected_context_features=selected_context,
         selected_exog=selected_exog,
-        add_selected_exog_missing_indicators=bool(training_cfg.get("add_selected_exog_missing_indicators", False)),
+        add_selected_exog_missing_indicators=bool(
+            training_cfg.get("add_selected_exog_missing_indicators", False)
+        ),
     )
     (full_train_view,), imputation_report = apply_missing_value_strategy(
         dfs=[full_train_view],
@@ -277,7 +294,8 @@ def train_final_artifact(  # pylint: disable=too-many-arguments,too-many-positio
             full_train_view, feature_cols, categorical_cols, training_cfg,
         )
     model = build_model(training_cfg)
-    model.fit(full_train_view[feature_cols], full_train_view["y_t_plus_h"], cat_features=categorical_cols)
+    model.fit(full_train_view[feature_cols], full_train_view["y_t_plus_h"],
+              cat_features=categorical_cols)
     metadata = {
         "model_id": ORIGINAL_MODEL_NAME,
         "model_name": ORIGINAL_MODEL_NAME,
@@ -291,7 +309,9 @@ def train_final_artifact(  # pylint: disable=too-many-arguments,too-many-positio
         "selected_anchor_features": selected_anchor,
         "selected_context_features": selected_context,
         "selected_exog": selected_exog,
-        "selected_exog_missing_indicators": bool(training_cfg.get("add_selected_exog_missing_indicators", False)),
+        "selected_exog_missing_indicators": bool(
+            training_cfg.get("add_selected_exog_missing_indicators", False)
+        ),
         "exog_lags": [int(lag) for lag in horizon_cfg.get("exog_lags", [1, 2, 3, 6])],
         "publication_lag_months": int(training_cfg.get("publication_lag_months", 0)),
         "include_target_history": bool(training_cfg.get("include_target_history", True)),
@@ -328,43 +348,47 @@ def train_horizon(  # pylint: disable=too-many-locals  # faithful port of train_
     parts = _split(frame, training_cfg)
     _check_splits(horizon, parts, training_cfg)
 
-    sel_val = vendor_train._select_feature_blocks(  # pylint: disable=protected-access
+    sel_val = _select_feature_blocks(
         parts["train"], config, horizon_cfg, exog_pool, anchor_pool, context_pool,
     )
     # Refit explicitly for train metrics using the selected validation-stage feature set.
     (train_view,), train_feature_cols, _ = materialize_selected_feature_views(
         dfs=[parts["train"]], base_feature_cols=base_cols, selected_anchor_features=sel_val[0],
         selected_context_features=sel_val[1], selected_exog=sel_val[2],
-        add_selected_exog_missing_indicators=bool(training_cfg.get("add_selected_exog_missing_indicators", False)),
+        add_selected_exog_missing_indicators=bool(
+            training_cfg.get("add_selected_exog_missing_indicators", False)
+        ),
     )
     train_model_stage = build_model(training_cfg)
     (train_view,), _ = apply_missing_value_strategy(
         dfs=[train_view], feature_cols=train_feature_cols, categorical_cols=cat_cols,
         training_cfg=training_cfg, entity_col=training_cfg["entity_col"],
     )
-    train_model_stage.fit(train_view[train_feature_cols], train_view["y_t_plus_h"], cat_features=cat_cols)
-    train_metrics, _ = vendor_train._score_train_stage(  # pylint: disable=protected-access
+    train_model_stage.fit(train_view[train_feature_cols], train_view["y_t_plus_h"],
+                          cat_features=cat_cols)
+    train_metrics, _ = _score_train_stage(
         train_df=train_view, feature_cols=train_feature_cols, categorical_cols=cat_cols,
         model=train_model_stage, selected_anchor=sel_val[0], selected_context=sel_val[1],
         selected_exog=sel_val[2], config=config,
     )
-    valid_metrics, _, valid_meta = vendor_train._evaluate_stage(  # pylint: disable=protected-access
+    valid_metrics, _, valid_meta = _evaluate_stage(
         fit_df=parts["train"], score_df=parts["validation"], split_name="validation",
         base_feature_cols=base_cols, categorical_cols=cat_cols, selected_anchor=sel_val[0],
         selected_context=sel_val[1], selected_exog=sel_val[2], config=config,
     )
-    sel_test = vendor_train._select_feature_blocks(  # pylint: disable=protected-access
+    sel_test = _select_feature_blocks(
         parts["train_valid"], config, horizon_cfg, exog_pool, anchor_pool, context_pool,
     )
-    test_metrics, _, test_meta = vendor_train._evaluate_stage(  # pylint: disable=protected-access
+    test_metrics, _, test_meta = _evaluate_stage(
         fit_df=parts["train_valid"], score_df=parts["test"], split_name="test",
         base_feature_cols=base_cols, categorical_cols=cat_cols, selected_anchor=sel_test[0],
         selected_context=sel_test[1], selected_exog=sel_test[2], config=config,
     )
-    sel_final = vendor_train._select_feature_blocks(  # pylint: disable=protected-access
+    sel_final = _select_feature_blocks(
         frame, config, horizon_cfg, exog_pool, anchor_pool, context_pool,
     )
-    model, metadata = train_final_artifact(frame, base_cols, cat_cols, sel_final, horizon_cfg, config)
+    model, metadata = train_final_artifact(frame, base_cols, cat_cols, sel_final, horizon_cfg,
+                                           config)
     valid_meta.pop("model")
     test_meta.pop("model")
     return HorizonResult(
@@ -380,7 +404,7 @@ def train_horizon(  # pylint: disable=too-many-locals  # faithful port of train_
     )
 
 
-def train_spatial_price_model(  # pylint: disable=too-many-locals
+def train_spatial_price_model(
     series: pd.DataFrame,
     reference: dict,
     *,
@@ -391,7 +415,8 @@ def train_spatial_price_model(  # pylint: disable=too-many-locals
     """Retrain the three horizons from scratch with the AI team's procedure."""
     if test_year != validation_year + 1:
         raise ValueError(
-            f"test_year ({test_year}) debe ser validation_year + 1 ({validation_year + 1}), como en "
+            f"test_year ({test_year}) debe ser validation_year + 1 ({validation_year + 1}), como "
+            f"en "
             "config.yaml (validación 2019, test 2020)."
         )
     series = preprocessing.validate_series(series)
@@ -401,22 +426,29 @@ def train_spatial_price_model(  # pylint: disable=too-many-locals
     panels = build_release_panels(series, max_year=test_year)
     result = TrainingResult(task_type=resolved_task_type)
     for horizon_cfg in HORIZONS_CFG:
-        logger.info("ml24 /train: horizonte h=%s (%s)", horizon_cfg["horizon_months"], resolved_task_type)
+        logger.info("ml24 /train: horizonte h=%s (%s)", horizon_cfg["horizon_months"],
+                    resolved_task_type)
         result.horizons.append(
-            train_horizon(horizon_cfg, config, panels, reference["spatial_weights"], reference["exog"])
+            train_horizon(horizon_cfg, config, panels, reference["spatial_weights"],
+                          reference["exog"])
         )
     result.training_time_s = round(time.perf_counter() - start, 2)
-    flat: dict[str, Any] = {}
-    for item in result.horizons:
-        for split, values in item.metrics.items():
-            for key, value in values.items():
-                flat[f"h{item.horizon}_{split}_{key}"] = value
-    result.metrics = flat
+    result.metrics = _flat_metrics(result.horizons)
     return result
 
 
+def _flat_metrics(horizons: list[HorizonResult]) -> dict[str, Any]:
+    """{h<H>_<split>_<metric>: value} for every horizon, split and metric (MLflow/version.json)."""
+    flat: dict[str, Any] = {}
+    for item in horizons:
+        for split, values in item.metrics.items():
+            for key, value in values.items():
+                flat[f"h{item.horizon}_{split}_{key}"] = value
+    return flat
+
+
 def save_training_artifacts(directory: Path, result: TrainingResult) -> None:
-    """Write the same layout as the base artifacts (flat): manifest, .cbm and metadata per horizon."""
+    """Write the base artifacts' (flat) layout: manifest, .cbm and metadata per horizon."""
     directory.mkdir(parents=True, exist_ok=True)
     manifest_horizons = []
     for item in result.horizons:
@@ -445,7 +477,8 @@ def save_training_artifacts(directory: Path, result: TrainingResult) -> None:
         json.dump(result.metrics, fh, indent=2)
 
 
-def save_base_reference_data(directory: Path, series: pd.DataFrame, exog_csv: str | Path | None) -> None:
+def save_base_reference_data(directory: Path, series: pd.DataFrame,
+                             exog_csv: str | Path | None) -> None:
     """Write the context data a new base version serves predictions from.
 
     The series is the training CSV restricted to the five products the panels use (exactly what

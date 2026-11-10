@@ -1,10 +1,13 @@
-from typing import Annotated, Any, Literal, Union
+"""Pydantic DTOs for the ml41 acoustic anomaly ``/predict`` endpoint."""
+from typing import Annotated, Literal, Union
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import Field
+
+from app.application.dto.plugin_dto import BatchRequestBase, BatchResponseBase, PluginDTO
 
 
-class PredictInlineRequest(BaseModel):
-    model_config = ConfigDict(protected_namespaces=())
+class PredictInlineRequest(PluginDTO):
+    """Inline request: one base64 WAV plus the machine combination to score it with."""
     mode: Literal["inline"] = "inline"
     audio_base64: str = Field(..., description="Base64-encoded WAV recording of the machine")
     machine: Literal["fan", "pump", "slider", "valve"] = Field(
@@ -24,11 +27,13 @@ class PredictInlineRequest(BaseModel):
         default=None,
         description="Override the trained decision threshold for maha_score (advanced use)",
     )
-    mlflow_run_id: str = Field(default="", description="MLflow run ID for a user-trained checkpoint")
+    mlflow_run_id: str = Field(
+        default="", description="MLflow run ID for a user-trained checkpoint"
+    )
 
 
-class PredictInlineResponse(BaseModel):
-    model_config = ConfigDict(protected_namespaces=())
+class PredictInlineResponse(PluginDTO):
+    """Inline response: anomaly scores and predicted label for one WAV."""
     model_id: str
     machine: str
     machine_id: str
@@ -36,14 +41,15 @@ class PredictInlineResponse(BaseModel):
     mse_score: float = Field(
         ..., description="Reconstruction MSE — stochastic across runs (~5-6%), informational only"
     )
-    maha_score: float = Field(..., description="Mahalanobis distance in PCA latent space (deterministic)")
+    maha_score: float = Field(
+        ..., description="Mahalanobis distance in PCA latent space (deterministic)"
+    )
     predicted_label: int = Field(..., description="0 = normal, 1 = anomalous")
     threshold_used: float
 
 
-class PredictBatchRequest(BaseModel):
-    model_config = ConfigDict(protected_namespaces=())
-    mode: Literal["batch"] = "batch"
+class PredictBatchRequest(BatchRequestBase):
+    """Batch request: ZIP with manifest.csv plus the referenced WAV files."""
     data_path: str = Field(
         ...,
         description=(
@@ -51,18 +57,14 @@ class PredictBatchRequest(BaseModel):
             "machine_id,snr) plus the referenced WAV files"
         ),
     )
-    mlflow_run_id: str = ""
     threshold: float | None = Field(
         default=None,
         description="Optional decision threshold override for every WAV in this batch",
     )
 
 
-class PredictBatchResponse(BaseModel):
-    model_config = ConfigDict(protected_namespaces=())
-    model_id: str
-    predictions: list[dict[str, Any]]
-    output_path: str | None = None
+class PredictBatchResponse(BatchResponseBase):
+    """Batch response: one prediction dict per WAV in the manifest."""
 
 
 PredictRequest = Annotated[

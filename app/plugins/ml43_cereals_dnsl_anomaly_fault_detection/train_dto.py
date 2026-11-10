@@ -1,16 +1,20 @@
-from pydantic import BaseModel, ConfigDict, Field
+"""Pydantic DTOs for the ml43-cereals-dnsl-anomaly-fault-detection /train endpoint."""
+from pydantic import Field
 
-from app.application.dto.train_dto import MlflowRunId
-
-
-class TrainRequest(BaseModel):
-    model_config = ConfigDict(protected_namespaces=())
-    data_path: str = Field(..., description="CSV con columnas de sensor + fault_name (opcional cycle_id/timestamp)")
-    mlflow_run_id: MlflowRunId
+from app.application.dto.plugin_dto import PluginDTO, TrainRequestBase
 
 
-class TrainResponse(BaseModel):
-    model_config = ConfigDict(protected_namespaces=())
+class TrainRequest(TrainRequestBase):
+    """Training request: CSV with sensor columns + fault_name."""
+
+    data_path: str = Field(
+        ..., description="CSV con columnas de sensor + fault_name (opcional cycle_id/timestamp)"
+    )
+
+
+class TrainResponse(PluginDTO):
+    """Training result: test-split metrics, threshold, split sizes and MLflow run."""
+
     detail: str
     accuracy: float
     fallo_auc: float

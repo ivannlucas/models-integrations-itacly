@@ -26,8 +26,10 @@ from app.plugins.ml41_meat_curing_machinery_acoustic_anomaly.constants import (
 )
 
 
+# pylint: disable-next=too-many-arguments  # the original's STFT parameters, all defaulted
 def wav_to_logmel(
     wav_path: str,
+    *,
     sr: int = AUDIO_SR,
     n_mels: int = N_MELS,
     win_length: int = WIN_LENGTH,
@@ -54,9 +56,9 @@ def wav_to_logmel(
     )
     log_mel = librosa.power_to_db(mel, ref=np.max).astype(np.float32)  # (n_mels, T)
 
-    T = log_mel.shape[1]
-    if T < target_frames:
-        pad = target_frames - T
+    n_frames = log_mel.shape[1]
+    if n_frames < target_frames:
+        pad = target_frames - n_frames
         log_mel = np.pad(log_mel, ((0, 0), (0, pad)), mode="reflect")
     else:
         log_mel = log_mel[:, :target_frames]

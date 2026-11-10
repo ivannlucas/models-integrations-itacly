@@ -6,24 +6,30 @@ Optimize mode (model_key="optimize") recommends (T_serv, Delta_P, Regeneration_p
 by static policy, adaptive GA or hybrid (default), as in the delivered
 realtime_decision_pipeline.
 
-Attribute/variable names like _scaler_X intentionally mirror the original codebase.
+Response field names like recommended_T_serv intentionally mirror the original codebase.
 """
-# pylint: disable=invalid-name
 from __future__ import annotations
 
+import json
 import logging
 import os
-import shutil
-from datetime import datetime, timezone
 from typing import Any
 
+import joblib
 import pandas as pd
 import torch
 
-from app.application.dto.stats_dto import InputField, OutputField, RuntimeStats, StatsResponse
+from app.application.dto.stats_dto import InputField, OutputField, StatsResponse
 from app.domain.ports.model_plugin_port import ModelPluginPort
-from app.domain.services.exceptions import ModelNotLoadedError, ModelPersistenceError
-from app.domain.services.mlflow_tracker import BaseMLflowTracker
+from app.domain.services.batch_rows import row_error_capture
+from app.domain.services.mlflow_artifacts import (
+    add_mlflow_run_to_stats,
+    removing_dir,
+    require_train_tracker,
+    upload_model_to_mlflow,
+)
+from app.domain.services.plugin_runtime import PluginRuntimeMixin
+from app.domain.services.xai_values import xai_feature_values
 from app.infrastructure.artifact_store import local_file_path
 from app.plugins.ml36_dairy_dnl_co2_emissions_optimizer.constants import (
     BASE_FEATURES,
@@ -71,55 +77,57 @@ from app.plugins.ml36_dairy_dnl_co2_emissions_optimizer.training import train_mo
 logger = logging.getLogger(__name__)
 
 
-def _xai_values_from_features(data: dict) -> dict[str, float] | None:
-    """Build xai_feature_values from a predict_batch row dict.
-
-    Without this, predict_batch rows only carry row/T_out_pred/CO2_emissions_pred —
-    the platform's XAI-context builder would be left with zero input features and
-    silently skip the explain service (same fix as ml34/ml35).
-    """
-    xai: dict[str, float] = {}
-    for f in BASE_FEATURES:
-        val = data.get(f)
-        if val is not None and pd.notna(val):
-            try:
-                xai[f] = float(val)
-            except (TypeError, ValueError):
-                pass
-    return xai or None
-
-
 def _present(value: Any) -> bool:
     """True when a CSV/DTO value is neither None nor NaN."""
     return value is not None and not pd.isna(value)
 
 
-class Ml36DairyDnlCo2EmissionsOptimizerPlugin(ModelPluginPort):
+def _decision_mode(features: dict) -> str:
+    """The requested decision mode (default hybrid), validated against DECISION_MODES."""
+    decision_mode = str(features.get("decision_mode") or DEFAULT_DECISION_MODE).lower()
+    if decision_mode not in DECISION_MODES:
+        raise ValueError(
+            f"decision_mode debe ser uno de {DECISION_MODES}, recibido: {decision_mode!r}"
+        )
+    return decision_mode
+
+
+def _compare_with_current(
+    bundle: tuple, context: dict, current: list[float] | None, opt_co2: float
+) -> dict:
+    """``current_CO2_pred``/``current_T_out_pred``/``co2_saving_vs_current`` of the response.
+
+    All three are None when the row does not carry the 3 current setpoints.
+    """
+    current_co2 = current_t_out = saving_vs_current = None
+    if current is not None:
+        current_co2, current_t_out = predict_scenario(
+            *bundle, context, current)
+        saving_vs_current = round(current_co2 - opt_co2, 4)
+        current_co2, current_t_out = round(current_co2, 4), round(current_t_out, 4)
+    return {
+        "current_CO2_pred": current_co2,
+        "current_T_out_pred": current_t_out,
+        "co2_saving_vs_current": saving_vs_current,
+    }
+
+
+class Ml36DairyDnlCo2EmissionsOptimizerPlugin(PluginRuntimeMixin, ModelPluginPort):
     """MLP digital twin + DEAP per-instance GA for pasteurization setpoints."""
 
     def __init__(self) -> None:
         self._model: Any = None
-        self._scaler_X: Any = None
-        self._scaler_Y: Any = None
+        self._scaler_x: Any = None
+        self._scaler_y: Any = None
         self._config: dict | None = None
         self._policy: list[float] | None = None
-        self._predict_count: int = 0
-        self._last_predict_at: str | None = None
 
     def load(self) -> None:
-        self._model, self._scaler_X, self._scaler_Y, self._config, self._policy = load_artifacts()
+        self._model, self._scaler_x, self._scaler_y, self._config, self._policy = load_artifacts()
         logger.info("Ml36DairyDnlCo2EmissionsOptimizerPlugin loaded: %s", MODEL_ID)
 
     def is_loaded(self) -> bool:
         return self._model is not None
-
-    def _require_loaded(self) -> None:
-        if self._model is None:
-            raise ModelNotLoadedError("El modelo no está cargado.")
-
-    def _record(self) -> None:
-        self._predict_count += 1
-        self._last_predict_at = datetime.now(tz=timezone.utc).isoformat()
 
     def _resolve_model(self, mlflow_run_id: str) -> tuple[tuple, str | None]:
         """(model, scaler_X, scaler_Y) for this request and the temp dir to remove afterwards.
@@ -129,9 +137,11 @@ class Ml36DairyDnlCo2EmissionsOptimizerPlugin(ModelPluginPort):
         """
         self._require_loaded()  # the GA policy always comes from the base artifacts
         if not mlflow_run_id:
-            return (self._model, self._scaler_X, self._scaler_Y), None
+            return (self._model, self._scaler_x, self._scaler_y), None
         logger.info("Using user model from MLflow run_id=%s", mlflow_run_id)
-        model, scaler_x, scaler_y, _config, temp_dir = download_user_model_from_mlflow(mlflow_run_id)
+        model, scaler_x, scaler_y, _config, temp_dir = download_user_model_from_mlflow(
+            mlflow_run_id
+        )
         return (model, scaler_x, scaler_y), temp_dir
 
     # ── predict_inline ────────────────────────────────────────────────────────
@@ -146,16 +156,13 @@ class Ml36DairyDnlCo2EmissionsOptimizerPlugin(ModelPluginPort):
     ) -> PredictInlineResponse | PredictOptimizeResponse:
         """Dispatch to MLP predict or GA optimize based on model_key."""
         bundle, user_temp_dir = self._resolve_model(mlflow_run_id)
-        try:
+        with removing_dir(user_temp_dir):
             if model_key == "optimize":
                 result = self._run_optimize(features, bundle)
             else:
                 result = self._run_predict(features, bundle)
             self._record()
             return result
-        finally:
-            if user_temp_dir:
-                shutil.rmtree(user_temp_dir, ignore_errors=True)
 
     @staticmethod
     def _run_predict(features: dict, bundle: tuple) -> PredictInlineResponse:
@@ -174,9 +181,7 @@ class Ml36DairyDnlCo2EmissionsOptimizerPlugin(ModelPluginPort):
 
     def _run_optimize(self, features: dict, bundle: tuple) -> PredictOptimizeResponse:
         """Static / adaptive / hybrid decision for one context row (deterministic per seed)."""
-        decision_mode = str(features.get("decision_mode") or DEFAULT_DECISION_MODE).lower()
-        if decision_mode not in DECISION_MODES:
-            raise ValueError(f"decision_mode debe ser uno de {DECISION_MODES}, recibido: {decision_mode!r}")
+        decision_mode = _decision_mode(features)
         seed = int(features.get("seed", DEFAULT_ROW_SEED))
         context = {c: float(features[c]) for c in CONTEXT_COLS}
 
@@ -184,16 +189,14 @@ class Ml36DairyDnlCo2EmissionsOptimizerPlugin(ModelPluginPort):
         if all(_present(features.get(g)) for g in GENE_ORDER):
             current = [float(features[g]) for g in GENE_ORDER]
 
-        policy = self._policy
         policy_co2, policy_t_out = predict_scenario(
-            *bundle, context, policy)
+            *bundle, context, self._policy)
 
-        selected = list(policy)
+        selected = list(self._policy)
         used_adaptive = decision_mode in ("adaptive", "hybrid")
         if used_adaptive:
-            seeds = [list(policy)] + ([current] if current else [])
             selected = run_adaptive_ga(
-                *bundle, context, seeds, seed)
+                *bundle, context, [list(self._policy)] + ([current] if current else []), seed)
 
         opt_co2, opt_t_out = predict_scenario(
             *bundle, context, selected)
@@ -204,16 +207,14 @@ class Ml36DairyDnlCo2EmissionsOptimizerPlugin(ModelPluginPort):
         feasible = opt_t_out >= T_OUT_MIN
         if not feasible:
             logger.warning(
-                "optimize — recomendación con T_out=%.2f °C < %.1f °C (devuelta sin rechazo) para %s",
-                opt_t_out, T_OUT_MIN, context,
+                "optimize — recomendación con T_out=%.2f °C < %.1f °C (devuelta sin rechazo) "
+                "para %s",
+                opt_t_out,
+                T_OUT_MIN,
+                context,
             )
 
-        current_co2 = current_t_out = saving_vs_current = None
-        if current is not None:
-            current_co2, current_t_out = predict_scenario(
-                *bundle, context, current)
-            saving_vs_current = round(current_co2 - opt_co2, 4)
-            current_co2, current_t_out = round(current_co2, 4), round(current_t_out, 4)
+        vs_current = _compare_with_current(bundle, context, current, opt_co2)
 
         logger.info(
             "optimize done — mode=%s seed=%d setpoints=(%.2f, %.3f, %.2f) CO2=%.3f T_out=%.2f",
@@ -230,15 +231,13 @@ class Ml36DairyDnlCo2EmissionsOptimizerPlugin(ModelPluginPort):
             recommended_CO2_pred=round(opt_co2, 4),
             recommended_T_out_pred=round(opt_t_out, 4),
             recommended_factible=feasible,
-            policy_T_serv=round(policy[0], 4),
-            policy_Delta_P=round(policy[1], 4),
-            policy_Regeneration_perc=round(policy[2], 4),
+            policy_T_serv=round(self._policy[0], 4),
+            policy_Delta_P=round(self._policy[1], 4),
+            policy_Regeneration_perc=round(self._policy[2], 4),
             policy_CO2_pred=round(policy_co2, 4),
             policy_T_out_pred=round(policy_t_out, 4),
             co2_saving_vs_policy=round(policy_co2 - opt_co2, 4),
-            current_CO2_pred=current_co2,
-            current_T_out_pred=current_t_out,
-            co2_saving_vs_current=saving_vs_current,
+            **vs_current,
         )
 
     # ── predict_batch ─────────────────────────────────────────────────────────
@@ -252,7 +251,7 @@ class Ml36DairyDnlCo2EmissionsOptimizerPlugin(ModelPluginPort):
         decision per CSV row (reusing _run_optimize), anything else runs the MLP.
         """
         bundle, user_temp_dir = self._resolve_model(mlflow_run_id)
-        try:
+        with removing_dir(user_temp_dir):
             with local_file_path(data_path) as local_path:
                 df = pd.read_csv(local_path)
 
@@ -266,10 +265,9 @@ class Ml36DairyDnlCo2EmissionsOptimizerPlugin(ModelPluginPort):
                 "predict_batch done — %d rows, model_key=%s, mlflow=%s",
                 len(predictions), model_key or "(estimate)", bool(mlflow_run_id),
             )
-            return PredictBatchResponse(model_id=MODEL_ID, predictions=predictions, output_path=None)
-        finally:
-            if user_temp_dir:
-                shutil.rmtree(user_temp_dir, ignore_errors=True)
+            return PredictBatchResponse(
+                model_id=MODEL_ID, predictions=predictions, output_path=None
+            )
 
     def _predict_batch_estimate(self, df: pd.DataFrame, bundle: tuple) -> list[dict]:
         """MLP digital-twin inference, one CSV row = one sample."""
@@ -278,18 +276,15 @@ class Ml36DairyDnlCo2EmissionsOptimizerPlugin(ModelPluginPort):
             raise ValueError(f"CSV falta columnas requeridas: {missing}")
         predictions: list[dict] = []
         for idx, row in df.iterrows():
-            try:
+            with row_error_capture(predictions, {"row": int(idx)}, what=f"fila {idx}"):
                 row_dict = row.to_dict()
                 pred = self._run_predict(row_dict, bundle)
                 predictions.append({
                     "row": int(idx),
                     "T_out_pred": pred.T_out_pred,
                     "CO2_emissions_pred": pred.CO2_emissions_pred,
-                    "xai_feature_values": _xai_values_from_features(row_dict),
+                    "xai_feature_values": xai_feature_values(row_dict, BASE_FEATURES) or None,
                 })
-            except Exception as exc:  # pylint: disable=broad-exception-caught
-                logger.warning("Error en fila %s: %s", idx, exc)
-                predictions.append({"row": int(idx), "error": str(exc)})
         return predictions
 
     def _predict_batch_optimize(self, df: pd.DataFrame, bundle: tuple) -> list[dict]:
@@ -306,7 +301,7 @@ class Ml36DairyDnlCo2EmissionsOptimizerPlugin(ModelPluginPort):
             raise ValueError(f"CSV falta columnas requeridas: {missing}")
         predictions: list[dict] = []
         for idx, row in df.iterrows():
-            try:
+            with row_error_capture(predictions, {"row": int(idx)}, what=f"fila {idx} (optimize)"):
                 features = {c: float(row[c]) for c in CONTEXT_COLS}
                 features["seed"] = (
                     int(row["seed"]) if "seed" in df.columns and _present(row["seed"])
@@ -320,9 +315,6 @@ class Ml36DairyDnlCo2EmissionsOptimizerPlugin(ModelPluginPort):
                 pred = self._run_optimize(features, bundle).model_dump()
                 pred.update({"row": int(idx), **{c: features[c] for c in CONTEXT_COLS}})
                 predictions.append(pred)
-            except Exception as exc:  # pylint: disable=broad-exception-caught
-                logger.warning("Error en fila %s (optimize): %s", idx, exc)
-                predictions.append({"row": int(idx), "error": str(exc)})
         return predictions
 
     # ── train ─────────────────────────────────────────────────────────────────
@@ -335,10 +327,7 @@ class Ml36DairyDnlCo2EmissionsOptimizerPlugin(ModelPluginPort):
         scalers live only in their MLflow run (predict with that mlflow_run_id); the served model
         and its artifacts are never replaced.
         """
-        import json  # pylint: disable=import-outside-toplevel
-        import tempfile  # pylint: disable=import-outside-toplevel
-        import joblib  # pylint: disable=import-outside-toplevel
-
+        tracker = require_train_tracker(mlflow_run_id)
         with local_file_path(data_path) as local_path:
             df = pd.read_csv(local_path)
         result = train_model(df)
@@ -349,29 +338,28 @@ class Ml36DairyDnlCo2EmissionsOptimizerPlugin(ModelPluginPort):
             for name in ("mae", "mse", "r2")
         }
 
-        mlflow_tmp = tempfile.mkdtemp(prefix="ml36_mlflow_")
-        try:
-            tracker = BaseMLflowTracker(mlflow_run_id)
+        def _log_and_write(model_dir: str) -> None:
+            # Params/metrics are logged here so that an MLflow failure while logging them is
+            # reported like a failed upload (ModelPersistenceError), as before.
             tracker.log_params({
                 "epochs_max": TRAIN_EPOCHS, "lr": TRAIN_LR, "optimizer": "Adam",
                 "batch_size": TRAIN_BATCH_SIZE, "patience": TRAIN_PATIENCE,
             })
             tracker.log_metrics({**flat, "n_train": result["n_train"], "n_val": result["n_val"],
                                  "n_test": result["n_test"], "epochs_run": result["epochs_run"]})
-            torch.save(result["model"].state_dict(), os.path.join(mlflow_tmp, MODEL_FILENAME))
-            with open(os.path.join(mlflow_tmp, MODEL_CONFIG_FILENAME), "w", encoding="utf-8") as f:
+            torch.save(result["model"].state_dict(), os.path.join(model_dir, MODEL_FILENAME))
+            with open(os.path.join(model_dir, MODEL_CONFIG_FILENAME), "w", encoding="utf-8") as f:
                 json.dump(result["config"], f, indent=4)
-            joblib.dump(result["scaler_x"], os.path.join(mlflow_tmp, SCALER_X_FILENAME))
-            joblib.dump(result["scaler_y"], os.path.join(mlflow_tmp, SCALER_Y_FILENAME))
-            tracker.upload_artifacts(mlflow_tmp, artifact_path="model")
-        except Exception as exc:  # pylint: disable=broad-exception-caught
-            logger.error("MLflow artifact upload failed: %s", exc)
-            raise ModelPersistenceError(f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}") from exc
-        finally:
-            shutil.rmtree(mlflow_tmp, ignore_errors=True)
+            joblib.dump(result["scaler_x"], os.path.join(model_dir, SCALER_X_FILENAME))
+            joblib.dump(result["scaler_y"], os.path.join(model_dir, SCALER_Y_FILENAME))
+
+        upload_model_to_mlflow(tracker, _log_and_write, prefix="ml36_mlflow_")
 
         return TrainResponse(
-            detail="Reentrenamiento completado (procedimiento train del equipo de IA); métricas sobre el split de test",
+            detail=(
+                "Reentrenamiento completado (procedimiento train del equipo de IA); métricas "
+                "sobre el split de test"
+            ),
             mae_t_out=round(flat["mae_t_out"], 4),
             mse_t_out=round(flat["mse_t_out"], 6),
             r2_t_out=round(flat["r2_t_out"], 4),
@@ -405,50 +393,107 @@ class Ml36DairyDnlCo2EmissionsOptimizerPlugin(ModelPluginPort):
             task_type="regression_prescriptive",
             framework=FRAMEWORK,
             inputs=[
-                InputField(name="F_milk", type="float",
-                           description="Caudal volumétrico de leche (L/h) [inline y optimize]"),
-                InputField(name="T_in", type="float",
-                           description="Temperatura de entrada de la leche (°C) [inline y optimize]"),
-                InputField(name="Fat_perc", type="float",
-                           description="% de grasa del lote [inline y optimize]"),
-                InputField(name="Viscosity", type="float",
-                           description="Viscosidad dinámica de la leche (cP) [inline y optimize]"),
-                InputField(name="t_ciclo", type="float",
-                           description="Tiempo desde el inicio del ciclo (min) [inline y optimize]"),
-                InputField(name="T_serv", type="float",
-                           description="Temperatura del líquido de calentamiento (°C) "
-                                       "[inline; en optimize opcional = operación actual]"),
-                InputField(name="Delta_P", type="float",
-                           description="Presión de impulsión de las bombas (bar) "
-                                       "[inline; en optimize opcional = operación actual]"),
-                InputField(name="Regeneration_perc", type="float",
-                           description="Eficiencia de regeneración térmica (%) "
-                                       "[inline; en optimize opcional = operación actual]"),
-                InputField(name="decision_mode", type="str",
-                           description="static | adaptive | hybrid (por defecto) [optimize]"),
-                InputField(name="seed", type="int",
-                           description="Semilla del GA adaptativo [optimize, opcional]"),
+                InputField(
+                    name="F_milk",
+                    type="float",
+                    description="Caudal volumétrico de leche (L/h) [inline y optimize]",
+                ),
+                InputField(
+                    name="T_in",
+                    type="float",
+                    description="Temperatura de entrada de la leche (°C) [inline y optimize]",
+                ),
+                InputField(
+                    name="Fat_perc",
+                    type="float",
+                    description="% de grasa del lote [inline y optimize]",
+                ),
+                InputField(
+                    name="Viscosity",
+                    type="float",
+                    description="Viscosidad dinámica de la leche (cP) [inline y optimize]",
+                ),
+                InputField(
+                    name="t_ciclo",
+                    type="float",
+                    description="Tiempo desde el inicio del ciclo (min) [inline y optimize]",
+                ),
+                InputField(
+                    name="T_serv",
+                    type="float",
+                    description="Temperatura del líquido de calentamiento (°C) "
+                    "[inline; en optimize opcional = operación actual]",
+                ),
+                InputField(
+                    name="Delta_P",
+                    type="float",
+                    description="Presión de impulsión de las bombas (bar) "
+                    "[inline; en optimize opcional = operación actual]",
+                ),
+                InputField(
+                    name="Regeneration_perc",
+                    type="float",
+                    description="Eficiencia de regeneración térmica (%) "
+                    "[inline; en optimize opcional = operación actual]",
+                ),
+                InputField(
+                    name="decision_mode",
+                    type="str",
+                    description="static | adaptive | hybrid (por defecto) [optimize]",
+                ),
+                InputField(
+                    name="seed",
+                    type="int",
+                    description="Semilla del GA adaptativo [optimize, opcional]",
+                ),
             ],
             outputs=[
-                OutputField(name="T_out_pred", type="float",
-                            description="Temperatura de salida predicha (°C) [modo inline]"),
-                OutputField(name="CO2_emissions_pred", type="float",
-                            description="Emisiones de CO2 predichas (kg) [modo inline]"),
-                OutputField(name="recommended_T_serv", type="float",
-                            description="Setpoint óptimo de T_serv (°C) [modo optimize]"),
-                OutputField(name="recommended_Delta_P", type="float",
-                            description="Setpoint óptimo de Delta_P [modo optimize]"),
-                OutputField(name="recommended_Regeneration_perc", type="float",
-                            description="Setpoint óptimo de regeneración (%) [modo optimize]"),
-                OutputField(name="recommended_CO2_pred", type="float",
-                            description="CO2 predicho con la recomendación (kg) [modo optimize]"),
-                OutputField(name="recommended_T_out_pred", type="float",
-                            description="T_out predicha con la recomendación (°C) [modo optimize]"),
-                OutputField(name="co2_saving_vs_policy", type="float",
-                            description="Ahorro de CO2 frente a la política global (kg) [modo optimize]"),
-                OutputField(name="co2_saving_vs_current", type="float",
-                            description="Ahorro de CO2 frente a la operación actual (kg), si se aporta "
-                                        "[modo optimize]"),
+                OutputField(
+                    name="T_out_pred",
+                    type="float",
+                    description="Temperatura de salida predicha (°C) [modo inline]",
+                ),
+                OutputField(
+                    name="CO2_emissions_pred",
+                    type="float",
+                    description="Emisiones de CO2 predichas (kg) [modo inline]",
+                ),
+                OutputField(
+                    name="recommended_T_serv",
+                    type="float",
+                    description="Setpoint óptimo de T_serv (°C) [modo optimize]",
+                ),
+                OutputField(
+                    name="recommended_Delta_P",
+                    type="float",
+                    description="Setpoint óptimo de Delta_P [modo optimize]",
+                ),
+                OutputField(
+                    name="recommended_Regeneration_perc",
+                    type="float",
+                    description="Setpoint óptimo de regeneración (%) [modo optimize]",
+                ),
+                OutputField(
+                    name="recommended_CO2_pred",
+                    type="float",
+                    description="CO2 predicho con la recomendación (kg) [modo optimize]",
+                ),
+                OutputField(
+                    name="recommended_T_out_pred",
+                    type="float",
+                    description="T_out predicha con la recomendación (°C) [modo optimize]",
+                ),
+                OutputField(
+                    name="co2_saving_vs_policy",
+                    type="float",
+                    description="Ahorro de CO2 frente a la política global (kg) [modo optimize]",
+                ),
+                OutputField(
+                    name="co2_saving_vs_current",
+                    type="float",
+                    description="Ahorro de CO2 frente a la operación actual (kg), si se aporta "
+                    "[modo optimize]",
+                ),
             ],
             metrics={
                 # MLP surrogate — test hold-out (final_test_metrics.json entregado)
@@ -466,21 +511,8 @@ class Ml36DairyDnlCo2EmissionsOptimizerPlugin(ModelPluginPort):
                 "ga_mejora_co2_pct": 21.68,
                 "ga_config": f"pop={GA_POP_SIZE}, gen={GA_N_GEN}, cxpb={GA_CXPB}, mutpb={GA_MUTPB}",
                 "aviso": "Métricas calculadas sobre datos sintéticos (simulador físico de "
-                         "intercambiador de placas); validación con datos reales de planta pendiente.",
+                "intercambiador de placas); validación con datos reales de planta pendiente.",
             },
-            runtime_stats=RuntimeStats(
-                total_predictions=self._predict_count,
-                avg_latency_ms=None,
-            ),
+            runtime_stats=self._runtime_stats(),
         )
-        if mlflow_run_id:
-            try:
-                tracker = BaseMLflowTracker(mlflow_run_id)
-                base.metrics["mlflow"] = {
-                    "params": tracker.get_params(),
-                    "metrics": tracker.get_metrics(),
-                }
-                logger.info("Stats enriched with MLflow data for run_id=%s", mlflow_run_id)
-            except Exception as exc:  # pylint: disable=broad-exception-caught
-                logger.warning("Could not fetch MLflow stats for run_id=%s: %s", mlflow_run_id, exc)
-        return base
+        return add_mlflow_run_to_stats(base, mlflow_run_id)

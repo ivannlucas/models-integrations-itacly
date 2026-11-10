@@ -1,0 +1,23 @@
+id,filename,machine,machine_id,snr,true_label,esperado_maha_score,esperado_predicted_label,esperado_threshold_used,nota
+caso_001,abnormal/00000000.wav,fan,id_00,0_dB,1,15.216082572937012,1,6.6067,
+caso_002,abnormal/00000001.wav,fan,id_00,0_dB,1,12.205583572387695,1,6.6067,
+caso_003,abnormal/00000002.wav,fan,id_00,0_dB,1,9.35803508758545,1,6.6067,
+caso_004,abnormal/00000003.wav,fan,id_00,0_dB,1,8.290242195129395,1,6.6067,
+caso_005,abnormal/00000004.wav,fan,id_00,0_dB,1,16.240764617919922,1,6.6067,
+caso_006,abnormal/00000005.wav,fan,id_00,0_dB,1,10.30270767211914,1,6.6067,
+caso_007,abnormal/00000006.wav,fan,id_00,0_dB,1,6.784762382507324,1,6.6067,
+caso_008,abnormal/00000007.wav,fan,id_00,0_dB,1,9.726583480834961,1,6.6067,
+caso_009,abnormal/00000008.wav,fan,id_00,0_dB,1,6.891941070556641,1,6.6067,
+caso_010,abnormal/00000009.wav,fan,id_00,0_dB,1,13.687139511108398,1,6.6067,
+caso_011,abnormal/00000010.wav,fan,id_00,0_dB,1,13.250008583068848,1,6.6067,
+caso_012,normal/00000000.wav,fan,id_00,0_dB,0,6.128852844238281,0,6.6067,
+caso_013,normal/00000001.wav,fan,id_00,0_dB,0,12.849665641784668,1,6.6067,"Falso positivo esperado — coherente con FPR=0.6798 documentado para esta combinación, no es un bug del plugin."
+caso_014,normal/00000002.wav,fan,id_00,0_dB,0,5.972254753112793,0,6.6067,
+caso_015,normal/00000003.wav,fan,id_00,0_dB,0,12.309003829956055,1,6.6067,Falso positivo esperado — ver caso_013.
+caso_016,normal/00000004.wav,fan,id_00,0_dB,0,10.719429016113281,1,6.6067,Falso positivo esperado — ver caso_013.
+caso_017,normal/00000005.wav,fan,id_00,0_dB,0,11.65042495727539,1,6.6067,Falso positivo esperado — ver caso_013.
+caso_018,normal/00000006.wav,fan,id_00,0_dB,0,8.38780403137207,1,6.6067,Falso positivo esperado — ver caso_013.
+caso_019,normal/00000007.wav,fan,id_00,0_dB,0,8.50153923034668,1,6.6067,Falso positivo esperado — ver caso_013.
+caso_020,normal/00000008.wav,fan,id_00,0_dB,0,17.239173889160156,1,6.6067,Falso positivo esperado — ver caso_013.
+caso_021,normal/00000009.wav,fan,id_00,0_dB,0,11.004780769348145,1,6.6067,Falso positivo esperado — ver caso_013.
+caso_022,normal/00000010.wav,fan,id_00,0_dB,0,10.049200057983398,1,6.6067,Falso positivo esperado — ver caso_013.

@@ -41,6 +41,7 @@ def test_create_endogenous_features_month_cyclical_encoding():
 
 
 def test_create_endogenous_features_spread_is_ratio():
+    """'spread' is indice_animales / indice_insumos."""
     df = pd.DataFrame({
         "indice_animales": [400.0], "indice_insumos": [200.0],
         "animales_afectados": [0], "precip_total": [0.0], "month": [1],
@@ -57,7 +58,9 @@ def test_prepare_inference_input_raises_insufficient_rows_for_short_history():
         "animales_afectados": 0,
     } for i in range(1, 5)])
     train_config = {
-        "input_cols_per_target": {"target_animales": ["indice_animales"], "target_insumos": ["indice_insumos"]},
+        "input_cols_per_target": {
+            "target_animales": ["indice_animales"], "target_insumos": ["indice_insumos"],
+        },
         "lookback": 3, "horizon": 4,
     }
     with pytest.raises(InsufficientRowsError):
@@ -65,6 +68,7 @@ def test_prepare_inference_input_raises_insufficient_rows_for_short_history():
 
 
 def test_prepare_inference_input_missing_required_column_raises_value_error():
+    """A missing required input column raises ValueError."""
     df = pd.DataFrame({"fecha": ["2024-01-01"] * 10})  # missing indice_animales etc.
     train_config = {"input_cols_per_target": {}, "lookback": 3, "horizon": 4}
     with pytest.raises(ValueError):
@@ -78,13 +82,15 @@ class _FakeModel:
         self._probas = np.asarray(probas)
 
     def predict_proba(self, x):
+        """Returns [1 - p, p] for the first len(x) configured probabilities."""
         n = len(x)
         return np.stack([1 - self._probas[:n], self._probas[:n]], axis=1)
 
 
 def test_run_inference_without_bagging_collapses_uncertainty_range_to_point_estimate():
-    """No bagging_models entry (missing/failed artifact) must yield proba_low == proba_high == proba,
-    matching predictor.py's graceful degradation without a confidence range."""
+    """No bagging_models entry (missing/failed artifact) must yield
+    proba_low == proba_high == proba, matching predictor.py's graceful degradation without a
+    confidence range."""
     models = {"target_animales": _FakeModel([0.2, 0.8])}
     results = run_inference(
         models=models,

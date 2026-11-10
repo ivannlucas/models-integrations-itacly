@@ -89,8 +89,8 @@ ACCEPTANCE_THRESHOLDS = {
 
 SYNTHETIC_DATA_WARNING = (
     "Modelo entrenado y validado exclusivamente sobre el dataset sintético "
-    "dataset_infestacion_cereales_sintetico (300 series, 144.000 observaciones horarias, generación "
-    "interna). Las métricas acreditan la consistencia del pipeline en un escenario controlado, no el "
-    "rendimiento sobre cereal real: la validación con datos reales de operación queda pendiente. "
-    "Ver inbox/a09/manifest.yaml known_issues."
+    "dataset_infestacion_cereales_sintetico (300 series, 144.000 observaciones horarias, "
+    "generación interna). Las métricas acreditan la consistencia del pipeline en un escenario "
+    "controlado, no el rendimiento sobre cereal real: la validación con datos reales de operación "
+    "queda pendiente. Ver inbox/a09/manifest.yaml known_issues."
 )

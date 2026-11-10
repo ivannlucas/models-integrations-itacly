@@ -20,6 +20,7 @@ INLINE_ROW = {
 
 
 def test_health(client):
+    """GET /health reports the model as loaded and ok."""
     body = client.get(f"{PREFIX}/health").json()
     assert body["status"] == "ok"
     assert body["model"] == MODEL_ID
@@ -27,11 +28,13 @@ def test_health(client):
 
 
 def test_stats(client):
+    """GET /stats returns the model name."""
     body = client.get(f"{PREFIX}/stats").json()
     assert body["model_name"] == MODEL_ID
 
 
 def test_predict_inline(client):
+    """An inline predict returns action and risk, with zero quantity when not triggered."""
     resp = client.post(f"{PREFIX}/predict", json=INLINE_ROW)
     assert resp.status_code == 200
     body = resp.json()
@@ -44,6 +47,7 @@ def test_predict_inline(client):
 
 
 def test_predict_inline_missing_field_rejected(client):
+    """An inline row without current_inventory_tons is rejected with 422."""
     payload = dict(INLINE_ROW)
     del payload["current_inventory_tons"]
     resp = client.post(f"{PREFIX}/predict", json=payload)
@@ -51,6 +55,7 @@ def test_predict_inline_missing_field_rejected(client):
 
 
 def test_predict_inline_negative_inventory_rejected(client):
+    """A negative inventory is rejected with 422."""
     payload = dict(INLINE_ROW)
     payload["current_inventory_tons"] = -5.0
     resp = client.post(f"{PREFIX}/predict", json=payload)
@@ -58,6 +63,7 @@ def test_predict_inline_negative_inventory_rejected(client):
 
 
 def test_predict_batch(client):
+    """A batch predict returns predictions and a passing stockout guardrail."""
     resp = client.post(f"{PREFIX}/predict", json={"mode": "batch", "data_path": "/tmp/fake.csv"})
     assert resp.status_code == 200
     body = resp.json()

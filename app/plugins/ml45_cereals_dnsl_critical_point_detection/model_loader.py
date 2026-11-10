@@ -31,7 +31,10 @@ _store = ArtifactStore(ARTIFACT_FOLDER_NAME)
 
 
 def load_artifacts_from_dir(artifact_dir: Path):
-    """Load (model, model_cfg, scaler_x, scaler_num, xai_background, threshold) from *artifact_dir*."""
+    """Load the served artifacts from *artifact_dir*.
+
+    Returns (model, model_cfg, scaler_x, scaler_num, xai_background, threshold).
+    """
     checkpoint_path = artifact_dir / MODEL_FILENAME
     checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
     if not isinstance(checkpoint, dict) or "model_state_dict" not in checkpoint:
@@ -68,4 +71,5 @@ def load_artifacts_from_dir(artifact_dir: Path):
 
 
 def load_artifacts():
+    """Load the base artifacts from the store's local folder (see load_artifacts_from_dir)."""
     return load_artifacts_from_dir(_store.local_dir)

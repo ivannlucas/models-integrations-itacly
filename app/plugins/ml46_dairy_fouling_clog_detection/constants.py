@@ -11,7 +11,9 @@ MODEL_MANIFEST_FILENAME = "model_manifest.json"
 
 FRAMEWORK = "pytorch/pandas/numpy/scikit-learn"
 VERSION = "1.0.0"
-SCENARIO = "no_clock"  # fixed — the alternative "full" checkpoint is not served (manifest.constraints)
+SCENARIO = (
+    "no_clock"  # fixed — the alternative "full" checkpoint is not served (manifest.constraints)
+)
 SEQ_LEN = 120
 SEVERITY_COL = "Rf_m2K_W"
 

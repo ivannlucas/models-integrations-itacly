@@ -10,7 +10,6 @@ out-of-sample degradation after 2021, outputs/a24/verification_report.md). The b
 versioned: every /train publishes the retrained horizons with the series (and, when given, the
 monthly exogenous block) they were trained on as the new base.
 """
-# pylint: disable=line-too-long  # repo limit is 120 (.flake8), enforced by flake8
 from __future__ import annotations
 
 import logging
@@ -18,16 +17,20 @@ import os
 import shutil
 import tempfile
 import time
-from datetime import datetime, timezone
 from pathlib import Path
 
 from app.application.dto.stats_dto import InputField, OutputField, RuntimeStats, StatsResponse
 from app.domain.ports.model_plugin_port import ModelPluginPort
-from app.domain.services.exceptions import ModelNotLoadedError
-from app.domain.services.mlflow_tracker import BaseMLflowTracker
+from app.domain.services.mlflow_artifacts import mlflow_run_summary, removing_dir
+from app.domain.services.plugin_runtime import PluginRuntimeMixin
 from app.infrastructure.artifact_store import local_file_path
 from app.infrastructure.base_model_publisher import persist_retrained_bundle
-from app.plugins.ml24_dairy_spatial_price_forecast import inference, model_loader, preprocessing, training
+from app.plugins.ml24_dairy_spatial_price_forecast import (
+    inference,
+    model_loader,
+    preprocessing,
+    training,
+)
 from app.plugins.ml24_dairy_spatial_price_forecast.constants import (
     ARTIFACT_FOLDER_NAME,
     FRAMEWORK,
@@ -55,18 +58,76 @@ from app.plugins.ml24_dairy_spatial_price_forecast.train_dto import (
 logger = logging.getLogger(__name__)
 
 
-class Ml24DairySpatialPriceForecastPlugin(ModelPluginPort):
+def _copy_to_temp_csv(path: str) -> str:
+    """Copy *path* (local or s3://) to a temp .csv that outlives the download; caller unlinks it."""
+    with local_file_path(path) as src:
+        fd, local = tempfile.mkstemp(suffix=".csv")
+        os.close(fd)
+        try:
+            shutil.copyfile(src, local)
+        except BaseException:
+            os.unlink(local)
+            raise
+    return local
+
+
+def _split_years(series, validation_year: int | None, test_year: int | None) -> tuple[int, int]:
+    """(validation_year, test_year): the given ones, the missing one derived, or both from the
+    series (training.default_split_years)."""
+    if test_year is None:
+        test_year = (
+            validation_year + 1 if validation_year is not None
+            else training.default_split_years(series)[1]
+        )
+    if validation_year is None:
+        validation_year = test_year - 1
+    return validation_year, test_year
+
+
+def _mlflow_params(result, validation_year: int, test_year: int, *, exog_renewed: bool) -> dict:
+    """Params logged to the MLflow run of a retraining."""
+    return {
+        "model": "CatBoostRegressor + baseline calibrado (t-1, t-12)",
+        "horizons": ",".join(str(h) for h in HORIZONS),
+        "iterations": TRAINING_CFG["catboost_iterations"],
+        "depth": TRAINING_CFG["catboost_depth"],
+        "learning_rate": TRAINING_CFG["catboost_learning_rate"],
+        "l2_leaf_reg": TRAINING_CFG["catboost_l2_leaf_reg"],
+        "loss_function": TRAINING_CFG["loss_function"],
+        "publication_lag_months": TRAINING_CFG["publication_lag_months"],
+        "random_state": TRAINING_CFG["random_state"],
+        "validation_year": validation_year,
+        "test_year": test_year,
+        "task_type": result.task_type,
+        "exog_renewed": exog_renewed,
+    }
+
+
+def _per_horizon_metrics(result) -> dict[str, HorizonMetrics]:
+    """TrainResponse h1/h3/h6 fields: split metrics and the calibrated blend of each horizon."""
+    return {
+        f"h{item.horizon}": HorizonMetrics(
+            train=HorizonSplitMetrics(**item.metrics["train"]),
+            validation=HorizonSplitMetrics(**item.metrics["validation"]),
+            test=HorizonSplitMetrics(**item.metrics["test"]),
+            baseline_w_persist_1=float(item.metadata["baseline_w_persist_1"]),
+            baseline_w_persist_12=float(item.metadata["baseline_w_persist_12"]),
+            ml_alpha=float(item.metadata["ml_alpha"]),
+            n_features=len(item.metadata["feature_cols"]),
+        )
+        for item in result.horizons
+    }
+
+
+class Ml24DairySpatialPriceForecastPlugin(PluginRuntimeMixin, ModelPluginPort):
     """CatBoost + calibrated-baseline plugin for the spatial dairy price forecast (h=1/3/6)."""
 
     BASE_ARTIFACT_FOLDER = ARTIFACT_FOLDER_NAME   # every /train publishes the new base model
 
     def __init__(self) -> None:
-        """Initialize an unloaded plugin with empty runtime counters."""
+        """Initialize an unloaded plugin (runtime counters and latency: mixin defaults)."""
         self._bundle: dict | None = None
         self._reference: dict | None = None
-        self._predict_count: int = 0
-        self._last_predict_at: str | None = None
-        self._total_latency_ms: float = 0.0
 
     # ── lifecycle ─────────────────────────────────────────────────────────────
 
@@ -83,15 +144,11 @@ class Ml24DairySpatialPriceForecastPlugin(ModelPluginPort):
         """Return True once models and reference data are loaded."""
         return self._bundle is not None and self._reference is not None
 
-    def _require_loaded(self) -> None:
-        if not self.is_loaded():
-            raise ModelNotLoadedError("El modelo no está cargado.")
-
     def _resolve_bundle(self, mlflow_run_id: str) -> tuple[dict, str | None]:
         """Return (bundle, temp_dir) as locals — never stored on self (shared across requests).
 
         A run without a loadable model raises UserModelUnavailableError (→ 422): never fall
-        back silently to the base model. The caller must rmtree temp_dir in a finally block.
+        back silently to the base model. The caller must remove temp_dir (``removing_dir``).
         """
         self._require_loaded()
         if mlflow_run_id:
@@ -99,9 +156,8 @@ class Ml24DairySpatialPriceForecastPlugin(ModelPluginPort):
         return self._bundle, None
 
     def _record_prediction(self, started: float) -> None:
-        self._predict_count += 1
-        self._total_latency_ms += (time.perf_counter() - started) * 1000.0
-        self._last_predict_at = datetime.now(tz=timezone.utc).isoformat()
+        """Count one served prediction (mixin) and accumulate its latency since *started*."""
+        self._record_latency((time.perf_counter() - started) * 1000.0)
 
     # ── predict_inline ────────────────────────────────────────────────────────
 
@@ -113,21 +169,20 @@ class Ml24DairySpatialPriceForecastPlugin(ModelPluginPort):
         threshold: float | None = None,
         mlflow_run_id: str = "",
     ) -> PredictInlineResponse:
-        """Forecast from the base series: optional ccaa / horizons filters and as_of_period cut-off."""
+        """Forecast from the base series: optional ccaa / horizons filters, as_of_period cut-off."""
         _ = model_key, threshold
         started = time.perf_counter()
         ccaa = preprocessing.resolve_ccaa(features.get("ccaa"))
         bundle, user_tmp = self._resolve_bundle(mlflow_run_id)
-        try:
-            series = preprocessing.truncate_series(self._reference["series"], features.get("as_of_period"))
+        with removing_dir(user_tmp):
+            series = preprocessing.truncate_series(self._reference["series"],
+                                                   features.get("as_of_period"))
             predictions, freshness, warnings = inference.run_inference(
                 bundle, self._reference, series, ccaa=ccaa, horizons=features.get("horizons"),
             )
-        finally:
-            if user_tmp:
-                shutil.rmtree(user_tmp, ignore_errors=True)
         self._record_prediction(started)
-        logger.info("predict_inline done — %d predicciones, count=%d", len(predictions), self._predict_count)
+        logger.info("predict_inline done — %d predicciones, count=%d", len(predictions),
+                    self._predict_count)
         return PredictInlineResponse(
             model_id=MODEL_ID, predictions=predictions, n_predictions=len(predictions),
             data_freshness=freshness, warnings=warnings,
@@ -139,15 +194,14 @@ class Ml24DairySpatialPriceForecastPlugin(ModelPluginPort):
         """Forecast every CCAA x horizon from a long-format series CSV (the original's --input)."""
         started = time.perf_counter()
         bundle, user_tmp = self._resolve_bundle(mlflow_run_id)
-        try:
+        with removing_dir(user_tmp):
             with local_file_path(data_path) as local_path:
                 series = preprocessing.read_series_csv(local_path)
-            predictions, freshness, warnings = inference.run_inference(bundle, self._reference, series)
-        finally:
-            if user_tmp:
-                shutil.rmtree(user_tmp, ignore_errors=True)
+            predictions, freshness, warnings = inference.run_inference(bundle, self._reference,
+                                                                       series)
         self._record_prediction(started)
-        logger.info("predict_batch done — %d predicciones, count=%d", len(predictions), self._predict_count)
+        logger.info("predict_batch done — %d predicciones, count=%d", len(predictions),
+                    self._predict_count)
         return PredictBatchResponse(
             model_id=MODEL_ID, predictions=predictions, n_predictions=len(predictions),
             data_freshness=freshness, warnings=warnings, output_path=None,
@@ -155,7 +209,7 @@ class Ml24DairySpatialPriceForecastPlugin(ModelPluginPort):
 
     # ── train ─────────────────────────────────────────────────────────────────
 
-    def train(  # pylint: disable=too-many-arguments,too-many-locals
+    def train(
         self,
         *,
         data_path: str,
@@ -180,45 +234,27 @@ class Ml24DairySpatialPriceForecastPlugin(ModelPluginPort):
             series = preprocessing.read_series_csv(local_path)
         try:
             if exog_path:
-                with local_file_path(exog_path) as exog_src:
-                    fd, exog_local = tempfile.mkstemp(suffix=".csv")
-                    os.close(fd)
-                    shutil.copyfile(exog_src, exog_local)
-                reference["exog"] = preprocessing.read_exog_csv(exog_local, list(self._reference["exog"].columns))
-            if test_year is None:
-                test_year = validation_year + 1 if validation_year is not None else training.default_split_years(series)[1]
-            if validation_year is None:
-                validation_year = test_year - 1
+                exog_local = _copy_to_temp_csv(exog_path)
+                reference["exog"] = preprocessing.read_exog_csv(
+                    exog_local, list(self._reference["exog"].columns)
+                )
+            validation_year, test_year = _split_years(series, validation_year, test_year)
             result = training.train_spatial_price_model(
                 series, reference, validation_year=validation_year, test_year=test_year,
             )
-            params = {
-                "model": "CatBoostRegressor + baseline calibrado (t-1, t-12)",
-                "horizons": ",".join(str(h) for h in HORIZONS),
-                "iterations": TRAINING_CFG["catboost_iterations"],
-                "depth": TRAINING_CFG["catboost_depth"],
-                "learning_rate": TRAINING_CFG["catboost_learning_rate"],
-                "l2_leaf_reg": TRAINING_CFG["catboost_l2_leaf_reg"],
-                "loss_function": TRAINING_CFG["loss_function"],
-                "publication_lag_months": TRAINING_CFG["publication_lag_months"],
-                "random_state": TRAINING_CFG["random_state"],
-                "validation_year": validation_year,
-                "test_year": test_year,
-                "task_type": result.task_type,
-                "exog_renewed": bool(exog_path),
-            }
+            params = _mlflow_params(result, validation_year, test_year,
+                                    exog_renewed=bool(exog_path))
             artifact_tmp = Path(tempfile.mkdtemp(prefix="ml24_train_"))
-            try:
+            with removing_dir(str(artifact_tmp)):
                 training.save_training_artifacts(artifact_tmp, result)
-                training.save_base_reference_data(artifact_tmp, preprocessing.validate_series(series), exog_local)
+                training.save_base_reference_data(artifact_tmp,
+                                                  preprocessing.validate_series(series), exog_local)
                 persisted = persist_retrained_bundle(
                     artifact_tmp, artifact_folder=ARTIFACT_FOLDER_NAME, data_path=data_path,
                     metrics=result.metrics, mlflow_run_id=mlflow_run_id,
                     upload_to_mlflow=lambda: upload_artifacts_to_mlflow(
                         str(artifact_tmp), mlflow_run_id, metrics=result.metrics, params=params),
                 )
-            finally:
-                shutil.rmtree(artifact_tmp, ignore_errors=True)
         finally:
             if exog_local:
                 os.unlink(exog_local)
@@ -226,27 +262,17 @@ class Ml24DairySpatialPriceForecastPlugin(ModelPluginPort):
         warnings = [persisted.upload_warning] if persisted.upload_warning else []
         if not exog_path:
             warnings.append(
-                "No se han renovado las exógenas mensuales (exog_path): se ha entrenado con las vigentes "
+                "No se han renovado las exógenas mensuales (exog_path): se ha entrenado con las "
+                "vigentes "
                 "y el modelo base nuevo las hereda."
             )
-        per_horizon = {
-            f"h{item.horizon}": HorizonMetrics(
-                train=HorizonSplitMetrics(**item.metrics["train"]),
-                validation=HorizonSplitMetrics(**item.metrics["validation"]),
-                test=HorizonSplitMetrics(**item.metrics["test"]),
-                baseline_w_persist_1=float(item.metadata["baseline_w_persist_1"]),
-                baseline_w_persist_12=float(item.metadata["baseline_w_persist_12"]),
-                ml_alpha=float(item.metadata["ml_alpha"]),
-                n_features=len(item.metadata["feature_cols"]),
-            )
-            for item in result.horizons
-        }
         return TrainResponse(
             detail=(
-                "spatial_price_model reentrenado desde cero (h=1/3/6) con el procedimiento del equipo de IA. "
+                "spatial_price_model reentrenado desde cero (h=1/3/6) con el procedimiento del "
+                "equipo de IA. "
                 f"Modelo base {persisted.base_version['version']}."
             ),
-            **per_horizon,
+            **_per_horizon_metrics(result),
             validation_year=validation_year,
             test_year=test_year,
             task_type=result.task_type,
@@ -263,8 +289,7 @@ class Ml24DairySpatialPriceForecastPlugin(ModelPluginPort):
     def _metrics_with_run(mlflow_run_id: str) -> dict:
         metrics = dict(METRICS_REPORTED)
         if mlflow_run_id:
-            tracker = BaseMLflowTracker(mlflow_run_id)
-            metrics["mlflow"] = {"params": tracker.get_params(), "metrics": tracker.get_metrics()}
+            metrics["mlflow"] = mlflow_run_summary(mlflow_run_id)
         return metrics
 
     def stats(self, mlflow_run_id: str = "") -> StatsResponse:
@@ -275,32 +300,39 @@ class Ml24DairySpatialPriceForecastPlugin(ModelPluginPort):
         """
         inputs = [
             InputField(name="ccaa", type="list[str]", default=None,
-                       description="(inline) Códigos de 3 letras o nombres oficiales de CCAA; vacío = las 17."),
+                       description="(inline) Códigos de 3 letras o nombres oficiales de CCAA; "
+                                   "vacío = las 17."),
             InputField(name="horizons", type="list[int]", format=["1", "3", "6"], default=None,
                        description="(inline) Horizontes en meses; vacío = los tres."),
             InputField(name="as_of_period", type="str", format=["YYYY-MM"], default=None,
                        description="(inline) Corta la serie base en ese mes (backtesting)."),
             InputField(name="data_path", type="str",
-                       description=f"(batch) CSV largo con columnas {list(SERIES_REQUIRED_COLUMNS)}."),
+                       description="(batch) CSV largo con columnas "
+                                   f"{list(SERIES_REQUIRED_COLUMNS)}."),
         ]
         outputs = [
             OutputField(name="predictions", type="list[dict]",
-                        description="Una fila por CCAA x horizonte: feature_period, period, ccaa, ccaa_code, "
-                                    "horizon_months, y_pred (EUR/kg o litro), y_baseline_calibrated, "
-                                    "y_persist_1, y_persist_12, selected_*."),
+                        description="Una fila por CCAA x horizonte: feature_period, period, ccaa, "
+                                    "ccaa_code, horizon_months, y_pred (EUR/kg o litro), "
+                                    "y_baseline_calibrated, y_persist_1, y_persist_12, "
+                                    "selected_*."),
             OutputField(name="data_freshness", type="dict",
-                        description="Último mes con dato MAPA y exógeno, y su antigüedad en meses."),
+                        description="Último mes con dato MAPA y exógeno, y su antigüedad en "
+                                    "meses."),
             OutputField(name="warnings", type="list[str]",
-                        description="Desfase MAPA > 24 meses o CCAA omitidas por histórico insuficiente."),
+                        description="Desfase MAPA > 24 meses o CCAA omitidas por histórico "
+                                    "insuficiente."),
         ]
-        avg_latency = self._total_latency_ms / self._predict_count if self._predict_count else None
         return StatsResponse(
             model_name=MODEL_ID,
             version=VERSION,
             description=(
-                "Predicción espacial del precio medio mensual de TOTAL LECHE LIQUIDA (EUR/kg o litro, panel "
-                "de consumo en hogares del MAPA) por comunidad autónoma, a 1, 3 y 6 meses. Modelo híbrido: "
-                "baseline calibrado (t-1, t-12) interpolado con CatBoostRegressor sobre señales espaciales y "
+                "Predicción espacial del precio medio mensual de TOTAL LECHE LIQUIDA (EUR/kg o "
+                "litro, panel "
+                "de consumo en hogares del MAPA) por comunidad autónoma, a 1, 3 y 6 meses. Modelo "
+                "híbrido: "
+                "baseline calibrado (t-1, t-12) interpolado con CatBoostRegressor sobre señales "
+                "espaciales y "
                 "exógenas del mercado lácteo europeo. Ver inbox/a24/manifest.yaml y "
                 "outputs/a24/verification_report.md (degradación fuera de muestra desde 2022)."
             ),
@@ -309,5 +341,6 @@ class Ml24DairySpatialPriceForecastPlugin(ModelPluginPort):
             inputs=inputs,
             outputs=outputs,
             metrics=self._metrics_with_run(mlflow_run_id),
-            runtime_stats=RuntimeStats(total_predictions=self._predict_count, avg_latency_ms=avg_latency),
+            runtime_stats=RuntimeStats(total_predictions=self._predict_count,
+                                       avg_latency_ms=self._avg_latency_ms()),
         )

@@ -5,11 +5,17 @@ Tests preprocessing, postprocessing, and the real plugin (mocked models).
 
 from __future__ import annotations
 
+import json
+import tempfile
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
 
+from app.domain.services.exceptions import NoValidSimulationPointError
+from app.plugins.ml25_wine_sulphites.model_loader import load_artifacts
+from app.plugins.ml25_wine_sulphites.plugin import Ml25WineSulphitesPlugin
 from app.plugins.ml25_wine_sulphites.postprocessing import (
     apply_operational_constraints,
     compute_molecular_so2,
@@ -146,7 +152,7 @@ class TestBuildSimulationGrid:
             "sulphates": 0.56, "alcohol": 9.4,
             "free sulfur dioxide": 11.0, "total sulfur dioxide": 34.0,
         }
-        free_targets, qual_df, bound_df = build_simulation_grid(base, delta_max=0)
+        free_targets, _, _ = build_simulation_grid(base, delta_max=0)
         assert len(free_targets) == 1
         assert free_targets[0] == 11.0
 
@@ -196,9 +202,9 @@ class TestComputeMolecularSO2:
         """Verify compute_molecular_so2 returns correct values."""
         # molecular = free / (1 + 10^(pH - pKa))
         free = np.array([10.0, 20.0, 30.0])
-        pH = 3.5
-        result = compute_molecular_so2(free, pH)
-        expected = free / (1.0 + 10.0 ** (pH - PKA_SO2))
+        ph = 3.5
+        result = compute_molecular_so2(free, ph)
+        expected = free / (1.0 + 10.0 ** (ph - PKA_SO2))
         np.testing.assert_array_almost_equal(result, expected)
 
     def test_zero_free_so2(self):
@@ -221,7 +227,7 @@ class TestApplyOperationalConstraints:
             free, bounds, totals, molecular, qualities,
             min_molecular=0.5, max_total=40.0,
         )
-        vf, vb, vt, vm, vq = result
+        vf, _, _, _, vq = result
         assert len(vf) == 2
         np.testing.assert_array_equal(vf, [10.0, 20.0])
         np.testing.assert_array_equal(vq, [6.0, 6.5])
@@ -283,7 +289,7 @@ class TestSelectRecommendation:
         totals = np.array([15.0, 17.0, 19.0])
         moleculars = np.array([0.8, 0.7, 0.6])
 
-        idx, reason, intervention = select_recommendation(
+        idx, _, intervention = select_recommendation(
             free, bounds, totals, moleculars, qualities,
             baseline_quality=5.0, mae_quality=0.1,
         )
@@ -299,7 +305,6 @@ class TestLoadArtifacts:
 
     def test_returns_models_and_metadata(self, tmp_path):
         """Verify load_artifacts returns both models and the metadata dict."""
-        import json
         meta = {"metrics": {"quality_cv": {"mae_mean": 0.4}, "bound_cv": {"mae_mean": 1.2}}}
         (tmp_path / "metadata.json").write_text(json.dumps(meta))
 
@@ -311,7 +316,6 @@ class TestLoadArtifacts:
                    side_effect=lambda f: tmp_path / f), \
              patch("app.plugins.ml25_wine_sulphites.model_loader.joblib.load",
                    side_effect=[mock_qual, mock_bound]):
-            from app.plugins.ml25_wine_sulphites.model_loader import load_artifacts
             qual, bound, metadata = load_artifacts()
 
         assert qual is mock_qual
@@ -328,17 +332,15 @@ class TestMl25WineSulphitesPluginDirect:
     def test_initial_state(self, mock_load):
         """Verify the plugin starts in an unloaded state with zero stats."""
         mock_load.return_value = (MagicMock(), MagicMock(), {})
-        from app.plugins.ml25_wine_sulphites.plugin import Ml25WineSulphitesPlugin
         plugin = Ml25WineSulphitesPlugin()
         assert plugin.is_loaded() is False
-        assert plugin._predict_count == 0
-        assert plugin._last_predict_at is None
+        assert plugin.predict_count == 0
+        assert plugin.last_predict_at is None
 
     @patch("app.plugins.ml25_wine_sulphites.plugin.load_artifacts")
     def test_load_sets_loaded(self, mock_load):
         """Verify calling load() makes is_loaded() return True."""
         mock_load.return_value = (MagicMock(), MagicMock(), {})
-        from app.plugins.ml25_wine_sulphites.plugin import Ml25WineSulphitesPlugin
         plugin = Ml25WineSulphitesPlugin()
         plugin.load()
         assert plugin.is_loaded() is True
@@ -347,7 +349,6 @@ class TestMl25WineSulphitesPluginDirect:
     def test_stats_structure(self, mock_load):
         """Verify stats() returns a StatsResponse with expected fields."""
         mock_load.return_value = (MagicMock(), MagicMock(), {})
-        from app.plugins.ml25_wine_sulphites.plugin import Ml25WineSulphitesPlugin
         plugin = Ml25WineSulphitesPlugin()
         plugin.load()
         stats = plugin.stats()
@@ -355,12 +356,11 @@ class TestMl25WineSulphitesPluginDirect:
         assert stats.runtime_stats.total_predictions == 0
         assert stats.runtime_stats.avg_latency_ms is None
 
-    @patch("app.plugins.ml25_wine_sulphites.plugin.BaseMLflowTracker")
+    @patch("app.domain.services.mlflow_artifacts.BaseMLflowTracker")
     @patch("app.plugins.ml25_wine_sulphites.plugin.load_artifacts")
-    def test_train_raises_file_not_found_for_missing_path(self, mock_load, mock_tracker):
+    def test_train_raises_file_not_found_for_missing_path(self, mock_load, _mock_tracker):
         """Verify train() raises FileNotFoundError when the data file does not exist."""
         mock_load.return_value = (MagicMock(), MagicMock(), {})
-        from app.plugins.ml25_wine_sulphites.plugin import Ml25WineSulphitesPlugin
         plugin = Ml25WineSulphitesPlugin()
         plugin.load()
         with pytest.raises((FileNotFoundError, OSError)):
@@ -369,9 +369,6 @@ class TestMl25WineSulphitesPluginDirect:
     @patch("app.plugins.ml25_wine_sulphites.plugin.load_artifacts")
     def test_predict_inline_with_mocked_models(self, mock_load):
         """Verify predict_inline returns expected fields with mocked models."""
-        import numpy as np
-        from app.plugins.ml25_wine_sulphites.plugin import Ml25WineSulphitesPlugin
-
         # Build a range of free SO2 values matching expected grid
         base_free = 11.0
         delta_max = 40.0
@@ -415,15 +412,12 @@ class TestMl25WineSulphitesPluginDirect:
         assert hasattr(result, "prediction")
         assert hasattr(result, "confidence")
         assert hasattr(result, "recommended_free_so2")
-        assert plugin._predict_count == 1
+        assert plugin.predict_count == 1
 
     @patch("app.plugins.ml25_wine_sulphites.plugin.load_artifacts")
     def test_predict_inline_no_valid_point_raises(self, mock_load):
-        """Verify predict_inline raises NoValidSimulationPointError when no feasible SO2 dose exists."""
-        import numpy as np
-        from app.domain.services.exceptions import NoValidSimulationPointError
-        from app.plugins.ml25_wine_sulphites.plugin import Ml25WineSulphitesPlugin
-
+        """Verify predict_inline raises NoValidSimulationPointError when no feasible SO2 dose
+        exists."""
         base_free = 11.0
         n_grid = 41
         mock_bound = MagicMock()
@@ -458,11 +452,6 @@ class TestMl25WineSulphitesPluginDirect:
     @patch("app.plugins.ml25_wine_sulphites.plugin.load_artifacts")
     def test_predict_batch_with_mocked_models(self, mock_load):
         """Verify predict_batch returns predictions list with mocked models."""
-        import numpy as np
-        import tempfile
-        from pathlib import Path
-        from app.plugins.ml25_wine_sulphites.plugin import Ml25WineSulphitesPlugin
-
         n_grid = 41
         mock_bound = MagicMock()
         mock_bound.predict.return_value = np.log1p(np.full(n_grid, 5.0))
@@ -488,11 +477,6 @@ class TestMl25WineSulphitesPluginDirect:
     @patch("app.plugins.ml25_wine_sulphites.plugin.load_artifacts")
     def test_predict_batch_with_error(self, mock_load):
         """Verify predict_batch handles errors gracefully and includes error status in results."""
-        import numpy as np
-        import tempfile
-        from pathlib import Path
-        from app.plugins.ml25_wine_sulphites.plugin import Ml25WineSulphitesPlugin
-
         # Model bound.predict returns non-numeric data, causing error in inference
         mock_bound = MagicMock()
         mock_bound.predict.return_value = "bad_data"

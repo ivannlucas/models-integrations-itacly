@@ -1,13 +1,14 @@
+"""Plugin ml28: deterministic rules engine for meat raw-material purchase decisions."""
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
 
 import pandas as pd
 
-from app.application.dto.stats_dto import InputField, OutputField, RuntimeStats, StatsResponse
+from app.application.dto.stats_dto import InputField, OutputField, StatsResponse
 from app.domain.ports.model_plugin_port import ModelPluginPort
-from app.domain.services.exceptions import ModelNotLoadedError, TrainingNotSupportedError
+from app.domain.services.exceptions import TrainingNotSupportedError
+from app.domain.services.plugin_runtime import PluginRuntimeMixin
 from app.infrastructure.artifact_store import local_file_path
 from app.plugins.ml28_meat_neuroevolutionary_raw_materials_prediction.constants import (
     DESTINATION_PROFILES,
@@ -27,7 +28,7 @@ from app.plugins.ml28_meat_neuroevolutionary_raw_materials_prediction.predict_dt
 logger = logging.getLogger(__name__)
 
 
-class Ml28MeatNeuroevolutionaryRawMaterialsPredictionPlugin(ModelPluginPort):
+class Ml28MeatNeuroevolutionaryRawMaterialsPredictionPlugin(PluginRuntimeMixin, ModelPluginPort):
     """Deterministic decision-support rules engine for meat raw-material procurement (CU28).
 
     NOTE on the package name: "neuroevolutionary" reflects the requested plugin name, not what
@@ -40,8 +41,6 @@ class Ml28MeatNeuroevolutionaryRawMaterialsPredictionPlugin(ModelPluginPort):
 
     def __init__(self) -> None:
         self._loaded = False
-        self._predict_count: int = 0
-        self._last_predict_at: str | None = None
 
     def load(self) -> None:
         # No artifact to download — the "model" is the vendored rules engine itself, driven by
@@ -51,14 +50,6 @@ class Ml28MeatNeuroevolutionaryRawMaterialsPredictionPlugin(ModelPluginPort):
 
     def is_loaded(self) -> bool:
         return self._loaded
-
-    def _require_loaded(self) -> None:
-        if not self._loaded:
-            raise ModelNotLoadedError("El modelo no está cargado.")
-
-    def _record(self) -> None:
-        self._predict_count += 1
-        self._last_predict_at = datetime.now(tz=timezone.utc).isoformat()
 
     def predict_inline(
         self,
@@ -72,7 +63,8 @@ class Ml28MeatNeuroevolutionaryRawMaterialsPredictionPlugin(ModelPluginPort):
         self._require_loaded()
         if mlflow_run_id:
             logger.warning(
-                "mlflow_run_id=%s ignored — ml28 has no trained artifact (training.supported=false)",
+                "mlflow_run_id=%s ignored — ml28 has no trained artifact "
+                "(training.supported=false)",
                 mlflow_run_id,
             )
 
@@ -87,7 +79,8 @@ class Ml28MeatNeuroevolutionaryRawMaterialsPredictionPlugin(ModelPluginPort):
         self._require_loaded()
         if mlflow_run_id:
             logger.warning(
-                "mlflow_run_id=%s ignored — ml28 has no trained artifact (training.supported=false)",
+                "mlflow_run_id=%s ignored — ml28 has no trained artifact "
+                "(training.supported=false)",
                 mlflow_run_id,
             )
 
@@ -117,12 +110,26 @@ class Ml28MeatNeuroevolutionaryRawMaterialsPredictionPlugin(ModelPluginPort):
     def stats(self, mlflow_run_id: str = "") -> StatsResponse:
         _ = mlflow_run_id
         inputs = [
-            InputField(name=col, type="string" if col in ("date", "raw_material_id", "destination_profile") else "float", description=f"Ver docs/input_contract.md — {col}")
+            InputField(
+                name=col,
+                type=(
+                    "string"
+                    if col in ("date", "raw_material_id", "destination_profile")
+                    else "float"
+                ),
+                description=f"Ver docs/input_contract.md — {col}",
+            )
             for col in REQUIRED_COLUMNS
         ]
         outputs = [
-            OutputField(name="purchase_trigger_flag", type="int", description="1=BUY, 0=DO_NOT_BUY"),
-            OutputField(name="order_quantity_tons", type="float", description="Cantidad final recomendada (0.0 si trigger=0)"),
+            OutputField(
+                name="purchase_trigger_flag", type="int", description="1=BUY, 0=DO_NOT_BUY"
+            ),
+            OutputField(
+                name="order_quantity_tons",
+                type="float",
+                description="Cantidad final recomendada (0.0 si trigger=0)",
+            ),
             OutputField(name="risk_level", type="string", description="LOW | MEDIUM | HIGH"),
         ]
 
@@ -141,13 +148,15 @@ class Ml28MeatNeuroevolutionaryRawMaterialsPredictionPlugin(ModelPluginPort):
             inputs=inputs,
             outputs=outputs,
             metrics={
-                # policy_simulation oficial (reports/official/cu28_metrics_official__mixed_context.md,
-                # 175 periodos de test) — es la MISMA lógica que este plugin ejecuta (run_policy_simulation),
-                # no la de los modelos ML desconectados (upstream_predictor/purchase_trigger/quantity_optimizer .pkl).
+                # policy_simulation oficial
+                # (reports/official/cu28_metrics_official__mixed_context.md,
+                # 175 periodos de test) — es la MISMA lógica que este plugin ejecuta
+                # (run_policy_simulation), no la de los modelos ML desconectados
+                # (upstream_predictor/purchase_trigger/quantity_optimizer .pkl).
                 "aggregate_excess_reduction_pct": 21.7108,
                 "stockout_guardrail_pass": True,
                 "n_periods_evaluated": 175,
                 "destination_profiles_catalog": DESTINATION_PROFILES,
             },
-            runtime_stats=RuntimeStats(total_predictions=self._predict_count, avg_latency_ms=None),
+            runtime_stats=self._runtime_stats(),
         )

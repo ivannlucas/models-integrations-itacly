@@ -16,20 +16,20 @@ random seed, so results are exactly reproducible from the reference data.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
-from typing import Any
+from typing import Any, NamedTuple
 
 import numpy as np
 import pandas as pd
 
-from app.application.dto.stats_dto import InputField, OutputField, RuntimeStats, StatsResponse
+from app.application.dto.stats_dto import InputField, OutputField, StatsResponse
 from app.domain.ports.model_plugin_port import ModelPluginPort
 from app.infrastructure.artifact_store import local_file_path
+from app.domain.services.batch_rows import row_error_capture
 from app.domain.services.exceptions import (
     InfeasibleOptimizationError,
-    ModelNotLoadedError,
     TrainingNotSupportedError,
 )
+from app.domain.services.plugin_runtime import PluginRuntimeMixin
 from app.plugins.ml31_cereals_residue_optimizer.constants import (
     BENEFIT_PRESERVATION_TARGET_PCT,
     FRAMEWORK,
@@ -81,15 +81,155 @@ _SENSITIVITY_PARAMS: tuple[str, ...] = (
 )
 
 
-class Ml31CerealsResidueOptimizerPlugin(ModelPluginPort):
+class _LPScenario(NamedTuple):
+    """Inputs of one LP scenario (what _build_optimizer needs to assemble the optimizer)."""
+
+    reference_year: int
+    climate_factor: float
+    spring_rain_mm: float
+    surface_tolerance_pct: float | None
+    min_secano_use_pct: float
+    min_regadio_use_pct: float
+    crop_constraints: dict
+    price_overrides: dict
+    cost_overrides: dict
+    total_secano_ha: float | None
+    total_regadio_ha: float | None
+
+
+def _scenario_from_features(
+    features: dict,
+    reference_year: int,
+    *,
+    crop_constraints: dict,
+    total_secano_ha: float | None,
+    total_regadio_ha: float | None,
+) -> _LPScenario:
+    """Read the shared scenario fields of an optimize/pareto request (same order as before)."""
+    climate_factor = float(features["climate_factor"])
+    spring_rain_mm = float(
+        features["expected_spring_rain_mm"]
+        if features.get("expected_spring_rain_mm") is not None
+        else _SCENARIO_DEFAULTS["expected_spring_rain_mm"]
+    )
+    surface_tolerance_pct = features.get("surface_tolerance_pct")
+    return _LPScenario(
+        reference_year=reference_year,
+        climate_factor=climate_factor,
+        spring_rain_mm=spring_rain_mm,
+        surface_tolerance_pct=surface_tolerance_pct,
+        min_secano_use_pct=float(features["min_secano_use_pct"]),
+        min_regadio_use_pct=float(features["min_regadio_use_pct"]),
+        crop_constraints=crop_constraints,
+        price_overrides=features.get("price_overrides") or {},
+        cost_overrides=features.get("cost_overrides") or {},
+        total_secano_ha=total_secano_ha,
+        total_regadio_ha=total_regadio_ha,
+    )
+
+
+def _verdict(total_benefit_eur: float, b_ben: float, res_red_pct: float, ben_chg: float) -> str:
+    """PASADO/FALLADO against the objective success criteria (memoria Tabla 10 / config
+    success_criteria)."""
+    residue_pass = res_red_pct >= RESIDUE_REDUCTION_TARGET_PCT
+    benefit_preservation_pct = (total_benefit_eur / b_ben * 100) if b_ben else 0.0
+    benefit_pass = benefit_preservation_pct >= BENEFIT_PRESERVATION_TARGET_PCT - 0.005
+    min_benefit_pass = ben_chg >= MIN_BENEFIT_CHANGE_EUR - 2.5
+    return "PASADO" if (residue_pass and benefit_pass and min_benefit_pass) else "FALLADO"
+
+
+def _compare_with_baseline(solution, baseline: dict) -> dict:
+    """Optimal plan per crop, totals, changes vs the historical baseline and the verdict."""
+    b_res = baseline["total_residue_t"]
+    b_ben = baseline["total_benefit_eur"]
+    b_prod = baseline["total_production_t"]
+
+    res_red = b_res - solution.total_residue_t
+    res_red_pct = (res_red / b_res * 100) if b_res else 0.0
+    ben_chg = solution.total_benefit_eur - b_ben
+    ben_chg_pct = (ben_chg / b_ben * 100) if b_ben else 0.0
+    prod_chg = solution.total_production_t - b_prod
+    prod_chg_pct = (prod_chg / b_prod * 100) if b_prod else 0.0
+
+    verdict = _verdict(solution.total_benefit_eur, b_ben, res_red_pct, ben_chg)
+
+    crop_allocation = {
+        c: {
+            "secano_ha": solution.secano[c],
+            "regadio_ha": solution.regadio[c],
+            "production_t": solution.production[c],
+            "residue_t": solution.residue[c],
+            "benefit_eur": solution.benefit[c],
+        }
+        for c in solution.crops
+    }
+
+    return {
+        "crop_allocation": crop_allocation,
+        "total_production_t": solution.total_production_t,
+        "total_residue_t": solution.total_residue_t,
+        "total_benefit_eur": solution.total_benefit_eur,
+        "baseline_total_production_t": b_prod,
+        "baseline_total_residue_t": b_res,
+        "baseline_total_benefit_eur": b_ben,
+        "residue_reduction_pct": round(res_red_pct, 2),
+        "benefit_change_eur": round(ben_chg, 2),
+        "benefit_change_pct": round(ben_chg_pct, 2),
+        "production_change_pct": round(prod_chg_pct, 2),
+        "solver_status": solution.status,
+        "solve_time_seconds": solution.solve_time_seconds,
+        "verdict": verdict,
+    }
+
+
+def _pareto_bounds(optimizer: LPOptimizer) -> dict:
+    """Step 1 of the Pareto study: the minimum-residue and maximum-benefit extremes."""
+    sol_min_res = optimizer.solve(mode="minimize_residue", min_benefit_eur=0)
+    if sol_min_res.status != "OPTIMAL":
+        raise InfeasibleOptimizationError(
+            f"No se puede calcular el residuo mínimo (estado={sol_min_res.status})."
+        )
+    sol_max_ben = optimizer.solve(mode="maximize_benefit", max_residue_t=None)
+    if sol_max_ben.status != "OPTIMAL":
+        raise InfeasibleOptimizationError(
+            f"No se puede calcular el beneficio máximo (estado={sol_max_ben.status})."
+        )
+    return {
+        "min_residue_t": sol_min_res.total_residue_t,
+        "benefit_at_min_res_eur": sol_min_res.total_benefit_eur,
+        "max_benefit_eur": sol_max_ben.total_benefit_eur,
+        "residue_at_max_ben_t": sol_max_ben.total_residue_t,
+    }
+
+
+def _pareto_sweep(
+    optimizer: LPOptimizer, max_benefit: float, pct_range, n_points: int
+) -> list[dict]:
+    """Step 2 of the Pareto study: minimize residue over a sweep of benefit constraints."""
+    b_low = max_benefit * pct_range[0]
+    b_high = max_benefit * pct_range[1]
+    benefit_values = np.linspace(b_low, b_high, n_points)
+
+    pareto_points: list[dict] = []
+    for i, b_k in enumerate(benefit_values):
+        sol = optimizer.solve(mode="minimize_residue", min_benefit_eur=b_k)
+        if sol.status == "OPTIMAL":
+            pareto_points.append({
+                "index": i,
+                "benefit_eur": round(sol.total_benefit_eur, 2),
+                "residue_t": round(sol.total_residue_t, 2),
+                "production_t": round(sol.total_production_t, 2),
+            })
+    return pareto_points
+
+
+class Ml31CerealsResidueOptimizerPlugin(PluginRuntimeMixin, ModelPluginPort):
     """Deterministic LP optimizer for cereal residue reduction / benefit."""
 
     def __init__(self) -> None:
         self._economics: dict | None = None
         self._hi: dict | None = None
         self._df: pd.DataFrame | None = None
-        self._predict_count: int = 0
-        self._last_predict_at: str | None = None
 
     def load(self) -> None:
         self._economics, self._hi, self._df = load_artifacts()
@@ -97,14 +237,6 @@ class Ml31CerealsResidueOptimizerPlugin(ModelPluginPort):
 
     def is_loaded(self) -> bool:
         return self._df is not None and self._economics is not None
-
-    def _require_loaded(self) -> None:
-        if not self.is_loaded():
-            raise ModelNotLoadedError("El modelo no está cargado.")
-
-    def _record(self) -> None:
-        self._predict_count += 1
-        self._last_predict_at = datetime.now(tz=timezone.utc).isoformat()
 
     # ── shared LP scenario setup ──────────────────────────────────────────────
     def _resolve_year(self, reference_year: int) -> int:
@@ -119,42 +251,28 @@ class Ml31CerealsResidueOptimizerPlugin(ModelPluginPort):
             return fallback
         return reference_year
 
-    def _build_optimizer(
-        self,
-        *,
-        reference_year: int,
-        climate_factor: float,
-        spring_rain_mm: float,
-        surface_tolerance_pct: float | None,
-        min_secano_use_pct: float,
-        min_regadio_use_pct: float,
-        crop_constraints: dict,
-        price_overrides: dict,
-        cost_overrides: dict,
-        total_secano_ha: float | None,
-        total_regadio_ha: float | None,
-    ) -> tuple[LPOptimizer, dict, dict]:
+    def _build_optimizer(self, scenario: _LPScenario) -> tuple[LPOptimizer, dict, dict]:
         """Assemble the LP optimizer + baseline for a scenario (mirrors run_inference)."""
         extractor = ParameterExtractor(self._df)
-        params = extractor.extract_for_year(reference_year)
+        params = extractor.extract_for_year(scenario.reference_year)
 
         pcm = PriceCostManager(self._economics, self._hi)
-        pcm.override({"price_overrides": price_overrides, "cost_overrides": cost_overrides})
+        pcm.override({
+            "price_overrides": scenario.price_overrides,
+            "cost_overrides": scenario.cost_overrides,
+        })
 
         harvest_fraction = extractor.compute_harvest_fraction(pcm)
 
-        if total_secano_ha is not None:
-            params["total_secano_ha"] = float(total_secano_ha)
-        if total_regadio_ha is not None:
-            params["total_regadio_ha"] = float(total_regadio_ha)
+        if scenario.total_secano_ha is not None:
+            params["total_secano_ha"] = float(scenario.total_secano_ha)
+        if scenario.total_regadio_ha is not None:
+            params["total_regadio_ha"] = float(scenario.total_regadio_ha)
 
         baseline = extractor.get_baseline_metrics(
-            reference_year, params, pcm,
-            harvest_fraction=harvest_fraction, climate_factor=climate_factor,
+            scenario.reference_year, params, pcm,
+            harvest_fraction=harvest_fraction, climate_factor=scenario.climate_factor,
         )
-
-        min_secano_use_ha = min_secano_use_pct / 100.0 * params["total_secano_ha"]
-        min_regadio_use_ha = min_regadio_use_pct / 100.0 * params["total_regadio_ha"]
 
         hist_area = {
             c: params["hist_secano"].get(c, 0.0) + params["hist_regadio"].get(c, 0.0)
@@ -168,14 +286,14 @@ class Ml31CerealsResidueOptimizerPlugin(ModelPluginPort):
             total_regadio_ha=params["total_regadio_ha"],
             yield_s=params["yield_s"],
             yield_r=params["yield_r"],
-            climate_factor=climate_factor,
-            spring_rain_mm=spring_rain_mm,
-            crop_constraints=crop_constraints,
+            climate_factor=scenario.climate_factor,
+            spring_rain_mm=scenario.spring_rain_mm,
+            crop_constraints=scenario.crop_constraints,
             harvest_fraction=harvest_fraction,
-            min_secano_use_ha=min_secano_use_ha,
-            min_regadio_use_ha=min_regadio_use_ha,
+            min_secano_use_ha=scenario.min_secano_use_pct / 100.0 * params["total_secano_ha"],
+            min_regadio_use_ha=scenario.min_regadio_use_pct / 100.0 * params["total_regadio_ha"],
             hist_area=hist_area,
-            surface_tolerance_pct=surface_tolerance_pct,
+            surface_tolerance_pct=scenario.surface_tolerance_pct,
         )
         return optimizer, params, baseline
 
@@ -205,27 +323,14 @@ class Ml31CerealsResidueOptimizerPlugin(ModelPluginPort):
         """
         reference_year = self._resolve_year(int(features["reference_year"]))
         opt_mode = features["optimization_mode"]
-        climate_factor = float(features["climate_factor"])
-        spring_rain_mm = float(
-            features["expected_spring_rain_mm"]
-            if features.get("expected_spring_rain_mm") is not None
-            else _SCENARIO_DEFAULTS["expected_spring_rain_mm"]
-        )
-        surface_tolerance_pct = features.get("surface_tolerance_pct")
-
-        optimizer, _params, baseline = self._build_optimizer(
-            reference_year=reference_year,
-            climate_factor=climate_factor,
-            spring_rain_mm=spring_rain_mm,
-            surface_tolerance_pct=surface_tolerance_pct,
-            min_secano_use_pct=float(features["min_secano_use_pct"]),
-            min_regadio_use_pct=float(features["min_regadio_use_pct"]),
+        scenario = _scenario_from_features(
+            features,
+            reference_year,
             crop_constraints=features.get("crop_constraints") or {},
-            price_overrides=features.get("price_overrides") or {},
-            cost_overrides=features.get("cost_overrides") or {},
             total_secano_ha=features.get("total_secano_ha"),
             total_regadio_ha=features.get("total_regadio_ha"),
         )
+        optimizer, _params, baseline = self._build_optimizer(scenario)
 
         min_benefit = features.get("min_benefit_eur")
         max_residue = features.get("max_residue_t")
@@ -241,56 +346,14 @@ class Ml31CerealsResidueOptimizerPlugin(ModelPluginPort):
             raise InfeasibleOptimizationError(
                 f"El problema LP no tiene solución óptima (estado={solution.status}) para el "
                 f"escenario (año={reference_year}, modo={opt_mode}). Revise que las restricciones "
-                f"(min_benefit, banda de superficie ±{surface_tolerance_pct}%, uso mínimo de "
-                f"tierra) sean compatibles."
+                f"(min_benefit, banda de superficie ±{scenario.surface_tolerance_pct}%, uso mínimo "
+                f"de tierra) sean compatibles."
             )
-
-        b_res = baseline["total_residue_t"]
-        b_ben = baseline["total_benefit_eur"]
-        b_prod = baseline["total_production_t"]
-
-        res_red = b_res - solution.total_residue_t
-        res_red_pct = (res_red / b_res * 100) if b_res else 0.0
-        ben_chg = solution.total_benefit_eur - b_ben
-        ben_chg_pct = (ben_chg / b_ben * 100) if b_ben else 0.0
-        prod_chg = solution.total_production_t - b_prod
-        prod_chg_pct = (prod_chg / b_prod * 100) if b_prod else 0.0
-
-        # Objective success criteria (memoria Tabla 10 / config success_criteria).
-        residue_pass = res_red_pct >= RESIDUE_REDUCTION_TARGET_PCT
-        benefit_preservation_pct = (solution.total_benefit_eur / b_ben * 100) if b_ben else 0.0
-        benefit_pass = benefit_preservation_pct >= BENEFIT_PRESERVATION_TARGET_PCT - 0.005
-        min_benefit_pass = ben_chg >= MIN_BENEFIT_CHANGE_EUR - 2.5
-        verdict = "PASADO" if (residue_pass and benefit_pass and min_benefit_pass) else "FALLADO"
-
-        crop_allocation = {
-            c: {
-                "secano_ha": solution.secano[c],
-                "regadio_ha": solution.regadio[c],
-                "production_t": solution.production[c],
-                "residue_t": solution.residue[c],
-                "benefit_eur": solution.benefit[c],
-            }
-            for c in solution.crops
-        }
 
         return {
             "reference_year": reference_year,
             "optimization_mode": opt_mode,
-            "crop_allocation": crop_allocation,
-            "total_production_t": solution.total_production_t,
-            "total_residue_t": solution.total_residue_t,
-            "total_benefit_eur": solution.total_benefit_eur,
-            "baseline_total_production_t": b_prod,
-            "baseline_total_residue_t": b_res,
-            "baseline_total_benefit_eur": b_ben,
-            "residue_reduction_pct": round(res_red_pct, 2),
-            "benefit_change_eur": round(ben_chg, 2),
-            "benefit_change_pct": round(ben_chg_pct, 2),
-            "production_change_pct": round(prod_chg_pct, 2),
-            "solver_status": solution.status,
-            "solve_time_seconds": solution.solve_time_seconds,
-            "verdict": verdict,
+            **_compare_with_baseline(solution, baseline),
         }
 
     def _compute_sensitivity(self, features: dict, baseline_res_red_pct: float) -> list[dict]:
@@ -326,15 +389,21 @@ class Ml31CerealsResidueOptimizerPlugin(ModelPluginPort):
                 perturbed_result = self._solve_scenario(perturbed_features)
             except InfeasibleOptimizationError:
                 continue
-            contributions.append({
-                "feature": param,
-                "contribution": round(perturbed_result["residue_reduction_pct"] - baseline_res_red_pct, 4),
-                "value": round(base_value, 4),
-            })
+            contributions.append(
+                {
+                    "feature": param,
+                    "contribution": round(
+                        perturbed_result["residue_reduction_pct"] - baseline_res_red_pct, 4
+                    ),
+                    "value": round(base_value, 4),
+                }
+            )
         contributions.sort(key=lambda c: abs(c["contribution"]), reverse=True)
         return contributions
 
-    def _run_optimize(self, features: dict, *, with_sensitivity: bool = False) -> PredictOptimizeResponse:
+    def _run_optimize(
+        self, features: dict, *, with_sensitivity: bool = False
+    ) -> PredictOptimizeResponse:
         result = self._solve_scenario(features)
         sensitivity = (
             self._compute_sensitivity(features, result["residue_reduction_pct"])
@@ -350,60 +419,16 @@ class Ml31CerealsResidueOptimizerPlugin(ModelPluginPort):
         reference_year = self._resolve_year(int(features["reference_year"]))
         n_points = int(features["num_points"])
         pct_range = features["benefit_range_pct_of_max"]
-        climate_factor = float(features["climate_factor"])
-        spring_rain_mm = float(
-            features["expected_spring_rain_mm"]
-            if features.get("expected_spring_rain_mm") is not None
-            else _SCENARIO_DEFAULTS["expected_spring_rain_mm"]
-        )
-        surface_tolerance_pct = features.get("surface_tolerance_pct")
-
-        optimizer, _params, _baseline = self._build_optimizer(
-            reference_year=reference_year,
-            climate_factor=climate_factor,
-            spring_rain_mm=spring_rain_mm,
-            surface_tolerance_pct=surface_tolerance_pct,
-            min_secano_use_pct=float(features["min_secano_use_pct"]),
-            min_regadio_use_pct=float(features["min_regadio_use_pct"]),
+        optimizer, _params, _baseline = self._build_optimizer(_scenario_from_features(
+            features,
+            reference_year,
             crop_constraints={},
-            price_overrides=features.get("price_overrides") or {},
-            cost_overrides=features.get("cost_overrides") or {},
             total_secano_ha=None,
             total_regadio_ha=None,
-        )
+        ))
 
-        # Step 1: bounds
-        sol_min_res = optimizer.solve(mode="minimize_residue", min_benefit_eur=0)
-        if sol_min_res.status != "OPTIMAL":
-            raise InfeasibleOptimizationError(
-                f"No se puede calcular el residuo mínimo (estado={sol_min_res.status})."
-            )
-        min_residue = sol_min_res.total_residue_t
-        benefit_at_min_res = sol_min_res.total_benefit_eur
-
-        sol_max_ben = optimizer.solve(mode="maximize_benefit", max_residue_t=None)
-        if sol_max_ben.status != "OPTIMAL":
-            raise InfeasibleOptimizationError(
-                f"No se puede calcular el beneficio máximo (estado={sol_max_ben.status})."
-            )
-        max_benefit = sol_max_ben.total_benefit_eur
-        residue_at_max_ben = sol_max_ben.total_residue_t
-
-        # Step 2: sweep the benefit constraint
-        b_low = max_benefit * pct_range[0]
-        b_high = max_benefit * pct_range[1]
-        benefit_values = np.linspace(b_low, b_high, n_points)
-
-        pareto_points: list[dict] = []
-        for i, b_k in enumerate(benefit_values):
-            sol = optimizer.solve(mode="minimize_residue", min_benefit_eur=b_k)
-            if sol.status == "OPTIMAL":
-                pareto_points.append({
-                    "index": i,
-                    "benefit_eur": round(sol.total_benefit_eur, 2),
-                    "residue_t": round(sol.total_residue_t, 2),
-                    "production_t": round(sol.total_production_t, 2),
-                })
+        bounds = _pareto_bounds(optimizer)
+        pareto_points = _pareto_sweep(optimizer, bounds["max_benefit_eur"], pct_range, n_points)
 
         # Step 3: filter dominated + knee
         pareto_front = filter_dominated(pareto_points)
@@ -431,12 +456,7 @@ class Ml31CerealsResidueOptimizerPlugin(ModelPluginPort):
         return PredictParetoResponse(
             model_id=MODEL_ID,
             reference_year=reference_year,
-            bounds={
-                "min_residue_t": min_residue,
-                "benefit_at_min_res_eur": benefit_at_min_res,
-                "max_benefit_eur": max_benefit,
-                "residue_at_max_ben_t": residue_at_max_ben,
-            },
+            bounds=bounds,
             pareto_points=points_out,
             knee_point=knee_out,
             num_sweep_points=len(pareto_points),
@@ -452,12 +472,12 @@ class Ml31CerealsResidueOptimizerPlugin(ModelPluginPort):
             df = pd.read_csv(local_path)
         predictions: list[dict] = []
         for idx, row in df.iterrows():
-            try:
+            with row_error_capture(predictions, {"row": int(idx)}, what=f"fila {idx}"):
                 features = self._row_to_scenario(row)
                 # Sensitivity (explainability) is only ever surfaced for the first row
                 # of a batch by the platform's XAI panel — computing it for every row
                 # would multiply solve time ~7x for no benefit, so it's skipped past idx 0.
-                result = self._run_optimize(features, with_sensitivity=(idx == 0))
+                result = self._run_optimize(features, with_sensitivity=idx == 0)
                 row_out = {
                     "row": int(idx),
                     "reference_year": result.reference_year,
@@ -474,9 +494,6 @@ class Ml31CerealsResidueOptimizerPlugin(ModelPluginPort):
                 if result.sensitivity is not None:
                     row_out["sensitivity"] = result.sensitivity
                 predictions.append(row_out)
-            except Exception as exc:  # pylint: disable=broad-exception-caught
-                logger.warning("Error en fila %s: %s", idx, exc)
-                predictions.append({"row": int(idx), "error": str(exc)})
         self._record()
         logger.info("predict_batch done — %d scenarios", len(predictions))
         return PredictBatchResponse(model_id=MODEL_ID, predictions=predictions, output_path=None)
@@ -529,50 +546,127 @@ class Ml31CerealsResidueOptimizerPlugin(ModelPluginPort):
             task_type="optimization",
             framework=FRAMEWORK,
             inputs=[
-                InputField(name="reference_year", type="int", default=2023,
-                           description="Año de referencia (superficies históricas) [optimize/pareto]"),
-                InputField(name="optimization_mode", type="str", default="minimize_residue",
-                           description="minimize_residue (Modo A) | maximize_benefit (Modo B) [optimize]"),
-                InputField(name="climate_factor", type="float", default=1.0,
-                           description="Multiplicador sobre los rendimientos [optimize/pareto]"),
-                InputField(name="expected_spring_rain_mm", type="float", default=130.0,
-                           description="Lluvia de primavera esperada (mm); <100 activa estrés hídrico"),
-                InputField(name="min_benefit_eur", type="float",
-                           description="Beneficio mínimo exigido (R6, Modo A); null => baseline"),
-                InputField(name="min_benefit_pct_of_baseline", type="float", default=1.0,
-                           description="% del beneficio baseline a preservar [optimize Modo A]"),
-                InputField(name="max_residue_t", type="float",
-                           description="Residuo máximo admisible (R7, Modo B)"),
-                InputField(name="surface_tolerance_pct", type="float", default=25.0,
-                           description="Banda ±% sobre la superficie histórica por cultivo (R4c)"),
-                InputField(name="min_secano_use_pct", type="float", default=95.0,
-                           description="Uso mínimo de secano (R1b)"),
-                InputField(name="min_regadio_use_pct", type="float", default=95.0,
-                           description="Uso mínimo de regadío (R2b)"),
-                InputField(name="num_points", type="int", default=20,
-                           description="Nº de puntos del barrido de beneficio [pareto]"),
-                InputField(name="benefit_range_pct_of_max", type="list",
-                           description="Rango [low, high] como fracción del beneficio máximo [pareto]"),
+                InputField(
+                    name="reference_year",
+                    type="int",
+                    default=2023,
+                    description="Año de referencia (superficies históricas) [optimize/pareto]",
+                ),
+                InputField(
+                    name="optimization_mode",
+                    type="str",
+                    default="minimize_residue",
+                    description="minimize_residue (Modo A) | maximize_benefit (Modo B) [optimize]",
+                ),
+                InputField(
+                    name="climate_factor",
+                    type="float",
+                    default=1.0,
+                    description="Multiplicador sobre los rendimientos [optimize/pareto]",
+                ),
+                InputField(
+                    name="expected_spring_rain_mm",
+                    type="float",
+                    default=130.0,
+                    description="Lluvia de primavera esperada (mm); <100 activa estrés hídrico",
+                ),
+                InputField(
+                    name="min_benefit_eur",
+                    type="float",
+                    description="Beneficio mínimo exigido (R6, Modo A); null => baseline",
+                ),
+                InputField(
+                    name="min_benefit_pct_of_baseline",
+                    type="float",
+                    default=1.0,
+                    description="% del beneficio baseline a preservar [optimize Modo A]",
+                ),
+                InputField(
+                    name="max_residue_t",
+                    type="float",
+                    description="Residuo máximo admisible (R7, Modo B)",
+                ),
+                InputField(
+                    name="surface_tolerance_pct",
+                    type="float",
+                    default=25.0,
+                    description="Banda ±% sobre la superficie histórica por cultivo (R4c)",
+                ),
+                InputField(
+                    name="min_secano_use_pct",
+                    type="float",
+                    default=95.0,
+                    description="Uso mínimo de secano (R1b)",
+                ),
+                InputField(
+                    name="min_regadio_use_pct",
+                    type="float",
+                    default=95.0,
+                    description="Uso mínimo de regadío (R2b)",
+                ),
+                InputField(
+                    name="num_points",
+                    type="int",
+                    default=20,
+                    description="Nº de puntos del barrido de beneficio [pareto]",
+                ),
+                InputField(
+                    name="benefit_range_pct_of_max",
+                    type="list",
+                    description="Rango [low, high] como fracción del beneficio máximo [pareto]",
+                ),
             ],
             outputs=[
-                OutputField(name="crop_allocation", type="dict",
-                            description="Plan óptimo por cultivo: secano_ha/regadio_ha/production_t/residue_t/benefit_eur [optimize]"),
-                OutputField(name="total_residue_t", type="float",
-                            description="Residuo total de la solución óptima (objetivo Modo A) [optimize]"),
-                OutputField(name="total_benefit_eur", type="float",
-                            description="Beneficio total de la solución óptima (objetivo Modo B) [optimize]"),
-                OutputField(name="residue_reduction_pct", type="float",
-                            description="Reducción de residuo vs baseline (positivo=reducción) [optimize]"),
-                OutputField(name="verdict", type="str",
-                            description="PASADO/FALLADO según criterios de éxito [optimize]"),
-                OutputField(name="solver_status", type="str",
-                            description="Estado CBC: OPTIMAL | INFEASIBLE | UNBOUNDED | NOT_SOLVED"),
-                OutputField(name="bounds", type="dict",
-                            description="Extremos de la frontera de Pareto [pareto]"),
-                OutputField(name="pareto_points", type="list",
-                            description="Puntos no dominados de la frontera (en millones) [pareto]"),
-                OutputField(name="knee_point", type="dict",
-                            description="Mejor compromiso residuo/beneficio [pareto]"),
+                OutputField(
+                    name="crop_allocation",
+                    type="dict",
+                    description=(
+                        "Plan óptimo por cultivo: "
+                        "secano_ha/regadio_ha/production_t/residue_t/benefit_eur [optimize]"
+                    ),
+                ),
+                OutputField(
+                    name="total_residue_t",
+                    type="float",
+                    description="Residuo total de la solución óptima (objetivo Modo A) [optimize]",
+                ),
+                OutputField(
+                    name="total_benefit_eur",
+                    type="float",
+                    description=(
+                        "Beneficio total de la solución óptima (objetivo Modo B) [optimize]"
+                    ),
+                ),
+                OutputField(
+                    name="residue_reduction_pct",
+                    type="float",
+                    description="Reducción de residuo vs baseline (positivo=reducción) [optimize]",
+                ),
+                OutputField(
+                    name="verdict",
+                    type="str",
+                    description="PASADO/FALLADO según criterios de éxito [optimize]",
+                ),
+                OutputField(
+                    name="solver_status",
+                    type="str",
+                    description="Estado CBC: OPTIMAL | INFEASIBLE | UNBOUNDED | NOT_SOLVED",
+                ),
+                OutputField(
+                    name="bounds",
+                    type="dict",
+                    description="Extremos de la frontera de Pareto [pareto]",
+                ),
+                OutputField(
+                    name="pareto_points",
+                    type="list",
+                    description="Puntos no dominados de la frontera (en millones) [pareto]",
+                ),
+                OutputField(
+                    name="knee_point",
+                    type="dict",
+                    description="Mejor compromiso residuo/beneficio [pareto]",
+                ),
             ],
             metrics={
                 # Escenario de referencia 2023 (memoria Tabla 12 / optimization_metrics.json).
@@ -583,11 +677,10 @@ class Ml31CerealsResidueOptimizerPlugin(ModelPluginPort):
                 "residuo_por_euro_optimo_t_eur": 0.0132,
                 "solver_status_2023": "OPTIMAL",
                 "solve_time_seconds_2023": 0.0138,
-                "nota_signo": ("residue_reduction_pct es POSITIVO cuando hay reducción; la memoria "
-                               "reporta el mismo dato con signo negativo como 'variación'."),
+                "nota_signo": (
+                    "residue_reduction_pct es POSITIVO cuando hay reducción; la memoria "
+                    "reporta el mismo dato con signo negativo como 'variación'."
+                ),
             },
-            runtime_stats=RuntimeStats(
-                total_predictions=self._predict_count,
-                avg_latency_ms=None,
-            ),
+            runtime_stats=self._runtime_stats(),
         )

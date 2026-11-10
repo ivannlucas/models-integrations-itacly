@@ -6,10 +6,10 @@ Port of the delivered ``realtime_decision_pipeline._run_adaptive_ga_for_row`` an
 parameters and per-row seeding (``random.seed`` + ``np.random.seed``) so a row run
 with the same seed reproduces the AI team's decisions.
 
-Variable names (scaler_X, T_serv, ...) intentionally mirror the original codebase;
-DEAP creator/toolbox members are registered dynamically, hence the pylint disables.
+Gene names (T_serv, Delta_P, ...) intentionally mirror the original codebase;
+DEAP creator/toolbox members are registered dynamically, hence the no-member disable.
 """
-# pylint: disable=invalid-name,too-many-arguments,too-many-positional-arguments,no-member
+# pylint: disable=no-member
 from __future__ import annotations
 
 import random
@@ -51,7 +51,7 @@ if _INDIVIDUAL_NAME not in creator.__dict__:
     creator.create(_INDIVIDUAL_NAME, list, fitness=creator.__dict__[_FITNESS_NAME])
 
 
-def predict_scenario(model, scaler_X, scaler_Y, context: dict,
+def predict_scenario(model, scaler_x, scaler_y, context: dict,
                      individual: Sequence[float]) -> tuple[float, float]:
     """Run the MLP for one context + (T_serv, Delta_P, Regeneration_perc), returning (CO2, T_out).
 
@@ -60,16 +60,16 @@ def predict_scenario(model, scaler_X, scaler_Y, context: dict,
     t_serv, delta_p, regen = clip_individual(individual)
     row = {c: float(context[c]) for c in CONTEXT_COLS}
     row.update({"T_serv": t_serv, "Delta_P": delta_p, "Regeneration_perc": regen})
-    x_scaled = scaler_X.transform(build_feature_frame(pd.DataFrame([row])))
+    x_scaled = scaler_x.transform(build_feature_frame(pd.DataFrame([row])))
     with torch.no_grad():
         y_scaled = model(torch.tensor(x_scaled, dtype=torch.float32)).cpu().numpy()
-    y_real = scaler_Y.inverse_transform(y_scaled)[0]
+    y_real = scaler_y.inverse_transform(y_scaled)[0]
     return float(y_real[CO2_IDX]), float(y_real[T_OUT_IDX])
 
 
-def fitness(model, scaler_X, scaler_Y, context: dict, individual: Sequence[float]) -> float:
+def fitness(model, scaler_x, scaler_y, context: dict, individual: Sequence[float]) -> float:
     """CO2 + soft penalty for T_out below the pasteurization threshold."""
-    co2, t_out = predict_scenario(model, scaler_X, scaler_Y, context, individual)
+    co2, t_out = predict_scenario(model, scaler_x, scaler_y, context, individual)
     penalty = PENALTY_FACTOR * (T_OUT_MIN - t_out) if t_out < T_OUT_MIN else 0.0
     return co2 + penalty
 
@@ -87,15 +87,8 @@ def _check_bounds(low: list, up: list):
     return decorator
 
 
-def run_adaptive_ga(model, scaler_X, scaler_Y, context: dict,
-                    seed_individuals: list[list[float]], row_seed: int) -> list[float]:
-    """Run the adaptive GA for one context row; returns the best (T_serv, Delta_P, Regeneration_perc).
-
-    Deterministic for a given *row_seed*.
-    """
-    random.seed(row_seed)
-    np.random.seed(row_seed)
-
+def _build_toolbox(model, scaler_x, scaler_y, context: dict) -> base.Toolbox:
+    """DEAP toolbox of the adaptive GA (registration only: no random number is drawn)."""
     low = [GA_BOUNDS[g][0] for g in GENE_ORDER]
     up = [GA_BOUNDS[g][1] for g in GENE_ORDER]
 
@@ -109,7 +102,7 @@ def run_adaptive_ga(model, scaler_X, scaler_Y, context: dict,
     )
     toolbox.register(
         "evaluate",
-        lambda ind: (fitness(model, scaler_X, scaler_Y, context, ind),),
+        lambda ind: (fitness(model, scaler_x, scaler_y, context, ind),),
     )
     toolbox.register("mate", tools.cxBlend, alpha=GA_CX_ALPHA)
     toolbox.register("mutate", tools.mutPolynomialBounded, low=low, up=up,
@@ -117,6 +110,22 @@ def run_adaptive_ga(model, scaler_X, scaler_Y, context: dict,
     toolbox.register("select", tools.selTournament, tournsize=GA_TOURNAMENT_SIZE)
     toolbox.decorate("mate", _check_bounds(low, up))
     toolbox.decorate("mutate", _check_bounds(low, up))
+    return toolbox
+
+
+# pylint: disable-next=too-many-arguments,too-many-positional-arguments  # delivered signature
+def run_adaptive_ga(model, scaler_x, scaler_y, context: dict,
+                    seed_individuals: list[list[float]], row_seed: int) -> list[float]:
+    """Run the adaptive GA for one context row; returns the best
+    (T_serv, Delta_P, Regeneration_perc).
+
+    Deterministic for a given *row_seed*.
+    """
+
+    random.seed(row_seed)
+    np.random.seed(row_seed)
+
+    toolbox = _build_toolbox(model, scaler_x, scaler_y, context)
 
     population = [toolbox.individual() for _ in range(GA_POP_SIZE)]
     # Faithful to the delivered code: the seed individuals are appended and then the

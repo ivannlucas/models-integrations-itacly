@@ -16,13 +16,16 @@ import pandas as pd
 import pytest
 
 from app.domain.services.exceptions import ModelPersistenceError
+from app.domain.services import mlflow_artifacts
 from app.plugins.ml36_dairy_dnl_co2_emissions_optimizer import plugin as plugin_mod
 from app.plugins.ml36_dairy_dnl_co2_emissions_optimizer import training
 from app.plugins.ml36_dairy_dnl_co2_emissions_optimizer.constants import (
-    FEATURE_ORDER, MODEL_CONFIG_FILENAME, MODEL_FILENAME, SCALER_X_FILENAME, SCALER_Y_FILENAME, TARGETS,
-    TRAIN_ARCHITECTURE, TRAIN_SEED, TRAIN_SEED_OFFSET,
+    FEATURE_ORDER, MODEL_CONFIG_FILENAME, MODEL_FILENAME, SCALER_X_FILENAME, SCALER_Y_FILENAME,
+    TARGETS, TRAIN_ARCHITECTURE, TRAIN_SEED, TRAIN_SEED_OFFSET,
 )
-from app.plugins.ml36_dairy_dnl_co2_emissions_optimizer.preprocessing import add_derived_features
+from app.plugins.ml36_dairy_dnl_co2_emissions_optimizer.preprocessing import (
+    add_derived_features,
+)
 
 CODE = Path(__file__).resolve().parents[2] / "inbox" / "a36" / "codigo"
 
@@ -34,11 +37,14 @@ def _cycles(n_cycles=12, steps=20, seed=0, with_cycle_id=True) -> pd.DataFrame:
     for cid in range(n_cycles):
         for t in range(steps):
             t_serv, regen = rng.uniform(75, 84), rng.uniform(87, 93)
-            row = {"T_serv": t_serv, "F_milk": rng.uniform(4500, 5800), "T_in": rng.uniform(3.5, 7.5),
-                   "Fat_perc": rng.uniform(3.2, 4.2), "Viscosity": rng.uniform(1.9, 2.2), "Regeneration_perc": regen,
+            row = {"T_serv": t_serv, "F_milk": rng.uniform(4500, 5800),
+                   "T_in": rng.uniform(3.5, 7.5), "Fat_perc": rng.uniform(3.2, 4.2),
+                   "Viscosity": rng.uniform(1.9, 2.2), "Regeneration_perc": regen,
                    "Delta_P": rng.uniform(0.6, 1.6), "t_ciclo": 5.0 * (t + 1)}
             row["T_out"] = t_serv - 1.3 + rng.normal(0, 0.02)
-            row["CO2_emissions"] = 20 + 0.8 * (t_serv - 78) - 0.9 * (regen - 90) + rng.normal(0, 0.3)
+            row["CO2_emissions"] = (
+                20 + 0.8 * (t_serv - 78) - 0.9 * (regen - 90) + rng.normal(0, 0.3)
+            )
             if with_cycle_id:
                 row["cycle_id"] = cid
             rows.append(row)
@@ -46,6 +52,7 @@ def _cycles(n_cycles=12, steps=20, seed=0, with_cycle_id=True) -> pd.DataFrame:
 
 
 def test_split_keeps_whole_cycles_and_is_70_15_15_by_cycle():
+    """The split keeps whole cycles and is 70/15/15 by cycle count."""
     df = training.prepare_frame(_cycles(n_cycles=20))
     train, val, test = training.split_frame(df)
     ids = [set(part["cycle_id"]) for part in (train, val, test)]
@@ -54,11 +61,13 @@ def test_split_keeps_whole_cycles_and_is_70_15_15_by_cycle():
 
 
 def test_cycles_are_rebuilt_from_t_ciclo_resets_without_cycle_id():
+    """Without cycle_id, cycles are rebuilt from t_ciclo resets."""
     df = _cycles(n_cycles=4, steps=3, with_cycle_id=False)
     assert training.detect_cycle_ids(df).tolist() == [0, 0, 0, 1, 1, 1, 2, 2, 2, 3, 3, 3]
 
 
 def test_split_is_balanced_by_season_when_a_month_column_exists():
+    """With a month column the split is balanced by season."""
     df = training.prepare_frame(_cycles(n_cycles=20))
     df["month"] = np.where(df["cycle_id"] < 10, 1, 7)  # 10 winter cycles + 10 summer cycles
     train, val, test = training.split_frame(df)
@@ -68,19 +77,26 @@ def test_split_is_balanced_by_season_when_a_month_column_exists():
 
 
 def test_derived_features_are_completed_with_the_original_formulas():
+    """Missing derived features are completed with the original formulas."""
     df = _cycles(n_cycles=3)
     out = training.prepare_frame(df)
-    assert np.allclose(out[FEATURE_ORDER].to_numpy(), add_derived_features(df)[FEATURE_ORDER].to_numpy())
+    assert np.allclose(
+        out[FEATURE_ORDER].to_numpy(), add_derived_features(df)[FEATURE_ORDER].to_numpy()
+    )
 
 
-@pytest.mark.parametrize("bad,match", [("no_target", "CO2_emissions"), ("two_cycles", "al menos 3 ciclos")])
+@pytest.mark.parametrize(
+    "bad,match", [("no_target", "CO2_emissions"), ("two_cycles", "al menos 3 ciclos")]
+)
 def test_invalid_training_csv_is_a_clear_error(bad, match):
+    """A CSV without target or with too few cycles raises a clear ValueError."""
     df = _cycles(n_cycles=2) if bad == "two_cycles" else _cycles().drop(columns=["CO2_emissions"])
     with pytest.raises(ValueError, match=match):
         training.train_model(df)
 
 
 def test_train_model_fits_new_scalers_and_a_new_mlp_with_the_original_config(monkeypatch):
+    """train_model fits new scalers on train and a new MLP with the delivered architecture."""
     monkeypatch.setattr(training, "TRAIN_EPOCHS", 3)
     result = training.train_model(_cycles())
     train, _, _ = training.split_frame(training.prepare_frame(_cycles()))
@@ -92,6 +108,7 @@ def test_train_model_fits_new_scalers_and_a_new_mlp_with_the_original_config(mon
 
 
 def test_training_is_reproducible(monkeypatch):
+    """Two trainings on the same data give identical weights."""
     monkeypatch.setattr(training, "TRAIN_EPOCHS", 3)
     first, second = training.train_model(_cycles()), training.train_model(_cycles())
     for key, value in first["model"].state_dict().items():
@@ -99,6 +116,7 @@ def test_training_is_reproducible(monkeypatch):
 
 
 def test_retraining_reproduces_the_delivered_split_scalers_and_metrics():
+    """On the delivered data the split, scalers and metrics match the original."""
     master_csv = CODE / "data" / "processed" / "df_pasteurizacion_master.csv"
     if not master_csv.exists():
         pytest.skip("inbox/a36/codigo not present")
@@ -106,7 +124,8 @@ def test_retraining_reproduces_the_delivered_split_scalers_and_metrics():
     train, val, test = training.split_frame(training.prepare_frame(master))
     for name, part in (("train", train), ("val", val), ("test", test)):
         delivered = pd.read_csv(CODE / "data" / "splits" / f"{name}_raw.csv")
-        assert np.allclose(part[FEATURE_ORDER + TARGETS].to_numpy(), delivered[FEATURE_ORDER + TARGETS].to_numpy(),
+        assert np.allclose(part[FEATURE_ORDER + TARGETS].to_numpy(),
+                           delivered[FEATURE_ORDER + TARGETS].to_numpy(),
                            rtol=0, atol=1e-12)
 
     result = training.train_model(master)
@@ -124,22 +143,27 @@ def test_retraining_reproduces_the_delivered_split_scalers_and_metrics():
 
 # ── plugin.train: MLflow only ──────────────────────────────────────────────────
 
-@pytest.fixture
-def instance():
+@pytest.fixture(name="instance")
+def fixture_instance():
+    """The real ml36 plugin."""
     return plugin_mod.Ml36DairyDnlCo2EmissionsOptimizerPlugin()
 
 
 def test_train_uploads_the_new_model_and_its_scalers_to_mlflow(instance, monkeypatch, tmp_path):
+    """train() uploads the new model, config and both scalers to the MLflow run."""
     monkeypatch.setattr(training, "TRAIN_EPOCHS", 2)
     csv = tmp_path / "cycles.csv"
     _cycles().to_csv(csv, index=False)
     store = tmp_path / "mlflow"
     tracker = MagicMock()
-    tracker.upload_artifacts.side_effect = lambda d, artifact_path: shutil.copytree(d, store / artifact_path)
-    monkeypatch.setattr(plugin_mod, "BaseMLflowTracker", MagicMock(return_value=tracker))
+    tracker.upload_artifacts.side_effect = (
+        lambda d, artifact_path: shutil.copytree(d, store / artifact_path)
+    )
+    monkeypatch.setattr(mlflow_artifacts, "BaseMLflowTracker", MagicMock(return_value=tracker))
 
     resp = instance.train(data_path=str(csv), mlflow_run_id="run-1")
-    assert (resp.n_train, resp.n_val, resp.n_test, resp.epochs_executed) == (160, 40, 40, 2)  # 12 cycles -> 8/2/2
+    # 12 cycles -> 8/2/2
+    assert (resp.n_train, resp.n_val, resp.n_test, resp.epochs_executed) == (160, 40, 40, 2)
     assert sorted(p.name for p in (store / "model").iterdir()) == sorted(
         [MODEL_FILENAME, MODEL_CONFIG_FILENAME, SCALER_X_FILENAME, SCALER_Y_FILENAME])
     uploaded_scaler = joblib.load(store / "model" / SCALER_X_FILENAME)
@@ -147,10 +171,11 @@ def test_train_uploads_the_new_model_and_its_scalers_to_mlflow(instance, monkeyp
 
 
 def test_train_fails_when_mlflow_upload_fails(instance, monkeypatch, tmp_path):
+    """A failed MLflow upload raises ModelPersistenceError."""
     monkeypatch.setattr(training, "TRAIN_EPOCHS", 1)
     csv = tmp_path / "cycles.csv"
     _cycles().to_csv(csv, index=False)
     tracker = MagicMock(upload_artifacts=MagicMock(side_effect=ConnectionError("mlflow caído")))
-    monkeypatch.setattr(plugin_mod, "BaseMLflowTracker", MagicMock(return_value=tracker))
+    monkeypatch.setattr(mlflow_artifacts, "BaseMLflowTracker", MagicMock(return_value=tracker))
     with pytest.raises(ModelPersistenceError, match="mlflow caído"):
         instance.train(data_path=str(csv), mlflow_run_id="run-1")

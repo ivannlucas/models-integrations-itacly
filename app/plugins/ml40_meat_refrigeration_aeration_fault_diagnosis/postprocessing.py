@@ -73,60 +73,88 @@ def apply_neurosymbolic_rules(
     ids = {name: fault_id for fault_id, name in mapping.items()}
 
     if system == "refrigeracion":
-        id_nc = ids.get("NON_CONDENSABLES")
-        id_cf = ids.get("COND_FOUL_SEVERE")
-        id_norm = ids.get("NORMAL")
-        id_drift_plus = ids.get("SENSOR_DRIFT_PLUS")
-        id_drift_minus = ids.get("SENSOR_DRIFT_MINUS")
-        id_uc_severe = ids.get("UNDERCHARGE_SEVERE")
-        id_ineff = ids.get("COMP_INEFFICIENCY")
-
-        t_nc_low = dyn.get("nc_low", -0.264)
-        t_cf_high = dyn.get("cf_high", 10.57)
-        uc_p_gate = dyn.get("uc_p_gate", df["P_suc_bar"].quantile(0.1))
-        eff_vol_limit = dyn.get("eff_vol_limit", 0.6)
-        drift_limit = dyn.get("drift_limit", 2.0)
-
-        if "T_cab_meas_diff" in df.columns:
-            y_final[(df["T_cab_meas_diff"] > drift_limit).to_numpy()] = id_drift_minus
-            y_final[(df["T_cab_meas_diff"] < -drift_limit).to_numpy()] = id_drift_plus
-
-        if "P_suc_bar" in df.columns and "SH_K" in df.columns:
-            mask_uc = (df["P_suc_bar"] < uc_p_gate) & (df["SH_K"] > 15)
-            y_final[mask_uc.to_numpy()] = id_uc_severe
-
-        if "Eff_vol" in df.columns:
-            mask_eff = (df["Eff_vol"] < eff_vol_limit).to_numpy() & (y_pred == id_norm)
-            y_final[mask_eff] = id_ineff
-
-        # Batch-level thermomechanical profile: NC vs CF disambiguation. NOTE: this rule
-        # depends on the MEAN over all in-scope rows of the batch, so predictions are
-        # batch-dependent by the AI team's design (see manifest known_issues).
-        if "early_P_dis_error" in df.columns and "T_cond_approach" in df.columns:
-            in_scope_mask = (y_pred == id_nc) | (y_pred == id_cf)
-            if in_scope_mask.any():
-                mean_p_dis = df.loc[in_scope_mask, "early_P_dis_error"].mean()
-                mean_approach = df.loc[in_scope_mask, "T_cond_approach"].mean()
-                if mean_approach > t_cf_high or mean_p_dis > t_nc_low:
-                    mask_pred_nc = y_pred == id_nc
-                    mask_pred_cf = y_pred == id_cf
-                    y_final[mask_pred_nc] = id_cf
-                    y_final[mask_pred_cf] = id_nc
-
+        _apply_refrigeration_rules(df, y_pred, y_final, ids, dyn)
     elif system == "aireado":
-        if "Encostramiento_Risk" in df.columns:
-            limit_enc = dyn.get("encostramiento_risk", 0.90)
-            mask_enc = (df["Encostramiento_Risk"] > limit_enc) & (df["RH_cab"] < 68)
-            y_final[mask_enc.to_numpy()] = ids.get("ENCOSTRAMIENTO", 1)
-
-        if "N_fan_Hz" in df.columns:
-            limit_fan = dyn.get("fan_fail_hz", 5.0)
-            # The original looks up "FALLO VENTILADOR" (with a space), which never matches the
-            # mapping key FALLO_VENTILADOR and falls back to 3 — same class id, kept faithful.
-            mask_vent = (df["N_fan_Hz"] < limit_fan).to_numpy() & (y_pred == ids.get("NORMAL", 0))
-            y_final[mask_vent] = ids.get("FALLO VENTILADOR", 3)
+        _apply_aeration_rules(df, y_pred, y_final, ids, dyn)
 
     return y_final
+
+
+def _apply_refrigeration_rules(
+    df: pd.DataFrame, y_pred: np.ndarray, y_final: np.ndarray, ids: dict, dyn: dict
+) -> None:
+    """Refrigeration rules of apply_neurosymbolic_rules; corrects ``y_final`` in place."""
+    _apply_refrigeration_row_rules(df, y_pred, y_final, ids, dyn)
+    _apply_nc_cf_batch_rule(df, y_pred, y_final, ids, dyn)
+
+
+def _apply_refrigeration_row_rules(
+    df: pd.DataFrame, y_pred: np.ndarray, y_final: np.ndarray, ids: dict, dyn: dict
+) -> None:
+    """Sensor drift, severe undercharge and compressor inefficiency rules (per row)."""
+    id_norm = ids.get("NORMAL")
+    id_drift_plus = ids.get("SENSOR_DRIFT_PLUS")
+    id_drift_minus = ids.get("SENSOR_DRIFT_MINUS")
+    id_uc_severe = ids.get("UNDERCHARGE_SEVERE")
+    id_ineff = ids.get("COMP_INEFFICIENCY")
+
+    uc_p_gate = dyn.get("uc_p_gate", df["P_suc_bar"].quantile(0.1))
+    eff_vol_limit = dyn.get("eff_vol_limit", 0.6)
+    drift_limit = dyn.get("drift_limit", 2.0)
+
+    if "T_cab_meas_diff" in df.columns:
+        y_final[(df["T_cab_meas_diff"] > drift_limit).to_numpy()] = id_drift_minus
+        y_final[(df["T_cab_meas_diff"] < -drift_limit).to_numpy()] = id_drift_plus
+
+    if "P_suc_bar" in df.columns and "SH_K" in df.columns:
+        mask_uc = (df["P_suc_bar"] < uc_p_gate) & (df["SH_K"] > 15)
+        y_final[mask_uc.to_numpy()] = id_uc_severe
+
+    if "Eff_vol" in df.columns:
+        mask_eff = (df["Eff_vol"] < eff_vol_limit).to_numpy() & (y_pred == id_norm)
+        y_final[mask_eff] = id_ineff
+
+
+def _apply_nc_cf_batch_rule(
+    df: pd.DataFrame, y_pred: np.ndarray, y_final: np.ndarray, ids: dict, dyn: dict
+) -> None:
+    """Batch-level thermomechanical profile: NC vs CF disambiguation.
+
+    NOTE: this rule depends on the MEAN over all in-scope rows of the batch, so predictions
+    are batch-dependent by the AI team's design (see manifest known_issues).
+    """
+    id_nc = ids.get("NON_CONDENSABLES")
+    id_cf = ids.get("COND_FOUL_SEVERE")
+    t_nc_low = dyn.get("nc_low", -0.264)
+    t_cf_high = dyn.get("cf_high", 10.57)
+
+    if "early_P_dis_error" in df.columns and "T_cond_approach" in df.columns:
+        in_scope_mask = (y_pred == id_nc) | (y_pred == id_cf)
+        if in_scope_mask.any():
+            mean_p_dis = df.loc[in_scope_mask, "early_P_dis_error"].mean()
+            mean_approach = df.loc[in_scope_mask, "T_cond_approach"].mean()
+            if mean_approach > t_cf_high or mean_p_dis > t_nc_low:
+                mask_pred_nc = y_pred == id_nc
+                mask_pred_cf = y_pred == id_cf
+                y_final[mask_pred_nc] = id_cf
+                y_final[mask_pred_cf] = id_nc
+
+
+def _apply_aeration_rules(
+    df: pd.DataFrame, y_pred: np.ndarray, y_final: np.ndarray, ids: dict, dyn: dict
+) -> None:
+    """Aeration rules of apply_neurosymbolic_rules; corrects ``y_final`` in place."""
+    if "Encostramiento_Risk" in df.columns:
+        limit_enc = dyn.get("encostramiento_risk", 0.90)
+        mask_enc = (df["Encostramiento_Risk"] > limit_enc) & (df["RH_cab"] < 68)
+        y_final[mask_enc.to_numpy()] = ids.get("ENCOSTRAMIENTO", 1)
+
+    if "N_fan_Hz" in df.columns:
+        limit_fan = dyn.get("fan_fail_hz", 5.0)
+        # The original looks up "FALLO VENTILADOR" (with a space), which never matches the
+        # mapping key FALLO_VENTILADOR and falls back to 3 — same class id, kept faithful.
+        mask_vent = (df["N_fan_Hz"] < limit_fan).to_numpy() & (y_pred == ids.get("NORMAL", 0))
+        y_final[mask_vent] = ids.get("FALLO VENTILADOR", 3)
 
 
 def apply_run_voting(df: pd.DataFrame, y_pred: np.ndarray) -> np.ndarray:

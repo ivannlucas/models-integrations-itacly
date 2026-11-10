@@ -1,35 +1,37 @@
 """Pydantic request/response DTOs for the meat-traceability /predict endpoint."""
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import Field
+
+from app.application.dto.plugin_dto import (
+    BatchRequestBase,
+    BatchResponseBase,
+    PluginDTO,
+    UserModelRunId,
+)
 
 
-class PredictBatchRequest(BaseModel):
+class PredictBatchRequest(BatchRequestBase):
     """Batch request: a CSV of traceability event records."""
 
-    model_config = ConfigDict(protected_namespaces=())
-    mode: Literal["batch"] = "batch"
     data_path: str = Field(..., description="Path to CSV file with traceability event records")
-    mlflow_run_id: str = Field(default="", description="MLflow run ID for user-trained model")
+    mlflow_run_id: UserModelRunId = ""
 
 
-class PredictBatchResponse(BaseModel):
+class PredictBatchResponse(BatchResponseBase):
     """Batch response: one scoring dict per row."""
 
-    model_config = ConfigDict(protected_namespaces=())
-    model_id: str
-    predictions: list[dict[str, Any]]
-    output_path: str | None = None
     warnings: list[str] = Field(
         default_factory=list,
-        description="Avisos no bloqueantes del contrato de datos (valores desconocidos o atípicos).",
+        description=(
+            "Avisos no bloqueantes del contrato de datos (valores desconocidos o atípicos)."
+        ),
     )
 
 
-class PredictInlineRequest(BaseModel):
+class PredictInlineRequest(PluginDTO):
     """Inline request: the 33 feature fields of a single traceability event."""
 
-    model_config = ConfigDict(protected_namespaces=())
     mode: Literal["inline"] = "inline"
     model_key: str | None = None
     threshold: float | None = None
@@ -68,13 +70,12 @@ class PredictInlineRequest(BaseModel):
     prev_ph_measurement_source: str | None = None
     cold_room_id: str | None = None
     scale_id: str | None = None
-    mlflow_run_id: str = Field(default="", description="MLflow run ID for user-trained model")
+    mlflow_run_id: UserModelRunId = ""
 
 
-class PredictInlineResponse(BaseModel):
+class PredictInlineResponse(PluginDTO):
     """Inline response: predicted incident class, score and confidence."""
 
-    model_config = ConfigDict(protected_namespaces=())
     model_id: str
     pred_traceability_incident: int = Field(..., description="0 (sin incidencia) o 1 (incidencia)")
     pred_score: float = Field(..., description="Probabilidad de incidencia (0.0–1.0)")

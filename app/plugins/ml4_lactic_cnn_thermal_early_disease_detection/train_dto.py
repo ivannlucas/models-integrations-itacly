@@ -5,15 +5,15 @@ images, following the original training recipe (Adam + Focal Loss + ReduceLROnPl
 early stopping) from configs/baseline_efficientnet.yaml (see manifest.training in
 inbox/a04/manifest.yaml).
 """
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import Field
 
+from app.application.dto.plugin_dto import PluginDTO, TrainRequestBase
 from app.application.dto.train_dto import MlflowRunId
 
 
-class TrainRequest(BaseModel):
+class TrainRequest(TrainRequestBase):
     """Train request: a dataset with the same layout as the original TIDS dataset."""
 
-    model_config = ConfigDict(protected_namespaces=())
     data_path: str = Field(
         ...,
         description=(
@@ -32,10 +32,9 @@ class TrainRequest(BaseModel):
     )
 
 
-class TrainResponse(BaseModel):
+class TrainResponse(PluginDTO):
     """Train response: metrics on the held-out validation split of the user's data."""
 
-    model_config = ConfigDict(protected_namespaces=())
     detail: str
     accuracy: float
     precision: float

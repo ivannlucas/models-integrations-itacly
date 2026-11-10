@@ -22,7 +22,6 @@ Plugin differences, all deliberate and documented in the manifest:
 * The CCAA/horizon filters are applied after predicting, exactly like --ccaa in the original
   (spatial features need every CCAA).
 """
-# pylint: disable=line-too-long  # repo limit is 120 (.flake8), enforced by flake8
 from __future__ import annotations
 
 from datetime import datetime
@@ -58,7 +57,8 @@ from app.plugins.ml24_dairy_spatial_price_forecast.exceptions import (
 _NAME_TO_CODE = {name: code for code, name in CCAA_CODE_TO_NAME.items()}
 
 
-def _panel(series: pd.DataFrame, context_products: list[str], min_year: int, derivatives: bool) -> pd.DataFrame:
+def _panel(series: pd.DataFrame, context_products: list[str], min_year: int,
+           derivatives: bool) -> pd.DataFrame:
     try:
         return build_product_panel(
             series=series,
@@ -69,7 +69,8 @@ def _panel(series: pd.DataFrame, context_products: list[str], min_year: int, der
             max_year=None,
             add_context_derivatives=derivatives,
         )
-    except ValueError as exc:   # e.g. "No rows left after filtering product panel" for a too-early cut
+    # e.g. "No rows left after filtering product panel" for a too-early cut
+    except ValueError as exc:
         raise SeriesContractError(str(exc)) from exc
 
 
@@ -118,7 +119,8 @@ def predict_horizon(
         selected_anchor_features=list(metadata["selected_anchor_features"]),
         selected_context_features=list(metadata["selected_context_features"]),
         selected_exog=list(metadata["selected_exog"]),
-        add_selected_exog_missing_indicators=bool(metadata.get("selected_exog_missing_indicators", False)),
+        add_selected_exog_missing_indicators=bool(metadata.get("selected_exog_missing_indicators",
+                                                               False)),
     )
     (inference_view,), _ = apply_missing_value_strategy(
         dfs=[inference_view],
@@ -143,7 +145,8 @@ def predict_horizon(
     y_pred = y_baseline + float(metadata["ml_alpha"]) * (y_ml - y_baseline)
 
     output = inference_view[
-        ["anchor_product", "context_products", "period", "period_dt", "target_period", "target_period_dt",
+        ["anchor_product", "context_products", "period", "period_dt", "target_period",
+         "target_period_dt",
          metadata["entity_col"]]
     ].copy()
     output = output.rename(
@@ -175,7 +178,8 @@ def compute_data_freshness(
 ) -> dict:
     """predictor._compute_data_freshness, verbatim."""
     anchor_panel = runtime_panels["anchor"]
-    main_last_period_dt = pd.to_datetime(anchor_panel.loc[anchor_panel[target_col].notna(), "period_dt"]).max()
+    main_last_period_dt = pd.to_datetime(anchor_panel.loc[anchor_panel[target_col].notna(),
+                                                          "period_dt"]).max()
     exog_last_period_dt = pd.to_datetime(monthly_exog["period_dt"]).max()
     as_of_month = pd.Timestamp(as_of.year, as_of.month, 1)
 
@@ -204,7 +208,25 @@ def _to_records(predictions: pd.DataFrame) -> list[dict]:
     return records
 
 
-def run_inference(  # pylint: disable=too-many-locals
+def _served_ccaa(
+    anchor_panel: pd.DataFrame, ccaa: list[str] | None,
+) -> tuple[list[str], dict[str, str], list[str]]:
+    """(CCAA to serve, CCAA left out -> reason, one warning per CCAA left out)."""
+    warnings: list[str] = []
+    insufficient = preprocessing.ccaa_with_insufficient_history(anchor_panel, TARGET_COL)
+    present = sorted(anchor_panel["ccaa"].astype(str).unique())
+    requested = ccaa or present
+    for name in requested:
+        if name not in present:
+            insufficient[name] = "no aparece en la serie de entrada"
+    served = [name for name in requested if name not in insufficient]
+    for name in requested:
+        if name in insufficient:
+            warnings.append(f"{name} omitida: {insufficient[name]} (mínimo de la memoria 8.4).")
+    return served, insufficient, warnings
+
+
+def run_inference(
     bundle: dict,
     reference: dict,
     series: pd.DataFrame,
@@ -220,38 +242,32 @@ def run_inference(  # pylint: disable=too-many-locals
     """
     anchor_panel = build_anchor_panel(series)
     monthly_exog = reference["exog"]
-    warnings: list[str] = []
-
-    insufficient = preprocessing.ccaa_with_insufficient_history(anchor_panel, TARGET_COL)
-    present = sorted(anchor_panel["ccaa"].astype(str).unique())
-    requested = ccaa or present
-    for name in requested:
-        if name not in present:
-            insufficient[name] = "no aparece en la serie de entrada"
-    served = [name for name in requested if name not in insufficient]
-    for name in requested:
-        if name in insufficient:
-            warnings.append(f"{name} omitida: {insufficient[name]} (mínimo de la memoria 8.4).")
+    served, insufficient, warnings = _served_ccaa(anchor_panel, ccaa)
     if not served:
         raise InsufficientPriceHistoryError(
-            "Ninguna CCAA solicitada tiene los 13 meses consecutivos de precio del producto ancla que "
+            "Ninguna CCAA solicitada tiene los 13 meses consecutivos de precio del producto ancla "
+            "que "
             f"necesitan los rezagos estacionales (lag_12): {insufficient}."
         )
     runtime_panels = {"anchor": anchor_panel, "context": build_context_panel(series)}
 
     wanted_horizons = horizons or list(bundle["horizons"])
     outputs = [
-        predict_horizon(bundle["horizons"][h], runtime_panels, monthly_exog, reference["spatial_weights"])
+        predict_horizon(bundle["horizons"][h], runtime_panels, monthly_exog,
+                        reference["spatial_weights"])
         for h in bundle["horizons"] if h in wanted_horizons
     ]
     predictions = pd.concat(outputs, ignore_index=True)
     predictions = predictions[predictions["ccaa"].isin(served)]
 
-    freshness = compute_data_freshness(runtime_panels, monthly_exog, TARGET_COL, as_of=datetime.now())
+    freshness = compute_data_freshness(runtime_panels, monthly_exog, TARGET_COL,
+                                       as_of=datetime.now())
     if freshness["main_source_lag_months"] > MAX_VALIDATED_LAG_MONTHS:
         warnings.append(
-            f"AVISO: el desfase de la fuente principal (MAPA) es de {freshness['main_source_lag_months']} "
-            f"meses, por encima de los {MAX_VALIDATED_LAG_MONTHS} meses para los que hay un barrido de "
+            f"AVISO: el desfase de la fuente principal (MAPA) es de "
+            f"{freshness['main_source_lag_months']} "
+            f"meses, por encima de los {MAX_VALIDATED_LAG_MONTHS} meses para los que hay un "
+            f"barrido de "
             "robustez validado (training.publication_lag_months). El rendimiento del modelo es "
             "susceptible de empeorar; la predicción se genera igualmente."
         )

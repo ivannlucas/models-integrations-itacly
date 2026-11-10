@@ -1,16 +1,15 @@
 """Pydantic request/response DTOs for the ml3 wine disease/pest /predict endpoint."""
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import Field
 
+from app.application.dto.plugin_dto import BatchRequestBase, BatchResponseBase, PluginDTO
 from app.plugins.ml3_wine_disease_pest_forecast.constants import WINDOW_SIZE
 
 
-class PredictBatchRequest(BaseModel):
+class PredictBatchRequest(BatchRequestBase):
     """Batch request: a CSV/parquet of raw hourly sensor rows (one or more series)."""
 
-    model_config = ConfigDict(protected_namespaces=())
-    mode: Literal["batch"] = "batch"
     data_path: str = Field(
         ...,
         description=(
@@ -23,19 +22,13 @@ class PredictBatchRequest(BaseModel):
     mlflow_run_id: str = Field(default="", description="MLflow run ID for a user-retrained model")
 
 
-class PredictBatchResponse(BaseModel):
+class PredictBatchResponse(BatchResponseBase):
     """Batch response: one scored window per series (last 168-hour window)."""
 
-    model_config = ConfigDict(protected_namespaces=())
-    model_id: str
-    predictions: list[dict[str, Any]]
-    output_path: str | None = None
 
-
-class PredictInlineRequest(BaseModel):
+class PredictInlineRequest(PluginDTO):
     """Inline request: at least 168 hourly rows of one series' sensor history."""
 
-    model_config = ConfigDict(protected_namespaces=())
     mode: Literal["inline"] = "inline"
     model_key: str | None = None
     threshold: float | None = None
@@ -54,10 +47,9 @@ class PredictInlineRequest(BaseModel):
     mlflow_run_id: str = Field(default="", description="MLflow run ID for a user-retrained model")
 
 
-class PredictInlineResponse(BaseModel):
+class PredictInlineResponse(PluginDTO):
     """Inline response: ensemble diagnosis, severity, treatment and confidence for one window."""
 
-    model_config = ConfigDict(protected_namespaces=())
     model_id: str
     id_serie: str | int
     fecha_evaluacion: str | None

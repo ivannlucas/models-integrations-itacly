@@ -3,24 +3,33 @@ from __future__ import annotations
 
 import logging
 import os
-import shutil
+import pickle
 import time
-from datetime import datetime, timezone
 
+from typing import Any, NamedTuple
+
+import numpy as np
 import pandas as pd
-from typing import Any
 
-from app.application.dto.stats_dto import InputField, OutputField, RuntimeStats, StatsResponse
+from app.application.dto.stats_dto import InputField, OutputField, StatsResponse
 from app.domain.ports.model_plugin_port import ModelPluginPort
-from app.domain.services.exceptions import ModelNotLoadedError, ModelPersistenceError
-from app.domain.services.mlflow_tracker import BaseMLflowTracker
+from app.domain.services.mlflow_artifacts import (
+    add_mlflow_run_to_stats,
+    removing_dir,
+    require_train_tracker,
+    upload_model_to_mlflow,
+)
+from app.domain.services.plugin_runtime import PluginRuntimeMixin
+from app.domain.services.xai_values import xai_feature_values
 from app.infrastructure.artifact_store import local_file_path
 from app.plugins.ml30_meat_traceability_detection.constants import (
     DEFAULT_THRESHOLD,
     FEATURE_COLUMNS,
     FRAMEWORK,
+    MODEL_FILENAME,
     MODEL_ID,
     NUMERIC_FEATURES,
+    PREPROCESSOR_FILENAME,
     TRAIN_BATCH_SIZE,
     TRAIN_EPOCHS,
     TRAIN_LEARNING_RATE,
@@ -30,7 +39,11 @@ from app.plugins.ml30_meat_traceability_detection.constants import (
     VERSION,
 )
 from app.plugins.ml30_meat_traceability_detection.contract import enforce_data_contract
-from app.plugins.ml30_meat_traceability_detection.model_loader import load_artifacts
+from app.plugins.ml30_meat_traceability_detection.model_loader import (
+    build_torch_mlp,
+    load_artifacts,
+    load_payload,
+)
 from app.plugins.ml30_meat_traceability_detection.postprocessing import run_inference
 from app.plugins.ml30_meat_traceability_detection.predict_dto import (
     PredictBatchResponse,
@@ -41,11 +54,23 @@ from app.plugins.ml30_meat_traceability_detection.preprocessing import (
     build_dataframe_from_features,
 )
 from app.plugins.ml30_meat_traceability_detection.train_dto import TrainResponse
-from app.plugins.ml30_meat_traceability_detection.mlflow_utils import download_user_model_from_mlflow
+from app.plugins.ml30_meat_traceability_detection.mlflow_utils import (
+    download_user_model_from_mlflow,
+)
 
 logger = logging.getLogger(__name__)
 
 _ID_COLUMNS = ("row_id", "event_uid")
+_TARGET = "target_traceability_incident"
+
+
+class _TrainTestSplit(NamedTuple):
+    """Preprocessed chronological train/test split of the training CSV."""
+
+    x_train: np.ndarray
+    x_test: np.ndarray
+    y_train: np.ndarray
+    y_test: np.ndarray
 
 
 def _to_native(value):
@@ -53,20 +78,73 @@ def _to_native(value):
     return value.item() if hasattr(value, "item") else value
 
 
-def _xai_values_from_row(row, feature_columns: list[str]) -> dict[str, float] | None:
-    """Build xai_feature_values from a features dict (inline) or DataFrame row (batch)."""
-    xai: dict[str, float] = {}
-    for col in feature_columns:
-        val = row.get(col)
-        if val is not None and pd.notna(val):
-            try:
-                xai[col] = float(val)
-            except (TypeError, ValueError):
-                pass
-    return xai or None
+def _batch_rows(df: pd.DataFrame, y_pred, y_score, feature_columns: list[str]) -> list[dict]:
+    """One predict_batch output row per CSV row (ids, prediction, score and XAI values)."""
+    id_cols = [c for c in _ID_COLUMNS if c in df.columns]
+    predictions: list[dict] = []
+    for i in range(len(df)):
+        df_row = df.iloc[i]
+        row = {c: _to_native(df_row[c]) for c in id_cols}
+        row["pred_traceability_incident"] = int(y_pred[i])
+        row["pred_score"] = float(y_score[i])
+        row["model_name"] = MODEL_ID
+        row["xai_feature_values"] = xai_feature_values(df_row, feature_columns) or None
+        predictions.append(row)
+    return predictions
 
 
-class Ml30MeatTraceabilityDetectionPlugin(ModelPluginPort):
+def _fit_mlp(x_train: np.ndarray, y_train: np.ndarray):
+    """Train a fresh MLP with the original best-genome hyperparameters (seeded)."""
+    import torch  # pylint: disable=import-outside-toplevel
+    from torch import nn  # pylint: disable=import-outside-toplevel
+
+    # Seeded like the original TorchMLPClassifier.fit (torch + DataLoader generator), so
+    # retraining on the same CSV yields the same model.
+    torch.manual_seed(TRAIN_SEED)
+    generator = torch.Generator()
+    generator.manual_seed(TRAIN_SEED)
+    mlp = build_torch_mlp(load_payload())
+    mlp.train()
+    loader = torch.utils.data.DataLoader(
+        torch.utils.data.TensorDataset(
+            torch.tensor(x_train, dtype=torch.float32),
+            torch.tensor(y_train, dtype=torch.float32).reshape(-1, 1),
+        ),
+        batch_size=TRAIN_BATCH_SIZE, shuffle=True, generator=generator,
+    )
+    criterion = nn.BCEWithLogitsLoss()
+    optimizer = torch.optim.Adam(
+        mlp.parameters(), lr=TRAIN_LEARNING_RATE, weight_decay=TRAIN_WEIGHT_DECAY
+    )
+    for _ in range(TRAIN_EPOCHS):
+        for xb, yb in loader:
+            optimizer.zero_grad()
+            criterion(mlp(xb), yb).backward()
+            optimizer.step()
+
+    mlp.eval()
+    return mlp
+
+
+def _test_metrics(mlp, x_test: np.ndarray, y_test: np.ndarray) -> tuple[float, float, float]:
+    """Accuracy, F1 and ROC-AUC of the retrained MLP on the held-out tail of the CSV."""
+    import torch  # pylint: disable=import-outside-toplevel
+    from sklearn.metrics import (  # pylint: disable=import-outside-toplevel
+        accuracy_score, f1_score, roc_auc_score,
+    )
+
+    with torch.no_grad():
+        y_score = torch.sigmoid(
+            mlp(torch.tensor(x_test, dtype=torch.float32)).reshape(-1)
+        ).numpy()
+    y_pred = (y_score >= 0.5).astype(int)
+    acc = float(accuracy_score(y_test, y_pred))
+    f1 = float(f1_score(y_test, y_pred, zero_division=0))
+    auc = float(roc_auc_score(y_test, y_score)) if len(set(y_test)) > 1 else 0.0
+    return acc, f1, auc
+
+
+class Ml30MeatTraceabilityDetectionPlugin(PluginRuntimeMixin, ModelPluginPort):
     """Binary classifier scoring traceability incidents in a meat-processing plant."""
 
     def __init__(self) -> None:
@@ -74,8 +152,6 @@ class Ml30MeatTraceabilityDetectionPlugin(ModelPluginPort):
         self._preprocessor = None
         self._mlp = None
         self._feature_columns: list[str] = []
-        self._predict_count: int = 0
-        self._last_predict_at: str | None = None
 
     def load(self) -> None:
         """Load the preprocessor and MLP artifacts."""
@@ -85,16 +161,6 @@ class Ml30MeatTraceabilityDetectionPlugin(ModelPluginPort):
     def is_loaded(self) -> bool:
         """Return True if the model is loaded."""
         return self._mlp is not None
-
-    def _require_loaded(self) -> None:
-        """Raise ModelNotLoadedError if the model is not loaded."""
-        if self._mlp is None:
-            raise ModelNotLoadedError("El modelo no está cargado.")
-
-    def _record(self) -> None:
-        """Update runtime counters after a prediction."""
-        self._predict_count += 1
-        self._last_predict_at = datetime.now(tz=timezone.utc).isoformat()
 
     def _resolve_model(self, mlflow_run_id: str) -> tuple[Any, Any, list[str], str | None]:
         """Return (preprocessor, mlp, feature_columns, temp_dir) to serve this request.
@@ -119,17 +185,19 @@ class Ml30MeatTraceabilityDetectionPlugin(ModelPluginPort):
     ) -> PredictInlineResponse:
         """Score a single traceability event."""
         if mlflow_run_id:
-            logger.info("predict_inline — using user-trained model from MLflow run_id=%s", mlflow_run_id)
+            logger.info(
+                "predict_inline — using user-trained model from MLflow run_id=%s", mlflow_run_id
+            )
         preprocessor, mlp, feature_columns, user_temp_dir = self._resolve_model(mlflow_run_id)
-        try:
+        with removing_dir(user_temp_dir):
             df = build_dataframe_from_features(features)
-            present = [k for k, v in features.items() if v is not None]
-            enforce_data_contract(df, preprocessor, present, logger)
+            enforce_data_contract(
+                df, preprocessor, [k for k, v in features.items() if v is not None], logger
+            )
             _, y_score = run_inference(preprocessor, mlp, df[feature_columns])
 
             score = float(y_score[0])
-            thr = threshold if threshold is not None else DEFAULT_THRESHOLD
-            pred = int(score >= thr)
+            pred = int(score >= (threshold if threshold is not None else DEFAULT_THRESHOLD))
             confidence = score if pred == 1 else 1.0 - score
 
             self._record()
@@ -139,149 +207,92 @@ class Ml30MeatTraceabilityDetectionPlugin(ModelPluginPort):
                 pred_score=score,
                 confidence=confidence,
                 model_name=MODEL_ID,
-                xai_feature_values=_xai_values_from_row(features, feature_columns),
+                xai_feature_values=xai_feature_values(features, feature_columns) or None,
             )
-        finally:
-            if user_temp_dir:
-                shutil.rmtree(user_temp_dir, ignore_errors=True)
 
-    def predict_batch(self, *, data_path: str, mlflow_run_id: str = "") -> PredictBatchResponse:
+    def predict_batch(
+        self, *, data_path: str, mlflow_run_id: str = ""
+    ) -> PredictBatchResponse:
         """Score every row of a CSV of traceability events."""
         if mlflow_run_id:
-            logger.info("predict_batch — using user-trained model from MLflow run_id=%s", mlflow_run_id)
+            logger.info(
+                "predict_batch — using user-trained model from MLflow run_id=%s", mlflow_run_id
+            )
         preprocessor, mlp, feature_columns, user_temp_dir = self._resolve_model(mlflow_run_id)
-        try:
+        with removing_dir(user_temp_dir):
             with local_file_path(data_path) as local_path:
                 raw_columns = pd.read_csv(local_path, nrows=0).columns
                 df = build_dataframe_from_csv(local_path)
             warnings = enforce_data_contract(df, preprocessor, raw_columns, logger)
-            id_cols = [c for c in _ID_COLUMNS if c in df.columns]
             y_pred, y_score = run_inference(preprocessor, mlp, df[feature_columns])
-
-            predictions: list[dict] = []
-            for i in range(len(df)):
-                df_row = df.iloc[i]
-                row = {c: _to_native(df_row[c]) for c in id_cols}
-                row["pred_traceability_incident"] = int(y_pred[i])
-                row["pred_score"] = float(y_score[i])
-                row["model_name"] = MODEL_ID
-                row["xai_feature_values"] = _xai_values_from_row(df_row, feature_columns)
-                predictions.append(row)
+            predictions = _batch_rows(df, y_pred, y_score, feature_columns)
 
             self._record()
             return PredictBatchResponse(
                 model_id=MODEL_ID, predictions=predictions, output_path=None, warnings=warnings,
             )
-        finally:
-            if user_temp_dir:
-                shutil.rmtree(user_temp_dir, ignore_errors=True)
 
-    def train(self, *, data_path: str, mlflow_run_id: str) -> TrainResponse:  # pylint: disable=too-many-locals
-        """Retrain the MLP from scratch with the original best-genome hyperparameters (reusing
-        the fitted preprocessor) and persist artifacts."""
-        import pickle  # pylint: disable=import-outside-toplevel
-        import tempfile  # pylint: disable=import-outside-toplevel
-        import torch  # pylint: disable=import-outside-toplevel
-        from torch import nn  # pylint: disable=import-outside-toplevel
-        from sklearn.metrics import (  # pylint: disable=import-outside-toplevel
-            accuracy_score, f1_score, roc_auc_score,
-        )
-
-        from app.plugins.ml30_meat_traceability_detection.constants import (  # pylint: disable=import-outside-toplevel
-            MODEL_FILENAME, PREPROCESSOR_FILENAME,
-        )
-        from app.plugins.ml30_meat_traceability_detection.model_loader import (  # pylint: disable=import-outside-toplevel
-            build_torch_mlp, load_payload,
-        )
-
-        if mlflow_run_id:
-            logger.info("Training with MLflow tracking, run_id=%s", mlflow_run_id)
-            tracker = BaseMLflowTracker(mlflow_run_id)
-            tracker.log_params({
-                "learning_rate": TRAIN_LEARNING_RATE,
-                "weight_decay": TRAIN_WEIGHT_DECAY,
-                "batch_size": TRAIN_BATCH_SIZE,
-                "epochs": TRAIN_EPOCHS,
-                "seed": TRAIN_SEED,
-                "optimizer": "Adam",
-                "loss": "BCEWithLogitsLoss",
-                "test_split": TRAIN_TEST_SPLIT,
-            })
-        else:
-            tracker = None
-
-        self._require_loaded()
-        t0 = time.perf_counter()
+    def _load_train_frame(self, data_path: str) -> pd.DataFrame:
+        """Read the labelled training CSV and check it against the served data contract."""
         with local_file_path(data_path) as local_path:
             raw_columns = pd.read_csv(local_path, nrows=0).columns
             df = build_dataframe_from_csv(local_path)
-        target = "target_traceability_incident"
-        if target not in df.columns:
-            raise ValueError(f"CSV must contain '{target}' column for training")
+        if _TARGET not in df.columns:
+            raise ValueError(f"CSV must contain '{_TARGET}' column for training")
         enforce_data_contract(df, self._preprocessor, raw_columns, logger)
+        return df
 
+    def _train_test_split(self, df: pd.DataFrame) -> _TrainTestSplit:
+        """Chronological split (last TRAIN_TEST_SPLIT rows held out) through the preprocessor."""
         x_raw = df[FEATURE_COLUMNS]
-        y = df[target].astype(int).to_numpy()
+        y = df[_TARGET].astype(int).to_numpy()
         split = int(len(x_raw) * (1 - TRAIN_TEST_SPLIT))
         x_train = self._preprocessor.transform(x_raw.iloc[:split])
         x_test = self._preprocessor.transform(x_raw.iloc[split:])
-        y_train, y_test = y[:split], y[split:]
+        return _TrainTestSplit(x_train, x_test, y[:split], y[split:])
 
-        # Seeded like the original TorchMLPClassifier.fit (torch + DataLoader generator), so
-        # retraining on the same CSV yields the same model.
-        torch.manual_seed(TRAIN_SEED)
-        generator = torch.Generator()
-        generator.manual_seed(TRAIN_SEED)
-        mlp = build_torch_mlp(load_payload())
-        mlp.train()
-        loader = torch.utils.data.DataLoader(
-            torch.utils.data.TensorDataset(
-                torch.tensor(x_train, dtype=torch.float32),
-                torch.tensor(y_train, dtype=torch.float32).reshape(-1, 1),
-            ),
-            batch_size=TRAIN_BATCH_SIZE, shuffle=True, generator=generator,
-        )
-        criterion = nn.BCEWithLogitsLoss()
-        optimizer = torch.optim.Adam(mlp.parameters(), lr=TRAIN_LEARNING_RATE, weight_decay=TRAIN_WEIGHT_DECAY)
-        for _ in range(TRAIN_EPOCHS):
-            for xb, yb in loader:
-                optimizer.zero_grad()
-                criterion(mlp(xb), yb).backward()
-                optimizer.step()
-
-        mlp.eval()
-        with torch.no_grad():
-            y_score = torch.sigmoid(
-                mlp(torch.tensor(x_test, dtype=torch.float32)).reshape(-1)
-            ).numpy()
-        y_pred = (y_score >= 0.5).astype(int)
-        acc = float(accuracy_score(y_test, y_pred))
-        f1 = float(f1_score(y_test, y_pred, zero_division=0))
-        auc = float(roc_auc_score(y_test, y_score)) if len(set(y_test)) > 1 else 0.0
-
+    def train(self, *, data_path: str, mlflow_run_id: str) -> TrainResponse:
+        """Retrain the MLP from scratch with the original best-genome hyperparameters (reusing
+        the fitted preprocessor) and persist artifacts."""
         # The retrained model lives only in its own MLflow run (predict with that
         # mlflow_run_id); the served base model and its local artifacts are never replaced.
-        upload_warning = None
-        if not tracker:
-            raise ModelPersistenceError("Sin run de MLflow: el modelo reentrenado no se ha guardado.")
-        if tracker:
-            tracker.log_metrics({
-                "test_accuracy": acc,
-                "test_f1": f1,
-                "test_roc_auc": auc,
-                "n_train": int(len(x_train)),
-                "n_test": int(len(x_test)),
-            })
-            try:
-                mlflow_tmp = tempfile.mkdtemp(prefix="ml30_mlflow_")
-                torch.save(mlp.state_dict(), os.path.join(mlflow_tmp, MODEL_FILENAME))
-                with open(os.path.join(mlflow_tmp, PREPROCESSOR_FILENAME), "wb") as fh:
-                    pickle.dump(self._preprocessor, fh)
-                tracker.upload_artifacts(mlflow_tmp, artifact_path="model")
-                shutil.rmtree(mlflow_tmp, ignore_errors=True)
-            except Exception as exc:  # pylint: disable=broad-exception-caught
-                logger.error("MLflow artifact upload failed: %s", exc)
-                raise ModelPersistenceError(f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}") from exc
+        tracker = require_train_tracker(mlflow_run_id)
+        logger.info("Training with MLflow tracking, run_id=%s", mlflow_run_id)
+        tracker.log_params({
+            "learning_rate": TRAIN_LEARNING_RATE,
+            "weight_decay": TRAIN_WEIGHT_DECAY,
+            "batch_size": TRAIN_BATCH_SIZE,
+            "epochs": TRAIN_EPOCHS,
+            "seed": TRAIN_SEED,
+            "optimizer": "Adam",
+            "loss": "BCEWithLogitsLoss",
+            "test_split": TRAIN_TEST_SPLIT,
+        })
+
+        self._require_loaded()
+        t0 = time.perf_counter()
+        df = self._load_train_frame(data_path)
+
+        split = self._train_test_split(df)
+        mlp = _fit_mlp(split.x_train, split.y_train)
+        acc, f1, auc = _test_metrics(mlp, split.x_test, split.y_test)
+
+        tracker.log_metrics({
+            "test_accuracy": acc,
+            "test_f1": f1,
+            "test_roc_auc": auc,
+            "n_train": int(len(split.x_train)),
+            "n_test": int(len(split.x_test)),
+        })
+
+        def _write(model_dir: str) -> None:
+            import torch  # pylint: disable=import-outside-toplevel
+
+            torch.save(mlp.state_dict(), os.path.join(model_dir, MODEL_FILENAME))
+            with open(os.path.join(model_dir, PREPROCESSOR_FILENAME), "wb") as fh:
+                pickle.dump(self._preprocessor, fh)
+
+        upload_model_to_mlflow(tracker, _write, prefix="ml30_mlflow_")
 
         elapsed = time.perf_counter() - t0
         logger.info("train() done — acc=%.4f f1=%.4f auc=%.4f mlflow=%s",
@@ -291,10 +302,10 @@ class Ml30MeatTraceabilityDetectionPlugin(ModelPluginPort):
             accuracy=round(acc, 4),
             f1=round(f1, 4),
             roc_auc=round(auc, 4),
-            n_train=int(len(x_train)),
-            n_test=int(len(x_test)),
+            n_train=int(len(split.x_train)),
+            n_test=int(len(split.x_test)),
             training_time_s=round(elapsed, 1),
-            upload_warning=upload_warning,
+            upload_warning=None,
             mlflow_run_id=mlflow_run_id,
         )
 
@@ -323,16 +334,6 @@ class Ml30MeatTraceabilityDetectionPlugin(ModelPluginPort):
                             description="Probabilidad de la clase predicha"),
             ],
             metrics={"test_accuracy": 0.8707, "test_f1": 0.6016, "test_roc_auc": 0.7185},
-            runtime_stats=RuntimeStats(total_predictions=self._predict_count, avg_latency_ms=None),
+            runtime_stats=self._runtime_stats(),
         )
-        if mlflow_run_id:
-            try:
-                tracker = BaseMLflowTracker(mlflow_run_id)
-                base.metrics["mlflow"] = {
-                    "params": tracker.get_params(),
-                    "metrics": tracker.get_metrics(),
-                }
-                logger.info("Stats enriched with MLflow data for run_id=%s", mlflow_run_id)
-            except Exception as exc:
-                logger.warning("Could not fetch MLflow stats for run_id=%s: %s", mlflow_run_id, exc)
-        return base
+        return add_mlflow_run_to_stats(base, mlflow_run_id)

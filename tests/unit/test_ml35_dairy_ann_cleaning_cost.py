@@ -35,6 +35,7 @@ OPTIMIZE_PAYLOAD = {
 
 
 def test_health(client):
+    """GET /health reports the model as loaded and ok."""
     body = client.get(f"{PREFIX}/health").json()
     assert body["status"] == "ok"
     assert body["model"] == "ml35-dairy-ann-cleaning-cost"
@@ -42,11 +43,13 @@ def test_health(client):
 
 
 def test_stats(client):
+    """GET /stats returns the model name."""
     body = client.get(f"{PREFIX}/stats").json()
     assert body["model_name"] == "ml35-dairy-ann-cleaning-cost"
 
 
 def test_predict_inline(client):
+    """An inline predict returns water consumption and achieved PU."""
     resp = client.post(f"{PREFIX}/predict", json=INLINE_PAYLOAD)
     assert resp.status_code == 200
     body = resp.json()
@@ -63,11 +66,13 @@ def test_predict_inline_derived_fields(client):
 
 
 def test_predict_inline_missing_required_field(client):
+    """An inline predict without flujo_leche_lh is rejected with 422."""
     payload = {k: v for k, v in INLINE_PAYLOAD.items() if k != "flujo_leche_lh"}
     assert client.post(f"{PREFIX}/predict", json=payload).status_code == 422
 
 
 def test_predict_optimize(client):
+    """An optimize request returns a numeric result."""
     resp = client.post(f"{PREFIX}/predict", json=OPTIMIZE_PAYLOAD)
     assert resp.status_code == 200
     body = resp.json()
@@ -77,12 +82,14 @@ def test_predict_optimize(client):
 
 
 def test_predict_batch(client):
+    """A batch predict returns the model id."""
     resp = client.post(f"{PREFIX}/predict", json={"mode": "batch", "data_path": "/tmp/dairy.csv"})
     assert resp.status_code == 200
     assert resp.json()["model_id"] == "ml35-dairy-ann-cleaning-cost"
 
 
 def test_train(client):
+    """POST /train returns the fine-tuning metrics."""
     resp = client.post(
         f"{PREFIX}/train", json={"data_path": "/tmp/train.csv", "mlflow_run_id": "test-run-id"}
     )
@@ -94,5 +101,6 @@ def test_train(client):
 
 
 def test_train_requires_mlflow_run_id(client):
+    """POST /train without mlflow_run_id is rejected with 422."""
     resp = client.post(f"{PREFIX}/train", json={"data_path": "/tmp/train.csv"})
     assert resp.status_code == 422

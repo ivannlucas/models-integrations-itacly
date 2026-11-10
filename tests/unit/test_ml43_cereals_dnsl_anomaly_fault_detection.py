@@ -1,3 +1,7 @@
+"""Tests for ``ml43-cereals-dnsl-anomaly-fault-detection``: endpoint wiring (FakePlugin) plus
+direct tests of the real plugin's training, validation, postprocessing, XAI report and MLflow
+threshold helpers on synthetic data."""
+# pylint: disable=protected-access  # tests of private helpers (_record, *_ctx, _build_final_report)
 import pickle
 from pathlib import Path
 from unittest.mock import patch
@@ -7,9 +11,25 @@ import pandas as pd
 import pytest
 import torch
 
-from app.plugins.ml43_cereals_dnsl_anomaly_fault_detection.constants import SENSOR_COLUMNS, SEQ_LENGTH, SOLAPAMIENTO_BETA
+from app.plugins.ml43_cereals_dnsl_anomaly_fault_detection import postprocessing
+from app.plugins.ml43_cereals_dnsl_anomaly_fault_detection._vendor.xai.explainer import (
+    DNFLExplainer,
+)
+from app.plugins.ml43_cereals_dnsl_anomaly_fault_detection.constants import (
+    SENSOR_COLUMNS,
+    SEQ_LENGTH,
+    SOLAPAMIENTO_BETA,
+)
+from app.plugins.ml43_cereals_dnsl_anomaly_fault_detection.mlflow_utils import (
+    get_calibrated_threshold,
+)
+from app.plugins.ml43_cereals_dnsl_anomaly_fault_detection.plugin import (
+    Ml43CerealsDnslAnomalyFaultDetectionPlugin,
+    _validate_saved_artifact,
+)
 
 PREFIX = "/models/ml43-cereals-dnsl-anomaly-fault-detection"
+_PLUGIN = "app.plugins.ml43_cereals_dnsl_anomaly_fault_detection.plugin"
 
 INLINE_PAYLOAD = {
     "mode": "inline",
@@ -30,6 +50,7 @@ INLINE_PAYLOAD = {
 
 
 def test_health(client):
+    """The health endpoint reports the model as loaded."""
     body = client.get(f"{PREFIX}/health").json()
     assert body["status"] == "ok"
     assert body["model"] == "ml43-cereals-dnsl-anomaly-fault-detection"
@@ -37,7 +58,9 @@ def test_health(client):
 
 
 def test_stats(client):
-    assert client.get(f"{PREFIX}/stats").json()["model_name"] == "ml43-cereals-dnsl-anomaly-fault-detection"
+    """The stats endpoint returns the model name."""
+    body = client.get(f"{PREFIX}/stats").json()
+    assert body["model_name"] == "ml43-cereals-dnsl-anomaly-fault-detection"
 
 
 def test_stats_without_mlflow_run_id_exposes_only_the_unified_metric_keys():
@@ -46,8 +69,6 @@ def test_stats_without_mlflow_run_id_exposes_only_the_unified_metric_keys():
     longer list the removed xai_result/xai_error fields (replaced by Estado del sistema/
     Subsistemas con alteraciones/Variables con alteraciones/Acciones correctivas
     recomendadas)."""
-    from app.plugins.ml43_cereals_dnsl_anomaly_fault_detection.plugin import Ml43CerealsDnslAnomalyFaultDetectionPlugin
-
     resp = Ml43CerealsDnslAnomalyFaultDetectionPlugin().stats()
 
     assert set(resp.metrics.keys()) == {
@@ -63,16 +84,14 @@ def test_stats_without_mlflow_run_id_exposes_only_the_unified_metric_keys():
 
 def test_avg_latency_ms_is_computed_from_recorded_predictions():
     """Fase 4 (modelo 43-44 audit): perf_counter() was measured but only logged —
-    stats() hardcoded avg_latency_ms=None. Tests _record()/stats() directly (no real
+    stats() hardcoded avg_latency_ms=None. Tests _record_latency()/stats() directly (no real
     model artifacts needed) since predict_batch just forwards its measured latency
-    into _record(), already exercised end-to-end by test_predict_batch above."""
-    from app.plugins.ml43_cereals_dnsl_anomaly_fault_detection.plugin import Ml43CerealsDnslAnomalyFaultDetectionPlugin
-
+    into _record_latency(), already exercised end-to-end by test_predict_batch above."""
     plugin = Ml43CerealsDnslAnomalyFaultDetectionPlugin()
     assert plugin.stats().runtime_stats.avg_latency_ms is None  # no predictions yet
 
-    plugin._record(120.0)
-    plugin._record(80.0)
+    plugin._record_latency(120.0)
+    plugin._record_latency(80.0)
 
     stats = plugin.stats()
     assert stats.runtime_stats.total_predictions == 2
@@ -80,15 +99,19 @@ def test_avg_latency_ms_is_computed_from_recorded_predictions():
 
 
 def test_predict_inline_not_supported(client):
-    # ml43-cereals-dnsl-anomaly-fault-detection requires a real 180-row window: inline (single-snapshot)
-    # prediction was retired. PredictRequest no longer has an "inline" mode, so
+    """Inline mode was retired: the request fails schema validation with 422."""
+    # ml43-cereals-dnsl-anomaly-fault-detection requires a real 180-row window: inline
+    # (single-snapshot) prediction was retired. PredictRequest no longer has an "inline" mode, so
     # this body fails schema validation before it ever reaches the plugin.
     resp = client.post(f"{PREFIX}/predict", json=INLINE_PAYLOAD)
     assert resp.status_code == 422
 
 
 def test_predict_batch(client):
-    resp = client.post(f"{PREFIX}/predict", json={"mode": "batch", "data_path": "/tmp/cereal_cycle.csv"})
+    """Batch prediction returns the model id and one prediction."""
+    resp = client.post(
+        f"{PREFIX}/predict", json={"mode": "batch", "data_path": "/tmp/cereal_cycle.csv"}
+    )
     assert resp.status_code == 200
     body = resp.json()
     assert body["model_id"] == "ml43-cereals-dnsl-anomaly-fault-detection"
@@ -96,7 +119,11 @@ def test_predict_batch(client):
 
 
 def test_train(client):
-    resp = client.post(f"{PREFIX}/train", json={"data_path": "/tmp/cereal_train.csv", "mlflow_run_id": "test-run-id"})
+    """The train endpoint returns the detail and macro_f1."""
+    resp = client.post(
+        f"{PREFIX}/train",
+        json={"data_path": "/tmp/cereal_train.csv", "mlflow_run_id": "test-run-id"},
+    )
     assert resp.status_code == 200
     body = resp.json()
     assert "detail" in body
@@ -107,8 +134,9 @@ def test_train(client):
 #
 # The tests above use the router's FakePlugin double (see conftest.py's FAKE_FACTORIES),
 # which never runs real training code. The regression test below instantiates the real
-# Ml43CerealsDnslAnomalyFaultDetectionPlugin directly and calls train() on synthetic data, bypassing HTTP/
-# FakePlugin entirely — same pattern as test_ml10_dairy_disease_vector_detection_unit.py's direct-plugin tests.
+# Ml43CerealsDnslAnomalyFaultDetectionPlugin directly and calls train() on synthetic data,
+# bypassing HTTP/FakePlugin entirely — same pattern as
+# test_ml10_dairy_disease_vector_detection_unit.py's direct-plugin tests.
 
 def _build_synthetic_cereal_csv(n_windows: int, corrupt_test_fold: bool) -> pd.DataFrame:
     """Builds a single-cycle synthetic sensor CSV yielding exactly ``n_windows`` windows
@@ -162,6 +190,26 @@ def _build_synthetic_cereal_csv(n_windows: int, corrupt_test_fold: bool) -> pd.D
     return df
 
 
+def _build_one_window_cycles_csv(cycle_labels):
+    """One SEQ_LENGTH-row cycle per label; non-NORMAL cycles are shifted by +50 on every sensor."""
+    rng = np.random.default_rng(99)
+    frames = []
+    for cycle_idx, label in enumerate(cycle_labels):
+        values = {
+            col: 20.0 + 3.0 * i + rng.normal(0, 0.1, SEQ_LENGTH)
+            for i, col in enumerate(SENSOR_COLUMNS)
+        }
+        if label != "NORMAL":
+            for col in SENSOR_COLUMNS:
+                values[col] += 50.0
+        frame = pd.DataFrame(values)
+        frame["cycle_id"] = f"cycle_{cycle_idx}"
+        frame["timestamp"] = pd.date_range("2026-01-01", periods=SEQ_LENGTH, freq="min")
+        frame["fault_name"] = label
+        frames.append(frame)
+    return pd.concat(frames, ignore_index=True)
+
+
 class TestTrainCheckpointSelectionUsesOnlyValidation:
     """Regression test for the modelo 43-44 audit (Fase 1): the checkpoint selected
     during training must never be influenced by the held-out test set.
@@ -179,8 +227,6 @@ class TestTrainCheckpointSelectionUsesOnlyValidation:
     N_WINDOWS = 20  # → n_train=14, n_val=3, n_test=3 with the 70/15/15 split
 
     def _train_once(self, tmp_path, corrupt_test_fold: bool):
-        from app.plugins.ml43_cereals_dnsl_anomaly_fault_detection.plugin import Ml43CerealsDnslAnomalyFaultDetectionPlugin
-
         df = _build_synthetic_cereal_csv(self.N_WINDOWS, corrupt_test_fold)
         csv_path = tmp_path / f"cereal_train_{'corrupt' if corrupt_test_fold else 'clean'}.csv"
         df.to_csv(csv_path, index=False)
@@ -189,12 +235,13 @@ class TestTrainCheckpointSelectionUsesOnlyValidation:
         torch.manual_seed(0)
         plugin = Ml43CerealsDnslAnomalyFaultDetectionPlugin()
         with patch(
-            "app.plugins.ml43_cereals_dnsl_anomaly_fault_detection.plugin.upload_artifacts_to_mlflow",
+            f"{_PLUGIN}.upload_artifacts_to_mlflow",
             return_value="fake-run-id",
         ):
             return plugin.train(data_path=str(csv_path), mlflow_run_id="")
 
     def test_checkpoint_selection_unaffected_by_test_fold_corruption(self, tmp_path):
+        """Corrupting only the test fold does not change the calibrated threshold."""
         resp_clean = self._train_once(tmp_path, corrupt_test_fold=False)
         resp_corrupt = self._train_once(tmp_path, corrupt_test_fold=True)
 
@@ -242,8 +289,6 @@ class TestTrainCheckpointSelectionUsesOnlyValidation:
         actually returned AND present in the metrics dict handed to MLflow, so
         stats(mlflow_run_id=...)'s existing metric-flattening loop has something to
         surface, regardless of which split path produced it."""
-        from app.plugins.ml43_cereals_dnsl_anomaly_fault_detection.plugin import Ml43CerealsDnslAnomalyFaultDetectionPlugin
-
         df = _build_synthetic_cereal_csv(self.N_WINDOWS, corrupt_test_fold=False)
         csv_path = tmp_path / "cereal_train_threshold.csv"
         df.to_csv(csv_path, index=False)
@@ -252,7 +297,7 @@ class TestTrainCheckpointSelectionUsesOnlyValidation:
         torch.manual_seed(0)
         plugin = Ml43CerealsDnslAnomalyFaultDetectionPlugin()
         with patch(
-            "app.plugins.ml43_cereals_dnsl_anomaly_fault_detection.plugin.upload_artifacts_to_mlflow",
+            f"{_PLUGIN}.upload_artifacts_to_mlflow",
             return_value="fake-run-id",
         ) as mock_upload:
             resp = plugin.train(data_path=str(csv_path), mlflow_run_id="")
@@ -266,8 +311,6 @@ class TestTrainCheckpointSelectionUsesOnlyValidation:
         fallo_auc/fallo_precision/fallo_recall — TEST_METRICS's own keys had no real
         per-run counterpart to overwrite from at all, so stats() could never surface
         real values under those tiles no matter what else got fixed."""
-        from app.plugins.ml43_cereals_dnsl_anomaly_fault_detection.plugin import Ml43CerealsDnslAnomalyFaultDetectionPlugin
-
         df = _build_synthetic_cereal_csv(self.N_WINDOWS, corrupt_test_fold=False)
         csv_path = tmp_path / "cereal_train_test_metrics.csv"
         df.to_csv(csv_path, index=False)
@@ -276,7 +319,7 @@ class TestTrainCheckpointSelectionUsesOnlyValidation:
         torch.manual_seed(0)
         plugin = Ml43CerealsDnslAnomalyFaultDetectionPlugin()
         with patch(
-            "app.plugins.ml43_cereals_dnsl_anomaly_fault_detection.plugin.upload_artifacts_to_mlflow",
+            f"{_PLUGIN}.upload_artifacts_to_mlflow",
             return_value="fake-run-id",
         ) as mock_upload:
             resp = plugin.train(data_path=str(csv_path), mlflow_run_id="")
@@ -301,26 +344,9 @@ class TestTrainCheckpointSelectionUsesOnlyValidation:
         and cycle 7 NORMAL makes the val fold genuinely mixed-class, actually
         exercising optimize_threshold_by_f1's 101-point grid search (not a degenerate
         single-class sweep)."""
-        from app.plugins.ml43_cereals_dnsl_anomaly_fault_detection.plugin import Ml43CerealsDnslAnomalyFaultDetectionPlugin
-
         cycle_labels = ["NORMAL"] * 6 + ["VALVULA_OBSTRUIDA", "NORMAL"] + ["NORMAL"] * 2
 
-        rng = np.random.default_rng(99)
-        frames = []
-        for cycle_idx, label in enumerate(cycle_labels):
-            values = {
-                col: 20.0 + 3.0 * i + rng.normal(0, 0.1, SEQ_LENGTH)
-                for i, col in enumerate(SENSOR_COLUMNS)
-            }
-            if label != "NORMAL":
-                for col in SENSOR_COLUMNS:
-                    values[col] += 50.0
-            frame = pd.DataFrame(values)
-            frame["cycle_id"] = f"cycle_{cycle_idx}"
-            frame["timestamp"] = pd.date_range("2026-01-01", periods=SEQ_LENGTH, freq="min")
-            frame["fault_name"] = label
-            frames.append(frame)
-        df = pd.concat(frames, ignore_index=True)
+        df = _build_one_window_cycles_csv(cycle_labels)
 
         csv_path = tmp_path / "cereal_train_mixed_val.csv"
         df.to_csv(csv_path, index=False)
@@ -329,7 +355,7 @@ class TestTrainCheckpointSelectionUsesOnlyValidation:
         torch.manual_seed(0)
         plugin = Ml43CerealsDnslAnomalyFaultDetectionPlugin()
         with patch(
-            "app.plugins.ml43_cereals_dnsl_anomaly_fault_detection.plugin.upload_artifacts_to_mlflow",
+            f"{_PLUGIN}.upload_artifacts_to_mlflow",
             return_value="fake-run-id",
         ) as mock_upload:
             resp = plugin.train(data_path=str(csv_path), mlflow_run_id="")
@@ -346,8 +372,6 @@ class TestTrainCheckpointSelectionUsesOnlyValidation:
         to MLflow as-is, reported as 'Entrenamiento completado'. Simulates that by making
         torch.save write an empty file, and asserts training aborts before ever attempting
         the MLflow upload."""
-        from app.plugins.ml43_cereals_dnsl_anomaly_fault_detection.plugin import Ml43CerealsDnslAnomalyFaultDetectionPlugin
-
         df = _build_synthetic_cereal_csv(self.N_WINDOWS, corrupt_test_fold=False)
         csv_path = tmp_path / "cereal_train_corrupt_artifact.csv"
         df.to_csv(csv_path, index=False)
@@ -358,11 +382,17 @@ class TestTrainCheckpointSelectionUsesOnlyValidation:
         np.random.seed(0)
         torch.manual_seed(0)
         plugin = Ml43CerealsDnslAnomalyFaultDetectionPlugin()
-        with patch("app.plugins.ml43_cereals_dnsl_anomaly_fault_detection.plugin.torch.save", side_effect=_write_empty_file), \
-                patch("app.plugins.ml43_cereals_dnsl_anomaly_fault_detection.plugin.upload_artifacts_to_mlflow") as mock_upload:
+        with patch(f"{_PLUGIN}.torch.save", side_effect=_write_empty_file), \
+                patch(f"{_PLUGIN}.upload_artifacts_to_mlflow") as mock_upload:
             with pytest.raises(ValueError, match="best_dnf_model.pt"):
                 plugin.train(data_path=str(csv_path), mlflow_run_id="")
             mock_upload.assert_not_called()
+
+
+def _pickle_load(path):
+    """Unpickle the file at ``path``."""
+    with open(path, "rb") as fh:
+        return pickle.load(fh)
 
 
 class TestValidateSavedArtifact:
@@ -372,34 +402,30 @@ class TestValidateSavedArtifact:
     when_the_model_artifact_is_corrupted for the end-to-end wiring)."""
 
     def test_raises_on_missing_file(self, tmp_path):
-        from app.plugins.ml43_cereals_dnsl_anomaly_fault_detection.plugin import _validate_saved_artifact
-
+        """A missing file is rejected as empty."""
         with pytest.raises(ValueError, match="vacío"):
             _validate_saved_artifact(tmp_path / "missing.pt", loader=lambda p: None)
 
     def test_raises_on_zero_byte_file(self, tmp_path):
-        from app.plugins.ml43_cereals_dnsl_anomaly_fault_detection.plugin import _validate_saved_artifact
-
+        """A zero-byte file is rejected as empty."""
         path = tmp_path / "empty.pkl"
         path.write_bytes(b"")
         with pytest.raises(ValueError, match="vacío"):
-            _validate_saved_artifact(path, loader=lambda p: pickle.load(open(p, "rb")))
+            _validate_saved_artifact(path, loader=_pickle_load)
 
     def test_raises_on_a_nonempty_but_corrupt_file(self, tmp_path):
-        from app.plugins.ml43_cereals_dnsl_anomaly_fault_detection.plugin import _validate_saved_artifact
-
+        """A non-empty but unreadable file is rejected as corrupt."""
         path = tmp_path / "corrupt.pkl"
         path.write_bytes(b"not actually a pickle stream")
         with pytest.raises(ValueError, match="corrupto"):
-            _validate_saved_artifact(path, loader=lambda p: pickle.load(open(p, "rb")))
+            _validate_saved_artifact(path, loader=_pickle_load)
 
     def test_passes_for_a_real_readable_artifact(self, tmp_path):
-        from app.plugins.ml43_cereals_dnsl_anomaly_fault_detection.plugin import _validate_saved_artifact
-
+        """A readable artifact passes validation."""
         path = tmp_path / "ok.pkl"
         with open(path, "wb") as f:
             pickle.dump({"a": 1}, f)
-        _validate_saved_artifact(path, loader=lambda p: pickle.load(open(p, "rb")))  # does not raise
+        _validate_saved_artifact(path, loader=_pickle_load)  # does not raise
 
 
 # ── Feedback 3 (modelo 43-44, 09/09/2026): labels + XAI-for-every-window ──────────────
@@ -412,6 +438,8 @@ class _FakeExplainer:
         self.calls = 0
 
     def explain(self, *, x_window, s_stats, background_windows, anomaly_threshold):
+        """Count the call and return the configured final report."""
+        _ = x_window, s_stats, background_windows, anomaly_threshold
         self.calls += 1
         return {"final_report": self._final_report}
 
@@ -426,15 +454,14 @@ def test_format_batch_predictions_uses_spanish_labels():
     """Point 1: predicted_anomaly_label must be 'Fallo'/'No Fallo' — mirrors
     ml45_cereals_dnsl_critical_point_detection/postprocessing.py, which already returns
     these Spanish labels for the same binary decision."""
-    from app.plugins.ml43_cereals_dnsl_anomaly_fault_detection import postprocessing
-
     x_arr, stats_scaled = _dummy_batch_inputs(2)
     scores = np.array([0.1, 0.9], dtype=np.float32)  # below / above threshold=0.5
 
     predictions = postprocessing.format_batch_predictions(
-        x_arr, scores, cycle_ids=None, threshold=0.5,
-        explainer=None, xai_background=None,
-        X_scaled=x_arr, stats_scaled=stats_scaled,
+        x_arr, scores, threshold=0.5,
+        xai=postprocessing.XaiInputs(
+            explainer=None, background=None, x_scaled=x_arr, stats_scaled=stats_scaled,
+        ),
     )
     assert predictions[0]["predicted_anomaly_label"] == "No Fallo"
     assert predictions[1]["predicted_anomaly_label"] == "Fallo"
@@ -444,8 +471,6 @@ def test_format_batch_predictions_runs_xai_for_every_window_not_only_failures():
     """Point 3: XAI must run for 'No Fallo' rows too. Previously gated behind
     `if is_anomaly`, so every non-anomalous row's xai_result was None by construction —
     not because the explanation failed, but because run_xai was never even called."""
-    from app.plugins.ml43_cereals_dnsl_anomaly_fault_detection import postprocessing
-
     final_report = {
         "Estado_del_sistema": {"Estado_interpretativo": "Normal"},
         "Mensaje_operativo": ["No se requieren acciones correctivas."],
@@ -455,9 +480,12 @@ def test_format_batch_predictions_runs_xai_for_every_window_not_only_failures():
     scores = np.array([0.1, 0.9], dtype=np.float32)  # No Fallo / Fallo
 
     predictions = postprocessing.format_batch_predictions(
-        x_arr, scores, cycle_ids=None, threshold=0.5,
-        explainer=explainer, xai_background=np.zeros((4, SEQ_LENGTH, len(SENSOR_COLUMNS)), dtype=np.float32),
-        X_scaled=x_arr, stats_scaled=stats_scaled,
+        x_arr, scores, threshold=0.5,
+        xai=postprocessing.XaiInputs(
+            explainer=explainer,
+            background=np.zeros((4, SEQ_LENGTH, len(SENSOR_COLUMNS)), dtype=np.float32),
+            x_scaled=x_arr, stats_scaled=stats_scaled,
+        ),
     )
     assert explainer.calls == 2, "run_xai must run for both the No Fallo and the Fallo window"
     assert predictions[0]["xai_result"] == final_report
@@ -491,8 +519,6 @@ def test_build_final_report_normal_has_only_mensaje_operativo():
     Bloques_principales/Variables_clave/Acciones_sugeridas absent entirely (not empty
     lists) — see plataforma's deriveModelo43XaiColumns, which relies on this absence to
     show 'No aplica'."""
-    from app.plugins.ml43_cereals_dnsl_anomaly_fault_detection._vendor.xai.explainer import DNFLExplainer
-
     report = _action_report(
         "normal",
         blocks=[{"block": "termico", "support_variables": ["temp_zona1"]}],
@@ -514,11 +540,10 @@ def test_build_final_report_normal_with_signals_has_blocks_variables_actions():
     """No Fallo + Normal con señales: unlike plain Normal, this state does NOT take the
     Mensaje_operativo shortcut — it gets the same Bloques_principales/Variables_clave/
     Acciones_sugeridas treatment as the anomaly states."""
-    from app.plugins.ml43_cereals_dnsl_anomaly_fault_detection._vendor.xai.explainer import DNFLExplainer
-
     report = _action_report(
         "normal_with_signals",
-        blocks=[{"block": "ventilacion_presion", "support_variables": ["presion_camara", "presion_ventilacion"]}],
+        blocks=[{"block": "ventilacion_presion",
+                 "support_variables": ["presion_camara", "presion_ventilacion"]}],
         actions=[{"action": "Inspeccionar ventilación y estado del actuador o ventilador."}],
     )
     final_report = DNFLExplainer._build_final_report(None, action_report=report)
@@ -527,14 +552,14 @@ def test_build_final_report_normal_with_signals_has_blocks_variables_actions():
     assert "Mensaje_operativo" not in final_report
     assert final_report["Bloques_principales"] == ["ventilacion_presion"]
     assert final_report["Variables_clave"] == ["presion_camara", "presion_ventilacion"]
-    assert final_report["Acciones_sugeridas"] == ["Inspeccionar ventilación y estado del actuador o ventilador."]
+    assert final_report["Acciones_sugeridas"] == [
+        "Inspeccionar ventilación y estado del actuador o ventilador."
+    ]
 
 
 def test_build_final_report_unconfirmed_alert_keeps_blocks_variables_actions():
     """Fallo + Alerta no confirmada: regression guard — must keep the same
     Bloques_principales/Variables_clave/Acciones_sugeridas shape it already had."""
-    from app.plugins.ml43_cereals_dnsl_anomaly_fault_detection._vendor.xai.explainer import DNFLExplainer
-
     report = _action_report(
         "unconfirmed_alert",
         blocks=[{"block": "ventilacion_presion", "support_variables": ["presion_ventilacion"]}],
@@ -552,13 +577,12 @@ def test_build_final_report_unconfirmed_alert_keeps_blocks_variables_actions():
 def test_build_final_report_confirmed_anomaly_keeps_blocks_variables_actions():
     """Fallo + Anomalía confirmada: regression guard — must keep the same
     Bloques_principales/Variables_clave/Acciones_sugeridas shape it already had."""
-    from app.plugins.ml43_cereals_dnsl_anomaly_fault_detection._vendor.xai.explainer import DNFLExplainer
-
     report = _action_report(
         "confirmed_anomaly",
         blocks=[{"block": "termico", "support_variables": ["temp_zona1", "temp_zona2"]},
                 {"block": "presion", "support_variables": ["presion_camara"]}],
-        actions=[{"action": "Detener el horno."}, {"action": "Inspeccionar sensores de temperatura."}],
+        actions=[{"action": "Detener el horno."},
+                 {"action": "Inspeccionar sensores de temperatura."}],
     )
     final_report = DNFLExplainer._build_final_report(None, action_report=report)
 
@@ -566,7 +590,9 @@ def test_build_final_report_confirmed_anomaly_keeps_blocks_variables_actions():
     assert "Mensaje_operativo" not in final_report
     assert final_report["Bloques_principales"] == ["termico", "presion"]
     assert final_report["Variables_clave"] == ["temp_zona1", "temp_zona2", "presion_camara"]
-    assert final_report["Acciones_sugeridas"] == ["Detener el horno.", "Inspeccionar sensores de temperatura."]
+    assert final_report["Acciones_sugeridas"] == [
+        "Detener el horno.", "Inspeccionar sensores de temperatura."
+    ]
 
 
 class TestPredictUsesCalibratedThresholdFromTrainedRun:
@@ -577,15 +603,14 @@ class TestPredictUsesCalibratedThresholdFromTrainedRun:
     plugin.py::_load_model_for_predict / mlflow_utils.py::get_calibrated_threshold."""
 
     def test_load_model_for_predict_uses_the_runs_calibrated_threshold(self):
-        from app.plugins.ml43_cereals_dnsl_anomaly_fault_detection.plugin import Ml43CerealsDnslAnomalyFaultDetectionPlugin
-
+        """_load_model_for_predict takes the threshold calibrated in the run."""
         plugin = Ml43CerealsDnslAnomalyFaultDetectionPlugin()
         fake_bundle = (object(), {}, object(), object(), None, object(), "/tmp/fake")
         with patch(
-            "app.plugins.ml43_cereals_dnsl_anomaly_fault_detection.plugin.download_user_model_from_mlflow",
+            f"{_PLUGIN}.download_user_model_from_mlflow",
             return_value=fake_bundle,
         ), patch(
-            "app.plugins.ml43_cereals_dnsl_anomaly_fault_detection.plugin.get_calibrated_threshold",
+            f"{_PLUGIN}.get_calibrated_threshold",
             return_value=0.7676,
         ) as mock_get_threshold:
             ctx = plugin._load_model_for_predict("some-run-id")
@@ -594,8 +619,7 @@ class TestPredictUsesCalibratedThresholdFromTrainedRun:
         mock_get_threshold.assert_called_once_with("some-run-id", default=plugin._threshold)
 
     def test_served_ctx_uses_the_instance_threshold(self):
-        from app.plugins.ml43_cereals_dnsl_anomaly_fault_detection.plugin import Ml43CerealsDnslAnomalyFaultDetectionPlugin
-
+        """The served context uses the instance's own threshold."""
         plugin = Ml43CerealsDnslAnomalyFaultDetectionPlugin()
         assert plugin._served_ctx()["threshold"] == plugin._threshold
 
@@ -609,10 +633,6 @@ def test_stats_overwrites_legacy_anomaly_keys_with_the_real_run_values():
     train() logs metrics under the exact unified key names TEST_METRICS itself uses
     (modelo 43-45 audit), so stats() can overwrite base.metrics directly, key by key,
     with no alias map needed."""
-    from unittest.mock import patch
-
-    from app.plugins.ml43_cereals_dnsl_anomaly_fault_detection.plugin import Ml43CerealsDnslAnomalyFaultDetectionPlugin
-
     plugin = Ml43CerealsDnslAnomalyFaultDetectionPlugin()
     with patch(
         "app.plugins.ml43_cereals_dnsl_anomaly_fault_detection.plugin.BaseMLflowTracker"
@@ -647,18 +667,17 @@ class TestGetCalibratedThreshold:
     wiring tested above."""
 
     def test_returns_the_logged_metric_when_present(self):
-        from app.plugins.ml43_cereals_dnsl_anomaly_fault_detection.mlflow_utils import get_calibrated_threshold
-
+        """The logged decision_threshold is returned when present."""
         with patch(
             "app.plugins.ml43_cereals_dnsl_anomaly_fault_detection.mlflow_utils.BaseMLflowTracker"
         ) as mock_tracker_cls:
-            mock_tracker_cls.return_value.get_metrics.return_value = {"decision_threshold": 0.63, "test_f1": 0.8}
+            mock_tracker_cls.return_value.get_metrics.return_value = {
+                "decision_threshold": 0.63, "test_f1": 0.8,
+            }
             assert get_calibrated_threshold("run-1", default=0.41) == 0.63
 
     def test_falls_back_to_default_when_metric_missing(self):
         """Runs trained before this metric existed never logged decision_threshold."""
-        from app.plugins.ml43_cereals_dnsl_anomaly_fault_detection.mlflow_utils import get_calibrated_threshold
-
         with patch(
             "app.plugins.ml43_cereals_dnsl_anomaly_fault_detection.mlflow_utils.BaseMLflowTracker"
         ) as mock_tracker_cls:
@@ -666,10 +685,11 @@ class TestGetCalibratedThreshold:
             assert get_calibrated_threshold("run-1", default=0.41) == 0.41
 
     def test_falls_back_to_default_on_mlflow_error(self):
-        from app.plugins.ml43_cereals_dnsl_anomaly_fault_detection.mlflow_utils import get_calibrated_threshold
-
+        """An MLflow error falls back to the default threshold."""
         with patch(
             "app.plugins.ml43_cereals_dnsl_anomaly_fault_detection.mlflow_utils.BaseMLflowTracker"
         ) as mock_tracker_cls:
-            mock_tracker_cls.return_value.get_metrics.side_effect = RuntimeError("MLflow unreachable")
+            mock_tracker_cls.return_value.get_metrics.side_effect = RuntimeError(
+                "MLflow unreachable"
+            )
             assert get_calibrated_threshold("run-1", default=0.41) == 0.41

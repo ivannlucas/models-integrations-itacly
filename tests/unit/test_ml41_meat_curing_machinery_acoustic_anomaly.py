@@ -17,6 +17,7 @@ INLINE_PAYLOAD = {
 
 
 def test_health(client):
+    """GET /health reports the model as loaded and ok."""
     body = client.get(f"{PREFIX}/health").json()
     assert body["status"] == "ok"
     assert body["model"] == "ml41-meat-curing-machinery-acoustic-anomaly"
@@ -24,11 +25,13 @@ def test_health(client):
 
 
 def test_stats(client):
+    """GET /stats returns the model name."""
     body = client.get(f"{PREFIX}/stats").json()
     assert body["model_name"] == "ml41-meat-curing-machinery-acoustic-anomaly"
 
 
 def test_predict_inline(client):
+    """An inline predict echoes the combination and returns label, scores and threshold."""
     resp = client.post(f"{PREFIX}/predict", json=INLINE_PAYLOAD)
     assert resp.status_code == 200
     body = resp.json()
@@ -43,17 +46,22 @@ def test_predict_inline(client):
 
 
 def test_predict_inline_missing_field(client):
-    resp = client.post(f"{PREFIX}/predict", json={"mode": "inline", "audio_base64": _TINY_AUDIO_B64})
+    """An inline predict without machine/machine_id/snr is rejected with 422."""
+    resp = client.post(
+        f"{PREFIX}/predict", json={"mode": "inline", "audio_base64": _TINY_AUDIO_B64}
+    )
     assert resp.status_code == 422
 
 
 def test_predict_inline_invalid_machine_rejected_by_schema(client):
+    """An unknown machine type is rejected by the schema with 422."""
     payload = {**INLINE_PAYLOAD, "machine": "not-a-machine"}
     resp = client.post(f"{PREFIX}/predict", json=payload)
     assert resp.status_code == 422
 
 
 def test_predict_inline_unsupported_combination_maps_to_422(client, fake_plugins):
+    """UnsupportedMachineConfigurationError maps to HTTP 422 with its message."""
     fake_plugins["ml41-meat-curing-machinery-acoustic-anomaly"].raise_on_inline = (
         UnsupportedMachineConfigurationError("combinación no soportada")
     )
@@ -63,6 +71,7 @@ def test_predict_inline_unsupported_combination_maps_to_422(client, fake_plugins
 
 
 def test_predict_inline_invalid_audio_maps_to_422(client, fake_plugins):
+    """InvalidAudioError maps to HTTP 422 with its message."""
     fake_plugins["ml41-meat-curing-machinery-acoustic-anomaly"].raise_on_inline = InvalidAudioError(
         "audio no decodificable"
     )
@@ -72,6 +81,7 @@ def test_predict_inline_invalid_audio_maps_to_422(client, fake_plugins):
 
 
 def test_predict_batch(client):
+    """A batch predict returns a predictions list."""
     resp = client.post(
         f"{PREFIX}/predict",
         json={"mode": "batch", "data_path": "/tmp/ml41_batch.zip"},
@@ -83,6 +93,7 @@ def test_predict_batch(client):
 
 
 def test_train(client):
+    """POST /train returns a per-combination summary."""
     resp = client.post(
         f"{PREFIX}/train",
         json={"data_path": "/tmp/ml41_train.zip", "mlflow_run_id": "test-run-id"},

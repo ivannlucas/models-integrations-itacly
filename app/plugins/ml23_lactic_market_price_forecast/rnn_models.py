@@ -5,7 +5,7 @@ Only GRUModel is included — the artifact uses GRU exclusively.
 from __future__ import annotations
 
 import torch
-import torch.nn as nn
+from torch import nn
 
 
 class GRUModel(nn.Module):

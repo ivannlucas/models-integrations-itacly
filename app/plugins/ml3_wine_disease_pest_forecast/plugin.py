@@ -11,17 +11,17 @@ from __future__ import annotations
 
 import copy
 import logging
-import shutil
 import tempfile
-from datetime import datetime, timezone
 from typing import Any
 
 import pandas as pd
 
-from app.application.dto.stats_dto import InputField, OutputField, RuntimeStats, StatsResponse
+from app.application.dto.stats_dto import InputField, OutputField, StatsResponse
 from app.domain.ports.model_plugin_port import ModelPluginPort
-from app.domain.services.exceptions import ModelNotLoadedError, ModelPersistenceError
+from app.domain.services.exceptions import ModelPersistenceError
+from app.domain.services.mlflow_artifacts import removing_dir, require_train_tracker
 from app.domain.services.mlflow_tracker import BaseMLflowTracker
+from app.domain.services.plugin_runtime import PluginRuntimeMixin
 from app.infrastructure.artifact_store import local_file_path
 from app.plugins.ml3_wine_disease_pest_forecast import (
     model_loader,
@@ -54,14 +54,12 @@ from app.plugins.ml3_wine_disease_pest_forecast.train_dto import TrainResponse
 logger = logging.getLogger(__name__)
 
 
-class Ml3WineDiseasePestForecastPlugin(ModelPluginPort):
+class Ml3WineDiseasePestForecastPlugin(PluginRuntimeMixin, ModelPluginPort):
     """Deep Ensemble vineyard diagnosis over 168-hour per-series sensor windows."""
 
     def __init__(self) -> None:
-        """Initialize an unloaded plugin with empty runtime counters."""
+        """Initialize an unloaded plugin (runtime counters start at the mixin defaults)."""
         self._bundle: tuple[list, Any, Any, list[str]] | None = None
-        self._predict_count: int = 0
-        self._last_predict_at: str | None = None
 
     def load(self) -> None:
         """Load the fixed ensemble (3 Keras checkpoints + scaler + label_encoder)."""
@@ -71,14 +69,6 @@ class Ml3WineDiseasePestForecastPlugin(ModelPluginPort):
     def is_loaded(self) -> bool:
         """Return True once the fixed bundle is loaded."""
         return self._bundle is not None
-
-    def _require_loaded(self) -> None:
-        if self._bundle is None:
-            raise ModelNotLoadedError("El modelo no está cargado.")
-
-    def _record_prediction(self) -> None:
-        self._predict_count += 1
-        self._last_predict_at = datetime.now(tz=timezone.utc).isoformat()
 
     # ── shared inference core ─────────────────────────────────────────────────
 
@@ -132,7 +122,7 @@ class Ml3WineDiseasePestForecastPlugin(ModelPluginPort):
         """Score every series in a CSV/parquet (one prediction per 168-hour window)."""
         self._require_loaded()
         bundle, user_tmp = self._bundle_for(mlflow_run_id)
-        try:
+        with removing_dir(user_tmp):
             with local_file_path(data_path) as local_path:
                 if str(local_path).lower().endswith(".parquet"):
                     raw_df = pd.read_parquet(local_path)
@@ -144,7 +134,7 @@ class Ml3WineDiseasePestForecastPlugin(ModelPluginPort):
             for series_name, series_df in preprocessing.prepare_series_groups(raw_df):
                 predictions.append(self._score_window(series_name, series_df, bundle))
 
-            self._record_prediction()
+            self._record()
             logger.info(
                 "predict_batch done — n_series=%d mlflow=%s count=%d",
                 len(predictions), bool(mlflow_run_id), self._predict_count,
@@ -152,9 +142,6 @@ class Ml3WineDiseasePestForecastPlugin(ModelPluginPort):
             return PredictBatchResponse(
                 model_id=MODEL_ID, predictions=predictions, output_path=None,
             )
-        finally:
-            if user_tmp:
-                shutil.rmtree(user_tmp, ignore_errors=True)
 
     # ── predict_inline ────────────────────────────────────────────────────────
 
@@ -169,7 +156,7 @@ class Ml3WineDiseasePestForecastPlugin(ModelPluginPort):
         """Score a single series submitted as a list of hourly row dicts (>= 168 rows)."""
         self._require_loaded()
         bundle, user_tmp = self._bundle_for(mlflow_run_id)
-        try:
+        with removing_dir(user_tmp):
             rows: list[dict] = features["rows"]
             raw_df = preprocessing.build_raw_dataframe(rows)
             preprocessing.validate_raw_columns(raw_df)
@@ -186,7 +173,7 @@ class Ml3WineDiseasePestForecastPlugin(ModelPluginPort):
                 series_name = raw_df[SERIES_COLUMN].iloc[0]
             record = self._score_window(series_name, raw_df, bundle)
 
-            self._record_prediction()
+            self._record()
             logger.info(
                 "predict_inline done — id_serie=%s prediction=%s conf=%.4f count=%d",
                 record["id_serie"], record["diagnostico_ia"], record["confianza_clasificacion"],
@@ -204,9 +191,6 @@ class Ml3WineDiseasePestForecastPlugin(ModelPluginPort):
                 model_name=MODEL_ID,
                 xai_feature_values=record["xai_feature_values"],
             )
-        finally:
-            if user_tmp:
-                shutil.rmtree(user_tmp, ignore_errors=True)
 
     # ── train (full retraining with the delivered procedure) ─────────────────
 
@@ -218,11 +202,12 @@ class Ml3WineDiseasePestForecastPlugin(ModelPluginPort):
         lives only in its own MLflow run (artifact_path="model"); the served fixed artifacts
         and their local copy are never mutated nor overwritten.
         """
+        tracker = require_train_tracker(mlflow_run_id)
         self._require_loaded()
         raw_df = training.load_retraining_input(data_path)
 
         train_tmp = tempfile.mkdtemp(prefix="ml3_train_")
-        try:
+        with removing_dir(train_tmp):
             model_paths = {
                 "M1_LSTM": f"{train_tmp}/{MODEL_FILENAMES[0]}",
                 "M2_CNN": f"{train_tmp}/{MODEL_FILENAMES[1]}",
@@ -233,21 +218,16 @@ class Ml3WineDiseasePestForecastPlugin(ModelPluginPort):
             result = training.run_retraining(raw_df, model_paths)
             metrics = result["metrics"]
 
-            upload_warning = None
-            if not mlflow_run_id:
-                raise ModelPersistenceError("Sin run de MLflow: el modelo reentrenado no se ha guardado.")
-            else:
-                tracker = BaseMLflowTracker(mlflow_run_id)
-                try:
-                    tracker.log_params({"window_size": WINDOW_SIZE, "epochs": EPOCHS,
-                                        "batch_size": BATCH_SIZE, "seed": TRAIN_RANDOM_SEED})
-                    tracker.log_metrics(metrics)
-                    tracker.upload_artifacts(train_tmp, artifact_path="model")
-                except Exception as exc:  # pylint: disable=broad-exception-caught
-                    logger.error("MLflow artifact upload failed: %s", exc)
-                    raise ModelPersistenceError(f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}") from exc
-        finally:
-            shutil.rmtree(train_tmp, ignore_errors=True)
+            try:
+                tracker.log_params({"window_size": WINDOW_SIZE, "epochs": EPOCHS,
+                                    "batch_size": BATCH_SIZE, "seed": TRAIN_RANDOM_SEED})
+                tracker.log_metrics(metrics)
+                tracker.upload_artifacts(train_tmp, artifact_path="model")
+            except Exception as exc:
+                logger.error("MLflow artifact upload failed: %s", exc)
+                raise ModelPersistenceError(
+                    f"El modelo reentrenado no se ha podido guardar en MLflow: {exc}"
+                ) from exc
 
         logger.info(
             "ml3 train() done — n_train_windows=%d n_val_windows=%d n_test_windows=%d "
@@ -272,7 +252,7 @@ class Ml3WineDiseasePestForecastPlugin(ModelPluginPort):
             mae=metrics["mae"],
             mse=metrics["mse"],
             r2=metrics["r2"],
-            upload_warning=upload_warning,
+            upload_warning=None,
         )
 
     # ── stats ─────────────────────────────────────────────────────────────────
@@ -339,10 +319,7 @@ class Ml3WineDiseasePestForecastPlugin(ModelPluginPort):
             # corrupt it for every future request once a real retrain's numbers got
             # written into it.
             metrics=copy.deepcopy(REPORTED_METRICS),
-            runtime_stats=RuntimeStats(
-                total_predictions=self._predict_count,
-                avg_latency_ms=None,
-            ),
+            runtime_stats=self._runtime_stats(),
         )
         # modelo 43-44-style audit follow-up: stats(mlflow_run_id=...) accepted the
         # parameter but never used it — every retrain's /stats always reported the
@@ -369,7 +346,9 @@ class Ml3WineDiseasePestForecastPlugin(ModelPluginPort):
                 # blind rename — REPORTED_METRICS's regression.rmse slot is genuinely
                 # root-mean-squared-error, a different unit from the mse train() logs.
                 if isinstance(base.metrics.get("classification"), dict):
-                    for key in ("accuracy", "precision_macro", "recall_macro", "f1_macro", "f1_weighted"):
+                    for key in (
+                        "accuracy", "precision_macro", "recall_macro", "f1_macro", "f1_weighted"
+                    ):
                         value = mlflow_metrics.get(key)
                         if isinstance(value, (int, float)):
                             base.metrics["classification"][key] = value
@@ -383,6 +362,6 @@ class Ml3WineDiseasePestForecastPlugin(ModelPluginPort):
                     r2 = mlflow_metrics.get("r2")
                     if isinstance(r2, (int, float)):
                         base.metrics["regression"]["r2"] = r2
-            except Exception as exc:  # pylint: disable=broad-exception-caught
+            except Exception as exc:  # pylint: disable=broad-exception-caught  # stats stay usable
                 logger.warning("Could not fetch MLflow stats for run_id=%s: %s", mlflow_run_id, exc)
         return base

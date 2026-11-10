@@ -11,6 +11,7 @@ MODEL_ID = "ml19-cereals-cost-forecast"
 
 
 def test_health(client):
+    """The health endpoint reports the model as loaded."""
     body = client.get(f"{PREFIX}/health").json()
     assert body["status"] == "ok"
     assert body["model"] == MODEL_ID
@@ -18,6 +19,7 @@ def test_health(client):
 
 
 def test_stats(client):
+    """The stats endpoint returns the model name."""
     assert client.get(f"{PREFIX}/stats").json()["model_name"] == MODEL_ID
 
 
@@ -32,6 +34,7 @@ def test_predict_inline_no_date_uses_latest(client):
 
 
 def test_predict_inline_with_date(client):
+    """An inline prediction for a given date echoes it as date_label."""
     resp = client.post(f"{PREFIX}/predict", json={"mode": "inline", "date": "2020-01"})
     assert resp.status_code == 200
     assert resp.json()["date_label"] == "2020-01"
@@ -55,6 +58,7 @@ def test_predict_inline_unavailable_date_maps_to_422(client, fake_plugins):
 
 
 def test_predict_batch(client):
+    """Batch prediction returns one prediction per row."""
     resp = client.post(
         f"{PREFIX}/predict", json={"mode": "batch", "data_path": "/tmp/a19_dates.csv"},
     )
@@ -65,14 +69,21 @@ def test_predict_batch(client):
 
 
 def test_train_returns_200_with_metrics(client):
-    resp = client.post(f"{PREFIX}/train", json={"data_path": "/tmp/dataset_v7_fe.csv", "mlflow_run_id": "test-run-id"})
+    """The train endpoint returns per-horizon metrics and the base version fields."""
+    resp = client.post(
+        f"{PREFIX}/train",
+        json={"data_path": "/tmp/dataset_v7_fe.csv", "mlflow_run_id": "test-run-id"},
+    )
     assert resp.status_code == 200
     body = resp.json()
-    assert {"horizons", "n_features", "train_end", "data_end", "base_version", "upload_warning"} <= body.keys()
+    expected = {"horizons", "n_features", "train_end", "data_end", "base_version",
+                "upload_warning"}
+    assert expected <= body.keys()
     assert [h["horizon"] for h in body["horizons"]] == [1, 2, 3]
     assert {"model_name", "sharpe"} <= body["horizons"][0]["reg"].keys()
 
 
 def test_train_without_mlflow_run_id_is_accepted(client):
     """ml19 promotes its base: the MLflow run is optional (traceability only)."""
-    assert client.post(f"{PREFIX}/train", json={"data_path": "/tmp/dataset_v7_fe.csv"}).status_code == 200
+    resp = client.post(f"{PREFIX}/train", json={"data_path": "/tmp/dataset_v7_fe.csv"})
+    assert resp.status_code == 200

@@ -4,7 +4,8 @@ Port del paquete ``src/xai/`` del equipo de IA conservando su semántica:
 - Grad-CAM 1D sobre ``features.17``, CAM interpolado a 600 pasos y normalizado a [0, 1].
 - SHAP ``GradientExplainer`` por cabeza, |SHAP| medio agrupado por sensor base y normalizado.
 - Riesgo: severidad x confianza, con bonus SHAP sobre los sensores de la regla física.
-- XAI por ciclo con el contrato de 43/44 (``xai_result`` / ``xai_error``): ver ``build_xai_result`` y ``explain_cycle``.
+- XAI por ciclo con el contrato de 43/44 (``xai_result`` / ``xai_error``): ver
+  ``build_xai_result`` y ``explain_cycle``.
 
 Grad-CAM (inmediato) y SHAP (caro, opcional) se calculan por separado: ninguna función de Grad-CAM
 depende de SHAP. Si SHAP no se pide, los campos que dependen de él quedan a ``None``.
@@ -35,13 +36,16 @@ from app.plugins.ml48_dairy_dnsl_critical_point_detection.constants import (
 
 logger = logging.getLogger(__name__)
 
-# Los hooks de Grad-CAM y GradientExplainer mutan/registran sobre la instancia compartida del modelo:
+# Los hooks de Grad-CAM y GradientExplainer mutan/registran sobre la instancia compartida del
+# modelo:
 # se serializa todo el cálculo XAI para que peticiones concurrentes no se pisen.
 XAI_LOCK = threading.Lock()
 
 PHYSICS_RULES = {
     "Bomba": {
-        "description": "Eficiencia hidráulica: P_hyd = PS1 × FS1 × 1.6666, eff = P_hyd / (|EPS1| + 1)",
+        "description": (
+            "Eficiencia hidráulica: P_hyd = PS1 × FS1 × 1.6666, eff = P_hyd / (|EPS1| + 1)"
+        ),
         "threshold": 0.75,
         "sensors": ["PS1", "FS1", "EPS1"],
         "condition": "efficiency < 0.75",
@@ -57,23 +61,55 @@ PHYSICS_RULES = {
 DEFAULT_MAINTENANCE_ACTIONS = {
     "Fouling": {
         0: {"accion": "Sin acción requerida", "urgencia": "Ninguna", "intervalo_ciclos": None},
-        1: {"accion": "Programar limpieza CIP en próximo turno", "urgencia": "Media", "intervalo_ciclos": 50},
-        2: {"accion": "Detener producción y ejecutar limpieza CIP inmediata", "urgencia": "Alta", "intervalo_ciclos": 0},
+        1: {
+            "accion": "Programar limpieza CIP en próximo turno",
+            "urgencia": "Media",
+            "intervalo_ciclos": 50,
+        },
+        2: {
+            "accion": "Detener producción y ejecutar limpieza CIP inmediata",
+            "urgencia": "Alta",
+            "intervalo_ciclos": 0,
+        },
     },
     "Válvula": {
         0: {"accion": "Sin acción requerida", "urgencia": "Ninguna", "intervalo_ciclos": None},
-        1: {"accion": "Verificar posición y respuesta del actuador de válvulas", "urgencia": "Media", "intervalo_ciclos": 30},
-        2: {"accion": "Reemplazo o reparación urgente de válvula de control", "urgencia": "Alta", "intervalo_ciclos": 0},
+        1: {
+            "accion": "Verificar posición y respuesta del actuador de válvulas",
+            "urgencia": "Media",
+            "intervalo_ciclos": 30,
+        },
+        2: {
+            "accion": "Reemplazo o reparación urgente de válvula de control",
+            "urgencia": "Alta",
+            "intervalo_ciclos": 0,
+        },
     },
     "Bomba": {
         0: {"accion": "Sin acción requerida", "urgencia": "Ninguna", "intervalo_ciclos": None},
-        1: {"accion": "Inspección de cavitación y verificar presión diferencial", "urgencia": "Media", "intervalo_ciclos": 40},
-        2: {"accion": "Reemplazo de bomba programado urgente — riesgo de fuga", "urgencia": "Alta", "intervalo_ciclos": 0},
+        1: {
+            "accion": "Inspección de cavitación y verificar presión diferencial",
+            "urgencia": "Media",
+            "intervalo_ciclos": 40,
+        },
+        2: {
+            "accion": "Reemplazo de bomba programado urgente — riesgo de fuga",
+            "urgencia": "Alta",
+            "intervalo_ciclos": 0,
+        },
     },
     "Acumulador": {
         0: {"accion": "Sin acción requerida", "urgencia": "Ninguna", "intervalo_ciclos": None},
-        1: {"accion": "Recargar presión del acumulador hidráulico", "urgencia": "Media", "intervalo_ciclos": 60},
-        2: {"accion": "Reemplazo de acumulador — presión fuera de rango operativo", "urgencia": "Alta", "intervalo_ciclos": 0},
+        1: {
+            "accion": "Recargar presión del acumulador hidráulico",
+            "urgencia": "Media",
+            "intervalo_ciclos": 60,
+        },
+        2: {
+            "accion": "Reemplazo de acumulador — presión fuera de rango operativo",
+            "urgencia": "Alta",
+            "intervalo_ciclos": 0,
+        },
     },
 }
 URGENCY_ORDER = {"Alta": 0, "Media": 1, "Ninguna": 2}
@@ -88,8 +124,9 @@ def _get_target_layer(model, layer_name: str):
     return module
 
 
-def compute_gradcam(model, input_tensor, target_head: int = 0, target_class: int | None = None,
-                    target_layer_name: str = GRADCAM_LAYER):
+def compute_gradcam(
+        model, input_tensor, target_head: int = 0, target_class: int | None = None,
+        target_layer_name: str = GRADCAM_LAYER):
     """Grad-CAM temporal (1, n_sensors, T) -> (cam (T,) en [0,1], predicción)."""
     model.eval()
     device = next(model.parameters()).device
@@ -98,8 +135,12 @@ def compute_gradcam(model, input_tensor, target_head: int = 0, target_class: int
 
     activations: dict = {}
     gradients: dict = {}
-    handle_fwd = target_layer.register_forward_hook(lambda m, i, o: activations.__setitem__("value", o))
-    handle_bwd = target_layer.register_full_backward_hook(lambda m, gi, go: gradients.__setitem__("value", go[0]))
+    handle_fwd = target_layer.register_forward_hook(
+        lambda m, i, o: activations.__setitem__("value", o)
+    )
+    handle_bwd = target_layer.register_full_backward_hook(
+        lambda m, gi, go: gradients.__setitem__("value", go[0])
+    )
 
     try:
         with torch.enable_grad():
@@ -121,16 +162,16 @@ def compute_gradcam(model, input_tensor, target_head: int = 0, target_class: int
         handle_fwd.remove()
         handle_bwd.remove()
 
-    prediction = {
+    return cam, {
         "head": HEAD_NAMES[target_head],
         "predicted_class": target_class,
         "class_name": CLASS_NAMES[target_class],
         "confidence": confidence,
     }
-    return cam, prediction
 
 
 def compute_gradcam_all_heads(model, input_tensor, target_layer_name: str = GRADCAM_LAYER):
+    """Grad-CAM de las 4 cabezas: lista de ``{"cam", "prediction"}`` en el orden de HEAD_NAMES."""
     results = []
     for head_idx in range(4):
         cam, prediction = compute_gradcam(model, input_tensor, target_head=head_idx,
@@ -157,23 +198,28 @@ def find_temporal_peaks(cam, threshold: float = GRADCAM_PEAK_THRESHOLD):
 # ── SHAP ──────────────────────────────────────────────────────────────────────
 
 class _HeadWrapper(torch.nn.Module):
+    """Expone una sola cabeza del modelo como salida (lo que espera GradientExplainer)."""
+
     def __init__(self, model, target_head: int):
         super().__init__()
         self.model = model
         self.target_head = target_head
 
     def forward(self, x):
+        """Logits de la cabeza ``target_head``."""
         return self.model(x)[self.target_head]
 
 
-def compute_shap_values(model, X_background, X_explain, feature_cols, target_head: int = 0) -> dict:
+def compute_shap_values(
+        model, x_background, x_explain, feature_cols, target_head: int = 0) -> dict:
     """|SHAP| medio por canal agrupado por sensor base y normalizado (suma = 1)."""
-    import shap  # import perezoso: dependencia pesada, solo necesaria si se pide SHAP
+    # import perezoso: dependencia pesada, solo necesaria si se pide SHAP
+    import shap  # pylint: disable=import-outside-toplevel
 
     device = next(model.parameters()).device
     model.eval()
-    explainer = shap.GradientExplainer(_HeadWrapper(model, target_head), X_background.to(device))
-    raw = explainer.shap_values(X_explain.to(device))
+    explainer = shap.GradientExplainer(_HeadWrapper(model, target_head), x_background.to(device))
+    raw = explainer.shap_values(x_explain.to(device))
 
     if isinstance(raw, list):
         raw = [v.cpu().numpy() if torch.is_tensor(v) else v for v in raw]
@@ -183,12 +229,18 @@ def compute_shap_values(model, X_background, X_explain, feature_cols, target_hea
         all_shap = np.abs(raw)
 
     channel_importance = np.asarray(all_shap.mean(axis=(0, 2))).flatten()
+    return _sensor_importance(channel_importance, feature_cols)
 
+
+def _sensor_importance(channel_importance: np.ndarray, feature_cols) -> dict[str, float]:
+    """Sum the channel importances per base sensor and normalise them (sum = 1)."""
     sensor_importance: dict[str, float] = {}
     for i, col in enumerate(feature_cols):
         for sensor in SENSOR_COLUMNS:
             if col.startswith(sensor):
-                sensor_importance[sensor] = sensor_importance.get(sensor, 0.0) + float(channel_importance[i])
+                sensor_importance[sensor] = (
+                    sensor_importance.get(sensor, 0.0) + float(channel_importance[i])
+                )
                 break
 
     total = float(sum(sensor_importance.values()))
@@ -197,14 +249,18 @@ def compute_shap_values(model, X_background, X_explain, feature_cols, target_hea
     return sensor_importance
 
 
-def compute_shap_all_heads(model, X_background, X_explain, feature_cols) -> dict:
+def compute_shap_all_heads(model, x_background, x_explain, feature_cols) -> dict:
+    """Importancia SHAP por sensor para cada una de las 4 cabezas."""
     return {
-        HEAD_NAMES[h]: compute_shap_values(model, X_background, X_explain, feature_cols, target_head=h)
+        HEAD_NAMES[h]: compute_shap_values(
+            model, x_background, x_explain, feature_cols, target_head=h
+        )
         for h in range(4)
     }
 
 
 def seed_xai() -> None:
+    """Fija las semillas de numpy y torch para que SHAP sea reproducible."""
     np.random.seed(RANDOM_STATE)
     torch.manual_seed(RANDOM_STATE)
 
@@ -212,6 +268,7 @@ def seed_xai() -> None:
 # ── Riesgo y prescriptivo ─────────────────────────────────────────────────────
 
 def compute_risk_scores(predictions, confidences, shap_importance: dict | None = None) -> dict:
+    """Riesgo por cabeza = severidad x confianza (con bonus SHAP físico), con su nivel."""
     risk_scores = {}
     severity_weights = {0: 0.0, 1: 0.5, 2: 1.0}
     for i, head in enumerate(HEAD_NAMES):
@@ -219,15 +276,24 @@ def compute_risk_scores(predictions, confidences, shap_importance: dict | None =
         if shap_importance and head in shap_importance:
             physics_sensors = PHYSICS_RULES.get(head, {}).get("sensors", [])
             if physics_sensors:
-                score = score * (1.0 + sum(shap_importance[head].get(s, 0.0) for s in physics_sensors))
+                score = score * (
+                    1.0 + sum(shap_importance[head].get(s, 0.0) for s in physics_sensors)
+                )
         score = min(score, 1.0)
-        level = "CRÍTICO" if score >= RISK_CRITICAL else "WARNING" if score >= RISK_WARNING else "NORMAL"
+        level = (
+            "CRÍTICO" if score >= RISK_CRITICAL
+            else "WARNING" if score >= RISK_WARNING
+            else "NORMAL"
+        )
         risk_scores[head] = {"score": round(score, 4), "level": level}
     return risk_scores
 
 
 def load_maintenance_actions(path: Path | None = None) -> dict:
-    """Acciones por componente/clase desde maintenance_actions.yaml; fallback a la tabla por defecto."""
+    """Acciones por componente/clase desde maintenance_actions.yaml.
+
+    Si el fichero falta o es inválido, se usa la tabla por defecto.
+    """
     path = path or Path(__file__).with_name(MAINTENANCE_ACTIONS_FILENAME)
     try:
         raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
@@ -252,7 +318,9 @@ def load_maintenance_actions(path: Path | None = None) -> dict:
     return configured
 
 
-def generate_maintenance_recommendations(predictions, confidences, risk_scores: dict | None = None) -> list[dict]:
+def generate_maintenance_recommendations(
+        predictions, confidences, risk_scores: dict | None = None) -> list[dict]:
+    """Acción prescriptiva por componente (con su riesgo), ordenada por urgencia."""
     actions = load_maintenance_actions()
     recommendations = []
     for i, head in enumerate(HEAD_NAMES):
@@ -273,39 +341,53 @@ def generate_maintenance_recommendations(predictions, confidences, risk_scores: 
     return recommendations
 
 
-def build_local_report(predictions, confidences, gradcam_results, shap_all: dict | None,
-                       cycle_id=None, include_cam: bool = False) -> list[dict]:
+def _critical_window(cam) -> tuple:
+    """(inicio_s, fin_s, intensidad) del pico Grad-CAM más intenso; (None, None, 0.0) si no hay."""
+    peaks = find_temporal_peaks(cam)
+    if not peaks:
+        return None, None, 0.0
+    start, end, intensity = max(peaks, key=lambda p: p[2])
+    return (
+        round(start / SAMPLING_RATE_HZ, 1),
+        round((end + 1) / SAMPLING_RATE_HZ, 1),
+        round(intensity, 4),
+    )
+
+
+def _top_sensor(shap_all: dict | None, head: str) -> tuple:
+    """(sensor más relevante, su importancia SHAP) de ``head``; (None, None) sin SHAP."""
+    if shap_all and shap_all.get(head):
+        top_sensor = max(shap_all[head], key=shap_all[head].get)
+        return top_sensor, round(shap_all[head][top_sensor], 4)
+    return None, None
+
+
+def build_local_report(  # pylint: disable=too-many-arguments
+        predictions, confidences, gradcam_results, shap_all: dict | None,
+        *, cycle_id=None, include_cam: bool = False) -> list[dict]:
     """Informe local por componente (equivalente a xai_report_cycle.csv).
 
     Sin SHAP: ``sensor_mas_relevante`` / ``importancia_sensor`` = None y el riesgo se calcula sin el
     bonus SHAP (``riesgo_incluye_shap`` = False), de modo que no se mezclan ambos resultados.
     """
     risk = compute_risk_scores(predictions, confidences, shap_importance=shap_all)
-    recs = {r["componente"]: r for r in generate_maintenance_recommendations(predictions, confidences, risk)}
+    recs = {
+        r["componente"]: r
+        for r in generate_maintenance_recommendations(predictions, confidences, risk)
+    }
 
     rows = []
     for i, head in enumerate(HEAD_NAMES):
-        cam = gradcam_results[i]["cam"]
-        peaks = find_temporal_peaks(cam)
-        if peaks:
-            start, end, intensity = max(peaks, key=lambda p: p[2])
-            win = (round(start / SAMPLING_RATE_HZ, 1), round((end + 1) / SAMPLING_RATE_HZ, 1), round(intensity, 4))
-        else:
-            win = (None, None, 0.0)
-
-        top_sensor = top_importance = None
-        if shap_all and shap_all.get(head):
-            top_sensor = max(shap_all[head], key=shap_all[head].get)
-            top_importance = round(shap_all[head][top_sensor], 4)
-
+        win = _critical_window(gradcam_results[i]["cam"])
+        top = _top_sensor(shap_all, head)
         rec = recs[head]
         row = {
             "cycle_id": cycle_id,
             "componente": head,
             "prediccion": CLASS_NAMES[predictions[i]],
             "confianza": round(confidences[i], 4),
-            "sensor_mas_relevante": top_sensor,
-            "importancia_sensor": top_importance,
+            "sensor_mas_relevante": top[0],
+            "importancia_sensor": top[1],
             "ventana_critica_inicio_s": win[0],
             "ventana_critica_fin_s": win[1],
             "intensidad_ventana": win[2],
@@ -317,7 +399,7 @@ def build_local_report(predictions, confidences, gradcam_results, shap_all: dict
             "riesgo_incluye_shap": shap_all is not None,
         }
         if include_cam:
-            row["gradcam_cam"] = [round(float(v), 4) for v in cam]
+            row["gradcam_cam"] = [round(float(v), 4) for v in gradcam_results[i]["cam"]]
         rows.append(row)
     return rows
 
@@ -329,16 +411,18 @@ MENSAJE_NORMAL = "Todos los componentes en estado Sano: no se requiere intervenc
 
 
 def build_xai_result(local_rows: list[dict]) -> dict:
-    """Construye el ``xai_result`` de un ciclo reutilizando las claves del ``final_report`` de modelo-43.
+    """Construye el ``xai_result`` de un ciclo con las claves del ``final_report`` de modelo-43.
 
     Claves de 43 (las que lee la plataforma): ``Estado_del_sistema.Estado_interpretativo``,
-    ``Bloques_principales`` y ``Variables_clave`` (ausentes si el estado es Normal), ``Acciones_sugeridas``
-    (estado no Normal) o ``Mensaje_operativo`` (estado Normal). ``Detalle_componentes`` es una clave adicional
-    con la ventana crítica, el riesgo y la acción de cada componente (la plataforma la ignora por ahora).
+    ``Bloques_principales`` y ``Variables_clave`` (ausentes si el estado es Normal),
+    ``Acciones_sugeridas`` (estado no Normal) o ``Mensaje_operativo`` (estado Normal).
+    ``Detalle_componentes`` es una clave adicional con la ventana crítica, el riesgo y la acción
+    de cada componente (la plataforma la ignora por ahora).
 
     - Estado: el peor estado de los cuatro componentes (Normal / Warning / Crítico).
     - Bloques: componentes alterados (estado distinto de Sano).
-    - Variables: sensores de la regla física de cada componente alterado y, si hubo SHAP, su sensor más relevante.
+    - Variables: sensores de la regla física de cada componente alterado y, si hubo SHAP, su
+      sensor más relevante.
     - Acciones: acción prescriptiva de cada componente alterado, por urgencia.
     """
     clase = {"Sano": 0, "Warning": 1, "Crítico": 2}
@@ -365,16 +449,34 @@ def build_xai_result(local_rows: list[dict]) -> dict:
         result["Variables_clave"] = variables
         por_urgencia = sorted(alterados, key=lambda r: URGENCY_ORDER.get(r["urgencia"], 99))
         result["Acciones_sugeridas"] = [f"{r['componente']}: {r['accion']}" for r in por_urgencia]
-    result["Detalle_componentes"] = [{k: v for k, v in r.items() if k != "cycle_id"} for r in local_rows]
+    result["Detalle_componentes"] = [
+        {k: v for k, v in r.items() if k != "cycle_id"} for r in local_rows
+    ]
     return result
 
 
-def explain_cycle(model, input_tensor, predictions, confidences, feature_cols, cycle_id=None,
-                  include_shap: bool = False, shap_background=None, include_cam: bool = False):
-    """XAI de un ciclo -> ``(xai_result, xai_error)``; nunca lanza: un fallo se devuelve como ``xai_error``.
+def _cycle_shap(model, tensor, shap_background, feature_cols) -> dict:
+    """SHAP de las 4 cabezas para un ciclo (usa el propio ciclo si no hay background)."""
+    if shap_background is None:
+        logger.warning(
+            "No packaged SHAP background; using the cycle itself as background "
+            "(degenerate)"
+        )
+        background = tensor.detach().cpu()
+    else:
+        background = torch.as_tensor(shap_background, dtype=torch.float32)
+    seed_xai()
+    return compute_shap_all_heads(model, background, tensor, feature_cols)
 
-    Grad-CAM se calcula siempre; SHAP solo con ``include_shap`` (coste alto). Un error aquí no afecta a la
-    predicción del ciclo ni a la de los demás ciclos del lote.
+
+def explain_cycle(  # pylint: disable=too-many-arguments
+        model, input_tensor, predictions, confidences, feature_cols, *, cycle_id=None,
+        include_shap: bool = False, shap_background=None, include_cam: bool = False):
+    """XAI de un ciclo -> ``(xai_result, xai_error)``.
+
+    Nunca lanza: un fallo se devuelve como ``xai_error``. Grad-CAM se calcula siempre; SHAP solo
+    con ``include_shap`` (coste alto). Un error aquí no afecta a la predicción del ciclo ni a la
+    de los demás ciclos del lote.
     """
     try:
         device = next(model.parameters()).device
@@ -383,15 +485,12 @@ def explain_cycle(model, input_tensor, predictions, confidences, feature_cols, c
             gradcam = compute_gradcam_all_heads(model, tensor)
             shap_all = None
             if include_shap:
-                if shap_background is None:
-                    logger.warning("No packaged SHAP background; using the cycle itself as background (degenerate)")
-                    background = tensor.detach().cpu()
-                else:
-                    background = torch.as_tensor(shap_background, dtype=torch.float32)
-                seed_xai()
-                shap_all = compute_shap_all_heads(model, background, tensor, feature_cols)
-        rows = build_local_report(predictions, confidences, gradcam, shap_all, cycle_id=cycle_id, include_cam=include_cam)
+                shap_all = _cycle_shap(model, tensor, shap_background, feature_cols)
+        rows = build_local_report(
+            predictions, confidences, gradcam, shap_all, cycle_id=cycle_id,
+            include_cam=include_cam,
+        )
         return build_xai_result(rows), None
-    except Exception as exc:  # pylint: disable=broad-exception-caught
+    except Exception as exc:  # pylint: disable=broad-exception-caught  # never breaks the cycle
         logger.warning("XAI failed for cycle %s: %s", cycle_id, exc)
         return None, str(exc)

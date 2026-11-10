@@ -10,9 +10,8 @@ from __future__ import annotations
 import json
 import logging
 import os
-import shutil
-import tempfile
 
+from app.domain.services.mlflow_artifacts import download_run_artifacts
 from app.domain.services.mlflow_tracker import BaseMLflowTracker, require_user_model
 from app.plugins.ml6_meat_poultry_disease_classification.constants import (
     ARTIFACT_FOLDER_NAME,
@@ -31,50 +30,58 @@ def download_user_model_from_mlflow(run_id: str):
     """Return ``(task, {name: model}, device, temp_dir)`` for the ensemble saved in ``run_id``.
 
     ``None`` (→ UserModelUnavailableError, 422) when the run has no complete ensemble.
-    Caller MUST ``shutil.rmtree(temp_dir)`` in a ``finally``.
+    Caller MUST remove ``temp_dir`` after use (``removing_dir``).
     """
-    tmp = tempfile.mkdtemp(prefix="mlflow_ml6_poultry_")
-    try:
-        tracker = BaseMLflowTracker(run_id)
-        local_path = tracker.download_artifacts(tmp, artifact_path=MLFLOW_ARTIFACT_PATH)
-        metadata_path = os.path.join(local_path, MLFLOW_METADATA_FILENAME) if local_path else ""
-        if not local_path or not os.path.exists(metadata_path):
-            logger.warning("MLflow run_id=%s sin %s en '%s'", run_id, MLFLOW_METADATA_FILENAME,
-                           MLFLOW_ARTIFACT_PATH)
-            shutil.rmtree(tmp, ignore_errors=True)
-            return None
-        with open(metadata_path, encoding="utf-8") as fh:
-            metadata = json.load(fh)
-        task = metadata["task"]
-        if task not in TASK_MODELS or tuple(metadata["class_names"]) != CLASS_NAMES[task]:
-            raise ValueError(f"metadata.json no corresponde a un ensemble de ml6: {metadata}")
-        missing = [n for n in TASK_MODELS[task]
-                   if not os.path.exists(os.path.join(local_path, MODEL_FILENAMES[n]))]
-        if missing:
-            logger.warning("MLflow run_id=%s: faltan los modelos %s del ensemble %s",
-                           run_id, missing, task)
-            shutil.rmtree(tmp, ignore_errors=True)
-            return None
+    loaded = download_run_artifacts(
+        run_id,
+        lambda local_path: _load(local_path, run_id),
+        prefix="mlflow_ml6_poultry_",
+        artifact_path=MLFLOW_ARTIFACT_PATH,
+    )
+    if loaded is None:
+        return None
+    (task, models, device), tmp = loaded
+    return task, models, device, tmp
 
-        # Imported lazily: the module stays importable (hygiene tests) without building models.
-        # pylint: disable-next=import-outside-toplevel
-        from app.plugins.ml6_meat_poultry_disease_classification.model_loader import (
-            build_from_checkpoint,
-            safe_device,
+
+def _load(local_path: str, run_id: str):
+    """Rebuild ``(task, {name: model}, device)`` from a downloaded ``model/`` folder.
+
+    ``None`` when the folder lacks ``metadata.json`` or one of the ensemble's checkpoints.
+    """
+    metadata_path = os.path.join(local_path, MLFLOW_METADATA_FILENAME)
+    if not os.path.exists(metadata_path):
+        logger.warning("MLflow run_id=%s sin %s en '%s'", run_id, MLFLOW_METADATA_FILENAME,
+                       MLFLOW_ARTIFACT_PATH)
+        return None
+    with open(metadata_path, encoding="utf-8") as fh:
+        metadata = json.load(fh)
+    task = metadata["task"]
+    if task not in TASK_MODELS or tuple(metadata["class_names"]) != CLASS_NAMES[task]:
+        raise ValueError(f"metadata.json no corresponde a un ensemble de ml6: {metadata}")
+    missing = [n for n in TASK_MODELS[task]
+               if not os.path.exists(os.path.join(local_path, MODEL_FILENAMES[n]))]
+    if missing:
+        logger.warning("MLflow run_id=%s: faltan los modelos %s del ensemble %s",
+                       run_id, missing, task)
+        return None
+
+    # Imported lazily: the module stays importable (hygiene tests) without building models.
+    # pylint: disable-next=import-outside-toplevel
+    from app.plugins.ml6_meat_poultry_disease_classification.model_loader import (
+        build_from_checkpoint,
+        safe_device,
+    )
+
+    device = safe_device()
+    models = {
+        name: build_from_checkpoint(
+            name, task, os.path.join(local_path, MODEL_FILENAMES[name]), device,
         )
-
-        device = safe_device()
-        models = {
-            name: build_from_checkpoint(
-                name, task, os.path.join(local_path, MODEL_FILENAMES[name]), device,
-            )
-            for name in TASK_MODELS[task]
-        }
-        logger.info("Ensemble %s del usuario descargado de MLflow run_id=%s", task, run_id)
-        return task, models, device, tmp
-    except BaseException:
-        shutil.rmtree(tmp, ignore_errors=True)
-        raise
+        for name in TASK_MODELS[task]
+    }
+    logger.info("Ensemble %s del usuario descargado de MLflow run_id=%s", task, run_id)
+    return task, models, device
 
 
 def upload_artifacts_to_mlflow(

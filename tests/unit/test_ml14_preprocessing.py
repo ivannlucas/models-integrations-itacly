@@ -10,12 +10,14 @@ import torch
 
 from app.domain.services.exceptions import InsufficientDataError
 from app.plugins.ml14_wine_phyto_price_forecast import preprocessing
+from app.plugins.ml14_wine_phyto_price_forecast.feature_engineering import build_modeling_features
 
 
 class _ZeroModel(torch.nn.Module):
     """Fake model: always predicts residual=0, so predicted_price == drift_baseline."""
 
     def forward(self, x):  # noqa: D102
+        """Return a zero residual for every sample in the batch."""
         return torch.zeros(x.shape[0])
 
 
@@ -47,8 +49,7 @@ def _rows(n: int = 24, overflow_on_last: bool = False) -> list[dict]:
 
 
 def test_run_inference_normal_case_returns_finite_price():
-    from app.plugins.ml14_wine_phyto_price_forecast.feature_engineering import build_modeling_features
-
+    """run_inference returns a finite predicted price on a normal window."""
     rows = _rows()
     feature_columns = list(build_modeling_features(rows).columns.difference(["date"]))
     result = preprocessing.run_inference(_bundle(feature_columns), rows)
@@ -59,8 +60,6 @@ def test_run_inference_rejects_float32_overflow_instead_of_returning_null():
     """A finite-but-huge value (1e250) overflows to inf when cast to float32 for the model
     input. Without a guard, this used to silently return predicted_price=null with HTTP 200
     (Pydantic serializes non-finite floats as null) instead of a clear 422."""
-    from app.plugins.ml14_wine_phyto_price_forecast.feature_engineering import build_modeling_features
-
     rows = _rows(overflow_on_last=True)
     feature_columns = list(build_modeling_features(rows).columns.difference(["date"]))
     with pytest.raises(InsufficientDataError, match="desborda"):
@@ -72,8 +71,6 @@ def test_run_inference_ignores_sparse_extra_fields_like_comment():
     used to leak into the internal dropna(), silently discarding rows that had no value for
     it and shifting/breaking the prediction window. Extra fields must be ignored entirely,
     regardless of which rows carry them."""
-    from app.plugins.ml14_wine_phyto_price_forecast.feature_engineering import build_modeling_features
-
     rows = _rows()
     feature_columns = list(build_modeling_features(rows).columns.difference(["date"]))
     bundle = _bundle(feature_columns)

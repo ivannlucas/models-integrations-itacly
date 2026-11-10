@@ -32,14 +32,15 @@ from __future__ import annotations
 import random
 import time
 from dataclasses import dataclass
+from typing import NamedTuple
 
 import numpy as np
 import pandas as pd
 import torch
-import torch.nn as nn
+from torch import nn
+from torch.utils.data import DataLoader, TensorDataset
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 from sklearn.preprocessing import StandardScaler
-from torch.utils.data import DataLoader, TensorDataset
 
 from app.plugins.ml14_wine_phyto_price_forecast.constants import (
     DATE_COL,
@@ -93,11 +94,14 @@ def load_training_frame(csv_path: str, expected_features: list[str]) -> pd.DataF
         missing = [c for c in expected_features if c not in df.columns]
         if missing:
             raise ValueError(
-                f"El CSV de entrenamiento (formato final_dataset_for_modeling) no trae las columnas "
+                "El CSV de entrenamiento (formato final_dataset_for_modeling) no trae las "
+                "columnas "
                 f"{missing}."
             )
     elif {DATE_COL, *RAW_VALUE_COLS} <= set(df.columns):
-        df = build_modeling_features(df.to_dict("records")).rename(columns={DATE_COL: REFERENCE_DATE_COL})
+        df = build_modeling_features(df.to_dict("records")).rename(
+            columns={DATE_COL: REFERENCE_DATE_COL}
+        )
     else:
         raise ValueError(
             "El CSV de entrenamiento debe ser el dataset de modelado del equipo de IA (FECHA + "
@@ -106,7 +110,9 @@ def load_training_frame(csv_path: str, expected_features: list[str]) -> pd.DataF
     df[REFERENCE_DATE_COL] = pd.to_datetime(df[REFERENCE_DATE_COL], errors="coerce")
     if df[REFERENCE_DATE_COL].isna().any():
         raise ValueError(f"La columna '{REFERENCE_DATE_COL}' tiene fechas no parseables.")
-    return df.sort_values(REFERENCE_DATE_COL).reset_index(drop=True)[[REFERENCE_DATE_COL, *expected_features]]
+    return df.sort_values(REFERENCE_DATE_COL).reset_index(drop=True)[
+        [REFERENCE_DATE_COL, *expected_features]
+    ]
 
 
 def prepare_horizon_dataset(df: pd.DataFrame, horizon: int = HORIZON_WEEKS) -> pd.DataFrame:
@@ -120,7 +126,9 @@ def prepare_horizon_dataset(df: pd.DataFrame, horizon: int = HORIZON_WEEKS) -> p
     return result.dropna(subset=[TARGET_COL]).copy()
 
 
-def split_temporal(df: pd.DataFrame, test_ratio: float = TEST_RATIO) -> tuple[pd.DataFrame, pd.DataFrame]:
+def split_temporal(
+    df: pd.DataFrame, test_ratio: float = TEST_RATIO
+) -> tuple[pd.DataFrame, pd.DataFrame]:
     """compare_models.py::split_temporal."""
     fechas = sorted(df[REFERENCE_DATE_COL].unique())
     n_test = max(1, int(len(fechas) * test_ratio))
@@ -143,7 +151,10 @@ def build_test_sequences_with_bridge(train_df, test_df, feature_cols, scaler):
     bridge = train_df.tail(SEQ_LEN - 1)
     combined = pd.concat([bridge, test_df], ignore_index=True)
     x_scaled = scaler.transform(combined[feature_cols].values)
-    cols = [combined[c].values for c in (RESIDUAL_TARGET_COL, CURRENT_PRICE_COL, DRIFT_BASELINE_COL, TARGET_COL)]
+    cols = [
+        combined[c].values
+        for c in (RESIDUAL_TARGET_COL, CURRENT_PRICE_COL, DRIFT_BASELINE_COL, TARGET_COL)
+    ]
     out = [[], [], [], [], []]
     for i in range(len(x_scaled) - SEQ_LEN + 1):
         target_idx = i + SEQ_LEN - 1
@@ -162,7 +173,9 @@ def calc_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> dict:
     return {
         "MAE": float(mean_absolute_error(y_true, y_pred)),
         "RMSE": float(np.sqrt(mean_squared_error(y_true, y_pred))),
-        "MAPE_%": round(float(np.mean(np.abs((y_true[mask] - y_pred[mask]) / y_true[mask])) * 100), 2),
+        "MAPE_%": round(
+            float(np.mean(np.abs((y_true[mask] - y_pred[mask]) / y_true[mask])) * 100), 2
+        ),
         "R2": float(r2_score(y_true, y_pred)),
     }
 
@@ -173,7 +186,9 @@ def calc_skill_metrics(y_true: np.ndarray, y_pred: np.ndarray, y_naive: np.ndarr
     nonzero = delta_true != 0
     direction = 50.0 if nonzero.sum() == 0 else float(
         np.mean(np.sign(delta_pred[nonzero]) == np.sign(delta_true[nonzero])) * 100)
-    mse_model, mse_naive = float(np.mean((y_true - y_pred) ** 2)), float(np.mean((y_true - y_naive) ** 2))
+    mse_model, mse_naive = (
+        float(np.mean((y_true - y_pred) ** 2)), float(np.mean((y_true - y_naive) ** 2))
+    )
     return {"direction_acc_%": round(direction, 1),
             "skill_score": round(1.0 - mse_model / mse_naive if mse_naive > 0 else 0.0, 4)}
 
@@ -186,13 +201,50 @@ def _set_seed(seed: int) -> None:
     torch.manual_seed(seed)
 
 
-def train_rnn(model, train_x, train_y, test_x, test_y, test_drift, test_future, target_scaler, *,
-              epochs: int, device: torch.device):
+class RnnData(NamedTuple):
+    """Scaled train/test sequences every seed of train_rnn uses (built once per /train)."""
+
+    train_x: np.ndarray
+    train_y: np.ndarray
+    test_x: np.ndarray
+    test_y: np.ndarray
+    test_cp: np.ndarray
+    test_drift: np.ndarray
+    test_future: np.ndarray
+    target_scaler: StandardScaler
+
+
+def _fit_epoch(model, train_dl: DataLoader, optimizer, criterion, device: torch.device) -> None:
+    """One training epoch over the shuffled train sequences (grad-clip 1.0)."""
+    model.train()
+    for xb, yb in train_dl:
+        xb, yb = xb.to(device), yb.to(device)
+        optimizer.zero_grad()
+        loss = criterion(model(xb), yb)
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+        optimizer.step()
+
+
+def _predict_test(model, test_t: torch.Tensor, data: RnnData) -> np.ndarray:
+    """Test-set price predictions: Drift baseline + the unscaled predicted residual."""
+    model.eval()
+    with torch.no_grad():
+        preds_scaled = model(test_t).cpu().numpy().reshape(-1, 1)
+    return data.test_drift + data.target_scaler.inverse_transform(preds_scaled).ravel()
+
+
+def train_rnn(model, data: RnnData, *, epochs: int, device: torch.device):
     """compare_models.py::train_rnn (early stopping on the test sequences, as delivered)."""
     model = model.to(device)
-    train_ds = TensorDataset(torch.tensor(train_x, dtype=torch.float32), torch.tensor(train_y, dtype=torch.float32))
-    train_dl = DataLoader(train_ds, batch_size=TRAIN_BATCH_SIZE, shuffle=True)
-    test_t = torch.tensor(test_x, dtype=torch.float32).to(device)
+    train_dl = DataLoader(
+        TensorDataset(
+            torch.tensor(data.train_x, dtype=torch.float32),
+            torch.tensor(data.train_y, dtype=torch.float32),
+        ),
+        batch_size=TRAIN_BATCH_SIZE, shuffle=True,
+    )
+    test_t = torch.tensor(data.test_x, dtype=torch.float32).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=TRAIN_LR, weight_decay=TRAIN_WEIGHT_DECAY)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, mode="min", factor=TRAIN_SCHEDULER_FACTOR, patience=TRAIN_SCHEDULER_PATIENCE)
@@ -200,20 +252,15 @@ def train_rnn(model, train_x, train_y, test_x, test_y, test_drift, test_future, 
 
     best_val, best_state, wait, epochs_run = float("inf"), None, 0, 0
     for epochs_run in range(1, epochs + 1):
-        model.train()
-        for xb, yb in train_dl:
-            xb, yb = xb.to(device), yb.to(device)
-            optimizer.zero_grad()
-            loss = criterion(model(xb), yb)
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-            optimizer.step()
+        _fit_epoch(model, train_dl, optimizer, criterion, device)
         model.eval()
         with torch.no_grad():
-            val_loss = float(np.mean((model(test_t).cpu().numpy() - test_y) ** 2))
+            val_loss = float(np.mean((model(test_t).cpu().numpy() - data.test_y) ** 2))
         scheduler.step(val_loss)
         if val_loss < best_val:
-            best_val, best_state, wait = val_loss, {k: v.cpu().clone() for k, v in model.state_dict().items()}, 0
+            best_val, best_state, wait = (
+                val_loss, {k: v.cpu().clone() for k, v in model.state_dict().items()}, 0
+            )
         else:
             wait += 1
             if wait >= TRAIN_PATIENCE:
@@ -221,26 +268,31 @@ def train_rnn(model, train_x, train_y, test_x, test_y, test_drift, test_future, 
 
     if best_state is not None:
         model.load_state_dict(best_state)
-    model.eval()
-    with torch.no_grad():
-        preds_scaled = model(test_t).cpu().numpy().reshape(-1, 1)
-    preds = test_drift + target_scaler.inverse_transform(preds_scaled).ravel()
-    return calc_metrics(test_future, preds), preds, epochs_run
+    preds = _predict_test(model, test_t, data)
+    return calc_metrics(data.test_future, preds), preds, epochs_run
 
 
-def train_gru(csv_path: str, expected_features: list[str], *, epochs: int = TRAIN_EPOCHS) -> TrainingResult:
-    """Run the delivered GRU training on *csv_path* (seed-42 model + mean ± std metrics)."""
-    start = time.time()
-    device = torch.device("cpu")   # determinism; the delivered run used CUDA if available
+def _split_training_frame(
+    csv_path: str, expected_features: list[str]
+) -> tuple[pd.DataFrame, pd.DataFrame, list[str]]:
+    """Horizon dataset split 80/20 by date; returns (train_df, test_df, feature_cols)."""
     df = prepare_horizon_dataset(load_training_frame(csv_path, expected_features))
     feature_cols = [c for c in df.columns if c not in EXCLUDE_COLS]
     train_df, test_df = split_temporal(df)
     if len(train_df) < SEQ_LEN or len(test_df) == 0:
         raise ValueError(
-            f"Histórico insuficiente para el split temporal 80/20 con secuencias de {SEQ_LEN} semanas "
-            f"(train={len(train_df)}, test={len(test_df)} filas con objetivo a {HORIZON_WEEKS} semanas)."
+            "Histórico insuficiente para el split temporal 80/20 con secuencias de "
+            f"{SEQ_LEN} semanas "
+            f"(train={len(train_df)}, test={len(test_df)} filas con objetivo a "
+            f"{HORIZON_WEEKS} semanas)."
         )
+    return train_df, test_df, feature_cols
 
+
+def _build_rnn_data(
+    train_df: pd.DataFrame, test_df: pd.DataFrame, feature_cols: list[str]
+) -> tuple[StandardScaler, RnnData]:
+    """Fit both scalers on train and build the scaled train/test (bridged) sequences."""
     scaler = StandardScaler().fit(train_df[feature_cols].values)
     target_scaler = StandardScaler().fit(train_df[[RESIDUAL_TARGET_COL]].values)
     train_x, train_y = build_train_sequences(train_df, feature_cols, scaler)
@@ -248,32 +300,65 @@ def train_gru(csv_path: str, expected_features: list[str], *, epochs: int = TRAI
         train_df, test_df, feature_cols, scaler)
     train_y = target_scaler.transform(train_y.reshape(-1, 1)).ravel()
     test_y = target_scaler.transform(test_y.reshape(-1, 1)).ravel()
+    return scaler, RnnData(
+        train_x, train_y, test_x, test_y, test_cp, test_drift, test_future, target_scaler
+    )
 
+
+def _train_seeds(data: RnnData, n_features: int, *, epochs: int, device: torch.device):
+    """train_rnn_multi_seed: per-seed metrics and (model, preds, epochs_run) of seed 42."""
     per_seed, canonical = [], None
     for seed in range(TRAIN_SEED_BASE, TRAIN_SEED_BASE + TRAIN_N_SEEDS):
         _set_seed(seed)
-        model = GRUModel(len(feature_cols), hidden_size=HIDDEN_SIZE)
-        metrics, preds, epochs_run = train_rnn(
-            model, train_x, train_y, test_x, test_y, test_drift, test_future, target_scaler,
-            epochs=epochs, device=device)
+        model = GRUModel(n_features, hidden_size=HIDDEN_SIZE)
+        metrics, preds, epochs_run = train_rnn(model, data, epochs=epochs, device=device)
         per_seed.append(metrics)
         if seed == TRAIN_SEED_BASE:
             canonical = (model.cpu(), preds, epochs_run)
+    return per_seed, canonical
 
-    model, preds, epochs_run = canonical
+
+def _seed_summary(per_seed: list[dict]) -> dict:
+    """Mean ± std over the seeds of MAE, RMSE, MAPE and R2."""
     out = {}
     for key, name in (("MAE", "mae"), ("RMSE", "rmse"), ("MAPE_%", "mape_pct"), ("R2", "r2")):
         vals = [m[key] for m in per_seed]
-        out[name], out[f"{name}_std"] = round(float(np.mean(vals)), 4), round(float(np.std(vals)), 4)
-    skill = calc_skill_metrics(test_future, preds, test_cp)
+        out[name], out[f"{name}_std"] = (
+            round(float(np.mean(vals)), 4), round(float(np.std(vals)), 4)
+        )
+    return out
+
+
+def _skill_and_baselines(
+    data: RnnData, preds: np.ndarray, test_df: pd.DataFrame, *, rmse: float
+) -> dict:
+    """Seed-42 skill metrics and the Drift / naive baselines on the test split."""
+    skill = calc_skill_metrics(data.test_future, preds, data.test_cp)
     drift = calc_metrics(test_df[TARGET_COL].values, test_df[DRIFT_BASELINE_COL].values)
     naive = calc_metrics(test_df[TARGET_COL].values, test_df[CURRENT_PRICE_COL].values)
-    out.update({
+    return {
         "direction_acc_pct": skill["direction_acc_%"], "skill_score": skill["skill_score"],
         "drift_rmse": drift["RMSE"], "naive_rmse": naive["RMSE"],
-        "beats_drift": out["rmse"] < drift["RMSE"],
-        "n_train": int(len(train_x)), "n_test": int(len(test_x)),
+        "beats_drift": rmse < drift["RMSE"],
+    }
+
+
+def train_gru(
+    csv_path: str, expected_features: list[str], *, epochs: int = TRAIN_EPOCHS
+) -> TrainingResult:
+    """Run the delivered GRU training on *csv_path* (seed-42 model + mean ± std metrics)."""
+    start = time.time()
+    device = torch.device("cpu")   # determinism; the delivered run used CUDA if available
+    train_df, test_df, feature_cols = _split_training_frame(csv_path, expected_features)
+    scaler, data = _build_rnn_data(train_df, test_df, feature_cols)
+    per_seed, (model, preds, epochs_run) = _train_seeds(
+        data, len(feature_cols), epochs=epochs, device=device
+    )
+    out = _seed_summary(per_seed)
+    out.update(_skill_and_baselines(data, preds, test_df, rmse=out["rmse"]))
+    out.update({
+        "n_train": int(len(data.train_x)), "n_test": int(len(data.test_x)),
         "epochs_run_seed_42": int(epochs_run), "n_seeds": TRAIN_N_SEEDS,
         "training_time_s": round(time.time() - start, 1),
     })
-    return TrainingResult(model, feature_cols, scaler, target_scaler, out)
+    return TrainingResult(model, feature_cols, scaler, data.target_scaler, out)

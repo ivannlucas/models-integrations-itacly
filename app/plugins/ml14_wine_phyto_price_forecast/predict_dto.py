@@ -1,12 +1,14 @@
 """Pydantic request/response DTOs for the ml14 /predict endpoint."""
 from typing import Annotated, Any, Literal, Union
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import Field
+
+from app.application.dto.plugin_dto import PluginDTO, UnusedThreshold
 
 from app.plugins.ml14_wine_phyto_price_forecast.constants import MIN_HISTORY_ROWS
 
 
-class PredictBatchRequest(BaseModel):
+class PredictBatchRequest(PluginDTO):
     """Batch request: a CSV with a raw weekly history (date + 6 base columns).
 
     Mirrors the delivered CLI (`python -m src.main predict --input <csv>`): the whole CSV is
@@ -15,7 +17,6 @@ class PredictBatchRequest(BaseModel):
     inbox/a14/manifest.yaml known_issues).
     """
 
-    model_config = ConfigDict(protected_namespaces=())
     mode: Literal["batch"] = "batch"
     data_path: str = Field(
         ...,
@@ -27,26 +28,21 @@ class PredictBatchRequest(BaseModel):
     )
 
 
-class PredictBatchResponse(BaseModel):
+class PredictBatchResponse(PluginDTO):
     """Batch response: a single prediction anchored at the CSV's last row."""
 
-    model_config = ConfigDict(protected_namespaces=())
     model_id: str
     predictions: list[dict[str, Any]]
     n_predictions: int
     output_path: str | None = None
 
 
-class PredictInlineRequest(BaseModel):
+class PredictInlineRequest(PluginDTO):
     """Inline request: the raw weekly history as a list of row dicts."""
 
-    model_config = ConfigDict(protected_namespaces=())
     mode: Literal["inline"] = "inline"
     model_key: str | None = None
-    threshold: float | None = Field(
-        default=None,
-        description="No usado por este modelo (no hay umbral de decisión); se acepta por compatibilidad de contrato.",
-    )
+    threshold: UnusedThreshold = None
     rows: list[dict[str, Any]] = Field(
         ...,
         min_length=MIN_HISTORY_ROWS,
@@ -59,14 +55,23 @@ class PredictInlineRequest(BaseModel):
     )
 
 
-class PredictInlineResponse(BaseModel):
+class PredictInlineResponse(PluginDTO):
     """Inline response: GRU price forecast at the 16-week horizon."""
 
-    model_config = ConfigDict(protected_namespaces=())
     model_id: str
-    predicted_price: float = Field(..., description="PROTECCION_FITO predicho a horizon_weeks vista (índice base 2020=100).")
-    current_price: float = Field(..., description="PROTECCION_FITO de la última fila del histórico aportado.")
-    drift_baseline: float = Field(..., description="Baseline lineal de drift — referencia frente a la que el GRU compara en el test reportado (ver manifest).")
+    predicted_price: float = Field(
+        ..., description="PROTECCION_FITO predicho a horizon_weeks vista (índice base 2020=100)."
+    )
+    current_price: float = Field(
+        ..., description="PROTECCION_FITO de la última fila del histórico aportado."
+    )
+    drift_baseline: float = Field(
+        ...,
+        description=(
+            "Baseline lineal de drift — referencia frente a la que el GRU compara en el test "
+            "reportado (ver manifest)."
+        ),
+    )
     horizon_weeks: int
     last_observed_date: str
     prediction_date: str
@@ -77,13 +82,19 @@ class PredictInlineResponse(BaseModel):
     )
     n_rows_used: int
     xai_feature_values: dict[str, float] | None = Field(
-        default=None, description="Valores de la última fila de features usados — consumidos por el servicio de explicabilidad",
+        default=None,
+        description=(
+            "Valores de la última fila de features usados — consumidos por el servicio de "
+            "explicabilidad"
+        ),
     )
     xai_feature_window: list[list[float]] | None = Field(
         default=None,
         description=(
-            "Ventana real (12 semanas x features, sin escalar, en el orden de xai_feature_values) que "
-            "puntuó la GRU — el servicio de explicabilidad la explica en lugar de repetir la última fila."
+            "Ventana real (12 semanas x features, sin escalar, en el orden de "
+            "xai_feature_values) que "
+            "puntuó la GRU — el servicio de explicabilidad la explica en lugar de repetir la "
+            "última fila."
         ),
     )
 

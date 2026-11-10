@@ -1,12 +1,17 @@
 # scripts/review_code.py
 # Purpose: Analyze the quality of a code file and return the analysis as text.
+"""Review code quality of files with a generative AI model and print a report."""
 
 import argparse
 import sys
 
-from files import get_files_to_process, read_file_content, ALLOWED_EXTENSIONS, load_agent_instructions
-from ia import setup_generative_model, process_file_with_ia, MAX_TOTAL_TOKENS
-from ui import log_message, Colors, STATUS_COLORS
+from files import (  # pylint: disable=import-error  # sibling script module
+    get_files_to_process, read_file_content, ALLOWED_EXTENSIONS, load_agent_instructions,
+)
+from ia import (  # pylint: disable=import-error  # sibling script module
+    setup_generative_model, process_file_with_ia, MAX_TOTAL_TOKENS,
+)
+from ui import log_message, Colors, STATUS_COLORS  # pylint: disable=import-error  # sibling script module
 
 # --- AGENT INSTRUCTIONS ---
 AGENT_INSTRUCTIONS = {
@@ -16,45 +21,37 @@ AGENT_INSTRUCTIONS = {
 }
 
 
-def quality_report(all_results, max_tokens_reached) -> None:
-    # --- FINAL REPORT ---
-    log_message("CODE QUALITY REPORT", "HEADER")
-    total_score = 0
-    num_scores = 0
+def _print_file_result(result: dict, filepath, score) -> None:
+    """Print the detailed analysis and suggestions the AI returned for one file."""
+    analysis = result.get('analisis_detallado', {})
+    suggestions = result.get('sugerencias_mejora', [])
 
-    for result in all_results:
-        filepath = result.get('filepath', 'Unknown')
-        analysis = result.get('analisis_detallado', {})
-        score = result.get('puntuacion_calidad', 0)
-        suggestions = result.get('sugerencias_mejora', [])
+    print(f"\n\n{Colors.HEADER}File: {Colors.UNDERLINE}{filepath}{Colors.ENDC}")
+    print(f"{Colors.BLUE}Quality Score: {score}/10{Colors.ENDC}")
 
-        print(f"\n\n{Colors.HEADER}File: {Colors.UNDERLINE}{filepath}{Colors.ENDC}")
-        print(f"{Colors.BLUE}Quality Score: {score}/10{Colors.ENDC}")
+    print(f"\n{Colors.CYAN}--- Detailed Analysis ---{Colors.ENDC}")
+    for category, details in analysis.items():
+        if isinstance(details, dict):
+            status = details.get("estado", "N/A").upper()
+            observation = details.get("observacion", "")
+            color = STATUS_COLORS.get(status, STATUS_COLORS["DEFAULT"])
 
-        print(f"\n{Colors.CYAN}--- Detailed Analysis ---{Colors.ENDC}")
-        for category, details in analysis.items():
-            if isinstance(details, dict):
-                status = details.get("estado", "N/A").upper()
-                observation = details.get("observacion", "")
-                color = STATUS_COLORS.get(status, STATUS_COLORS["DEFAULT"])
+            print(
+                f"  {color}{Colors.BOLD}{category.replace('_', ' ').title()}:{Colors.ENDC} "
+                f"{color}[{status}]{Colors.ENDC} {observation}")
+        else:
+            print(
+                f"  {Colors.BOLD}{category.replace('_', ' ').title()}:{Colors.ENDC} {details}"
+            )
 
-                print(
-                    f"  {color}{Colors.BOLD}{category.replace('_', ' ').title()}:{Colors.ENDC} {color}[{status}]{Colors.ENDC} {observation}")
-            else:
-                print(f"  {Colors.BOLD}{category.replace('_', ' ').title()}:{Colors.ENDC} {details}")
+    if suggestions:
+        print(f"\n{Colors.CYAN}--- Improvement Suggestions ---{Colors.ENDC}")
+        for i, sug in enumerate(suggestions, 1):
+            print(f"  {i}. {sug.get('sugerencia', 'N/A')}")
 
-        if suggestions:
-            print(f"\n{Colors.CYAN}--- Improvement Suggestions ---{Colors.ENDC}")
-            for i, sug in enumerate(suggestions, 1):
-                print(f"  {i}. {sug.get('sugerencia', 'N/A')}")
 
-        if score is not None:
-            try:
-                total_score += float(score)
-                num_scores += 1
-            except (ValueError, TypeError):
-                log_message(f"Invalid score '{score}' for file {filepath}.", "WARNING")
-
+def _exit_with_verdict(total_score: float, num_scores: int, max_tokens_reached) -> None:
+    """Log the average score and exit with 1 on low quality or an incomplete review."""
     # --- SUMMARY AND EXIT STATUS ---
     log_message("FINAL SUMMARY", "HEADER")
     if num_scores > 0:
@@ -65,7 +62,10 @@ def quality_report(all_results, max_tokens_reached) -> None:
             log_message(f"{score_message} LOW QUALITY.", "ERROR")
             sys.exit(1)
         elif max_tokens_reached:
-            log_message(f"{score_message} ACCEPTABLE QUALITY, but not all files could be reviewed.", "ERROR")
+            log_message(
+                f"{score_message} ACCEPTABLE QUALITY, but not all files could be reviewed.",
+                "ERROR",
+            )
             sys.exit(1)
         else:
             log_message(f"{score_message} ACCEPTABLE QUALITY.", "SUCCESS")
@@ -73,15 +73,43 @@ def quality_report(all_results, max_tokens_reached) -> None:
         log_message("No quality scores could be calculated.", "WARNING")
 
 
-# --- MAIN FUNCTION ---
-def main():
+def quality_report(all_results, max_tokens_reached) -> None:
+    """Print the per-file review results and exit with the overall quality verdict."""
+    # --- FINAL REPORT ---
+    log_message("CODE QUALITY REPORT", "HEADER")
+    total_score = 0
+    num_scores = 0
+
+    for result in all_results:
+        filepath = result.get('filepath', 'Unknown')
+        score = result.get('puntuacion_calidad', 0)
+        _print_file_result(result, filepath, score)
+
+        if score is not None:
+            try:
+                total_score += float(score)
+                num_scores += 1
+            except (ValueError, TypeError):
+                log_message(f"Invalid score '{score}' for file {filepath}.", "WARNING")
+
+    _exit_with_verdict(total_score, num_scores, max_tokens_reached)
+
+
+def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Analyzes code quality using a generative AI model.",
         formatter_class=argparse.RawTextHelpFormatter
     )
     parser.add_argument("path", nargs='?', default=None, type=str,
-                        help="Path to the file/directory. If omitted, analyzes modified files in Git.")
-    args = parser.parse_args()
+                        help=("Path to the file/directory. If omitted, analyzes modified "
+                              "files in Git."))
+    return parser.parse_args()
+
+
+# --- MAIN FUNCTION ---
+def main():
+    """Parse CLI args, review every selected file with the AI and print the report."""
+    args = _parse_args()
 
     log_message("STARTING AI CODE REVIEWER", "HEADER")
 
@@ -110,7 +138,8 @@ def main():
             break
 
         log_message(
-            f"Analyzing file: {Colors.UNDERLINE}{filepath}{Colors.ENDC}. File {file_number_processed} from {len(files_to_process)}",
+            f"Analyzing file: {Colors.UNDERLINE}{filepath}{Colors.ENDC}. "
+            f"File {file_number_processed} from {len(files_to_process)}",
             "INFO")
         file_number_processed += 1
         language = ALLOWED_EXTENSIONS.get(filepath.suffix)
@@ -128,12 +157,16 @@ def main():
             log_message(f"Skipping {filepath}: Could not read file content.", "WARNING")
             continue
 
-        result, tokens_call, consumption_call = process_file_with_ia(model, agent_instructions, code_content,
-                                                                     str(filepath))
+        result, tokens_call, consumption_call = process_file_with_ia(
+            model, agent_instructions, code_content, str(filepath)
+        )
         total_tokens_used += tokens_call
         consumption_total += consumption_call
-        log_message(f"Tokens consumed: {tokens_call} | Total: {total_tokens_used} --> {round(consumption_total, 4)} $",
-                    "INFO")
+        log_message(
+            f"Tokens consumed: {tokens_call} | Total: {total_tokens_used} "
+            f"--> {round(consumption_total, 4)} $",
+            "INFO",
+        )
 
         all_results.append(result)
 

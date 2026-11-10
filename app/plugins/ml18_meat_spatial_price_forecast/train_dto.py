@@ -1,14 +1,12 @@
 """Pydantic DTOs for the ml18 /train endpoint."""
-# pylint: disable=too-few-public-methods  # Pydantic DTOs carry no behaviour
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import Field
 
-from app.application.dto.base_version_dto import VersionInfo
+from app.application.dto.plugin_dto import PluginDTO, PromotingTrainRunId, PublishedBaseVersion
 
 
-class TrainRequest(BaseModel):
+class TrainRequest(PluginDTO):
     """Retrain the GRU from scratch with the AI team's procedure on a modelling CSV."""
 
-    model_config = ConfigDict(protected_namespaces=())
     data_path: str = Field(
         ...,
         description=(
@@ -19,17 +17,12 @@ class TrainRequest(BaseModel):
             "70/15/15 por fecha; cada combinación necesita más de 12 meses."
         ),
     )
-    mlflow_run_id: str = Field(
-        default="",
-        description="Run de MLflow opcional: si se indica, el modelo reentrenado también se guarda "
-        "en él (trazabilidad). Con o sin run, el modelo reentrenado pasa a ser el modelo base.",
-    )
+    mlflow_run_id: PromotingTrainRunId = ""
 
 
-class TrainResponse(BaseModel):
+class TrainResponse(PluginDTO):
     """Train/val/test metrics in euros (same as models/artifacts/.../metrics.json)."""
 
-    model_config = ConfigDict(protected_namespaces=())
     detail: str
     train_mae: float
     train_rmse: float
@@ -52,8 +45,9 @@ class TrainResponse(BaseModel):
     mlflow_run_id: str = ""
     upload_warning: str | None = Field(
         default=None,
-        description="Aviso si falló la subida a MLflow; el modelo base se publica igualmente (502 solo si falla la publicación del base)",
+        description=(
+            "Aviso si falló la subida a MLflow; el modelo base se publica igualmente "
+            "(502 solo si falla la publicación del base)"
+        ),
     )
-    base_version: VersionInfo | None = Field(
-        default=None, description="Versión del modelo base publicada por este reentreno"
-    )
+    base_version: PublishedBaseVersion = None

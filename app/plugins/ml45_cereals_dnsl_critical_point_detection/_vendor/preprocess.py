@@ -76,7 +76,7 @@ def _resolve_sequence_feature_columns(
     return [c for c in df.columns if c not in excluded_cols]
 
 
-def split_train_val_test_by_id(
+def split_train_val_test_by_id(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals,too-many-branches,too-many-statements
     df: pd.DataFrame,
     id_col: str,
     target_column: str,
@@ -90,9 +90,9 @@ def split_train_val_test_by_id(
             f"La columna objetivo '{target_column}' no existe en el DataFrame."
         )
 
-    if not (0 < val_size < 1):
+    if not 0 < val_size < 1:
         raise ValueError("val_size debe estar entre 0 y 1 (exclusivo).")
-    if not (0 < test_size < 1):
+    if not 0 < test_size < 1:
         raise ValueError("test_size debe estar entre 0 y 1 (exclusivo).")
     if val_size + test_size >= 1:
         raise ValueError("La suma de val_size y test_size debe ser menor que 1.")
@@ -191,7 +191,7 @@ def split_train_val_test_by_id(
     return split_data, unique_ids
 
 
-def create_sequences(
+def create_sequences(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals,too-many-branches
     df: pd.DataFrame,
     target_column: str,
     seq_length: int = 50,
@@ -242,7 +242,7 @@ def create_sequences(
     if len(feature_cols) == 0:
         raise ValueError("No hay columnas de entrada para construir secuencias.")
 
-    X_seq: list[np.ndarray] = []
+    x_seq: list[np.ndarray] = []
     y_seq: list = []
     timestamp_windows_labels: list[tuple[pd.Timestamp, pd.Timestamp]] = []
     entity_ids: list = []
@@ -260,11 +260,11 @@ def create_sequences(
             if len(g) < seq_length:
                 continue
 
-            X_vals = g[feature_cols].to_numpy()
+            x_vals = g[feature_cols].to_numpy()
             y_vals = g[target_column].to_numpy()
 
             for i in range(0, len(g) - seq_length + 1, step):
-                X_seq.append(X_vals[i:i + seq_length])
+                x_seq.append(x_vals[i:i + seq_length])
                 window_labels = y_vals[i:i + seq_length]
                 y_seq.append(_window_target_label(window_labels))
                 if timestamp_column in g.columns:
@@ -283,11 +283,11 @@ def create_sequences(
                 [],
             )
 
-        X_vals = df_ord[feature_cols].to_numpy()
+        x_vals = df_ord[feature_cols].to_numpy()
         y_vals = df_ord[target_column].to_numpy()
 
         for i in range(0, len(df_ord) - seq_length + 1, step):
-            X_seq.append(X_vals[i:i + seq_length])
+            x_seq.append(x_vals[i:i + seq_length])
             window_labels = y_vals[i:i + seq_length]
             y_seq.append(_window_target_label(window_labels))
             if timestamp_column in df_ord.columns:
@@ -296,7 +296,7 @@ def create_sequences(
                 timestamp_end = timestamp_window.iloc[-1]
                 timestamp_windows_labels.append((timestamp_init, timestamp_end))
 
-    if len(X_seq) == 0:
+    if len(x_seq) == 0:
         return (
             np.empty((0, seq_length, len(feature_cols))),
             np.empty((0,), dtype=df_ord[target_column].dtype),
@@ -304,10 +304,12 @@ def create_sequences(
             [],
         )
 
-    return np.asarray(X_seq), np.asarray(y_seq, dtype=np.int64), timestamp_windows_labels, entity_ids
+    return (
+        np.asarray(x_seq), np.asarray(y_seq, dtype=np.int64), timestamp_windows_labels, entity_ids
+    )
 
 
-def stats_windows(
+def stats_windows(  # pylint: disable=too-many-branches
     x_seq: np.ndarray,
     feature_names: Optional[list[str]] = None,
     stats_creation: Optional[list[str]] = None,
@@ -387,7 +389,7 @@ def stats_windows(
     return pd.DataFrame(out)
 
 
-def run_data_processing_pipeline(
+def run_data_processing_pipeline(  # pylint: disable=too-many-locals,too-many-branches,too-many-statements
     data_cfg: dict,
     df: Optional[pd.DataFrame] = None,
     pre_split: Optional[dict[str, pd.DataFrame]] = None,
@@ -426,8 +428,14 @@ def run_data_processing_pipeline(
         split_df = {}
         for split_name, split_frame in pre_split.items():
             split_frame.columns = split_frame.columns.str.lower()
-            if id_column and id_column in split_frame.columns and timestamp_column in split_frame.columns:
-                split_frame = split_frame.sort_values(by=[id_column, timestamp_column]).reset_index(drop=True)
+            if (
+                id_column
+                and id_column in split_frame.columns
+                and timestamp_column in split_frame.columns
+            ):
+                split_frame = split_frame.sort_values(
+                    by=[id_column, timestamp_column]
+                ).reset_index(drop=True)
             elif timestamp_column in split_frame.columns:
                 split_frame = split_frame.sort_values(by=timestamp_column).reset_index(drop=True)
             split_df[split_name] = split_frame
@@ -477,10 +485,18 @@ def run_data_processing_pipeline(
                 split_path = os.path.join(data_path, filename)
                 split_frame = pd.read_csv(split_path)
                 split_frame.columns = split_frame.columns.str.lower()
-                if id_column and id_column in split_frame.columns and timestamp_column in split_frame.columns:
-                    split_frame = split_frame.sort_values(by=[id_column, timestamp_column]).reset_index(drop=True)
+                if (
+                    id_column
+                    and id_column in split_frame.columns
+                    and timestamp_column in split_frame.columns
+                ):
+                    split_frame = split_frame.sort_values(
+                        by=[id_column, timestamp_column]
+                    ).reset_index(drop=True)
                 elif timestamp_column in split_frame.columns:
-                    split_frame = split_frame.sort_values(by=timestamp_column).reset_index(drop=True)
+                    split_frame = split_frame.sort_values(
+                        by=timestamp_column
+                    ).reset_index(drop=True)
                 split_df[split_name] = split_frame
                 logger.info("  %s: %d muestras", split_name.capitalize(), len(split_frame))
 
@@ -532,10 +548,10 @@ def run_data_processing_pipeline(
         )
 
     # Creación de secuencias temporales
-    X_seqs: dict[str, np.ndarray] = {}
+    x_seqs: dict[str, np.ndarray] = {}
     y_seqs: dict[str, np.ndarray] = {}
     for split in split_names:
-        X_seqs[split], y_seqs[split], _, _ = create_sequences(
+        x_seqs[split], y_seqs[split], _, _ = create_sequences(
             split_df[split],
             target_column=target_column,
             seq_length=seq_length,
@@ -546,12 +562,13 @@ def run_data_processing_pipeline(
         )
 
         logger.info(
-            "Split '%s' procesado: %s ventanas temporales creadas, con %d registros cada una y un solapamiento de %s (%d registros).",
+            "Split '%s' procesado: %s ventanas temporales creadas, con %d registros cada una "
+            "y un solapamiento de %s (%d registros).",
             split,
-            X_seqs[split].shape[0],
-            X_seqs[split].shape[1],
+            x_seqs[split].shape[0],
+            x_seqs[split].shape[1],
             solapamiento_beta,
-            int(X_seqs[split].shape[1] * (1 - solapamiento_beta)),
+            int(x_seqs[split].shape[1] * (1 - solapamiento_beta)),
         )
 
     # Cálculo de estadísticas por ventana
@@ -564,7 +581,7 @@ def run_data_processing_pipeline(
             id_column=id_column,
         )
         df_stats[split] = stats_windows(
-            X_seqs[split],
+            x_seqs[split],
             feature_names=feature_cols,
             stats_creation=fuzzy_processing_cfg.get('stats_creation'),
         )
@@ -586,20 +603,20 @@ def run_data_processing_pipeline(
 
     # Escalado de secuencias X
     scaler_x = StandardScaler()
-    X_scaled: dict[str, np.ndarray] = {}
+    x_scaled: dict[str, np.ndarray] = {}
 
-    n_features = X_seqs['train'].shape[-1]
-    X_scaled['train'] = scaler_x.fit_transform(
-        X_seqs['train'].reshape(-1, n_features)
-    ).reshape(X_seqs['train'].shape)
+    n_features = x_seqs['train'].shape[-1]
+    x_scaled['train'] = scaler_x.fit_transform(
+        x_seqs['train'].reshape(-1, n_features)
+    ).reshape(x_seqs['train'].shape)
 
     for split in ['val', 'test']:
-        X_scaled[split] = scaler_x.transform(
-            X_seqs[split].reshape(-1, n_features)
-        ).reshape(X_seqs[split].shape)
+        x_scaled[split] = scaler_x.transform(
+            x_seqs[split].reshape(-1, n_features)
+        ).reshape(x_seqs[split].shape)
 
     split_data = {
-        'X': {split: X_scaled[split] for split in split_names},
+        'X': {split: x_scaled[split] for split in split_names},
         'y': {split: y_seqs[split] for split in split_names},
     }
 

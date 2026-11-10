@@ -1,16 +1,16 @@
-"""Vendored verbatim from inbox/a45/codigo/src/training/loss.py — used only by trainer.py
-(fine-tuning), same composite loss the original DNF model was trained with.
+"""Vendored verbatim from inbox/a45/codigo/src/training/loss.py — used by plugin.py::train(),
+same composite loss the original DNF model was trained with.
 """
 from __future__ import annotations
 
 from typing import Dict, Optional, Tuple
 
 import torch
-import torch.nn as nn
+from torch import nn
 import torch.nn.functional as F
 
 
-class DNFLoss(nn.Module):
+class DNFLoss(nn.Module):  # pylint: disable=too-many-instance-attributes
     """Loss compuesta para el modelo Deep Neuro-Fuzzy.
 
     Combina losses supervisadas de anomalía con losses auxiliares por rama
@@ -29,7 +29,7 @@ class DNFLoss(nn.Module):
         eps: Epsilon numérico.
     """
 
-    def __init__(
+    def __init__(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         self,
         anomaly_pos_weight: Optional[torch.Tensor] = None,
         anomaly_weight: float = 1.0,
@@ -73,16 +73,16 @@ class DNFLoss(nn.Module):
         if x.dim() != 2:
             raise ValueError(f"x debe ser [B,R], recibido {tuple(x.shape)}")
 
-        B, R = x.shape
-        if B < 2 or R < 2:
+        batch_size, n_rules = x.shape
+        if batch_size < 2 or n_rules < 2:
             return x.new_tensor(0.0)
 
         x_centered = x - x.mean(dim=0, keepdim=True)
         std = x_centered.std(dim=0, keepdim=True, unbiased=False).clamp_min(self.eps)
         x_std = x_centered / std
 
-        corr = (x_std.T @ x_std) / B
-        mask = ~torch.eye(R, device=x.device, dtype=torch.bool)
+        corr = (x_std.T @ x_std) / batch_size
+        mask = ~torch.eye(n_rules, device=x.device, dtype=torch.bool)
         offdiag_vals = corr[mask]
         return (offdiag_vals ** 2).mean()
 
@@ -122,15 +122,15 @@ class DNFLoss(nn.Module):
                 f"alpha_probs debe ser [R,F,M], recibido {tuple(alpha_probs.shape)}"
             )
 
-        R = alpha_probs.size(0)
-        if R < 2:
+        n_rules = alpha_probs.size(0)
+        if n_rules < 2:
             return alpha_probs.new_tensor(0.0)
 
-        flat = alpha_probs.reshape(R, -1)
+        flat = alpha_probs.reshape(n_rules, -1)
         flat = flat / flat.norm(dim=1, keepdim=True).clamp_min(self.eps)
 
         sim = flat @ flat.T
-        mask = ~torch.eye(R, device=alpha_probs.device, dtype=torch.bool)
+        mask = ~torch.eye(n_rules, device=alpha_probs.device, dtype=torch.bool)
         offdiag_vals = sim[mask]
         return (offdiag_vals ** 2).mean()
 
@@ -155,7 +155,7 @@ class DNFLoss(nn.Module):
         target = torch.full_like(mean_usage, 1.0 / mean_usage.numel())
         return F.mse_loss(mean_usage, target, reduction=self.reduction)
 
-    def forward(
+    def forward(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
         self,
         anomaly_score: torch.Tensor,
         logit_anomaly_dl: Optional[torch.Tensor],

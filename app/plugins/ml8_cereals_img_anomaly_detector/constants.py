@@ -1,3 +1,4 @@
+"""Static configuration for the ml8-cereals-img-anomaly-detector plugin."""
 MODEL_ID = "ml8-cereals-img-anomaly-detector"
 ARTIFACT_FOLDER_NAME = "ml8_cereals_img_anomaly_detector"
 MODEL_FILENAME = "mobilenet_v3_large_cereales_multitask.pth"

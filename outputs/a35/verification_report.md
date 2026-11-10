@@ -23,7 +23,8 @@ Fecha: 2026-07-03
 - [x] **`GET /health`**: `{"status":"ok","model":"ml35-dairy-ann-cleaning-cost","version":"1.0.0","loaded":true}`
 - [x] **`GET /stats`**: `model_name`, `task_type=regression_prescriptive`, 8 inputs, métricas correctas
 - [x] **`POST /predict` (modo inline)**: OK
-- [x] **`POST /predict` (modo optimize)**: OK (GA ejecuta y devuelve setpoints + ahorro)
+- [x] **`POST /predict` (modo optimize)**: OK (GA ejecuta y devuelve setpoints + ahorro) — roto
+  desde `aebc62d` y corregido el 2026-11-05, ver "Re-verificación del modo optimize" al final
 
 ## Correctitud (golden dataset)
 
@@ -67,3 +68,43 @@ Diferencia máxima observada: 0.01 L (<0.001%) — diferencia de redondeo float3
 ## Estado final
 
 **[ LISTO PARA PR ]**
+
+## Re-verificación del modo optimize — 2026-11-05
+
+Lo detectó el informe de pylint (`outputs/informe_pylint.md`). El modo optimize no funcionaba
+desde `aebc62d` (2026-10-07, aislamiento de modelos de usuario) por dos causas:
+
+- `_run_optimize` reasignaba su parámetro `ctx` (tupla `model, scaler_X, scaler_y`) al dict de
+  features del escenario, y luego desempaquetaba ese dict → `ValueError: too many values to
+  unpack (expected 3)`. El dict se llama ahora `context`.
+- `pygad` no estaba en `requirements.txt` → `ModuleNotFoundError`. Añadido `pygad==3.5.0`, la
+  versión de la entrega.
+
+`test_predict_optimize` no lo detectó porque usa el plugin falso de `tests/conftest.py`.
+
+**Verificación cuantitativa del GA** (la que proponía la nota anterior): el plugin real con los
+artefactos entregados, sobre el escenario de `optimization_results_single_mode.csv` y los 20 de
+`optimization_results_massive_mode.csv` (21 escenarios), comparado con la salida del equipo de IA:
+
+| Campo | Error relativo máximo |
+|---|---|
+| opt_temp_leche | 6.9e-07 |
+| opt_temp_agua | 6.4e-07 |
+| opt_flujo | 1.6e-06 |
+| consumo_estandar | 2.1e-07 |
+| consumo_optimizado | 3.5e-07 |
+| ahorro_l | 7.1e-07 |
+| ahorro_pct | 1.4e-06 |
+| pu_logrado | 1.8e-06 |
+
+Las diferencias vienen solo del redondeo de la respuesta (4 decimales en temperaturas, 2 en
+caudal y consumos): con `random_seed=42` el GA reproduce exactamente las soluciones entregadas.
+Tiempo medio: 1.3 s por escenario en CPU.
+
+Nuevo `tests/unit/test_ml35_optimize.py`, que ejecuta `_run_optimize` real:
+- un test sin artefactos que comprueba que el GA usa el modelo recibido en `ctx` (base o
+  reentrenado);
+- 3 golden cases (single + 2 massive) con los artefactos entregados (se salta si
+  `inbox/a35/codigo` no está).
+
+Sin el arreglo fallan los 4; con él pasan. Suite completa: 1349 pasados. flake8: 0.

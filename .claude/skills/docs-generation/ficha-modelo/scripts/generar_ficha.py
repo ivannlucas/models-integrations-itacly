@@ -4,15 +4,19 @@ Genera una ficha técnica o funcional de modelo DatagIA a partir de un JSON
 de datos y la plantilla docxtpl correspondiente.
 
 Uso:
-    python3 generar_ficha.py --tipo tecnica   --datos datos_a35.json --out a35_ficha_tecnica_v2.docx
-    python3 generar_ficha.py --tipo funcional --datos datos_a35.json --out a35_ficha_funcional_v2.docx
+    python3 generar_ficha.py --tipo tecnica   --datos datos_a35.json \
+        --out a35_ficha_tecnica_v2.docx
+    python3 generar_ficha.py --tipo funcional --datos datos_a35.json \
+        --out a35_ficha_funcional_v2.docx
 
 El JSON de datos debe seguir el esquema descrito en reference/esquema_datos.md.
 Un mismo fichero de datos puede alimentar ambas plantillas: cada plantilla
 solo usa las claves que necesita e ignora el resto.
 """
+
 import argparse
 import json
+import re
 import sys
 import zipfile
 import shutil
@@ -40,8 +44,11 @@ def fix_ns_prefix(path):
                 if name == "word/document.xml":
                     text = data.decode("utf-8")
                     if "xmlns:w=" not in text:
-                        import re
-                        m = re.search(r'xmlns:(ns\d+)="http://schemas\.openxmlformats\.org/wordprocessingml/2006/main"', text)
+                        m = re.search(
+                            r'xmlns:(ns\d+)="http://schemas\.openxmlformats\.org/'
+                            r'wordprocessingml/2006/main"',
+                            text,
+                        )
                         if m:
                             prefix = m.group(1)
                             text = text.replace(f"xmlns:{prefix}=", "xmlns:w=")
@@ -52,6 +59,7 @@ def fix_ns_prefix(path):
 
 
 def main():
+    """Renderiza la plantilla elegida con los datos JSON y guarda el .docx de salida."""
     ap = argparse.ArgumentParser()
     ap.add_argument("--tipo", required=True, choices=["tecnica", "funcional"])
     ap.add_argument("--datos", required=True, help="Fichero JSON con los datos del modelo")

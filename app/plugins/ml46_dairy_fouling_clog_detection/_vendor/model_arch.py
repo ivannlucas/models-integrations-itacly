@@ -9,7 +9,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, Mapping, Sequence
 
 import torch
-import torch.nn as nn
+from torch import nn
 import torch.nn.functional as F
 
 from app.plugins.ml46_dairy_fouling_clog_detection._vendor.artifact_validation import (
@@ -33,7 +33,9 @@ class Chomp1d(nn.Module):
 class TemporalBlock(nn.Module):
     """Two causal dilated Conv1d layers with residual connection."""
 
-    def __init__(self, in_ch: int, out_ch: int, kernel_size: int, dilation: int, dropout: float) -> None:
+    def __init__(
+        self, in_ch: int, out_ch: int, kernel_size: int, dilation: int, dropout: float
+    ) -> None:
         super().__init__()
         pad = (kernel_size - 1) * dilation
         self.net = nn.Sequential(
@@ -56,10 +58,13 @@ class TemporalBlock(nn.Module):
         return self.relu(out + res)
 
 
+# pylint: disable-next=too-many-instance-attributes
 class PredictiveTCN(nn.Module):
     """Causal multi-output TCN: severity + stage + 3 binary horizons + 3 time-to-event heads."""
 
-    def __init__(self, n_features: int, channels: int, dilations: Sequence[int], dropout: float) -> None:
+    def __init__(
+        self, n_features: int, channels: int, dilations: Sequence[int], dropout: float
+    ) -> None:
         super().__init__()
         self.n_features = int(n_features)
         self.channels = int(channels)
@@ -69,7 +74,9 @@ class PredictiveTCN(nn.Module):
         layers: List[nn.Module] = []
         in_ch = n_features
         for d in self.dilations:
-            layers.append(TemporalBlock(in_ch, channels, kernel_size=3, dilation=d, dropout=dropout))
+            layers.append(
+                TemporalBlock(in_ch, channels, kernel_size=3, dilation=d, dropout=dropout)
+            )
             in_ch = channels
         self.tcn = nn.Sequential(*layers)
         self.shared = nn.Sequential(
@@ -126,6 +133,7 @@ class PredictiveTCN(nn.Module):
         h_last = h[:, :, -1]
         h_last = self.shared(h_last)
         return {
+            # pylint: disable-next=not-callable  # torch C function, inference false positive
             "severity_scaled": F.softplus(self.severity_head(h_last).squeeze(-1)),
             "stage_logits": self.stage_head(h_last),
             "foul_h_logit": self.foul_h_head(h_last).squeeze(-1),
@@ -137,6 +145,7 @@ class PredictiveTCN(nn.Module):
         }
 
 
+# pylint: disable-next=too-many-locals
 def validate_checkpoint_compatibility(
     model: PredictiveTCN,
     state_dict: Mapping[str, torch.Tensor],
@@ -153,7 +162,9 @@ def validate_checkpoint_compatibility(
     the tensor-shape check against the freshly-built model instance runs.
     """
     expected_shapes = model.state_shape_signature()
-    observed_shapes = {name: list(tensor.shape) for name, tensor in state_dict.items() if hasattr(tensor, "shape")}
+    observed_shapes = {
+        name: list(tensor.shape) for name, tensor in state_dict.items() if hasattr(tensor, "shape")
+    }
     missing = sorted(set(expected_shapes) - set(observed_shapes))
     unexpected = sorted(set(observed_shapes) - set(expected_shapes))
     shape_mismatches = {
@@ -175,7 +186,14 @@ def validate_checkpoint_compatibility(
     if architecture_contract:
         contract_arch = dict(architecture_contract.get("architecture", {}))
         if contract_arch:
-            comparable_keys = ["model_class", "n_features", "channels", "kernel_size", "dilations", "heads"]
+            comparable_keys = [
+                "model_class",
+                "n_features",
+                "channels",
+                "kernel_size",
+                "dilations",
+                "heads",
+            ]
             for key in comparable_keys:
                 if contract_arch.get(key) != model_signature.get(key):
                     errors.append(
@@ -183,15 +201,27 @@ def validate_checkpoint_compatibility(
                         f"expected {contract_arch.get(key)}, observed {model_signature.get(key)}"
                     )
         contract_feature_hash = architecture_contract.get("feature_names_hash")
-        if feature_names is not None and contract_feature_hash and contract_feature_hash != feature_hash:
-            errors.append(f"Feature list hash mismatch: expected {contract_feature_hash}, observed {feature_hash}")
+        if (
+            feature_names is not None
+            and contract_feature_hash
+            and contract_feature_hash != feature_hash
+        ):
+            errors.append(
+                f"Feature list hash mismatch: expected {contract_feature_hash}, observed "
+                f"{feature_hash}"
+            )
         contract_scenario = architecture_contract.get("scenario")
         if scenario is not None and contract_scenario and str(contract_scenario) != str(scenario):
-            errors.append(f"Scenario contract mismatch: expected {contract_scenario}, observed {scenario}")
+            errors.append(
+                f"Scenario contract mismatch: expected {contract_scenario}, observed {scenario}"
+            )
         contract_state_hash = architecture_contract.get("state_shape_hash")
         observed_state_hash = payload_sha256(expected_shapes)
         if contract_state_hash and contract_state_hash != observed_state_hash:
-            errors.append(f"State-shape contract mismatch: expected {contract_state_hash}, observed {observed_state_hash}")
+            errors.append(
+                f"State-shape contract mismatch: expected {contract_state_hash}, observed "
+                f"{observed_state_hash}"
+            )
 
     report = {
         "ok": not errors,

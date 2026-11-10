@@ -1,21 +1,18 @@
 """Pydantic DTOs for the meat-traceability /train endpoint."""
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import Field
 
-from app.application.dto.train_dto import MlflowRunId
+from app.application.dto.plugin_dto import ConfirmedRunId, PluginDTO, TrainRequestBase
 
 
-class TrainRequest(BaseModel):
+class TrainRequest(TrainRequestBase):
     """Train request: a CSV with the 33 features plus the target column."""
 
-    model_config = ConfigDict(protected_namespaces=())
     data_path: str = Field(..., description="CSV con features + columna target")
-    mlflow_run_id: MlflowRunId
 
 
-class TrainResponse(BaseModel):
+class TrainResponse(PluginDTO):
     """Train response: fields match the dict returned by plugin.train()."""
 
-    model_config = ConfigDict(protected_namespaces=())
     detail: str
     accuracy: float
     f1: float
@@ -27,11 +24,4 @@ class TrainResponse(BaseModel):
         default=None,
         description="Informativo si los artefactos se guardaron en local pero falló el upload a S3",
     )
-    mlflow_run_id: str = Field(
-        default="",
-        description=(
-            "Run de MLflow al que se subieron los artefactos. La plataforma lo toma como "
-            "autoritativo frente al run que pre-creó ella: si aquel falló, este es el que "
-            "de verdad tiene el modelo entrenado (train-task-manager.ts, confirmedRunId)."
-        ),
-    )
+    mlflow_run_id: ConfirmedRunId = ""

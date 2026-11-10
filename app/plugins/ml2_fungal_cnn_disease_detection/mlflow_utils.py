@@ -12,13 +12,13 @@ from __future__ import annotations
 
 import logging
 import os
-import tempfile
 
 import torch
-import shutil
 
-from app.domain.services.mlflow_tracker import BaseMLflowTracker, require_user_model
+from app.domain.services.mlflow_artifacts import download_run_artifacts
+from app.domain.services.mlflow_tracker import require_user_model
 from app.plugins.ml2_fungal_cnn_disease_detection.constants import IMAGE_SIZE, MODEL_FILENAME
+from app.plugins.ml2_fungal_cnn_disease_detection.model_loader import LeafCNN, _safe_device
 
 logger = logging.getLogger(__name__)
 
@@ -29,46 +29,36 @@ def download_user_model_from_mlflow(run_id: str) -> tuple[dict, str] | None:
 
     Returns ``(bundle, temp_dir)`` — the same shape as ``model_loader.load_model_bundle()`` —
     or ``None`` if the run has no ``model`` artifacts (not found / not yet trained).
-    Caller MUST ``shutil.rmtree(temp_dir)`` after use (see ``plugin.py``'s try/finally).
+    Caller MUST remove ``temp_dir`` after use (see ``plugin.py``'s ``removing_dir``).
     """
-    # pylint: disable=import-outside-toplevel
-    from app.plugins.ml2_fungal_cnn_disease_detection.model_loader import LeafCNN, _safe_device
-    # pylint: enable=import-outside-toplevel
+    return download_run_artifacts(
+        run_id, lambda local_path: _load(local_path, run_id), prefix="mlflow_ml2_"
+    )
 
-    tmp = tempfile.mkdtemp(prefix="mlflow_ml2_")
-    try:
-        local_path = BaseMLflowTracker(run_id).download_artifacts(tmp, artifact_path="model")
-        if not local_path:
-            logger.warning("No model artifacts found in MLflow run_id=%s", run_id)
-            shutil.rmtree(tmp, ignore_errors=True)
-            return None
 
-        checkpoint_path = os.path.join(local_path, MODEL_FILENAME)
-        if not os.path.exists(checkpoint_path):
-            logger.warning(
-                "MLflow run_id=%s has no %s under its model artifacts", run_id, MODEL_FILENAME
-            )
-            shutil.rmtree(tmp, ignore_errors=True)
-            return None
+def _load(local_path: str, run_id: str) -> dict | None:
+    """Rebuild the LeafCNN bundle from a downloaded ``model`` folder (None if incomplete)."""
+    checkpoint_path = os.path.join(local_path, MODEL_FILENAME)
+    if not os.path.exists(checkpoint_path):
+        logger.warning(
+            "MLflow run_id=%s has no %s under its model artifacts", run_id, MODEL_FILENAME
+        )
+        return None
 
-        checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
-        classes: list[str] = checkpoint["classes"]
+    checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+    classes: list[str] = checkpoint["classes"]
 
-        device = _safe_device()
-        model = LeafCNN(num_classes=len(classes)).to(device)
-        model.load_state_dict(checkpoint["model_state_dict"])
-        model.eval()
+    device = _safe_device()
+    model = LeafCNN(num_classes=len(classes)).to(device)
+    model.load_state_dict(checkpoint["model_state_dict"])
+    model.eval()
 
-        bundle = {
-            "model_id": checkpoint.get("model_id", "ml2-fungal-cnn-disease-detection"),
-            "model": model,
-            "device": device,
-            "image_size": checkpoint.get("image_size", IMAGE_SIZE),
-            "classes": classes,
-        }
-
-        logger.info("Downloaded user model from MLflow run_id=%s (classes=%s)", run_id, classes)
-        return bundle, tmp
-    except BaseException:
-        shutil.rmtree(tmp, ignore_errors=True)
-        raise
+    bundle = {
+        "model_id": checkpoint.get("model_id", "ml2-fungal-cnn-disease-detection"),
+        "model": model,
+        "device": device,
+        "image_size": checkpoint.get("image_size", IMAGE_SIZE),
+        "classes": classes,
+    }
+    logger.info("Loaded user model from MLflow run_id=%s (classes=%s)", run_id, classes)
+    return bundle

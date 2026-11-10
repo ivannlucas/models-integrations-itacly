@@ -1,15 +1,16 @@
 """Pydantic request/response DTOs for the ml18 /predict endpoint."""
 from typing import Annotated, Any, Literal, Union
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import Field
+
+from app.application.dto.plugin_dto import PluginDTO, UnusedThreshold
 
 from app.plugins.ml18_meat_spatial_price_forecast.constants import LOOKBACK
 
 
-class PredictBatchRequest(BaseModel):
+class PredictBatchRequest(PluginDTO):
     """Batch request: a CSV with a panel of monthly rows (one or more CCAA-Producto groups)."""
 
-    model_config = ConfigDict(protected_namespaces=())
     mode: Literal["batch"] = "batch"
     data_path: str = Field(
         ...,
@@ -21,26 +22,21 @@ class PredictBatchRequest(BaseModel):
     )
 
 
-class PredictBatchResponse(BaseModel):
+class PredictBatchResponse(PluginDTO):
     """Batch response: one next-month prediction per (CCAA, Producto) group with enough history."""
 
-    model_config = ConfigDict(protected_namespaces=())
     model_id: str
     predictions: list[dict[str, Any]]
     n_predictions: int
     output_path: str | None = None
 
 
-class PredictInlineRequest(BaseModel):
+class PredictInlineRequest(PluginDTO):
     """Inline request: the panel as a list of row dicts."""
 
-    model_config = ConfigDict(protected_namespaces=())
     mode: Literal["inline"] = "inline"
     model_key: str | None = None
-    threshold: float | None = Field(
-        default=None,
-        description="No usado por este modelo (no hay umbral de decisión); se acepta por compatibilidad de contrato.",
-    )
+    threshold: UnusedThreshold = None
     rows: list[dict[str, Any]] = Field(
         ...,
         min_length=LOOKBACK,
@@ -54,10 +50,9 @@ class PredictInlineRequest(BaseModel):
     )
 
 
-class PredictInlineResponse(BaseModel):
+class PredictInlineResponse(PluginDTO):
     """Inline response: one next-month prediction per (CCAA, Producto) group with enough history."""
 
-    model_config = ConfigDict(protected_namespaces=())
     model_id: str
     predictions: list[dict[str, Any]] = Field(
         ...,

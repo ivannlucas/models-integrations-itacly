@@ -1,12 +1,14 @@
+"""DTOs de entrenamiento de ml48."""
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import Field, field_validator
 
-from app.application.dto.train_dto import MlflowRunId
+from app.application.dto.plugin_dto import PluginDTO, TrainRequestBase
 
 
-class TrainRequest(BaseModel):
-    model_config = ConfigDict(protected_namespaces=())
+class TrainRequest(TrainRequestBase):
+    """Petición de /train: CSV de ciclos etiquetados, run de MLflow y modo."""
+
     data_path: str = Field(
         ...,
         description=(
@@ -16,12 +18,13 @@ class TrainRequest(BaseModel):
             "las del 15% de test."
         ),
     )
-    mlflow_run_id: MlflowRunId
     mode: Literal["fine_tune", "full"] = Field(
         default="fine_tune",
         description=(
-            "fine_tune (por defecto): calibra las 4 cabezas del modelo servido con datos de planta, "
-            "backbone CNN congelado (fine_tuner.py del equipo de IA; bastan unos cientos de ciclos). "
+            "fine_tune (por defecto): calibra las 4 cabezas del modelo servido con datos de "
+            "planta, "
+            "backbone CNN congelado (fine_tuner.py del equipo de IA; bastan unos cientos de "
+            "ciclos). "
             "full: reentrena la CNN desde cero con los hiperparámetros de Optuna (trainer.py; "
             "pensado para miles de ciclos — con pocos ciclos da un modelo peor que el servido). "
             "batch/inline se tratan como fine_tune: la plataforma manda su modo de transporte en "
@@ -37,8 +40,9 @@ class TrainRequest(BaseModel):
         return "fine_tune" if value in ("batch", "inline") else value
 
 
-class TrainResponse(BaseModel):
-    model_config = ConfigDict(protected_namespaces=())
+class TrainResponse(PluginDTO):
+    """Resultado de /train: métricas de test y run de MLflow."""
+
     detail: str
     mode: str
     exact_match: float

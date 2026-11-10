@@ -6,27 +6,52 @@ and the real plugin class (with mocked model loading).
 
 from __future__ import annotations
 
-import csv
-import os
-import tempfile
-import io
 import base64
+import csv
+import io
+import json
+import os
+import sys
+import tempfile
+import zipfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 import torch
-from PIL import Image
+from PIL import Image, ImageDraw
+from torch import nn
+from torch.utils.data import DataLoader, TensorDataset
+from torchvision import transforms as T
 
-from app.domain.services.exceptions import InvalidImageError
-from app.plugins.ml10_dairy_disease_vector_detection.postprocessing import build_inline_result, classify_crop
+from app.domain.services.exceptions import InvalidImageError, ModelNotLoadedError
+from app.plugins.ml10_dairy_disease_vector_detection.model_loader import (
+    _build_mobilenetv3_classifier,
+    load_detector_and_classifier,
+)
+from app.plugins.ml10_dairy_disease_vector_detection.plugin import (
+    _CLASSES,
+    Ml10DairyDiseaseVectorDetectionPlugin,
+    _cls_train_epoch,
+    _cls_transforms,
+    _cls_validate,
+    _create_splits,
+)
+from app.plugins.ml10_dairy_disease_vector_detection.postprocessing import (
+    build_inline_result,
+    classify_crop,
+)
 from app.plugins.ml10_dairy_disease_vector_detection.preprocessing import (
     CLASSIFIER_TRANSFORM,
     build_eval_transform,
     crop_to_tensor,
     image_base64_to_pil,
 )
-from app.plugins.ml10_dairy_disease_vector_detection.plugin import Ml10DairyDiseaseVectorDetectionPlugin, _cls_transforms
+
+# pylint: disable=protected-access
+
+_LOAD_PATCH = "app.plugins.ml10_dairy_disease_vector_detection.plugin.load_detector_and_classifier"
+_LOADER_MOD = "app.plugins.ml10_dairy_disease_vector_detection.model_loader"
 
 
 def _make_mock_classifier(class_idx=0, confidence=0.9):
@@ -125,7 +150,6 @@ class TestClassifierTransform:
         scores cls_conf=0.9996 with Resize(256)+CenterCrop(224) (matches the delivered JSON to
         4 decimals) vs. 0.9991 without CenterCrop — see inbox/a10/manifest.yaml golden_cases.
         """
-        from torchvision import transforms as T
         assert any(isinstance(t, T.CenterCrop) for t in CLASSIFIER_TRANSFORM.transforms)
         assert any(
             isinstance(t, T.Resize) and t.size == 256 for t in CLASSIFIER_TRANSFORM.transforms
@@ -143,7 +167,6 @@ class TestClassifierTransform:
         resize+center-crop, since every pixel is identical either way.
         """
         img = Image.new("RGB", (300, 150), color=(30, 60, 90))
-        from PIL import ImageDraw
         draw = ImageDraw.Draw(img)
         draw.rectangle([0, 0, 149, 74], fill=(220, 20, 20))
         draw.rectangle([150, 75, 299, 149], fill=(20, 220, 20))
@@ -166,7 +189,7 @@ class TestClassifyCrop:
         classifier = MagicMock()
         classifier.return_value = torch.tensor([[0.1, 0.8, 0.1]])
         tensor = torch.randn(1, 3, 224, 224)
-        species, conf = classify_crop(classifier, tensor, ["fly", "mos", "tick"], "cpu")
+        species, _ = classify_crop(classifier, tensor, ["fly", "mos", "tick"], "cpu")
         assert species == "mos"
 
     def test_all_classes_predictable(self):
@@ -174,7 +197,7 @@ class TestClassifyCrop:
         classifier = MagicMock()
         classifier.return_value = torch.tensor([[0.9, 0.05, 0.05]])
         tensor = torch.randn(1, 3, 224, 224)
-        species, conf = classify_crop(classifier, tensor, ["fly", "mos", "tick"], "cpu")
+        species, _ = classify_crop(classifier, tensor, ["fly", "mos", "tick"], "cpu")
         assert species == "fly"
 
     def test_device_moving(self):
@@ -182,7 +205,7 @@ class TestClassifyCrop:
         classifier = MagicMock()
         classifier.return_value = torch.tensor([[0.2, 0.2, 0.6]])
         tensor = torch.randn(1, 3, 224, 224)
-        species, conf = classify_crop(
+        species, _ = classify_crop(
             classifier, tensor, ["fly", "mos", "tick"], torch.device("cpu")
         )
         assert species == "tick"
@@ -206,7 +229,12 @@ class TestBuildInlineResult:
     def test_single_detection(self):
         """Verify a single detection produces the correct result."""
         dets = [
-            {"species": "fly", "det_conf": 0.9, "cls_conf": 0.95, "bbox": {"x1": 0, "y1": 0, "x2": 10, "y2": 10}},
+            {
+                "species": "fly",
+                "det_conf": 0.9,
+                "cls_conf": 0.95,
+                "bbox": {"x1": 0, "y1": 0, "x2": 10, "y2": 10},
+            },
         ]
         result = build_inline_result("ml10-dairy-disease-vector-detection", dets)
         assert result["prediction"] == "fly"
@@ -243,30 +271,28 @@ class TestBuildInlineResult:
 class TestMl10DairyDiseaseVectorDetectionPluginDirect:
     """Tests the real plugin class with mocked model loading."""
 
-    @patch("app.plugins.ml10_dairy_disease_vector_detection.plugin.load_detector_and_classifier")
+    @patch(_LOAD_PATCH)
     def test_plugin_initial_state(self, mock_load):
         """Verify the plugin starts in an unloaded state with zero stats."""
-        from app.plugins.ml10_dairy_disease_vector_detection.plugin import Ml10DairyDiseaseVectorDetectionPlugin
+        _ = mock_load
         plugin = Ml10DairyDiseaseVectorDetectionPlugin()
         assert plugin.is_loaded() is False
-        assert plugin._predict_count == 0
+        assert plugin.predict_count == 0
         assert plugin._total_latency_ms == 0.0
-        assert plugin._last_predict_at is None
+        assert plugin.last_predict_at is None
 
-    @patch("app.plugins.ml10_dairy_disease_vector_detection.plugin.load_detector_and_classifier")
+    @patch(_LOAD_PATCH)
     def test_plugin_load_sets_loaded(self, mock_load):
         """Verify calling load() makes is_loaded() return True."""
         mock_load.return_value = (MagicMock(), MagicMock(), ["fly", "mos", "tick"])
-        from app.plugins.ml10_dairy_disease_vector_detection.plugin import Ml10DairyDiseaseVectorDetectionPlugin
         plugin = Ml10DairyDiseaseVectorDetectionPlugin()
         plugin.load()
         assert plugin.is_loaded() is True
 
-    @patch("app.plugins.ml10_dairy_disease_vector_detection.plugin.load_detector_and_classifier")
+    @patch(_LOAD_PATCH)
     def test_stats_structure(self, mock_load):
         """Verify stats() returns a StatsResponse with expected fields."""
         mock_load.return_value = (MagicMock(), MagicMock(), ["fly", "mos", "tick"])
-        from app.plugins.ml10_dairy_disease_vector_detection.plugin import Ml10DairyDiseaseVectorDetectionPlugin
         plugin = Ml10DairyDiseaseVectorDetectionPlugin()
         plugin.load()
         stats = plugin.stats()
@@ -278,11 +304,10 @@ class TestMl10DairyDiseaseVectorDetectionPluginDirect:
         assert stats.runtime_stats.total_predictions == 0
         assert stats.runtime_stats.avg_latency_ms is None
 
-    @patch("app.plugins.ml10_dairy_disease_vector_detection.plugin.load_detector_and_classifier")
+    @patch(_LOAD_PATCH)
     def test_stats_with_predictions(self, mock_load):
         """Verify predict_count reflects the number of predictions made."""
         mock_load.return_value = (MagicMock(), MagicMock(), ["fly", "mos", "tick"])
-        from app.plugins.ml10_dairy_disease_vector_detection.plugin import Ml10DairyDiseaseVectorDetectionPlugin
         plugin = Ml10DairyDiseaseVectorDetectionPlugin()
         plugin.load()
         plugin._update_stats(latency_ms=100.0)
@@ -290,41 +315,37 @@ class TestMl10DairyDiseaseVectorDetectionPluginDirect:
         stats = plugin.stats()
         assert stats.runtime_stats.total_predictions == 2
 
-    @patch("app.plugins.ml10_dairy_disease_vector_detection.plugin.load_detector_and_classifier")
+    @patch(_LOAD_PATCH)
     def test_update_stats_tracking(self, mock_load):
         """Verify _update_stats increments predict_count and records latency."""
         mock_load.return_value = (MagicMock(), MagicMock(), ["fly", "mos", "tick"])
-        from app.plugins.ml10_dairy_disease_vector_detection.plugin import Ml10DairyDiseaseVectorDetectionPlugin
         plugin = Ml10DairyDiseaseVectorDetectionPlugin()
         plugin.load()
-        assert plugin._predict_count == 0
-        assert plugin._last_predict_at is None
+        assert plugin.predict_count == 0
+        assert plugin.last_predict_at is None
         plugin._update_stats(latency_ms=50.0)
-        assert plugin._predict_count == 1
+        assert plugin.predict_count == 1
         assert plugin._total_latency_ms == 50.0
-        assert plugin._last_predict_at is not None
+        assert plugin.last_predict_at is not None
 
-    @patch("app.plugins.ml10_dairy_disease_vector_detection.plugin.load_detector_and_classifier")
-    def test_assert_loaded_raises_when_not_loaded(self, mock_load):
-        """Verify _assert_loaded raises ModelNotLoadedError when not loaded."""
-        from app.plugins.ml10_dairy_disease_vector_detection.plugin import Ml10DairyDiseaseVectorDetectionPlugin
-        from app.domain.services.exceptions import ModelNotLoadedError
+    @patch(_LOAD_PATCH)
+    def test_require_loaded_raises_when_not_loaded(self, mock_load):
+        """Verify _require_loaded raises ModelNotLoadedError when not loaded."""
+        _ = mock_load
         plugin = Ml10DairyDiseaseVectorDetectionPlugin()
         with pytest.raises(ModelNotLoadedError):
-            plugin._assert_loaded()
+            plugin._require_loaded()
 
-    @patch("app.plugins.ml10_dairy_disease_vector_detection.plugin.load_detector_and_classifier")
-    def test_assert_loaded_passes_when_loaded(self, mock_load):
-        """Verify _assert_loaded does not raise after load()."""
+    @patch(_LOAD_PATCH)
+    def test_require_loaded_passes_when_loaded(self, mock_load):
+        """Verify _require_loaded does not raise after load()."""
         mock_load.return_value = (MagicMock(), MagicMock(), ["fly", "mos", "tick"])
-        from app.plugins.ml10_dairy_disease_vector_detection.plugin import Ml10DairyDiseaseVectorDetectionPlugin
         plugin = Ml10DairyDiseaseVectorDetectionPlugin()
         plugin.load()
-        plugin._assert_loaded()  # should not raise
+        plugin._require_loaded()  # should not raise
 
     def test_image_paths_from_csv(self):
         """Verify _image_paths_from_csv extracts paths from a CSV."""
-        from app.plugins.ml10_dairy_disease_vector_detection.plugin import Ml10DairyDiseaseVectorDetectionPlugin
         plugin = Ml10DairyDiseaseVectorDetectionPlugin()
         with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False) as f:
             writer = csv.writer(f)
@@ -342,7 +363,6 @@ class TestMl10DairyDiseaseVectorDetectionPluginDirect:
 
     def test_image_paths_from_csv_empty_rows_skipped(self):
         """Verify empty rows in CSV are skipped."""
-        from app.plugins.ml10_dairy_disease_vector_detection.plugin import Ml10DairyDiseaseVectorDetectionPlugin
         plugin = Ml10DairyDiseaseVectorDetectionPlugin()
         with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False) as f:
             writer = csv.writer(f)
@@ -365,23 +385,19 @@ class TestClsTransforms:
 
     def test_returns_two_transforms(self):
         """Verify _cls_transforms returns train and eval transforms."""
-        from app.plugins.ml10_dairy_disease_vector_detection.plugin import _cls_transforms
         train_tfm, eval_tfm = _cls_transforms(224)
         assert train_tfm is not None
         assert eval_tfm is not None
 
     def test_transform_produces_correct_shape(self):
         """Verify eval transform produces a tensor of the expected shape."""
-        from app.plugins.ml10_dairy_disease_vector_detection.plugin import _cls_transforms
-        import PIL.Image
         _, eval_tfm = _cls_transforms(224)
-        img = PIL.Image.new("RGB", (300, 300), color="red")
+        img = Image.new("RGB", (300, 300), color="red")
         tensor = eval_tfm(img)
         assert tensor.shape == (3, 224, 224)
 
     def test_custom_size(self):
         """Verify _cls_transforms supports a custom image size."""
-        from app.plugins.ml10_dairy_disease_vector_detection.plugin import _cls_transforms
         _, eval_tfm = _cls_transforms(128)
         img = Image.new("RGB", (200, 200), color="blue")
         tensor = eval_tfm(img)
@@ -399,7 +415,6 @@ class TestCreateSplits:
         the 80/10/10 a previous version of this function used, which diverged from the
         original delivered split logic.
         """
-        from app.plugins.ml10_dairy_disease_vector_detection.plugin import _create_splits, _CLASSES
         with tempfile.TemporaryDirectory() as tmp:
             data_root = Path(tmp) / "data"
             for cls in _CLASSES:
@@ -422,7 +437,6 @@ class TestCreateSplits:
 
     def test_empty_class_handling(self):
         """Verify _create_splits handles classes with no files gracefully."""
-        from app.plugins.ml10_dairy_disease_vector_detection.plugin import _create_splits
         with tempfile.TemporaryDirectory() as tmp:
             # One class has no files
             data_root = Path(tmp) / "data"
@@ -450,13 +464,12 @@ class TestPredictInlineWithMocks:
 
     def _make_plugin(self, detector_mock=None, classifier_mock=None):
         """Create a plugin instance with mocked detector and classifier."""
-        with patch("app.plugins.ml10_dairy_disease_vector_detection.plugin.load_detector_and_classifier") as mock_load:
+        with patch(_LOAD_PATCH) as mock_load:
             mock_load.return_value = (
                 detector_mock or MagicMock(),
                 classifier_mock or MagicMock(),
                 ["fly", "mos", "tick"],
             )
-            from app.plugins.ml10_dairy_disease_vector_detection.plugin import Ml10DairyDiseaseVectorDetectionPlugin
             plugin = Ml10DairyDiseaseVectorDetectionPlugin()
             plugin.load()
             return plugin
@@ -483,6 +496,17 @@ class TestPredictInlineWithMocks:
         mock_detector.predict.return_value = [mock_box_container]
         return mock_detector
 
+    def test_invalid_image_with_user_model_removes_its_temp_dir(self, tmp_path):
+        """An invalid image after the user's classifier was downloaded still removes its dir."""
+        plugin, user_dir = self._make_plugin(), tmp_path / "user_classifier"
+        user_dir.mkdir()
+        download = _LOAD_PATCH.replace("load_detector_and_classifier",
+                                       "download_user_classifier_from_mlflow")
+        with patch(download, return_value=(MagicMock(), ["fly"], str(user_dir))):
+            with pytest.raises(InvalidImageError):
+                plugin.predict_inline(features={"image_path": "f.gif"}, mlflow_run_id="r1")
+        assert not user_dir.exists()
+
     def test_predict_inline_with_base64(self):
         """Verify predict_inline works with a base64-encoded image."""
         img = Image.new("RGB", (100, 100), color="red")
@@ -506,7 +530,7 @@ class TestPredictInlineWithMocks:
         # present too — Grad-CAM needs to run against these crops, not the full uncropped
         # scene, or the resulting heatmap has no real spatial correspondence to any detection.
         assert len(result.heatmap_crops) == 1
-        crop = result.heatmap_crops[0]
+        crop = result.heatmap_crops[0]  # pylint: disable=unsubscriptable-object  # pydantic field
         assert crop["species"] == "fly"
         assert isinstance(crop["crop_base64"], str) and len(crop["crop_base64"]) > 0
         assert crop["bbox"] == {"x1": 10.0, "y1": 20.0, "x2": 80.0, "y2": 90.0}
@@ -562,12 +586,11 @@ class TestPredictInlineWithMocks:
         result = plugin.predict_inline(features={"image_base64": b64})
         assert result.prediction == "no_vectors"
         assert result.vectors_count == 0
-        assert result.heatmap_crops == []
+        # Exact comparison on purpose: also checks it is a list, not None.
+        assert result.heatmap_crops == []  # pylint: disable=use-implicit-booleaness-not-comparison
 
     def test_predict_inline_with_image_path(self):
         """Verify predict_inline works with an image_path field."""
-        import tempfile
-        from pathlib import Path
         detector = self._make_mock_detector()
         classifier = _make_mock_classifier()
         plugin = self._make_plugin(detector, classifier)
@@ -592,17 +615,15 @@ class TestPredictInlineWithMocks:
 
     def test_predict_inline_updates_stats(self):
         """Verify predict_inline updates predict_count."""
-        import io
-        import base64
         img = Image.new("RGB", (100, 100), color="yellow")
         buf = io.BytesIO()
         img.save(buf, format="PNG")
         b64 = base64.b64encode(buf.getvalue()).decode()
 
         plugin = self._make_plugin()
-        assert plugin._predict_count == 0
+        assert plugin.predict_count == 0
         plugin.predict_inline(features={"image_base64": b64})
-        assert plugin._predict_count == 1
+        assert plugin.predict_count == 1
 
     def test_predict_inline_skips_zero_area_detection(self):
         """Verify predict_inline skips boxes with zero area."""
@@ -650,15 +671,12 @@ class TestPredictBatchWithMocks:
 
     def test_predict_batch_directory_mode(self):
         """Verify predict_batch works with a directory of images."""
-        import tempfile
-        from pathlib import Path
 
         mock_detector = self._make_mock_detector()
         mock_classifier = _make_mock_classifier()
 
-        with patch("app.plugins.ml10_dairy_disease_vector_detection.plugin.load_detector_and_classifier") as mock_load:
+        with patch(_LOAD_PATCH) as mock_load:
             mock_load.return_value = (mock_detector, mock_classifier, ["fly", "mos", "tick"])
-            from app.plugins.ml10_dairy_disease_vector_detection.plugin import Ml10DairyDiseaseVectorDetectionPlugin
             plugin = Ml10DairyDiseaseVectorDetectionPlugin()
             plugin.load()
 
@@ -668,13 +686,13 @@ class TestPredictBatchWithMocks:
                 result = plugin.predict_batch(data_path=tmp)
                 assert result.model_id == "ml10-dairy-disease-vector-detection"
                 assert len(result.predictions) == 1
-                assert plugin._predict_count == 1
+                assert plugin.predict_count == 1
 
     def test_predict_batch_with_csv(self):
         """Verify predict_batch works with a CSV file listing images."""
         mock_detector = self._make_mock_detector([(0.9, [10, 20, 50, 60])])
         mock_classifier = _make_mock_classifier()
-        with patch("app.plugins.ml10_dairy_disease_vector_detection.plugin.load_detector_and_classifier") as mock_load:
+        with patch(_LOAD_PATCH) as mock_load:
             mock_load.return_value = (mock_detector, mock_classifier, ["fly", "mos", "tick"])
 
             plugin = Ml10DairyDiseaseVectorDetectionPlugin()
@@ -685,22 +703,20 @@ class TestPredictBatchWithMocks:
                 img_path = Path(tmp) / "test.jpg"
                 Image.new("RGB", (50, 50), color="red").save(str(img_path))
                 csv_path = Path(tmp) / "images.csv"
-                with open(str(csv_path), "w", newline="") as f:
+                with open(str(csv_path), "w", newline="", encoding="utf-8") as f:
                     writer = csv.writer(f)
                     writer.writerow(["image_path"])
                     writer.writerow([str(img_path)])
                 result = plugin.predict_batch(data_path=str(csv_path))
                 assert result.model_id == "ml10-dairy-disease-vector-detection"
                 assert len(result.predictions) == 1
-                assert plugin._predict_count == 1
+                assert plugin.predict_count == 1
 
     def test_predict_batch_empty_directory_raises(self):
         """Verify predict_batch raises ValueError on empty directories."""
-        import tempfile
 
-        with patch("app.plugins.ml10_dairy_disease_vector_detection.plugin.load_detector_and_classifier") as mock_load:
+        with patch(_LOAD_PATCH) as mock_load:
             mock_load.return_value = (MagicMock(), MagicMock(), ["fly", "mos", "tick"])
-            from app.plugins.ml10_dairy_disease_vector_detection.plugin import Ml10DairyDiseaseVectorDetectionPlugin
             plugin = Ml10DairyDiseaseVectorDetectionPlugin()
             plugin.load()
 
@@ -710,9 +726,8 @@ class TestPredictBatchWithMocks:
 
     def test_predict_batch_unsupported_type_raises(self):
         """Verify predict_batch raises ValueError for paths that are not CSV, ZIP, or directory."""
-        with patch("app.plugins.ml10_dairy_disease_vector_detection.plugin.load_detector_and_classifier") as mock_load:
+        with patch(_LOAD_PATCH) as mock_load:
             mock_load.return_value = (MagicMock(), MagicMock(), ["fly", "mos", "tick"])
-            from app.plugins.ml10_dairy_disease_vector_detection.plugin import Ml10DairyDiseaseVectorDetectionPlugin
             plugin = Ml10DairyDiseaseVectorDetectionPlugin()
             plugin.load()
             with pytest.raises(ValueError, match="data_path debe ser CSV, ZIP o directorio"):
@@ -722,14 +737,14 @@ class TestPredictBatchWithMocks:
         """Verify predict_batch handles missing images gracefully (error entry)."""
         mock_detector = self._make_mock_detector()
         mock_classifier = _make_mock_classifier()
-        with patch("app.plugins.ml10_dairy_disease_vector_detection.plugin.load_detector_and_classifier") as mock_load:
+        with patch(_LOAD_PATCH) as mock_load:
             mock_load.return_value = (mock_detector, mock_classifier, ["fly", "mos", "tick"])
             plugin = Ml10DairyDiseaseVectorDetectionPlugin()
             plugin.load()
 
             with tempfile.TemporaryDirectory() as tmp:
                 csv_path = Path(tmp) / "bad.csv"
-                with open(str(csv_path), "w", newline="") as f:
+                with open(str(csv_path), "w", newline="", encoding="utf-8") as f:
                     writer = csv.writer(f)
                     writer.writerow(["image_path"])
                     writer.writerow([str(Path(tmp) / "nonexistent.jpg")])
@@ -745,7 +760,7 @@ class TestPredictBatchWithMocks:
         """
         mock_detector = self._make_mock_detector([(0.9, [10, 20, 50, 60])])
         mock_classifier = _make_mock_classifier()
-        with patch("app.plugins.ml10_dairy_disease_vector_detection.plugin.load_detector_and_classifier") as mock_load:
+        with patch(_LOAD_PATCH) as mock_load:
             mock_load.return_value = (mock_detector, mock_classifier, ["fly", "mos", "tick"])
             plugin = Ml10DairyDiseaseVectorDetectionPlugin()
             plugin.load()
@@ -769,7 +784,7 @@ class TestPredictBatchWithMocks:
         runModelo10CompositeExplain reads (crop_base64, species, cls_conf, bbox)."""
         mock_detector = self._make_mock_detector([(0.9, [10, 20, 50, 60])])
         mock_classifier = _make_mock_classifier(class_idx=2, confidence=0.8)
-        with patch("app.plugins.ml10_dairy_disease_vector_detection.plugin.load_detector_and_classifier") as mock_load:
+        with patch(_LOAD_PATCH) as mock_load:
             mock_load.return_value = (mock_detector, mock_classifier, ["fly", "mos", "tick"])
             plugin = Ml10DairyDiseaseVectorDetectionPlugin()
             plugin.load()
@@ -812,16 +827,12 @@ class TestPredictBatchZip:
 
     def test_predict_batch_with_zip(self):
         """Verify predict_batch works with a ZIP file of images."""
-        import zipfile
-        import tempfile
-        from pathlib import Path
 
         mock_detector = self._make_mock_detector()
         mock_classifier = _make_mock_classifier()
 
-        with patch("app.plugins.ml10_dairy_disease_vector_detection.plugin.load_detector_and_classifier") as mock_load:
+        with patch(_LOAD_PATCH) as mock_load:
             mock_load.return_value = (mock_detector, mock_classifier, ["fly", "mos", "tick"])
-            from app.plugins.ml10_dairy_disease_vector_detection.plugin import Ml10DairyDiseaseVectorDetectionPlugin
             plugin = Ml10DairyDiseaseVectorDetectionPlugin()
             plugin.load()
 
@@ -838,15 +849,16 @@ class TestPredictBatchZip:
                 assert result.model_id == "ml10-dairy-disease-vector-detection"
                 assert len(result.predictions) == 2
 
+                # Same ZIP without ".zip" (s3:// key with no extension): detected by content.
+                no_ext = Path(tmp) / "dataset"
+                no_ext.write_bytes(zip_path.read_bytes())
+                assert len(plugin.predict_batch(data_path=str(no_ext)).predictions) == 2
+
     def test_predict_batch_zip_no_images_raises(self):
         """Verify predict_batch raises ValueError when ZIP has no image files."""
-        import zipfile
-        import tempfile
-        from pathlib import Path
 
-        with patch("app.plugins.ml10_dairy_disease_vector_detection.plugin.load_detector_and_classifier") as mock_load:
+        with patch(_LOAD_PATCH) as mock_load:
             mock_load.return_value = (MagicMock(), MagicMock(), ["fly", "mos", "tick"])
-            from app.plugins.ml10_dairy_disease_vector_detection.plugin import Ml10DairyDiseaseVectorDetectionPlugin
             plugin = Ml10DairyDiseaseVectorDetectionPlugin()
             plugin.load()
 
@@ -865,17 +877,12 @@ class TestTrainHelpers:
 
     def test_cls_train_epoch(self):
         """Verify _cls_train_epoch returns float loss and accuracy."""
-        import torch
-        import torch.nn as nn
-        from torch.utils.data import DataLoader, TensorDataset
-        from app.plugins.ml10_dairy_disease_vector_detection.plugin import _cls_train_epoch
-        from app.plugins.ml10_dairy_disease_vector_detection.model_loader import _build_mobilenetv3_classifier
 
         model = _build_mobilenetv3_classifier(3)
         model.train()
-        X = torch.randn(16, 3, 224, 224)
+        x = torch.randn(16, 3, 224, 224)
         y = torch.randint(0, 3, (16,))
-        loader = DataLoader(TensorDataset(X, y), batch_size=8)
+        loader = DataLoader(TensorDataset(x, y), batch_size=8)
         optimizer = torch.optim.SGD(model.parameters(), lr=0.01)
         criterion = nn.CrossEntropyLoss()
 
@@ -886,17 +893,12 @@ class TestTrainHelpers:
 
     def test_cls_validate(self):
         """Verify _cls_validate returns float loss and accuracy."""
-        import torch
-        import torch.nn as nn
-        from torch.utils.data import DataLoader, TensorDataset
-        from app.plugins.ml10_dairy_disease_vector_detection.plugin import _cls_validate
-        from app.plugins.ml10_dairy_disease_vector_detection.model_loader import _build_mobilenetv3_classifier
 
         model = _build_mobilenetv3_classifier(3)
         model.eval()
-        X = torch.randn(16, 3, 224, 224)
+        x = torch.randn(16, 3, 224, 224)
         y = torch.randint(0, 3, (16,))
-        loader = DataLoader(TensorDataset(X, y), batch_size=8)
+        loader = DataLoader(TensorDataset(x, y), batch_size=8)
         criterion = nn.CrossEntropyLoss()
 
         loss, acc = _cls_validate(model, loader, criterion, "cpu")
@@ -908,27 +910,24 @@ class TestTrainHelpers:
 class TestTrainErrorPaths:
     """Tests for training error handling paths."""
 
-    @patch("app.plugins.ml10_dairy_disease_vector_detection.plugin.load_detector_and_classifier")
+    @patch(_LOAD_PATCH)
     def test_train_rejects_non_zip(self, mock_load):
         """Verify train raises ValueError for non-zip paths."""
         mock_load.return_value = (MagicMock(), MagicMock(), ["fly", "mos", "tick"])
-        from app.plugins.ml10_dairy_disease_vector_detection.plugin import Ml10DairyDiseaseVectorDetectionPlugin
         plugin = Ml10DairyDiseaseVectorDetectionPlugin()
         plugin.load()
         with pytest.raises(ValueError, match="debe ser un fichero .zip"):
             plugin.train(data_path="/some/dir/", mlflow_run_id="test-run-id")
 
-    @patch("app.plugins.ml10_dairy_disease_vector_detection.plugin.load_detector_and_classifier")
+    @patch(_LOAD_PATCH)
     def test_train_rejects_invalid_zip_structure(self, mock_load):
         """Verify train raises ValueError for ZIP without expected folder structure."""
         mock_load.return_value = (MagicMock(), MagicMock(), ["fly", "mos", "tick"])
-        from app.plugins.ml10_dairy_disease_vector_detection.plugin import Ml10DairyDiseaseVectorDetectionPlugin
         plugin = Ml10DairyDiseaseVectorDetectionPlugin()
         plugin.load()
         with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as f:
             zip_path = f.name
         try:
-            import zipfile
             with zipfile.ZipFile(zip_path, "w") as zf:
                 zf.writestr("random_file.txt", "not a valid dataset")
             with pytest.raises(ValueError, match="ZIP sin estructura"):
@@ -936,17 +935,15 @@ class TestTrainErrorPaths:
         finally:
             os.unlink(zip_path)
 
-    @patch("app.plugins.ml10_dairy_disease_vector_detection.plugin.load_detector_and_classifier")
+    @patch(_LOAD_PATCH)
     def test_train_rejects_empty_zip(self, mock_load):
         """Verify train raises ValueError for empty ZIP files."""
         mock_load.return_value = (MagicMock(), MagicMock(), ["fly", "mos", "tick"])
-        from app.plugins.ml10_dairy_disease_vector_detection.plugin import Ml10DairyDiseaseVectorDetectionPlugin
         plugin = Ml10DairyDiseaseVectorDetectionPlugin()
         plugin.load()
         with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as f:
             zip_path = f.name
         try:
-            import zipfile
             with zipfile.ZipFile(zip_path, "w"):
                 pass  # empty zip
             with pytest.raises(ValueError, match="ZIP sin estructura"):
@@ -962,9 +959,6 @@ class TestLoadDetectorAndClassifier:
 
     def test_loads_successfully(self, tmp_path):
         """Verify load_detector_and_classifier returns detector, classifier and class names."""
-        import json
-        import sys
-        import torch
 
         class_names = ["fly", "mos", "tick"]
         (tmp_path / "class_names.json").write_text(json.dumps(class_names))
@@ -978,16 +972,15 @@ class TestLoadDetectorAndClassifier:
         mock_ultralytics = MagicMock()
         mock_ultralytics.YOLO.return_value = mock_detector
 
-        with patch("app.plugins.ml10_dairy_disease_vector_detection.model_loader._store.download_all_if_needed"), \
-             patch("app.plugins.ml10_dairy_disease_vector_detection.model_loader._store.path",
+        with patch(_LOADER_MOD + "._store.download_all_if_needed"), \
+             patch(_LOADER_MOD + "._store.path",
                    side_effect=lambda f: tmp_path / f), \
-             patch("app.plugins.ml10_dairy_disease_vector_detection.model_loader._build_mobilenetv3_classifier",
+             patch(_LOADER_MOD + "._build_mobilenetv3_classifier",
                    return_value=mock_classifier), \
-             patch("app.plugins.ml10_dairy_disease_vector_detection.model_loader.torch.load",
+             patch(_LOADER_MOD + ".torch.load",
                    return_value=mock_state_dict), \
              patch.dict(sys.modules, {"ultralytics": mock_ultralytics}):
-            from app.plugins.ml10_dairy_disease_vector_detection.model_loader import load_detector_and_classifier
-            det, clf, names = load_detector_and_classifier(torch.device("cpu"))
+            det, _, names = load_detector_and_classifier(torch.device("cpu"))
 
         assert names == class_names
         assert det is mock_detector
@@ -996,15 +989,12 @@ class TestLoadDetectorAndClassifier:
 
     def test_raises_when_artifact_file_missing(self, tmp_path):
         """Verify FileNotFoundError when an artifact path does not exist on disk."""
-        import json
-        import torch
 
         (tmp_path / "class_names.json").write_text(json.dumps(["fly"]))
         # detector_best.pt and best_classifier.pth deliberately absent
 
-        with patch("app.plugins.ml10_dairy_disease_vector_detection.model_loader._store.download_all_if_needed"), \
-             patch("app.plugins.ml10_dairy_disease_vector_detection.model_loader._store.path",
+        with patch(_LOADER_MOD + "._store.download_all_if_needed"), \
+             patch(_LOADER_MOD + "._store.path",
                    side_effect=lambda f: tmp_path / f):
-            from app.plugins.ml10_dairy_disease_vector_detection.model_loader import load_detector_and_classifier
             with pytest.raises(FileNotFoundError):
                 load_detector_and_classifier(torch.device("cpu"))

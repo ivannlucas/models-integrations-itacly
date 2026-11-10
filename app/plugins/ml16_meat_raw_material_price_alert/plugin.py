@@ -11,20 +11,24 @@ from __future__ import annotations
 
 import json
 import logging
-import shutil
 import tempfile
-from datetime import datetime, timezone
 
 import joblib
 import pandas as pd
 
-from app.application.dto.stats_dto import InputField, OutputField, RuntimeStats, StatsResponse
+from app.application.dto.stats_dto import InputField, OutputField, StatsResponse
 from app.domain.ports.model_plugin_port import ModelPluginPort
-from app.domain.services.exceptions import ModelNotLoadedError
+from app.domain.services.mlflow_artifacts import add_mlflow_run_to_stats, removing_dir
 from app.domain.services.mlflow_tracker import BaseMLflowTracker
+from app.domain.services.plugin_runtime import PluginRuntimeMixin
 from app.infrastructure.artifact_store import local_file_path
 from app.infrastructure.base_model_publisher import persist_retrained_bundle
-from app.plugins.ml16_meat_raw_material_price_alert import model_loader, postprocessing, preprocessing, training
+from app.plugins.ml16_meat_raw_material_price_alert import (
+    model_loader,
+    postprocessing,
+    preprocessing,
+    training,
+)
 from app.plugins.ml16_meat_raw_material_price_alert.constants import (
     ARTIFACT_FOLDER_NAME,
     BAGGING_FILENAMES,
@@ -38,7 +42,9 @@ from app.plugins.ml16_meat_raw_material_price_alert.constants import (
     TRAIN_CONFIG_FILENAME,
     VERSION,
 )
-from app.plugins.ml16_meat_raw_material_price_alert.mlflow_utils import download_user_model_from_mlflow
+from app.plugins.ml16_meat_raw_material_price_alert.mlflow_utils import (
+    download_user_model_from_mlflow,
+)
 from app.plugins.ml16_meat_raw_material_price_alert.predict_dto import (
     PredictBatchResponse,
     PredictInlineResponse,
@@ -48,7 +54,31 @@ from app.plugins.ml16_meat_raw_material_price_alert.train_dto import TrainRespon
 logger = logging.getLogger(__name__)
 
 
-class Ml16MeatRawMaterialPriceAlertPlugin(ModelPluginPort):
+def _read_train_frame(data_path: str) -> pd.DataFrame:
+    """Read the labeled training CSV, check its columns and derive 'month' if missing."""
+    with local_file_path(data_path) as local_path:
+        df = pd.read_csv(local_path)
+
+    missing = [c for c in RAW_REQUIRED_COLUMNS if c != "month" and c not in df.columns]
+    missing += [c for c in TARGETS if c not in df.columns]
+    if missing:
+        raise ValueError(f"El CSV de entrenamiento no trae las columnas requeridas: {missing}")
+    return preprocessing.ensure_month_column(df)
+
+
+def _write_bundle(bundle_dir: str, result: dict, train_config: dict) -> None:
+    """Write both targets' model/scaler/bagging and train_config.json with canonical names."""
+    for target in TARGETS:
+        joblib.dump(result["models"][target], f"{bundle_dir}/{MODEL_FILENAMES[target]}")
+        joblib.dump(result["scalers"][target], f"{bundle_dir}/{SCALER_FILENAMES[target]}")
+        joblib.dump(
+            result["bagging_models"][target], f"{bundle_dir}/{BAGGING_FILENAMES[target]}"
+        )
+    with open(f"{bundle_dir}/{TRAIN_CONFIG_FILENAME}", "w", encoding="utf-8") as fh:
+        json.dump(train_config, fh, indent=2, ensure_ascii=False)
+
+
+class Ml16MeatRawMaterialPriceAlertPlugin(PluginRuntimeMixin, ModelPluginPort):
     """Dual-target price-alert classifier: XGBoost (animales) + LogisticRegression (insumos)."""
 
     BASE_ARTIFACT_FOLDER = ARTIFACT_FOLDER_NAME   # every /train publishes the new base model
@@ -59,8 +89,6 @@ class Ml16MeatRawMaterialPriceAlertPlugin(ModelPluginPort):
         self._scalers: dict | None = None
         self._bagging_models: dict | None = None
         self._train_config: dict | None = None
-        self._predict_count: int = 0
-        self._last_predict_at: str | None = None
 
     # ── lifecycle ─────────────────────────────────────────────────────────────
 
@@ -75,21 +103,17 @@ class Ml16MeatRawMaterialPriceAlertPlugin(ModelPluginPort):
 
     def is_loaded(self) -> bool:
         """Return True once both targets' models/scalers/train_config are loaded."""
-        return self._models is not None and self._scalers is not None and self._train_config is not None
-
-    def _require_loaded(self) -> None:
-        if not self.is_loaded():
-            raise ModelNotLoadedError("El modelo no está cargado.")
-
-    def _record_prediction(self) -> None:
-        self._predict_count += 1
-        self._last_predict_at = datetime.now(tz=timezone.utc).isoformat()
+        return (
+            self._models is not None
+            and self._scalers is not None
+            and self._train_config is not None
+        )
 
     def _resolve_user_bundle(self, mlflow_run_id: str):
         """Download a user-retrained bundle from MLflow, or None on failure/absence.
 
         Returns ((models, scalers, bagging_models, train_config), temp_dir); the caller must
-        shutil.rmtree(temp_dir) in a finally block.
+        remove temp_dir (``removing_dir``).
         """
         if not mlflow_run_id:
             return None
@@ -127,21 +151,20 @@ class Ml16MeatRawMaterialPriceAlertPlugin(ModelPluginPort):
             resolved = self._resolve_user_bundle(mlflow_run_id)
             if resolved is not None:
                 bundle_override, user_tmp = resolved
-        try:
+        with removing_dir(user_tmp):
             with local_file_path(data_path) as local_path:
                 df = pd.read_csv(local_path)
             results, prepared = self._run(df, bundle_override)
             records = postprocessing.build_predictions_records(results, prepared["fechas"])
-            self._record_prediction()
+            self._record()
             logger.info(
-                "predict_batch done — %d predicciones, mlflow=%s", len(records), bool(mlflow_run_id),
+                "predict_batch done — %d predicciones, mlflow=%s",
+                len(records), bool(mlflow_run_id),
             )
             return PredictBatchResponse(
-                model_id=MODEL_ID, predictions=records, n_predictions=len(records), output_path=None,
+                model_id=MODEL_ID, predictions=records, n_predictions=len(records),
+                output_path=None,
             )
-        finally:
-            if user_tmp:
-                shutil.rmtree(user_tmp, ignore_errors=True)
 
     # ── predict_inline ────────────────────────────────────────────────────────
 
@@ -162,14 +185,14 @@ class Ml16MeatRawMaterialPriceAlertPlugin(ModelPluginPort):
             resolved = self._resolve_user_bundle(mlflow_run_id)
             if resolved is not None:
                 bundle_override, user_tmp = resolved
-        try:
+        with removing_dir(user_tmp):
             rows: list[dict] = features["rows"]
             df = preprocessing.build_raw_dataframe(rows)
             results, prepared = self._run(df, bundle_override)
             records = postprocessing.build_predictions_records(results, prepared["fechas"])
             last = records[-1]
 
-            self._record_prediction()
+            self._record()
             logger.info(
                 "predict_inline done — fecha=%s animales_pred=%s insumos_pred=%s count=%d",
                 last["fecha"], last["target_animales_pred"], last["target_insumos_pred"],
@@ -194,9 +217,6 @@ class Ml16MeatRawMaterialPriceAlertPlugin(ModelPluginPort):
                     "target_insumos_proba": last["target_insumos_proba"],
                 },
             )
-        finally:
-            if user_tmp:
-                shutil.rmtree(user_tmp, ignore_errors=True)
 
     # ── train (retraining with the original procedure) ───────────────────────
 
@@ -212,16 +232,7 @@ class Ml16MeatRawMaterialPriceAlertPlugin(ModelPluginPort):
         mlflow_run_id is given, also saved to that run (artifact_path="model").
         """
         self._require_loaded()
-        with local_file_path(data_path) as local_path:
-            df = pd.read_csv(local_path)
-
-        missing = [c for c in RAW_REQUIRED_COLUMNS if c != "month" and c not in df.columns]
-        missing += [c for c in TARGETS if c not in df.columns]
-        if missing:
-            raise ValueError(f"El CSV de entrenamiento no trae las columnas requeridas: {missing}")
-        df = preprocessing.ensure_month_column(df)
-
-        result = training.train_models(df)
+        result = training.train_models(_read_train_frame(data_path))
 
         train_config = {
             "final_thresholds": result["thresholds"],
@@ -237,13 +248,8 @@ class Ml16MeatRawMaterialPriceAlertPlugin(ModelPluginPort):
         }
         tracker = BaseMLflowTracker(mlflow_run_id)
         bundle_dir = tempfile.mkdtemp(prefix="ml16_train_")
-        try:
-            for target in TARGETS:
-                joblib.dump(result["models"][target], f"{bundle_dir}/{MODEL_FILENAMES[target]}")
-                joblib.dump(result["scalers"][target], f"{bundle_dir}/{SCALER_FILENAMES[target]}")
-                joblib.dump(result["bagging_models"][target], f"{bundle_dir}/{BAGGING_FILENAMES[target]}")
-            with open(f"{bundle_dir}/{TRAIN_CONFIG_FILENAME}", "w", encoding="utf-8") as fh:
-                json.dump(train_config, fh, indent=2, ensure_ascii=False)
+        with removing_dir(bundle_dir):
+            _write_bundle(bundle_dir, result, train_config)
 
             def _upload_to_mlflow() -> None:
                 tracker.log_params({
@@ -256,20 +262,21 @@ class Ml16MeatRawMaterialPriceAlertPlugin(ModelPluginPort):
 
             persisted = persist_retrained_bundle(
                 bundle_dir, artifact_folder=ARTIFACT_FOLDER_NAME, data_path=data_path,
-                metrics=flat_metrics, mlflow_run_id=mlflow_run_id, upload_to_mlflow=_upload_to_mlflow,
+                metrics=flat_metrics, mlflow_run_id=mlflow_run_id,
+                upload_to_mlflow=_upload_to_mlflow,
             )
-        finally:
-            shutil.rmtree(bundle_dir, ignore_errors=True)
 
         m = result["metrics"]
         logger.info(
             "ml16 train() done — n_train=%d n_test=%d animales_f1=%.3f insumos_f1=%.3f mlflow=%s",
-            result["n_train"], result["n_test"], m["target_animales"]["f1"], m["target_insumos"]["f1"],
+            result["n_train"], result["n_test"],
+            m["target_animales"]["f1"], m["target_insumos"]["f1"],
             bool(mlflow_run_id),
         )
         return TrainResponse(
             detail=(
-                "Reentrenamiento completado (XGBoost + LogisticRegression, procedimiento original). "
+                "Reentrenamiento completado (XGBoost + LogisticRegression, "
+                "procedimiento original). "
                 f"Modelo base {persisted.base_version['version']}."
             ),
             n_train_rows=result["n_train"],
@@ -296,7 +303,8 @@ class Ml16MeatRawMaterialPriceAlertPlugin(ModelPluginPort):
         """Return model metadata, the input/output contract and the real hold-out metrics."""
         inputs = [
             InputField(name="fecha", type="date", description="Primer día del mes (YYYY-MM-01)."),
-            InputField(name="month", type="int", description="Mes 1-12. Se deriva de 'fecha' si falta."),
+            InputField(name="month", type="int",
+                       description="Mes 1-12. Se deriva de 'fecha' si falta."),
             InputField(name="indice_animales", type="float",
                        description="Índice mensual de precios del sector cárnico (EUR)."),
             InputField(name="indice_insumos", type="float",
@@ -304,23 +312,30 @@ class Ml16MeatRawMaterialPriceAlertPlugin(ModelPluginPort):
             InputField(name="precip_total", type="float",
                        description="Precipitación total mensual (mm), promedio nacional."),
             InputField(name="precip_max", type="float", default=None,
-                       description="Precipitación máxima mensual (mm). No influye en la predicción."),
+                       description=(
+                           "Precipitación máxima mensual (mm). No influye en la predicción."
+                       )),
             InputField(name="wet_days", type="float",
                        description="Días con lluvia al mes, promedio nacional."),
             InputField(name="wash_days", type="float", default=None,
                        description="Días de lavado al mes. No influye en la predicción."),
             InputField(name="animales_afectados", type="int",
-                       description="Animales afectados por epidemias veterinarias en el mes (0 si no hay focos)."),
+                       description=(
+                           "Animales afectados por epidemias veterinarias en el mes "
+                           "(0 si no hay focos)."
+                       )),
         ]
         outputs = [
             OutputField(name="fecha", type="date",
                         description="Mes objetivo de la predicción (último mes de entrada + 4)."),
             OutputField(name="target_animales_pred", type="int",
                         description="1 = alerta de encarecimiento (>= 2.5% en 4 meses)"),
-            OutputField(name="target_animales_proba", type="float", description="Probabilidad XGBoost"),
+            OutputField(name="target_animales_proba", type="float",
+                        description="Probabilidad XGBoost"),
             OutputField(name="target_insumos_pred", type="int",
                         description="1 = alerta de encarecimiento (>= 2.5% en 4 meses)"),
-            OutputField(name="target_insumos_proba", type="float", description="Probabilidad LogisticRegression"),
+            OutputField(name="target_insumos_proba", type="float",
+                        description="Probabilidad LogisticRegression"),
         ]
         base = StatsResponse(
             model_name=MODEL_ID,
@@ -347,16 +362,7 @@ class Ml16MeatRawMaterialPriceAlertPlugin(ModelPluginPort):
                     "— ver inbox/a16/manifest.yaml known_issues."
                 ),
             },
-            runtime_stats=RuntimeStats(
-                total_predictions=self._predict_count,
-                avg_latency_ms=None,  # una llamada puntúa varios meses; la latencia por mes no es comparable
-            ),
+            # una llamada puntúa varios meses; la latencia por mes no es comparable
+            runtime_stats=self._runtime_stats(),
         )
-        if mlflow_run_id:
-            try:
-                tracker = BaseMLflowTracker(mlflow_run_id)
-                base.metrics["mlflow"] = {"params": tracker.get_params(), "metrics": tracker.get_metrics()}
-                logger.info("Stats enriched with MLflow data for run_id=%s", mlflow_run_id)
-            except Exception as exc:  # pylint: disable=broad-exception-caught
-                logger.warning("Could not fetch MLflow stats for run_id=%s: %s", mlflow_run_id, exc)
-        return base
+        return add_mlflow_run_to_stats(base, mlflow_run_id)

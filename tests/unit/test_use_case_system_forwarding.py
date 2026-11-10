@@ -18,11 +18,17 @@ class _PluginWithSystem:
         self.calls = []
 
     def predict_batch(self, *, data_path, mlflow_run_id="", system=None):
-        self.calls.append({"data_path": data_path, "mlflow_run_id": mlflow_run_id, "system": system})
+        """Record the call (including system) and return a fixed batch response."""
+        self.calls.append(
+            {"data_path": data_path, "mlflow_run_id": mlflow_run_id, "system": system}
+        )
         return _BATCH_RESPONSE
 
     def train(self, *, data_path, mlflow_run_id="", system=None):
-        self.calls.append({"data_path": data_path, "mlflow_run_id": mlflow_run_id, "system": system})
+        """Record the call (including system) and return an empty result."""
+        self.calls.append(
+            {"data_path": data_path, "mlflow_run_id": mlflow_run_id, "system": system}
+        )
         return {}
 
 
@@ -31,27 +37,32 @@ class _PluginWithoutSystem:
         self.calls = []
 
     def predict_batch(self, *, data_path, mlflow_run_id=""):
+        """Record the call and return a fixed batch response."""
         self.calls.append({"data_path": data_path, "mlflow_run_id": mlflow_run_id})
         return _BATCH_RESPONSE
 
     def train(self, *, data_path, mlflow_run_id=""):
+        """Record the call and return an empty result."""
         self.calls.append({"data_path": data_path, "mlflow_run_id": mlflow_run_id})
         return {}
 
 
 def test_predict_batch_forwards_system_when_declared():
+    """predict forwards system to a plugin whose predict_batch declares it."""
     plugin = _PluginWithSystem()
     PredictModelUseCase(plugin).execute(PredictBatchRequest(data_path="a.csv", system="aireado"))
     assert plugin.calls[0]["system"] == "aireado"
 
 
 def test_predict_batch_omits_system_when_not_declared():
+    """predict does not pass system to a plugin that does not declare it."""
     plugin = _PluginWithoutSystem()
     PredictModelUseCase(plugin).execute(PredictBatchRequest(data_path="a.csv", system="aireado"))
     assert "system" not in plugin.calls[0]
 
 
 def test_train_forwards_system_when_declared():
+    """train forwards system to a plugin whose train declares it."""
     plugin = _PluginWithSystem()
     TrainModelUseCase(plugin).execute(
         TrainRequest(data_path="a.csv", mlflow_run_id="test-run-id", system="refrigeracion")
@@ -60,6 +71,7 @@ def test_train_forwards_system_when_declared():
 
 
 def test_train_omits_system_when_not_declared():
+    """train does not pass system to a plugin that does not declare it."""
     plugin = _PluginWithoutSystem()
     TrainModelUseCase(plugin).execute(
         TrainRequest(data_path="a.csv", mlflow_run_id="test-run-id", system="refrigeracion")

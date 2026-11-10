@@ -1,4 +1,5 @@
-"""ml19 /train — port of the AI team's official pipeline (src/training/train.py::run_multihorizon_training).
+"""ml19 /train — port of the AI team's official pipeline
+(src/training/train.py::run_multihorizon_training).
 
 Same steps, same order, same hyperparameters, with the stage helpers vendored verbatim in
 _vendor/training_core.py:
@@ -29,7 +30,7 @@ Plugin adaptations, all deliberate:
 * No .sha256 sidecars, walk-forward traces, results/splits CSVs or console report: they are
   diagnostics of the original repo and do not change the artifacts.
 """
-# pylint: disable=line-too-long  # repo limit is 120 (.flake8), enforced by flake8
+
 from __future__ import annotations
 
 import json
@@ -65,6 +66,7 @@ REQUIRED_TRAIN_COLUMNS = (DATE_COL, "target_media", core.TARGET_REG, core.TARGET
 
 
 @dataclass
+# pylint: disable-next=too-many-instance-attributes
 class TrainingResult:
     """Production artifacts and walk-forward metrics of one retraining."""
 
@@ -103,7 +105,8 @@ def validate_training_frame(df: pd.DataFrame) -> pd.DataFrame:
     missing = [c for c in REQUIRED_TRAIN_COLUMNS if c not in df.columns]
     if missing:
         raise ValueError(
-            f"El CSV de entrenamiento no trae las columnas {missing}. Debe ser el dataset_v7_fe.csv "
+            f"El CSV de entrenamiento no trae las columnas {missing}. Debe ser el "
+            "dataset_v7_fe.csv "
             "que genera el pipeline del equipo de IA (python -m src.main data_processing)."
         )
     df = df.copy()
@@ -111,12 +114,92 @@ def validate_training_frame(df: pd.DataFrame) -> pd.DataFrame:
     if df[DATE_COL].isna().any():
         raise ValueError("La columna 'date' tiene valores vacíos o que no son fechas.")
     with_target = df.dropna(subset=[core.TARGET_REG])
-    if (with_target[DATE_COL] <= core.TRAIN_END).sum() == 0 or (with_target[DATE_COL] > core.TRAIN_END).sum() == 0:
+    if (with_target[DATE_COL] <= core.TRAIN_END).sum() == 0 or (
+        with_target[DATE_COL] > core.TRAIN_END
+    ).sum() == 0:
         raise ValueError(
-            f"El dataset debe tener filas con target antes y después de {core.TRAIN_END} (selección de "
+            f"El dataset debe tener filas con target antes y después de {core.TRAIN_END} "
+            "(selección de "
             "features y walk-forward del procedimiento original)."
         )
     return df
+
+
+def _walk_forward_reg(
+    df: pd.DataFrame, features: list[str], horizons, train_end, reg_models: dict
+) -> dict:
+    """Step 5 of train.py: walk-forward regression of every model on every REG horizon."""
+    reg_results: dict[tuple[str, int], dict] = {}
+    for h in horizons:
+        target_col = f"ret_{h}m"
+        for mname, factory in reg_models.items():
+            y_te, preds, dates = core.walk_forward_regression(
+                df, features, target_col, train_end, factory
+            )
+            if len(y_te) == 0:
+                continue
+            metrics = core.eval_regression(y_te, preds, f"{mname}_h{h}m")
+            metrics.update(y_test=y_te, preds=preds, dates=dates)
+            reg_results[(mname, h)] = metrics
+    return reg_results
+
+
+def _walk_forward_clf(df: pd.DataFrame, features: list[str], horizons, train_end) -> dict:
+    """Step 6 of train.py: walk-forward classification of every model on every CLF horizon."""
+    clf_results: dict[tuple[str, int], dict] = {}
+    for h in horizons:
+        target_col = f"dir_{h}m"
+        for mname, factory in CLF_FACTORIES.items():
+            y_te, preds, probs, dates = core.walk_forward_classification(
+                df, features, target_col, train_end, factory
+            )
+            if len(y_te) == 0:
+                continue
+            metrics = core.eval_classification(y_te, preds, probs, f"{mname}_h{h}m")
+            metrics.update(y_test=y_te, dates=dates)
+            clf_results[(mname, h)] = metrics
+    return clf_results
+
+
+def _best_per_horizon(results: dict, models, horizons, metric: str, task: str) -> dict[int, str]:
+    """Step 7 of train.py: the delivered _select_best_model per horizon with results."""
+    select = core._select_best_model  # pylint: disable=protected-access  # vendored, verbatim
+    return {
+        h: select(
+            {m: results[(m, h)] for m in models if (m, h) in results},
+            metric,
+            task,
+        )
+        for h in horizons
+        if any((m, h) in results for m in models)
+    }
+
+
+def _features_and_lasso_alpha(df: pd.DataFrame, reg_horizons, train_end) -> tuple[list[str], float]:
+    """Steps 3-4 of train.py: STRICT feature selection and the Lasso alpha, both on train."""
+    # -- 3. STRICT feature selection on train, shared by every horizon
+    ref_target = f"ret_{min(reg_horizons)}m"
+    df_ref = df.dropna(subset=[ref_target]).copy()
+    train_mask_ref = df_ref["date"] <= train_end
+    features, _ = core.select_features(
+        df_ref,
+        min_corr=core.MIN_CORR,
+        target_col=ref_target,
+        strict=True,
+        train_mask=train_mask_ref,
+    )
+    if not features:
+        raise ValueError(
+            "La selección STRICT no ha dejado ninguna feature: el dataset no es válido para "
+            "entrenar."
+        )
+
+    # -- 4. Lasso alpha, once, on train
+    df_ref_clean = df_ref.dropna(subset=features + [ref_target]).copy()
+    train_df = df_ref_clean[df_ref_clean["date"] <= train_end]
+    lasso_alpha = core.best_lasso_alpha(StandardScaler().fit_transform(train_df[features].values),
+                                        train_df[ref_target].values)
+    return features, lasso_alpha
 
 
 def train_multihorizon(df: pd.DataFrame) -> TrainingResult:
@@ -134,58 +217,20 @@ def train_multihorizon(df: pd.DataFrame) -> TrainingResult:
     # -- 2. multi-horizon targets
     df = core.build_multihorizon_targets(df, all_horizons)
 
-    # -- 3. STRICT feature selection on train, shared by every horizon
-    ref_target = f"ret_{min(reg_horizons)}m"
-    df_ref = df.dropna(subset=[ref_target]).copy()
-    train_mask_ref = df_ref["date"] <= train_end
-    features, _ = core.select_features(
-        df_ref, min_corr=core.MIN_CORR, target_col=ref_target, strict=True, train_mask=train_mask_ref,
-    )
-    if not features:
-        raise ValueError("La selección STRICT no ha dejado ninguna feature: el dataset no es válido para entrenar.")
-
-    # -- 4. Lasso alpha, once, on train
-    df_ref_clean = df_ref.dropna(subset=features + [ref_target]).copy()
-    train_df = df_ref_clean[df_ref_clean["date"] <= train_end]
-    lasso_alpha = core.best_lasso_alpha(StandardScaler().fit_transform(train_df[features].values),
-                                        train_df[ref_target].values)
+    features, lasso_alpha = _features_and_lasso_alpha(df, reg_horizons, train_end)
 
     # -- 5. walk-forward regression
     reg_models = _reg_factories(lasso_alpha)
-    reg_results: dict[tuple[str, int], dict] = {}
-    for h in reg_horizons:
-        target_col = f"ret_{h}m"
-        for mname, factory in reg_models.items():
-            y_te, preds, dates = core.walk_forward_regression(df, features, target_col, train_end, factory)
-            if len(y_te) == 0:
-                continue
-            metrics = core.eval_regression(y_te, preds, f"{mname}_h{h}m")
-            metrics.update(y_test=y_te, preds=preds, dates=dates)
-            reg_results[(mname, h)] = metrics
+    reg_results = _walk_forward_reg(df, features, reg_horizons, train_end, reg_models)
 
     # -- 6. walk-forward classification
-    clf_results: dict[tuple[str, int], dict] = {}
-    for h in clf_horizons:
-        target_col = f"dir_{h}m"
-        for mname, factory in CLF_FACTORIES.items():
-            y_te, preds, probs, dates = core.walk_forward_classification(df, features, target_col, train_end, factory)
-            if len(y_te) == 0:
-                continue
-            metrics = core.eval_classification(y_te, preds, probs, f"{mname}_h{h}m")
-            metrics.update(y_test=y_te, dates=dates)
-            clf_results[(mname, h)] = metrics
+    clf_results = _walk_forward_clf(df, features, clf_horizons, train_end)
 
     # -- 7. best model per horizon and task
-    best_reg = {
-        h: core._select_best_model(  # pylint: disable=protected-access
-            {m: reg_results[(m, h)] for m in reg_models if (m, h) in reg_results}, REG_SELECTION_METRIC, "reg")
-        for h in reg_horizons if any((m, h) in reg_results for m in reg_models)
-    }
-    best_clf = {
-        h: core._select_best_model(  # pylint: disable=protected-access
-            {m: clf_results[(m, h)] for m in CLF_FACTORIES if (m, h) in clf_results}, CLF_SELECTION_METRIC, "clf")
-        for h in clf_horizons if any((m, h) in clf_results for m in CLF_FACTORIES)
-    }
+    best_reg = _best_per_horizon(reg_results, reg_models, reg_horizons, REG_SELECTION_METRIC, "reg")
+    best_clf = _best_per_horizon(
+        clf_results, CLF_FACTORIES, clf_horizons, CLF_SELECTION_METRIC, "clf"
+    )
 
     result = TrainingResult(
         features=features, lasso_alpha=lasso_alpha, best_reg=best_reg, best_clf=best_clf,
@@ -203,13 +248,18 @@ def _provenance(wf_metrics: dict, keys: tuple[str, ...], n_samples: int) -> dict
         "training_scope": "all_data",
         "metrics_source": "walk_forward",
         "walk_forward_metrics": {k: float(wf_metrics.get(k, 0)) for k in keys},
-        "note": "Este modelo fue reentrenado sobre ALL data para produccion. Las metricas walk-forward corresponden a la validacion out-of-sample.",
+        "note": (
+            "Este modelo fue reentrenado sobre ALL data para produccion. Las metricas "
+            "walk-forward corresponden a la validacion out-of-sample."
+        ),
         "trained_at_utc": datetime.now(timezone.utc).isoformat(),
         "n_samples_all_data": n_samples,
     }
 
 
-def _build_production_artifacts(df: pd.DataFrame, result: TrainingResult, train_end: str, reg_models: dict) -> None:
+def _build_production_artifacts(
+    df: pd.DataFrame, result: TrainingResult, train_end: str, reg_models: dict
+) -> None:
     """train.py::_save_best_models + _save_model_selection_audit, kept in memory."""
     features = result.features
     for h, mname in result.best_reg.items():
@@ -220,9 +270,17 @@ def _build_production_artifacts(df: pd.DataFrame, result: TrainingResult, train_
         mdl = reg_models[mname]()
         mdl.fit(sc.fit_transform(x_all), y_all)
         result.artifacts[reg_artifact_filename(h, mname)] = {
-            "model": mdl, "scaler": sc, "features": features, "task": "reg", "horizon": h, "model_name": mname,
-            "provenance": _provenance(result.reg_results.get((mname, h), {}),
-                                      ("corr", "dir_acc", "sharpe", "mae", "rmse", "r2"), len(x_all)),
+            "model": mdl,
+            "scaler": sc,
+            "features": features,
+            "task": "reg",
+            "horizon": h,
+            "model_name": mname,
+            "provenance": _provenance(
+                result.reg_results.get((mname, h), {}),
+                ("corr", "dir_acc", "sharpe", "mae", "rmse", "r2"),
+                len(x_all),
+            ),
         }
     for h, mname in result.best_clf.items():
         target_col = f"dir_{h}m"
@@ -232,9 +290,17 @@ def _build_production_artifacts(df: pd.DataFrame, result: TrainingResult, train_
         mdl = CLF_FACTORIES[mname]()
         mdl.fit(sc.fit_transform(x_all), y_all)
         result.artifacts[clf_artifact_filename(h, mname)] = {
-            "model": mdl, "scaler": sc, "features": features, "task": "clf", "horizon": h, "model_name": mname,
-            "provenance": _provenance(result.clf_results.get((mname, h), {}),
-                                      ("acc", "f1", "auc", "brier", "sharpe"), len(x_all)),
+            "model": mdl,
+            "scaler": sc,
+            "features": features,
+            "task": "clf",
+            "horizon": h,
+            "model_name": mname,
+            "provenance": _provenance(
+                result.clf_results.get((mname, h), {}),
+                ("acc", "f1", "auc", "brier", "sharpe"),
+                len(x_all),
+            ),
         }
     result.meta = {
         "features": features,
@@ -244,13 +310,19 @@ def _build_production_artifacts(df: pd.DataFrame, result: TrainingResult, train_
         "xgb_params": core.XGB_PARAMS,
         "best_reg": {str(h): m for h, m in result.best_reg.items()},
         "best_clf": {str(h): m for h, m in result.best_clf.items()},
-        "selection_metrics": {"regression": REG_SELECTION_METRIC, "classification": CLF_SELECTION_METRIC},
+        "selection_metrics": {
+            "regression": REG_SELECTION_METRIC,
+            "classification": CLF_SELECTION_METRIC,
+        },
         "production_model_scope": {
             "regression": ["Ridge", "Lasso", "XGBoost"],
             "classification": ["LogReg", "RandomForest", "XGBoost"],
         },
         "experimental_models": {
-            "DRNN": "Disponible en flujo legacy (run_walk_forward include_drnn=True); excluido del ranking oficial por estabilidad/rendimiento.",
+            "DRNN": (
+                "Disponible en flujo legacy (run_walk_forward include_drnn=True); excluido del "
+                "ranking oficial por estabilidad/rendimiento."
+            ),
         },
         "provenance": {
             "metrics_source": "walk_forward",
@@ -265,20 +337,43 @@ def _build_production_artifacts(df: pd.DataFrame, result: TrainingResult, train_
             ),
         },
     }
-    reg_rows = [{
-        "task": "reg", "horizon": int(h), "model_name": m, "selected": bool(result.best_reg.get(h) == m),
-        "selection_metric": REG_SELECTION_METRIC, "selection_value": float(v[REG_SELECTION_METRIC]),
-        "corr": float(v["corr"]), "dir_acc": float(v["dir_acc"]), "mae": float(v["mae"]),
-        "rmse": float(v["rmse"]), "r2": float(v["r2"]),
-    } for (m, h), v in result.reg_results.items()]
-    clf_rows = [{
-        "task": "clf", "horizon": int(h), "model_name": m, "selected": bool(result.best_clf.get(h) == m),
-        "selection_metric": CLF_SELECTION_METRIC, "selection_value": float(v[CLF_SELECTION_METRIC]),
-        "acc": float(v["acc"]), "f1": float(v["f1"]), "brier": float(v["brier"]), "sharpe": float(v["sharpe"]),
-    } for (m, h), v in result.clf_results.items()]
+    reg_rows = [
+        {
+            "task": "reg",
+            "horizon": int(h),
+            "model_name": m,
+            "selected": bool(result.best_reg.get(h) == m),
+            "selection_metric": REG_SELECTION_METRIC,
+            "selection_value": float(v[REG_SELECTION_METRIC]),
+            "corr": float(v["corr"]),
+            "dir_acc": float(v["dir_acc"]),
+            "mae": float(v["mae"]),
+            "rmse": float(v["rmse"]),
+            "r2": float(v["r2"]),
+        }
+        for (m, h), v in result.reg_results.items()
+    ]
+    clf_rows = [
+        {
+            "task": "clf",
+            "horizon": int(h),
+            "model_name": m,
+            "selected": bool(result.best_clf.get(h) == m),
+            "selection_metric": CLF_SELECTION_METRIC,
+            "selection_value": float(v[CLF_SELECTION_METRIC]),
+            "acc": float(v["acc"]),
+            "f1": float(v["f1"]),
+            "brier": float(v["brier"]),
+            "sharpe": float(v["sharpe"]),
+        }
+        for (m, h), v in result.clf_results.items()
+    ]
     result.audit = {
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
-        "criteria": {"regression": f"max_{REG_SELECTION_METRIC}", "classification": f"max_{CLF_SELECTION_METRIC}"},
+        "criteria": {
+            "regression": f"max_{REG_SELECTION_METRIC}",
+            "classification": f"max_{CLF_SELECTION_METRIC}",
+        },
         "best_reg": result.meta["best_reg"],
         "best_clf": result.meta["best_clf"],
         "regression_candidates": reg_rows,

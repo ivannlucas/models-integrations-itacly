@@ -29,14 +29,8 @@ MAX_ANNOTATED_SIZE = 640
 JPEG_QUALITY = 70
 
 
-def yolo_results_to_dict(
-    results: Any, original_image: np.ndarray, conf_threshold: float = 0.28
-) -> dict:
-    """Convert an ultralytics Results object to the platform output dict.
-
-    Returns: prediction, confidence, total_detections, species_counts,
-    detections (list), annotated_image (base64 JPEG).
-    """
+def _decode_detections(results: Any, conf_threshold: float) -> List[Dict[str, Any]]:
+    """Boxes of an ultralytics Results object at or above ``conf_threshold``, decoded."""
     detections: List[Dict[str, Any]] = []
 
     if results.boxes is not None and len(results.boxes) > 0:
@@ -47,22 +41,24 @@ def yolo_results_to_dict(
         # (the checkpoint's own embedded names are known to be wrong, see
         # constants.TRAINING_CLASS_ID_TO_CODE for the full explanation and evidence).
 
-        for i in range(len(class_ids)):
+        for i, class_id in enumerate(class_ids):
             conf = float(confidences[i])
             if conf < conf_threshold:
                 continue
-            cls_code = TRAINING_CLASS_ID_TO_CODE.get(int(class_ids[i]), str(class_ids[i]))
+            cls_code = TRAINING_CLASS_ID_TO_CODE.get(int(class_id), str(class_id))
             detections.append({
                 "class": cls_code,
                 "class_name": CLASS_NAMES.get(cls_code, cls_code),
                 "confidence": round(conf, 4),
                 "bbox": [round(float(v), 1) for v in xyxy[i]],
             })
+    return detections
 
-    species_counts: Dict[str, int] = {}
-    for d in detections:
-        species_counts[d["class"]] = species_counts.get(d["class"], 0) + 1
 
+def _dominant_species(
+    detections: List[Dict[str, Any]], species_counts: Dict[str, int]
+) -> Tuple[str, float]:
+    """``(prediction, confidence)``: most detected species (ties → higher summed confidence)."""
     prediction = "none"
     confidence = 0.0
     if detections:
@@ -73,6 +69,24 @@ def yolo_results_to_dict(
         # "confidence" = highest single-detection confidence among boxes of the predicted
         # class only (not the max/mean/min across all detected classes in the image).
         confidence = round(max(d["confidence"] for d in detections if d["class"] == prediction), 4)
+    return prediction, confidence
+
+
+def yolo_results_to_dict(
+    results: Any, original_image: np.ndarray, conf_threshold: float = 0.28
+) -> dict:
+    """Convert an ultralytics Results object to the platform output dict.
+
+    Returns: prediction, confidence, total_detections, species_counts,
+    detections (list), annotated_image (base64 JPEG).
+    """
+    detections = _decode_detections(results, conf_threshold)
+
+    species_counts: Dict[str, int] = {}
+    for d in detections:
+        species_counts[d["class"]] = species_counts.get(d["class"], 0) + 1
+
+    prediction, confidence = _dominant_species(detections, species_counts)
 
     return {
         "prediction": prediction,
@@ -84,18 +98,19 @@ def yolo_results_to_dict(
     }
 
 
-def _render_annotated_image(image: np.ndarray, detections: List[Dict[str, Any]]) -> str:
-    """Draw bounding boxes on the image and return it as base64 JPEG."""
-    img = Image.fromarray(image).convert("RGB")
-
+def _downscale(img: Image.Image) -> Tuple[Image.Image, float, float]:
+    """Shrink ``img`` to MAX_ANNOTATED_SIZE on its long side: ``(img, scale_w, scale_h)``."""
     w, h = img.size
     if max(w, h) > MAX_ANNOTATED_SIZE:
         scale = MAX_ANNOTATED_SIZE / max(w, h)
-        img = img.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
-        scale_w = int(w * scale) / w
-        scale_h = int(h * scale) / h
-    else:
-        scale_w = scale_h = 1.0
+        img = img.resize((int(w * scale), int(h * scale)), Image.LANCZOS)  # pylint: disable=no-member
+        return img, int(w * scale) / w, int(h * scale) / h
+    return img, 1.0, 1.0
+
+
+def _render_annotated_image(image: np.ndarray, detections: List[Dict[str, Any]]) -> str:
+    """Draw bounding boxes on the image and return it as base64 JPEG."""
+    img, scale_w, scale_h = _downscale(Image.fromarray(image).convert("RGB"))
 
     draw = ImageDraw.Draw(img)
     for d in detections:

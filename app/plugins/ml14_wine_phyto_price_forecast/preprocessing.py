@@ -42,18 +42,8 @@ def _build_gap_warning(last_date: pd.Timestamp) -> str | None:
     )
 
 
-def run_inference(bundle: dict, rows: list[dict]) -> dict:
-    """Derive features from a raw weekly history and run the GRU forecast.
-
-    Returns a dict with predicted_price, current_price, drift_baseline, horizon_weeks,
-    last_observed_date, prediction_date, gap_warning, n_rows_used, xai_feature_values (the last
-    row's feature values) and xai_feature_window (the unscaled SEQ_LEN x n_features window the GRU
-    scored) — both for the explainability service, which explains the real window.
-    """
-    features_df = build_modeling_features(rows)
-    feature_columns: list[str] = bundle["feature_columns"]
-
-    seq_df = features_df[feature_columns].tail(SEQ_LEN)
+def _scale_window(bundle: dict, seq_df: pd.DataFrame) -> np.ndarray:
+    """Scale the SEQ_LEN window with the bundle's input scaler (float32), rejecting overflows."""
     mean = np.asarray(bundle["input_scaler_mean"], dtype=np.float32)
     scale = np.asarray(bundle["input_scaler_scale"], dtype=np.float32)
     # El histórico ya se validó como finito en float64 (feature_engineering.py), pero un valor
@@ -68,13 +58,35 @@ def run_inference(bundle: dict, rows: list[dict]) -> dict:
             "la precisión numérica del modelo (float32) aunque sea un valor finito válido en la "
             "entrada. Revisa las columnas numéricas del histórico aportado."
         )
+    return seq_scaled
 
+
+def _predict_residual(bundle: dict, seq_scaled: np.ndarray) -> float:
+    """Run the GRU on the scaled window and unscale its drift residual."""
     model = bundle["model"]
     x = torch.tensor(seq_scaled[np.newaxis, ...], dtype=torch.float32)
     with torch.no_grad():
         residual_scaled = float(model(x).item())
 
-    residual = residual_scaled * float(bundle["target_scaler_scale"]) + float(bundle["target_scaler_mean"])
+    return (
+        residual_scaled * float(bundle["target_scaler_scale"])
+        + float(bundle["target_scaler_mean"])
+    )
+
+
+def run_inference(bundle: dict, rows: list[dict]) -> dict:
+    """Derive features from a raw weekly history and run the GRU forecast.
+
+    Returns a dict with predicted_price, current_price, drift_baseline, horizon_weeks,
+    last_observed_date, prediction_date, gap_warning, n_rows_used, xai_feature_values (the last
+    row's feature values) and xai_feature_window (the unscaled SEQ_LEN x n_features window the GRU
+    scored) — both for the explainability service, which explains the real window.
+    """
+    features_df = build_modeling_features(rows)
+    feature_columns: list[str] = bundle["feature_columns"]
+
+    seq_df = features_df[feature_columns].tail(SEQ_LEN)
+    residual = _predict_residual(bundle, _scale_window(bundle, seq_df))
 
     last_row = features_df.iloc[-1]
     last_date = pd.Timestamp(last_row[DATE_COL])

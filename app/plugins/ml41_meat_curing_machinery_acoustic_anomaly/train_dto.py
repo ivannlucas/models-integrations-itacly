@@ -1,10 +1,11 @@
-from pydantic import BaseModel, ConfigDict, Field
+"""Pydantic DTOs for the ml41 acoustic anomaly ``/train`` endpoint."""
+from pydantic import Field
 
-from app.application.dto.train_dto import MlflowRunId
+from app.application.dto.plugin_dto import PluginDTO, TrainRequestBase
 
 
-class TrainRequest(BaseModel):
-    model_config = ConfigDict(protected_namespaces=())
+class TrainRequest(TrainRequestBase):
+    """Train request: ZIP of WAVs per combination plus the target MLflow run."""
     data_path: str = Field(
         ...,
         description=(
@@ -16,11 +17,10 @@ class TrainRequest(BaseModel):
             "prediction requires an explicit threshold override or training with both classes."
         ),
     )
-    mlflow_run_id: MlflowRunId
 
 
-class CombinationTrainMetrics(BaseModel):
-    model_config = ConfigDict(protected_namespaces=())
+class CombinationTrainMetrics(PluginDTO):
+    """Training metrics for one fine-tuned (machine, machine_id, snr) combination."""
     machine: str
     machine_id: str
     snr: str
@@ -36,11 +36,13 @@ class CombinationTrainMetrics(BaseModel):
     threshold: float | None = None
 
 
-class TrainResponse(BaseModel):
-    model_config = ConfigDict(protected_namespaces=())
+class TrainResponse(PluginDTO):
+    """Train response: per-combination metrics and optional upload warning."""
     detail: str
     per_combination: list[CombinationTrainMetrics]
     upload_warning: str | None = Field(
         default=None,
-        description="Aviso si el entrenamiento terminó pero el modelo no se ha podido guardar en MLflow",
+        description=(
+            "Aviso si el entrenamiento terminó pero el modelo no se ha podido guardar en MLflow"
+        ),
     )

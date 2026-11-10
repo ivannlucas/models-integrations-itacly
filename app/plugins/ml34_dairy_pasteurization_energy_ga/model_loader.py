@@ -76,9 +76,9 @@ def load_artifacts():
     )
     model.eval()
 
-    scaler_X = joblib.load(_store.path(SCALER_X_FILENAME))  # pylint: disable=invalid-name
+    scaler_x = joblib.load(_store.path(SCALER_X_FILENAME))
     scaler_y = joblib.load(_store.path(SCALER_Y_FILENAME))
 
     logger.info("ml34 artifacts loaded — DynamicMLP(%s layers x %s) + scalers",
                 config["num_layers"], config["neurons"])
-    return model, scaler_X, scaler_y, config
+    return model, scaler_x, scaler_y, config

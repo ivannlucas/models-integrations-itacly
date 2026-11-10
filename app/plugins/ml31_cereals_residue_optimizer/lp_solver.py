@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, NamedTuple, Optional
 
 import pulp
 
@@ -18,7 +18,7 @@ from app.plugins.ml31_cereals_residue_optimizer.preprocessing import PriceCostMa
 
 
 @dataclass
-class LPSolution:
+class LPSolution:  # pylint: disable=too-many-instance-attributes
     """Holds the result of a single LP solve."""
 
     status: str
@@ -36,10 +36,31 @@ class LPSolution:
     raw: Optional[Any] = None
 
 
-class LPOptimizer:
+_STATUS_MAP = {
+    "Optimal": "OPTIMAL",
+    "Infeasible": "INFEASIBLE",
+    "Unbounded": "UNBOUNDED",
+    "Not solved": "NOT_SOLVED",
+}
+
+
+class _LPModel(NamedTuple):
+    """Decision variables and linear expressions of one LP build (see LPOptimizer.solve)."""
+
+    x_s: Dict[str, Any]
+    x_r: Dict[str, Any]
+    prod: Dict[str, Any]
+    res_pos: Dict[str, Any]
+    benefit: Dict[str, Any]
+    total_prod: Any
+    total_res: Any
+    total_benefit: Any
+
+
+class LPOptimizer:  # pylint: disable=too-many-instance-attributes
     """Builds and solves the LP model for crop allocation."""
 
-    def __init__(
+    def __init__(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
         self,
         crops: List[str],
         price_cost_mgr: PriceCostManager,
@@ -58,8 +79,8 @@ class LPOptimizer:
     ):
         self.crops = crops
         self.pcm = price_cost_mgr
-        self.S_s = total_secano_ha
-        self.S_r = total_regadio_ha
+        self.S_s = total_secano_ha  # pylint: disable=invalid-name  # LP notation S_s
+        self.S_r = total_regadio_ha  # pylint: disable=invalid-name  # LP notation S_r
         self.yield_s = yield_s
         self.yield_r = yield_r
         self.f_clima = climate_factor
@@ -99,15 +120,8 @@ class LPOptimizer:
         return self.crop_constraints.get(crop, {}).get("min_surface_pct", default)
 
     # ── build & solve ────────────────────────────────────────────────────────
-    def solve(
-        self,
-        mode: str = "minimize_residue",
-        min_benefit_eur: Optional[float] = None,
-        max_residue_t: Optional[float] = None,
-    ) -> LPSolution:
-        """Build and solve the LP model and return an LPSolution."""
-        prob = pulp.LpProblem("CropAllocation", pulp.LpMinimize)
-
+    def _build_model(self) -> "_LPModel":
+        """Decision variables and the linear expressions built on them (no constraints yet)."""
         x_s = {c: pulp.LpVariable(f"x_s_{c}", lowBound=0) for c in self.crops}
         x_r = {c: pulp.LpVariable(f"x_r_{c}", lowBound=0) for c in self.crops}
 
@@ -128,9 +142,20 @@ class LPOptimizer:
             for c in self.crops
         }
 
-        total_prod = pulp.lpSum(prod[c] for c in self.crops)
-        total_res = pulp.lpSum(res_pos[c] for c in self.crops)
-        total_benefit = pulp.lpSum(benefit[c] for c in self.crops)
+        return _LPModel(
+            x_s=x_s,
+            x_r=x_r,
+            prod=prod,
+            res_pos=res_pos,
+            benefit=benefit,
+            total_prod=pulp.lpSum(prod[c] for c in self.crops),
+            total_res=pulp.lpSum(res_pos[c] for c in self.crops),
+            total_benefit=pulp.lpSum(benefit[c] for c in self.crops),
+        )
+
+    def _add_land_constraints(self, prob: pulp.LpProblem, model: "_LPModel") -> None:
+        """R1 / R2 (available land) and R1b / R2b (land-use floors)."""
+        x_s, x_r = model.x_s, model.x_r
 
         # R1 / R2: available land upper bounds
         prob += pulp.lpSum(x_s[c] for c in self.crops) <= self.S_s, "R1_total_secano"
@@ -138,16 +163,25 @@ class LPOptimizer:
 
         # R1b / R2b: land-use floors
         if self.min_secano_use_ha > 0:
-            prob += pulp.lpSum(x_s[c] for c in self.crops) >= self.min_secano_use_ha, "R1b_min_secano_use"
+            prob += (
+                pulp.lpSum(x_s[c] for c in self.crops) >= self.min_secano_use_ha,
+                "R1b_min_secano_use",
+            )
         if self.min_regadio_use_ha > 0:
-            prob += pulp.lpSum(x_r[c] for c in self.crops) >= self.min_regadio_use_ha, "R2b_min_regadio_use"
+            prob += (
+                pulp.lpSum(x_r[c] for c in self.crops) >= self.min_regadio_use_ha,
+                "R2b_min_regadio_use",
+            )
 
+    def _add_crop_constraints(self, prob: pulp.LpProblem, model: "_LPModel") -> None:
+        """Per-crop R3 (min production), R4/R4b (surface share) and R4c (historical band)."""
+        x_s, x_r = model.x_s, model.x_r
         total_surface = self.S_s + self.S_r
 
         for c in self.crops:
             min_prod = self._get_min_production(c)
             if min_prod > 0:
-                prob += prod[c] >= min_prod, f"R3_min_prod_{c}"
+                prob += model.prod[c] >= min_prod, f"R3_min_prod_{c}"
 
             max_pct = self._get_max_surface_pct(c)
             if max_pct < 100.0:
@@ -163,14 +197,26 @@ class LPOptimizer:
                 prob += (x_s[c] + x_r[c]) <= h * (1.0 + tol), f"R4c_hi_band_{c}"
                 prob += (x_s[c] + x_r[c]) >= h * (1.0 - tol), f"R4c_lo_band_{c}"
 
+    def solve(
+        self,
+        mode: str = "minimize_residue",
+        min_benefit_eur: Optional[float] = None,
+        max_residue_t: Optional[float] = None,
+    ) -> LPSolution:
+        """Build and solve the LP model and return an LPSolution."""
+        prob = pulp.LpProblem("CropAllocation", pulp.LpMinimize)
+        model = self._build_model()
+        self._add_land_constraints(prob, model)
+        self._add_crop_constraints(prob, model)
+
         if mode == "minimize_residue":
-            prob += total_res, "Obj_minimize_residue"
+            prob += model.total_res, "Obj_minimize_residue"
             if min_benefit_eur is not None:
-                prob += total_benefit >= min_benefit_eur, "R6_min_benefit"
+                prob += model.total_benefit >= min_benefit_eur, "R6_min_benefit"
         elif mode == "maximize_benefit":
-            prob += -total_benefit, "Obj_maximize_benefit"
+            prob += -model.total_benefit, "Obj_maximize_benefit"
             if max_residue_t is not None:
-                prob += total_res <= max_residue_t, "R7_max_residue"
+                prob += model.total_res <= max_residue_t, "R7_max_residue"
         else:
             raise ValueError(
                 f"Unknown mode '{mode}'. Use 'minimize_residue' or 'maximize_benefit'."
@@ -180,13 +226,7 @@ class LPOptimizer:
         prob.solve(pulp.PULP_CBC_CMD(msg=0))
         elapsed = time.perf_counter() - t0
 
-        status_map = {
-            "Optimal": "OPTIMAL",
-            "Infeasible": "INFEASIBLE",
-            "Unbounded": "UNBOUNDED",
-            "Not solved": "NOT_SOLVED",
-        }
-        status_str = status_map.get(pulp.LpStatus[prob.status], pulp.LpStatus[prob.status])
+        status_str = _STATUS_MAP.get(pulp.LpStatus[prob.status], pulp.LpStatus[prob.status])
 
         sol = LPSolution(
             status=status_str,
@@ -199,15 +239,15 @@ class LPOptimizer:
             return sol
 
         for c in self.crops:
-            sol.secano[c] = round(pulp.value(x_s[c]), 2)
-            sol.regadio[c] = round(pulp.value(x_r[c]), 2)
-            sol.production[c] = round(pulp.value(prod[c]), 2)
-            sol.residue[c] = round(pulp.value(res_pos[c]), 2)
-            sol.benefit[c] = round(pulp.value(benefit[c]), 2)
+            sol.secano[c] = round(pulp.value(model.x_s[c]), 2)
+            sol.regadio[c] = round(pulp.value(model.x_r[c]), 2)
+            sol.production[c] = round(pulp.value(model.prod[c]), 2)
+            sol.residue[c] = round(pulp.value(model.res_pos[c]), 2)
+            sol.benefit[c] = round(pulp.value(model.benefit[c]), 2)
 
-        sol.total_production_t = round(pulp.value(total_prod), 2)
-        sol.total_residue_t = round(pulp.value(total_res), 2)
-        sol.total_benefit_eur = round(pulp.value(total_benefit), 2)
+        sol.total_production_t = round(pulp.value(model.total_prod), 2)
+        sol.total_residue_t = round(pulp.value(model.total_res), 2)
+        sol.total_benefit_eur = round(pulp.value(model.total_benefit), 2)
 
         sol.objective_value = (
             sol.total_residue_t if mode == "minimize_residue" else sol.total_benefit_eur

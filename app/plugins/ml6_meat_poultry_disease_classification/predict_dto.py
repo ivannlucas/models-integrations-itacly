@@ -1,7 +1,9 @@
 """Pydantic request/response DTOs for the ml6 poultry disease /predict endpoint."""
 from typing import Annotated, Any, Literal, Union
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import Field
+
+from app.application.dto.plugin_dto import PluginDTO
 
 _MODEL_KEY_DESCRIPTION = (
     "Ensemble a usar: 'thermal' (imagen térmica del ave, healthy/sick) o 'rgb' (imagen RGB de "
@@ -16,10 +18,9 @@ _MLFLOW_RUN_DESCRIPTION = (
 ModelKey = Literal["thermal", "rgb"]
 
 
-class PredictBatchRequest(BaseModel):
+class PredictBatchRequest(PluginDTO):
     """Batch request: a directory or ZIP of images of one modality."""
 
-    model_config = ConfigDict(protected_namespaces=())
     mode: Literal["batch"] = "batch"
     model_key: ModelKey | None = Field(default=None, description=_MODEL_KEY_DESCRIPTION)
     mlflow_run_id: str = Field(default="", description=_MLFLOW_RUN_DESCRIPTION)
@@ -33,10 +34,9 @@ class PredictBatchRequest(BaseModel):
     )
 
 
-class PredictBatchResponse(BaseModel):
+class PredictBatchResponse(PluginDTO):
     """Batch response: one prediction row per image, plus metrics when labels are known."""
 
-    model_config = ConfigDict(protected_namespaces=())
     model_id: str
     task: str
     n_images: int
@@ -49,10 +49,9 @@ class PredictBatchResponse(BaseModel):
     output_path: str | None = None
 
 
-class PredictInlineRequest(BaseModel):
+class PredictInlineRequest(PluginDTO):
     """Inline request: a single image as base64 or path."""
 
-    model_config = ConfigDict(protected_namespaces=())
     mode: Literal["inline"] = "inline"
     model_key: ModelKey | None = Field(default=None, description=_MODEL_KEY_DESCRIPTION)
     mlflow_run_id: str = Field(default="", description=_MLFLOW_RUN_DESCRIPTION)
@@ -61,10 +60,9 @@ class PredictInlineRequest(BaseModel):
     image_path: str | None = Field(default=None, description="Ruta a una imagen en disco")
 
 
-class PredictInlineResponse(BaseModel):
+class PredictInlineResponse(PluginDTO):
     """Inline response: majority-vote class plus each base model's vote and probabilities."""
 
-    model_config = ConfigDict(protected_namespaces=())
     model_id: str
     task: str
     threshold: float | None = None

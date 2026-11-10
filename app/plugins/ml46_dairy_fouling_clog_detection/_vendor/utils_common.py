@@ -28,6 +28,7 @@ def ensure_columns(df: pd.DataFrame, defaults: Mapping[str, Any]) -> pd.DataFram
     return out
 
 
+# pylint: disable-next=too-many-branches
 def derive_cycle_columns(df: pd.DataFrame) -> pd.DataFrame:
     """Derive asset_id/cycle_id/sequence_id/cycle_index if not already present."""
     out = df.copy()
@@ -37,9 +38,15 @@ def derive_cycle_columns(df: pd.DataFrame) -> pd.DataFrame:
 
     if "cycle_id" not in out.columns or out["cycle_id"].isna().all():
         candidate = None
-        if "batch_id" in out.columns and (~out["batch_id"].astype(str).isin(["", "none", "nan", "None"])).any():
+        if (
+            "batch_id" in out.columns
+            and (~out["batch_id"].astype(str).isin(["", "none", "nan", "None"])).any()
+        ):
             candidate = out["batch_id"].astype(str)
-        elif "episode_id" in out.columns and (~out["episode_id"].astype(str).isin(["", "none", "nan", "None"])).any():
+        elif (
+            "episode_id" in out.columns
+            and (~out["episode_id"].astype(str).isin(["", "none", "nan", "None"])).any()
+        ):
             candidate = out["episode_id"].astype(str)
         if candidate is not None:
             out["cycle_id"] = candidate
@@ -61,7 +68,10 @@ def derive_cycle_columns(df: pd.DataFrame) -> pd.DataFrame:
         if out["sequence_id"].nunique() < pair_count:
             out["sequence_id"] = out["asset_id"].astype(str) + "::" + out["cycle_id"].astype(str)
 
-    if "cycle_index" not in out.columns or pd.to_numeric(out["cycle_index"], errors="coerce").isna().all():
+    if (
+        "cycle_index" not in out.columns
+        or pd.to_numeric(out["cycle_index"], errors="coerce").isna().all()
+    ):
         out["cycle_index"] = 0
         for asset_id, idx in out.groupby("asset_id", sort=False).groups.items():
             g = out.loc[idx].sort_values("timestamp")
@@ -109,7 +119,12 @@ def minutes_since_last_event(timestamps_ns: np.ndarray, event_times_ns: np.ndarr
     return out.astype(np.float32)
 
 
-def previous_event_value(timestamps_ns: np.ndarray, event_times_ns: np.ndarray, values: Sequence[str], default: str = "none") -> np.ndarray:
+def previous_event_value(
+    timestamps_ns: np.ndarray,
+    event_times_ns: np.ndarray,
+    values: Sequence[str],
+    default: str = "none",
+) -> np.ndarray:
     """Value of the most recent event at/before each timestamp."""
     out = np.array([default] * len(timestamps_ns), dtype=object)
     if len(event_times_ns) == 0:
@@ -140,7 +155,7 @@ def safe_float(x: Any, default: float = 0.0) -> float:
         if x is None or (isinstance(x, float) and not math.isfinite(x)):
             return default
         return float(x)
-    except Exception:
+    except Exception:  # pylint: disable=broad-exception-caught  # documented: default on any error
         return default
 
 

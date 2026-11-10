@@ -11,14 +11,24 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from app.domain.services import mlflow_artifacts
 from app.domain.services.exceptions import UserModelUnavailableError
-from app.plugins.ml18_meat_spatial_price_forecast import constants, mlflow_utils, preprocessing, training
+from app.infrastructure.artifact_store import ArtifactStore
+from app.plugins.ml18_meat_spatial_price_forecast import (
+    constants,
+    mlflow_utils,
+    model_loader,
+    preprocessing,
+    training,
+)
 from app.plugins.ml18_meat_spatial_price_forecast import plugin as plugin_mod
 
 pytest.importorskip("tensorflow")
 
 
-def _panel(n_months=40, regions=("ANDALUCIA", "MURCIA", "BALEARES"), products=("CARNE POLLO",), seed=0):
+def _panel(
+    n_months=40, regions=("ANDALUCIA", "MURCIA", "BALEARES"), products=("CARNE POLLO",), seed=0
+):
     rng = np.random.default_rng(seed)
     rows = []
     for ccaa in regions:
@@ -26,43 +36,54 @@ def _panel(n_months=40, regions=("ANDALUCIA", "MURCIA", "BALEARES"), products=("
             for i, fecha in enumerate(pd.date_range("2015-01-01", periods=n_months, freq="MS")):
                 rows.append({
                     "Fecha": fecha.strftime("%Y-%m-%d"), "CCAA": ccaa, "Producto": prod,
-                    "Poblacion": 1e6, "RentaHogar": 25000 + 10 * i, "CONSUMO X CAPITA": 1.0 + rng.normal(0, 0.05),
+                    "Poblacion": 1e6, "RentaHogar": 25000 + 10 * i,
+                    "CONSUMO X CAPITA": 1.0 + rng.normal(0, 0.05),
                     "PENETRACION (%)": 50.0, "PRECIO MEDIO KG": 4 + 0.02 * i + rng.normal(0, 0.05),
                 })
     return pd.DataFrame(rows)
 
 
-@pytest.fixture
-def csv_path(tmp_path):
+@pytest.fixture(name="csv_path")
+def fixture_csv_path(tmp_path):
+    """CSV with a synthetic 40-month panel (3 regions, 1 product)."""
     path = tmp_path / "panel.csv"
     _panel().to_csv(path, sep=";", index=False)
     return str(path)
 
 
-@pytest.fixture
-def fast(monkeypatch):
+@pytest.fixture(name="fast")
+def fixture_fast(monkeypatch):
     """Two epochs instead of 60: same code path, seconds instead of minutes."""
     real = training.train_gru
     monkeypatch.setattr(training, "train_gru", lambda path, **kw: real(path, **{**kw, "epochs": 2}))
 
 
 def test_hyperparameters_are_the_delivered_config():
+    """The training hyperparameters match the delivered config."""
     assert (constants.HIDDEN_UNITS, constants.DROPOUT, constants.DENSE_UNITS) == (96, 0.2, 32)
-    assert (constants.LEARNING_RATE, constants.TRAIN_EPOCHS, constants.TRAIN_BATCH_SIZE) == (0.001, 60, 32)
-    assert (constants.EARLY_STOPPING_PATIENCE, constants.TRAIN_RATIO, constants.VAL_RATIO) == (8, 0.70, 0.15)
+    assert (
+        constants.LEARNING_RATE, constants.TRAIN_EPOCHS, constants.TRAIN_BATCH_SIZE
+    ) == (0.001, 60, 32)
+    assert (
+        constants.EARLY_STOPPING_PATIENCE, constants.TRAIN_RATIO, constants.VAL_RATIO
+    ) == (8, 0.70, 0.15)
     assert constants.LOOKBACK == 12
 
 
 def test_split_is_temporal_and_scalers_fit_on_train_dates_only(csv_path):
+    """The split is temporal and the scaler is fitted on train dates only."""
     df = training.engineer_features(training.load_training_frame(csv_path))
     train_end, val_end = training.temporal_cutoffs(df)
     dates = sorted(df["Fecha"].unique())
     assert train_end == dates[int(40 * 0.70) - 1] and val_end == dates[int(40 * 0.85) - 1]
     scaler = training.fit_scaler_train_only(df, ["PRECIO MEDIO KG"], train_end)
-    assert scaler.mean_[0] == pytest.approx(df.loc[df["Fecha"] <= train_end, "PRECIO MEDIO KG"].mean())
+    assert scaler.mean_[0] == pytest.approx(
+        df.loc[df["Fecha"] <= train_end, "PRECIO MEDIO KG"].mean()
+    )
 
 
 def test_every_window_is_built_and_split_by_target_date(csv_path):
+    """Every window is built and the train/val/test split covers all of them."""
     df = training.engineer_features(training.load_training_frame(csv_path))
     df[training.TARGET_SCALED] = df["PRECIO MEDIO KG"]
     x, _, dates = training.build_training_sequences(df)
@@ -73,60 +94,91 @@ def test_every_window_is_built_and_split_by_target_date(csv_path):
 
 
 def test_mojibake_price_header_is_resolved_like_the_original(tmp_path):
+    """The mojibake price header is resolved like in the original code."""
     path = tmp_path / "mojibake.csv"
-    _panel().rename(columns={"PRECIO MEDIO KG": "PRECIO MEDIO KG."}).to_csv(path, sep=";", index=False)
+    _panel().rename(columns={"PRECIO MEDIO KG": "PRECIO MEDIO KG."}).to_csv(
+        path, sep=";", index=False
+    )
     df = training.load_training_frame(str(path))
     assert df["PRECIO MEDIO KG"].notna().all()
     assert preprocessing.resolve_target_column(pd.DataFrame({"x": [1]})) is False
 
 
-@pytest.mark.parametrize("months,match", [(3, "fechas distintas"), (12, "ninguna secuencia"), (14, "Split temporal")])
+@pytest.mark.parametrize(
+    "months,match",
+    [(3, "fechas distintas"), (12, "ninguna secuencia"), (14, "Split temporal")],
+)
 def test_too_short_history_is_a_clear_error(tmp_path, months, match):
+    """Too short histories raise a clear ValueError at each stage."""
     path = tmp_path / "short.csv"
     _panel(n_months=months).to_csv(path, sep=";", index=False)
     with pytest.raises(ValueError, match=match):
         training.train_gru(str(path), epochs=1)
 
 
-def test_train_uploads_only_to_mlflow_and_the_model_is_served_by_run(csv_path, fast, monkeypatch, tmp_path, isolated_base_store):
+@pytest.mark.usefixtures("fast", "isolated_base_store")
+def test_train_uploads_only_to_mlflow_and_the_model_is_served_by_run(
+    csv_path, monkeypatch, tmp_path
+):
+    """train() uploads only to MLflow, publishes v1 and the run's model serves predictions."""
     captured = tmp_path / "mlflow_store"
     tracker = MagicMock()
-    tracker.upload_artifacts.side_effect = lambda d, artifact_path: shutil.copytree(d, captured / artifact_path)
+    tracker.upload_artifacts.side_effect = (
+        lambda d, artifact_path: shutil.copytree(d, captured / artifact_path)
+    )
     tracker.download_artifacts.side_effect = (
-        lambda dest, artifact_path: str(shutil.copytree(captured / artifact_path, f"{dest}/{artifact_path}"))
+        lambda dest, artifact_path: str(
+            shutil.copytree(captured / artifact_path, f"{dest}/{artifact_path}")
+        )
     )
     monkeypatch.setattr(mlflow_utils, "BaseMLflowTracker", MagicMock(return_value=tracker))
-    local_before = set(plugin_mod.model_loader._store.local_dir.rglob("*"))  # pylint: disable=protected-access
+    monkeypatch.setattr(mlflow_artifacts, "BaseMLflowTracker", MagicMock(return_value=tracker))
+    store = ArtifactStore(constants.ARTIFACT_FOLDER_NAME)  # same local dir as the plugin's store
+    local_before = set(store.local_dir.rglob("*"))
 
-    instance = plugin_mod.Ml18MeatSpatialPriceForecastPlugin()   # no base model loaded: train never needs it
+    # no base model loaded: train never needs it
+    instance = plugin_mod.Ml18MeatSpatialPriceForecastPlugin()
     resp = instance.train(data_path=csv_path, mlflow_run_id="run-1")
     assert resp.mlflow_run_id == "run-1" and resp.upload_warning is None
     assert resp.base_version.version == "v1"
     assert resp.epochs_run == 2 and resp.n_test > 0
-    assert set(plugin_mod.model_loader._store.local_dir.rglob("*")) == local_before  # pylint: disable=protected-access
-    assert {"model.joblib", "x_scaler.json", "y_scaler.json", "metrics.json"} <= {p.name for p in (captured / "model").iterdir()}
+    store = ArtifactStore(constants.ARTIFACT_FOLDER_NAME)  # same local dir as the plugin's store
+    assert set(store.local_dir.rglob("*")) == local_before
+    assert {"model.joblib", "x_scaler.json", "y_scaler.json", "metrics.json"} <= {
+        p.name for p in (captured / "model").iterdir()
+    }
 
     rows = _panel().query("CCAA == 'ANDALUCIA'").tail(12).to_dict("records")
     preds = instance.predict_inline(features={"rows": rows}, mlflow_run_id="run-1").predictions
-    assert preds[0]["CCAA"] == "ANDALUCIA" and np.isfinite(preds[0]["predicted_price"])
+    first = preds[0]  # pylint: disable=unsubscriptable-object  # pydantic field
+    assert first["CCAA"] == "ANDALUCIA" and np.isfinite(first["predicted_price"])
     # The explainability service explains the unscaled features of the window's last month.
-    assert list(preds[0]["xai_feature_values"]) == list(constants.FEATURE_COLUMNS)
-    assert preds[0]["xai_feature_values"]["Poblacion"] == 1e6
-    window = preds[0]["xai_feature_window"]  # the real window the GRU scored, last row = values
-    assert len(window) == constants.LOOKBACK and window[-1] == list(preds[0]["xai_feature_values"].values())
+    assert list(first["xai_feature_values"]) == list(constants.FEATURE_COLUMNS)
+    assert first["xai_feature_values"]["Poblacion"] == 1e6
+    window = first["xai_feature_window"]  # the real window the GRU scored, last row = values
+    assert len(window) == constants.LOOKBACK
+    assert window[-1] == list(first["xai_feature_values"].values())
 
 
-def test_mlflow_failure_is_a_warning(csv_path, fast, monkeypatch):
+@pytest.mark.usefixtures("fast")
+def test_mlflow_failure_is_a_warning(csv_path, monkeypatch):
+    """An MLflow upload failure becomes a warning and the base is still published."""
     tracker = MagicMock(upload_artifacts=MagicMock(side_effect=ConnectionError("mlflow caído")))
     monkeypatch.setattr(mlflow_utils, "BaseMLflowTracker", MagicMock(return_value=tracker))
-    resp = plugin_mod.Ml18MeatSpatialPriceForecastPlugin().train(data_path=csv_path, mlflow_run_id="run-1")
+    resp = plugin_mod.Ml18MeatSpatialPriceForecastPlugin().train(
+        data_path=csv_path, mlflow_run_id="run-1"
+    )
+    # pylint: disable-next=unsupported-membership-test  # pydantic fields
     assert "mlflow caído" in resp.upload_warning and resp.base_version.version == "v1"
 
 
 def test_predict_with_a_run_without_model_never_uses_the_base(monkeypatch):
-    monkeypatch.setattr(mlflow_utils, "BaseMLflowTracker",
-                        MagicMock(return_value=MagicMock(download_artifacts=MagicMock(return_value=""))))
+    """A run without a model raises UserModelUnavailableError instead of using the base."""
+    tracker = MagicMock(download_artifacts=MagicMock(return_value=""))
+    monkeypatch.setattr(mlflow_artifacts, "BaseMLflowTracker", MagicMock(return_value=tracker))
     instance = plugin_mod.Ml18MeatSpatialPriceForecastPlugin()
-    instance._bundle = {"model": object()}  # pylint: disable=protected-access  # a base model is loaded
+    # a base model is loaded
+    monkeypatch.setattr(model_loader, "load_artifact_bundle", lambda: {"model": object()})
+    instance.load()
     with pytest.raises(UserModelUnavailableError, match="run-vacio"):
         instance.predict_inline(features={"rows": []}, mlflow_run_id="run-vacio")

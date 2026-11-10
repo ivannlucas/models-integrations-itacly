@@ -31,9 +31,11 @@ def decode_image_base64(image_base64: str) -> np.ndarray:
     except (binascii.Error, ValueError) as exc:
         raise InvalidImageError(f"image_base64 no es base64 válido: {exc}") from exc
     array = np.frombuffer(raw, dtype=np.uint8)
-    img_bgr = cv2.imdecode(array, cv2.IMREAD_COLOR)
+    img_bgr = cv2.imdecode(array, cv2.IMREAD_COLOR)  # pylint: disable=no-member  # cv2 C-extension members
     if img_bgr is None:
-        raise InvalidImageError("No se pudo decodificar la imagen (formato no soportado o datos corruptos).")
+        raise InvalidImageError(
+            "No se pudo decodificar la imagen (formato no soportado o datos corruptos)."
+        )
     return img_bgr
 
 
@@ -48,16 +50,20 @@ def yolo_crop_alignment(img_bgr: np.ndarray, yolo_model, yolo_device: str) -> np
     production).
     """
     if yolo_model is not None:
-        results = yolo_model.predict(img_bgr, conf=YOLO_CONF_THRESHOLD, verbose=False, device=yolo_device)
+        results = yolo_model.predict(
+            img_bgr, conf=YOLO_CONF_THRESHOLD, verbose=False, device=yolo_device
+        )
         if len(results) > 0 and len(results[0].boxes) > 0:
             box = results[0].boxes.data[0]
             x1, y1, x2, y2 = (int(v) for v in box[:4])
             img_bgr = img_bgr[max(0, y1):y2, max(0, x1):x2]
             if img_bgr.size == 0:
-                raise InvalidImageError("El recorte detectado por YOLO está vacío (caja degenerada).")
+                raise InvalidImageError(
+                    "El recorte detectado por YOLO está vacío (caja degenerada)."
+                )
 
-    img_res = cv2.resize(img_bgr, IMAGE_SIZE)
-    img_rgb = cv2.cvtColor(img_res, cv2.COLOR_BGR2RGB)
+    img_res = cv2.resize(img_bgr, IMAGE_SIZE)  # pylint: disable=no-member  # cv2 C-extension members
+    img_rgb = cv2.cvtColor(img_res, cv2.COLOR_BGR2RGB)  # pylint: disable=no-member  # cv2 C-extension members
     return img_rgb.astype(np.float32) / 255.0
 
 
@@ -78,7 +84,9 @@ def validate_and_align_sensors(sensors: dict) -> np.ndarray:
             parts.append(f"Columnas no reconocidas: {sorted(unexpected)}")
         raise DataContractError("; ".join(parts))
     try:
-        aligned = np.array([float(received[col]) for col in SENSOR_COLS], dtype=np.float32).reshape(1, -1)
+        aligned = np.array(
+            [float(received[col]) for col in SENSOR_COLS], dtype=np.float32
+        ).reshape(1, -1)
     except (TypeError, ValueError) as exc:
         raise DataContractError(f"Valor de sensor no numérico: {exc}") from exc
     if not np.all(np.isfinite(aligned)):

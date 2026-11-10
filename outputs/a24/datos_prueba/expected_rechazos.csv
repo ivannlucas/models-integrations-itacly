@@ -1,0 +1,3 @@
+case_id,http_status,error_contains
+rechazo_ccaa_espana,422,T.ESPANA/ESP no se predice
+rechazo_historial_insuficiente,422,13 meses consecutivos

@@ -12,16 +12,22 @@ the training step and MLflow replaced, so they catch regressions the fakes canno
 """
 import pandas as pd
 import pytest
+from sklearn.preprocessing import StandardScaler
 
+from app.domain.services import mlflow_artifacts
 from app.domain.services.exceptions import ModelPersistenceError, UserModelUnavailableError
 from app.domain.services.mlflow_tracker import require_user_model
+from app.plugins.ml15_wine_ipi_price_forecast import mlflow_utils as ml15_mlflow_utils
+from app.plugins.ml15_wine_ipi_price_forecast import plugin as ml15_plugin
 from app.registry import REGISTRY
 from tests.conftest import TEST_REGISTRY
 
 # Models whose /train publishes the new base (BASE_ARTIFACT_FOLDER on the real plugin class):
 # they accept /train without a run (spec D4). Read from the real registry so the list cannot drift.
 PROMOTING_MODEL_IDS = {
-    entry.model_id for entry in REGISTRY if getattr(entry.plugin_class, "BASE_ARTIFACT_FOLDER", None)
+    entry.model_id
+    for entry in REGISTRY
+    if getattr(entry.plugin_class, "BASE_ARTIFACT_FOLDER", None)
 }
 TRAINABLE = [entry for entry in TEST_REGISTRY
              if entry.train_request_type is not None and entry.model_id not in PROMOTING_MODEL_IDS]
@@ -32,7 +38,10 @@ TRAINABLE = [entry for entry in TEST_REGISTRY
 @pytest.mark.parametrize("run_id", ["", "   "])
 @pytest.mark.parametrize("entry", TRAINABLE, ids=[entry.model_id for entry in TRAINABLE])
 def test_train_rejects_empty_mlflow_run_id(client, entry, run_id):
-    resp = client.post(f"{entry.prefix}/train", json={"data_path": "/tmp/x.csv", "mlflow_run_id": run_id})
+    """An empty or blank mlflow_run_id on /train is rejected with 422."""
+    resp = client.post(
+        f"{entry.prefix}/train", json={"data_path": "/tmp/x.csv", "mlflow_run_id": run_id}
+    )
     assert resp.status_code == 422
     assert any("mlflow_run_id" in err["loc"] for err in resp.json()["detail"])
 
@@ -44,24 +53,37 @@ ML10_PREFIX = "/models/ml10-dairy-disease-vector-detection"
 
 
 def test_train_returns_502_when_model_cannot_be_saved(client, fake_plugins, monkeypatch):
+    """ModelPersistenceError on /train maps to HTTP 502."""
     def failing_train(**_kwargs):
-        raise ModelPersistenceError("El modelo reentrenado no se ha podido guardar en MLflow: boom")
+        """Simulate a retrained model that cannot be saved to MLflow."""
+        raise ModelPersistenceError(
+            "El modelo reentrenado no se ha podido guardar en MLflow: boom"
+        )
 
     monkeypatch.setattr(fake_plugins[ML10], "train", failing_train)
-    resp = client.post(f"{ML10_PREFIX}/train", json={"data_path": "/tmp/x.zip", "mlflow_run_id": "run-1"})
+    resp = client.post(
+        f"{ML10_PREFIX}/train", json={"data_path": "/tmp/x.zip", "mlflow_run_id": "run-1"}
+    )
     assert resp.status_code == 502
     assert "no se ha podido guardar en MLflow" in resp.json()["detail"]
 
 
-def test_predict_returns_422_when_user_model_unavailable(client, fake_plugins, lacteo_inline_payload):
+def test_predict_returns_422_when_user_model_unavailable(
+    client, fake_plugins, lacteo_inline_payload
+):
+    """UserModelUnavailableError on predict maps to HTTP 422."""
     fake_plugins[ML10].raise_on_inline = UserModelUnavailableError("run-1 sin modelo")
-    resp = client.post(f"{ML10_PREFIX}/predict", json={**lacteo_inline_payload, "mlflow_run_id": "run-1"})
+    resp = client.post(
+        f"{ML10_PREFIX}/predict", json={**lacteo_inline_payload, "mlflow_run_id": "run-1"}
+    )
     assert resp.status_code == 422
     assert "run-1 sin modelo" in resp.json()["detail"]
 
 
 def test_stats_returns_422_when_user_model_unavailable(client, fake_plugins, monkeypatch):
+    """UserModelUnavailableError on /stats maps to HTTP 422."""
     def failing_stats(mlflow_run_id=""):
+        """Simulate a run whose model cannot be loaded."""
         raise UserModelUnavailableError(f"{mlflow_run_id} sin modelo")
 
     monkeypatch.setattr(fake_plugins[ML10], "stats", failing_stats)
@@ -71,6 +93,7 @@ def test_stats_returns_422_when_user_model_unavailable(client, fake_plugins, mon
 
 
 def test_require_user_model_raises_only_when_a_run_was_requested():
+    """require_user_model raises only when a run was requested and has no model."""
     download = require_user_model(lambda run_id: None)
     with pytest.raises(UserModelUnavailableError, match="run-1"):
         download("run-1")
@@ -83,14 +106,18 @@ def test_require_user_model_raises_only_when_a_run_was_requested():
     RuntimeError("size mismatch for head.weight"), KeyError("target"),
 ])
 def test_require_user_model_turns_bad_artifacts_into_422(error):
+    """Corrupt or missing artifacts become UserModelUnavailableError."""
     def download(run_id):
         raise error
     with pytest.raises(UserModelUnavailableError, match="run-1"):
         require_user_model(download)("run-1")
 
 
-@pytest.mark.parametrize("error", [AttributeError("x"), TypeError("unexpected keyword"), NameError("y")])
+@pytest.mark.parametrize(
+    "error", [AttributeError("x"), TypeError("unexpected keyword"), NameError("y")]
+)
 def test_require_user_model_lets_loader_bugs_surface_as_500(error):
+    """Programming errors in the loader propagate unchanged."""
     # A bug in our own loader is not a client error: it must not be disguised as a 422.
     def download(run_id):
         raise error
@@ -100,18 +127,20 @@ def test_require_user_model_lets_loader_bugs_surface_as_500(error):
 
 # ── Plugin real (ml15) ────────────────────────────────────────────────────────
 
-@pytest.fixture
-def ml15(monkeypatch, tmp_path):
-    from sklearn.preprocessing import StandardScaler
+@pytest.fixture(name="ml15")
+def fixture_ml15(monkeypatch, tmp_path):
+    """Real ml15 plugin with training stubbed out, plus a tiny training CSV."""
+    plugin = ml15_plugin
+    mlflow_utils = ml15_mlflow_utils
 
-    from app.plugins.ml15_wine_ipi_price_forecast import mlflow_utils, plugin
-
-    metrics = dict(rmse=1.0, mae=1.0, mape_pct=1.0, r2=0.5, mda_pct=100.0)
+    metrics = {"rmse": 1.0, "mae": 1.0, "mape_pct": 1.0, "r2": 0.5, "mda_pct": 100.0}
     monkeypatch.setattr(plugin.training, "train_model", lambda df: {
         "model": StandardScaler(), "n_train": 10, "n_test": 2, "metrics": metrics,
         "baseline_persistence": metrics, "rmse_reduction_pct": 0.0, "mape_reduction_pct": 0.0,
-        "train_end_date": pd.Timestamp("2023-12-01"), "train_origin_start": pd.Timestamp("2016-06-01"),
-        "train_origin_end": pd.Timestamp("2023-06-01"), "test_start_date": pd.Timestamp("2025-01-01"),
+        "train_end_date": pd.Timestamp("2023-12-01"),
+        "train_origin_start": pd.Timestamp("2016-06-01"),
+        "train_origin_end": pd.Timestamp("2023-06-01"),
+        "test_start_date": pd.Timestamp("2025-01-01"),
         "test_end_date": pd.Timestamp("2026-01-01"), "training_time_s": 0.0,
     })
     instance = plugin.Ml15WineIpiPriceForecastPlugin()
@@ -122,19 +151,23 @@ def ml15(monkeypatch, tmp_path):
 
 
 def test_ml15_train_mlflow_failure_is_a_warning_and_the_base_is_published(ml15, monkeypatch):
+    """For ml15 an MLflow upload failure is a warning and the new base is still published."""
     plugin, _, instance, data = ml15
 
     class UnreachableTracker:
+        """MLflow tracker stand-in whose uploads always fail."""
+
         def __init__(self, run_id):
             self.run_id = run_id
 
         def log_params(self, *_args):
-            pass
+            """Ignore params."""
 
         def log_metrics(self, *_args):
-            pass
+            """Ignore metrics."""
 
         def upload_artifacts(self, *_args, **_kwargs):
+            """Fail as if MLflow were unreachable."""
             raise ConnectionError("MLflow unreachable")
 
     monkeypatch.setattr(plugin, "BaseMLflowTracker", UnreachableTracker)
@@ -144,16 +177,21 @@ def test_ml15_train_mlflow_failure_is_a_warning_and_the_base_is_published(ml15, 
 
 
 def test_ml15_predict_fails_instead_of_serving_base_model(ml15, monkeypatch):
+    """ml15 predict with a run without model fails rather than serving the base."""
     _, mlflow_utils, instance, data = ml15
 
     class EmptyRunTracker:
+        """MLflow tracker stand-in for a run that has no model artifacts."""
+
         def __init__(self, run_id):
             self.run_id = run_id
 
         def download_artifacts(self, *_args, **_kwargs):
+            """Return '' like BaseMLflowTracker does for a run without artifacts."""
             return ""  # what BaseMLflowTracker returns for a run without model / MLflow down
 
-    monkeypatch.setattr(mlflow_utils, "BaseMLflowTracker", EmptyRunTracker)
+    monkeypatch.setattr(mlflow_artifacts, "BaseMLflowTracker", EmptyRunTracker)
+    monkeypatch.setattr(mlflow_utils, "BaseMLflowTracker", EmptyRunTracker, raising=False)
     with pytest.raises(UserModelUnavailableError, match="run-1"):
         instance.predict_batch(data_path=data, mlflow_run_id="run-1")
 

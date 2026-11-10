@@ -88,7 +88,37 @@ def create_sequences(data_x: np.ndarray, lookback: int) -> np.ndarray:
     return np.array(sequences)
 
 
-def prepare_inference_input(df: pd.DataFrame, train_config: dict, scalers: dict) -> dict:
+def _check_min_rows(df: pd.DataFrame, lookback: int) -> int:
+    """Raise InsufficientRowsError below warmup + lookback + 1 rows; return the row count."""
+    min_rows_required = FEATURE_WARMUP_ROWS + lookback + 1
+    n_rows = len(df)
+    if n_rows < min_rows_required:
+        date_min = df["fecha"].min().date() if n_rows else "N/A"
+        date_max = df["fecha"].max().date() if n_rows else "N/A"
+        raise InsufficientRowsError(
+            f"Histórico insuficiente: se necesitan al menos {min_rows_required} meses "
+            f"(warmup={FEATURE_WARMUP_ROWS} + lookback={lookback} + 1), pero se recibieron "
+            f"{n_rows} meses ({date_min} -> {date_max})."
+        )
+    return n_rows
+
+
+def _flat_windows(
+    df: pd.DataFrame, input_cols_per_target: dict, scalers: dict, lookback: int
+) -> dict[str, np.ndarray]:
+    """Scale each target's input columns and flatten its lookback windows (2D per target)."""
+    x_flat_per_target: dict[str, np.ndarray] = {}
+    for target, cols in input_cols_per_target.items():
+        scaled = scalers[target].transform(df[cols])
+        x_seq = create_sequences(scaled, lookback)
+        n_flat = lookback * len(cols)
+        x_flat_per_target[target] = x_seq.reshape(x_seq.shape[0], n_flat)
+    return x_flat_per_target
+
+
+def prepare_inference_input(
+    df: pd.DataFrame, train_config: dict, scalers: dict
+) -> dict:
     """Port of src/predict/predictor.py::prepare_input.
 
     Parameters
@@ -119,16 +149,7 @@ def prepare_inference_input(df: pd.DataFrame, train_config: dict, scalers: dict)
     df["fecha"] = pd.to_datetime(df["fecha"])
     df = df.sort_values("fecha").reset_index(drop=True)
 
-    min_rows_required = FEATURE_WARMUP_ROWS + lookback + 1
-    n_rows = len(df)
-    if n_rows < min_rows_required:
-        date_min = df["fecha"].min().date() if n_rows else "N/A"
-        date_max = df["fecha"].max().date() if n_rows else "N/A"
-        raise InsufficientRowsError(
-            f"Histórico insuficiente: se necesitan al menos {min_rows_required} meses "
-            f"(warmup={FEATURE_WARMUP_ROWS} + lookback={lookback} + 1), pero se recibieron "
-            f"{n_rows} meses ({date_min} -> {date_max})."
-        )
+    n_rows = _check_min_rows(df, lookback)
 
     df = create_endogenous_features(df)
     all_feat_cols = {c for cols in input_cols_per_target.values() for c in cols}
@@ -140,12 +161,7 @@ def prepare_inference_input(df: pd.DataFrame, train_config: dict, scalers: dict)
             f"{len(df)} filas útiles de {n_rows} recibidas."
         )
 
-    x_flat_per_target: dict[str, np.ndarray] = {}
-    for target, cols in input_cols_per_target.items():
-        scaled = scalers[target].transform(df[cols])
-        x_seq = create_sequences(scaled, lookback)
-        n_flat = lookback * len(cols)
-        x_flat_per_target[target] = x_seq.reshape(x_seq.shape[0], n_flat)
+    x_flat_per_target = _flat_windows(df, input_cols_per_target, scalers, lookback)
 
     valid_dates = pd.DatetimeIndex(df["fecha"].values[lookback:]) + pd.DateOffset(months=horizon)
 

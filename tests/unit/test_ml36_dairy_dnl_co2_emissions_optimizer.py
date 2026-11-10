@@ -18,6 +18,7 @@ OPTIMIZE_PAYLOAD = {"mode": "inline", "model_key": "optimize", **CONTEXT}
 
 
 def test_health(client):
+    """GET /health reports the model as ok and loaded."""
     body = client.get(f"{PREFIX}/health").json()
     assert body["status"] == "ok"
     assert body["model"] == MODEL
@@ -25,10 +26,12 @@ def test_health(client):
 
 
 def test_stats(client):
+    """GET /stats returns the model name."""
     assert client.get(f"{PREFIX}/stats").json()["model_name"] == MODEL
 
 
 def test_predict_inline(client):
+    """Inline /predict returns numeric T_out and CO2 predictions."""
     resp = client.post(f"{PREFIX}/predict", json=INLINE_PAYLOAD)
     assert resp.status_code == 200
     body = resp.json()
@@ -38,16 +41,19 @@ def test_predict_inline(client):
 
 
 def test_predict_inline_missing_context_field(client):
+    """Inline /predict without a context field (F_milk) is rejected with 422."""
     payload = {k: v for k, v in INLINE_PAYLOAD.items() if k != "F_milk"}
     assert client.post(f"{PREFIX}/predict", json=payload).status_code == 422
 
 
 def test_predict_inline_missing_control_field(client):
+    """Inline /predict without a control field (Delta_P) is rejected with 422."""
     payload = {k: v for k, v in INLINE_PAYLOAD.items() if k != "Delta_P"}
     assert client.post(f"{PREFIX}/predict", json=payload).status_code == 422
 
 
 def test_predict_optimize(client):
+    """model_key=optimize returns a feasible hybrid recommendation without current values."""
     resp = client.post(f"{PREFIX}/predict", json=OPTIMIZE_PAYLOAD)
     assert resp.status_code == 200
     body = resp.json()
@@ -60,27 +66,34 @@ def test_predict_optimize(client):
 
 
 def test_predict_optimize_with_current_operation(client):
+    """Optimize accepts the 3 current controls together."""
     payload = {**OPTIMIZE_PAYLOAD, "T_serv": 79.5, "Delta_P": 0.75, "Regeneration_perc": 91.88}
     assert client.post(f"{PREFIX}/predict", json=payload).status_code == 200
 
 
 def test_predict_optimize_partial_current_operation_rejected(client):
+    """Optimize with only some current controls is rejected with 422."""
     payload = {**OPTIMIZE_PAYLOAD, "T_serv": 79.5}
     assert client.post(f"{PREFIX}/predict", json=payload).status_code == 422
 
 
 def test_predict_optimize_invalid_decision_mode(client):
+    """An unknown decision_mode is rejected with 422."""
     payload = {**OPTIMIZE_PAYLOAD, "decision_mode": "turbo"}
     assert client.post(f"{PREFIX}/predict", json=payload).status_code == 422
 
 
 def test_predict_optimize_missing_context_field(client):
+    """Optimize without a context field (Viscosity) is rejected with 422."""
     payload = {k: v for k, v in OPTIMIZE_PAYLOAD.items() if k != "Viscosity"}
     assert client.post(f"{PREFIX}/predict", json=payload).status_code == 422
 
 
 def test_predict_batch(client):
-    resp = client.post(f"{PREFIX}/predict", json={"mode": "batch", "data_path": "/tmp/pasteurizacion.csv"})
+    """Batch /predict returns per-row CO2 estimates."""
+    resp = client.post(
+        f"{PREFIX}/predict", json={"mode": "batch", "data_path": "/tmp/pasteurizacion.csv"}
+    )
     assert resp.status_code == 200
     body = resp.json()
     assert body["model_id"] == MODEL
@@ -104,7 +117,10 @@ def test_predict_batch_optimize(client):
 
 
 def test_train(client):
-    resp = client.post(f"{PREFIX}/train", json={"data_path": "/tmp/train.csv", "mlflow_run_id": "run-1"})
+    """/train returns the retraining detail and typed metrics."""
+    resp = client.post(
+        f"{PREFIX}/train", json={"data_path": "/tmp/train.csv", "mlflow_run_id": "run-1"}
+    )
     assert resp.status_code == 200
     body = resp.json()
     assert body["detail"].startswith("Reentrenamiento completado")

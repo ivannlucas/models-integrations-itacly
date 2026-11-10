@@ -1,3 +1,4 @@
+"""Constants for the ml28 meat raw-materials purchase plugin."""
 MODEL_ID = "ml28-meat-neuroevolutionary-raw-materials-prediction"
 ARTIFACT_FOLDER_NAME = "ml28_meat_neuroevolutionary_raw_materials_prediction"
 

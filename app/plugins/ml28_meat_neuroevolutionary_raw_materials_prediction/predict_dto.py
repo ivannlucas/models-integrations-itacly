@@ -7,45 +7,77 @@ single-row mode, not a workaround.
 """
 from typing import Annotated, Any, Literal, Union
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import Field
+
+from app.application.dto.plugin_dto import BatchRequestBase, PluginDTO
 
 
-class PredictBatchRequest(BaseModel):
-    model_config = ConfigDict(protected_namespaces=())
-    mode: Literal["batch"] = "batch"
-    data_path: str = Field(..., description="Path to CSV following docs/input_contract.md: one row per date+raw_material_id+destination_profile")
-    mlflow_run_id: str = Field(default="", description="Ignored — ml28 has no trainable artifact (training.supported=false)")
+class PredictBatchRequest(BatchRequestBase):
+    """Batch request: path to a CSV with one row per date/raw material/destination."""
+    data_path: str = Field(
+        ...,
+        description=(
+            "Path to CSV following docs/input_contract.md: one row per "
+            "date+raw_material_id+destination_profile"
+        ),
+    )
+    mlflow_run_id: str = Field(
+        default="",
+        description="Ignored — ml28 has no trainable artifact (training.supported=false)",
+    )
 
 
-class PredictBatchResponse(BaseModel):
-    model_config = ConfigDict(protected_namespaces=())
+class PredictBatchResponse(PluginDTO):
+    """Batch response: per-row decisions plus aggregate policy-simulation summary."""
     model_id: str
     predictions: list[dict[str, Any]]
-    summary: dict[str, Any] | None = Field(default=None, description="Aggregate policy-simulation metrics across all rows (row_count, triggered_orders, aggregate_excess_reduction_pct, stockout_guardrail_pass, ...)")
+    summary: dict[str, Any] | None = Field(
+        default=None,
+        description=(
+            "Aggregate policy-simulation metrics across all rows (row_count, triggered_orders, "
+            "aggregate_excess_reduction_pct, stockout_guardrail_pass, ...)"
+        ),
+    )
     output_path: str | None = None
 
 
-class PredictInlineRequest(BaseModel):
-    model_config = ConfigDict(protected_namespaces=())
+class PredictInlineRequest(PluginDTO):
+    """Inline request: a single operational row (date + raw material + destination)."""
     mode: Literal["inline"] = "inline"
     date: str = Field(..., description="ISO or parseable date of the operational need")
     raw_material_id: str = Field(..., description="Meat raw material identifier")
-    destination_profile: str = Field(..., description="Intended production destination of the raw material (not the purchased product)")
-    current_inventory_tons: float = Field(..., ge=0, description="Available inventory at the start of the horizon")
-    expected_requirement_tons: float = Field(..., ge=0, description="Expected raw material requirement")
+    destination_profile: str = Field(
+        ...,
+        description=(
+            "Intended production destination of the raw material (not the purchased product)"
+        ),
+    )
+    current_inventory_tons: float = Field(
+        ..., ge=0, description="Available inventory at the start of the horizon"
+    )
+    expected_requirement_tons: float = Field(
+        ..., ge=0, description="Expected raw material requirement"
+    )
     lead_time_days: float = Field(..., ge=0, description="Expected days until receipt")
     safety_coverage_days: float = Field(..., ge=0, description="Target safety coverage in days")
-    expected_yield_rate: float = Field(..., ge=0, le=1, description="Expected raw material yield rate")
+    expected_yield_rate: float = Field(
+        ..., ge=0, le=1, description="Expected raw material yield rate"
+    )
     expected_waste_rate: float = Field(..., ge=0, le=1, description="Expected waste rate")
     unit_purchase_cost: float = Field(..., ge=0, description="Expected unit cost per ton")
-    shelf_life_days: float = Field(..., ge=0, description="Expected shelf life of the raw material/lot")
+    shelf_life_days: float = Field(
+        ..., ge=0, description="Expected shelf life of the raw material/lot"
+    )
     model_key: str | None = None
     threshold: float | None = None
-    mlflow_run_id: str = Field(default="", description="Ignored — ml28 has no trainable artifact (training.supported=false)")
+    mlflow_run_id: str = Field(
+        default="",
+        description="Ignored — ml28 has no trainable artifact (training.supported=false)",
+    )
 
 
-class PredictInlineResponse(BaseModel):
-    model_config = ConfigDict(protected_namespaces=())
+class PredictInlineResponse(PluginDTO):
+    """Inline response: purchase decision for a single row."""
     model_id: str
     date: str
     raw_material_id: str
@@ -58,11 +90,19 @@ class PredictInlineResponse(BaseModel):
     expected_waste_rate: float
     unit_purchase_cost: float
     shelf_life_days: float
-    purchase_trigger_proba: float = Field(..., description="Sigmoid score over the inventory coverage gap")
-    purchase_trigger_flag: int = Field(..., description="1 if projected stock after lead time is below safety stock")
+    purchase_trigger_proba: float = Field(
+        ..., description="Sigmoid score over the inventory coverage gap"
+    )
+    purchase_trigger_flag: int = Field(
+        ..., description="1 if projected stock after lead time is below safety stock"
+    )
     recommended_action: str = Field(..., description="BUY or DO_NOT_BUY")
-    quantity_optimizer_recommendation_tons: float = Field(..., description="Raw recommendation BEFORE gating — never present as the final decision")
-    order_quantity_tons: float = Field(..., description="Final recommended quantity — 0.0 whenever purchase_trigger_flag=0")
+    quantity_optimizer_recommendation_tons: float = Field(
+        ..., description="Raw recommendation BEFORE gating — never present as the final decision"
+    )
+    order_quantity_tons: float = Field(
+        ..., description="Final recommended quantity — 0.0 whenever purchase_trigger_flag=0"
+    )
     decision_reason: str
     projected_stock_after_lead_time_tons: float
     safety_stock_tons: float

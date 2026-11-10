@@ -3,6 +3,7 @@
 Wiring only (routing, schema validation, exception mapping) against the FakePlugin. Numerical
 correctness is verified against the manifest golden_cases in outputs/a09/verification_report.md.
 """
+from app.domain.services.exceptions import InsufficientSequenceHistoryError
 
 PREFIX = "/models/ml9-cereals-infestation-sequence-classifier"
 
@@ -20,6 +21,7 @@ INLINE_PAYLOAD = {"mode": "inline", "rows": [_ROW] * 48}
 
 
 def test_health(client):
+    """GET /health reports the model as loaded and ok."""
     body = client.get(f"{PREFIX}/health").json()
     assert body["status"] == "ok"
     assert body["model"] == "ml9-cereals-infestation-sequence-classifier"
@@ -27,11 +29,13 @@ def test_health(client):
 
 
 def test_stats(client):
+    """GET /stats returns the model name."""
     body = client.get(f"{PREFIX}/stats").json()
     assert body["model_name"] == "ml9-cereals-infestation-sequence-classifier"
 
 
 def test_predict_inline(client):
+    """An inline predict with 48 rows returns the class, confidence and rows used."""
     resp = client.post(f"{PREFIX}/predict", json=INLINE_PAYLOAD)
     assert resp.status_code == 200
     body = resp.json()
@@ -58,6 +62,7 @@ def test_predict_inline_below_window_size_rejected(client):
 
 
 def test_predict_batch(client):
+    """A batch predict returns windows, series count and class distribution."""
     resp = client.post(f"{PREFIX}/predict", json={"mode": "batch", "data_path": "/tmp/serie.csv"})
     assert resp.status_code == 200
     body = resp.json()
@@ -69,8 +74,7 @@ def test_predict_batch(client):
 
 
 def test_predict_insufficient_sequence_history_maps_to_422(client, fake_plugins):
-    from app.domain.services.exceptions import InsufficientSequenceHistoryError
-
+    """InsufficientSequenceHistoryError from the plugin maps to HTTP 422."""
     fake_plugins["ml9-cereals-infestation-sequence-classifier"].raise_on_inline = (
         InsufficientSequenceHistoryError("Se requieren al menos 48 observaciones horarias.")
     )
@@ -80,30 +84,39 @@ def test_predict_insufficient_sequence_history_maps_to_422(client, fake_plugins)
 
 def test_predict_batch_unexpected_error_maps_to_500(client, fake_plugins):
     """An error that is not a declared domain exception must not be masked as 422."""
-    fake_plugins["ml9-cereals-infestation-sequence-classifier"].raise_on_batch = RuntimeError("boom")
+    fake_plugins["ml9-cereals-infestation-sequence-classifier"].raise_on_batch = (
+        RuntimeError("boom")
+    )
     resp = client.post(f"{PREFIX}/predict", json={"mode": "batch", "data_path": "/tmp/serie.csv"})
     assert resp.status_code == 500
 
 
 def test_train(client):
-    resp = client.post(f"{PREFIX}/train", json={"data_path": "/tmp/train.csv", "mlflow_run_id": "test-run-id"})
+    """POST /train returns the documented metrics and artifact path."""
+    resp = client.post(
+        f"{PREFIX}/train", json={"data_path": "/tmp/train.csv", "mlflow_run_id": "test-run-id"}
+    )
     assert resp.status_code == 200
     body = resp.json()
     assert body["detail"]
     # manifest.training.metrics_returned
-    for metric in ("accuracy", "balanced_accuracy", "f1_macro", "precision_macro", "recall_macro", "log_loss"):
+    for metric in (
+        "accuracy", "balanced_accuracy", "f1_macro", "precision_macro", "recall_macro", "log_loss"
+    ):
         assert isinstance(body[metric], float)
     assert isinstance(body["n_windows_test"], int)
     assert body["artifact_path"].endswith("user_final_winner.pt")
 
 
-def test_train_bad_csv_maps_to_400(client, fake_plugins):
+def test_train_bad_csv_maps_to_400(client, fake_plugins, monkeypatch):
     """A ValueError from train() (missing columns) must surface as 400, not 500."""
     plugin = fake_plugins["ml9-cereals-infestation-sequence-classifier"]
 
-    def _boom(_plugin, *, data_path):
+    def _boom(**_kwargs):
         raise ValueError("El CSV de entrenamiento no trae las columnas requeridas: ['target']")
 
-    plugin._train_factory = _boom  # pylint: disable=protected-access
-    resp = client.post(f"{PREFIX}/train", json={"data_path": "/tmp/bad.csv", "mlflow_run_id": "test-run-id"})
+    monkeypatch.setattr(plugin, "train", _boom)
+    resp = client.post(
+        f"{PREFIX}/train", json={"data_path": "/tmp/bad.csv", "mlflow_run_id": "test-run-id"}
+    )
     assert resp.status_code == 400

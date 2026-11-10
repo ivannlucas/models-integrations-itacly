@@ -17,6 +17,7 @@ _BEHAVIORS = {"grazing", "walking", "drinking", "running", "grooming", "other", 
 
 
 def test_health(client):
+    """The health endpoint reports the model as loaded."""
     body = client.get(f"{PREFIX}/health").json()
     assert body["status"] == "ok"
     assert body["model"] == "ml5-meat-cow-behaviour"
@@ -24,10 +25,12 @@ def test_health(client):
 
 
 def test_stats(client):
+    """The stats endpoint returns the model name."""
     assert client.get(f"{PREFIX}/stats").json()["model_name"] == "ml5-meat-cow-behaviour"
 
 
 def test_predict_inline(client):
+    """An inline prediction returns a known behaviour with confidence and anomaly flag."""
     resp = client.post(f"{PREFIX}/predict", json=INLINE_PAYLOAD)
     assert resp.status_code == 200
     body = resp.json()
@@ -39,11 +42,13 @@ def test_predict_inline(client):
 
 
 def test_predict_inline_too_few_frames(client):
+    """Fewer frames than required are rejected with 422."""
     payload = {"mode": "inline", "frames_base64": ["dGVzdA=="] * 5}
     assert client.post(f"{PREFIX}/predict", json=payload).status_code == 422
 
 
 def test_predict_batch(client):
+    """Batch prediction returns a predictions list."""
     resp = client.post(f"{PREFIX}/predict", json={"mode": "batch", "data_path": "/tmp/cows.mp4"})
     assert resp.status_code == 200
     body = resp.json()
@@ -52,6 +57,7 @@ def test_predict_batch(client):
 
 
 def test_predict_batch_invalid_video_maps_to_422(client, fake_plugins):
+    """InvalidVideoError in batch mode maps to 422 with its message."""
     fake_plugins["ml5-meat-cow-behaviour"].raise_on_batch = InvalidVideoError(
         "Cannot open video file"
     )
@@ -61,6 +67,7 @@ def test_predict_batch_invalid_video_maps_to_422(client, fake_plugins):
 
 
 def test_predict_inline_insufficient_frames_maps_to_422(client, fake_plugins):
+    """InsufficientFramesError in inline mode maps to 422."""
     fake_plugins["ml5-meat-cow-behaviour"].raise_on_inline = InsufficientFramesError(
         "not enough frames"
     )
@@ -70,7 +77,9 @@ def test_predict_inline_insufficient_frames_maps_to_422(client, fake_plugins):
 
 def test_train_classifier_succeeds(client):
     """Only the classifier supports /train now (detector stays out of scope)."""
-    resp = client.post(f"{PREFIX}/train", json={"data_path": "/tmp/x.zip", "mlflow_run_id": "test-run-id"})
+    resp = client.post(
+        f"{PREFIX}/train", json={"data_path": "/tmp/x.zip", "mlflow_run_id": "test-run-id"}
+    )
     assert resp.status_code == 200
     body = resp.json()
     assert "train_clips" in body["metrics"]
