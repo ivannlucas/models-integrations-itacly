@@ -497,8 +497,8 @@ class Ml10DairyDiseaseVectorDetectionPlugin(PluginRuntimeMixin, ModelPluginPort)
                 if not image_files:
                     raise ValueError(f"No se encontraron imágenes en: {data_path}")
                 predictions = [
-                    self._predict_file(img_path, user_clf, user_cls_names, first=index == 0)
-                    for index, img_path in enumerate(image_files)
+                    self._predict_file(img_path, user_clf, user_cls_names)
+                    for img_path in image_files
                 ]
 
         self._update_stats(latency_ms=(time.perf_counter() - t0) * 1000)
@@ -506,7 +506,7 @@ class Ml10DairyDiseaseVectorDetectionPlugin(PluginRuntimeMixin, ModelPluginPort)
             model_id=self.MODEL_ID, predictions=predictions, output_path=None
         )
 
-    def _predict_file(self, img_path: Path, clf, class_names, *, first: bool) -> dict:
+    def _predict_file(self, img_path: Path, clf, class_names) -> dict:
         """Batch row of one image (an error row when it cannot be processed)."""
         try:
             image_pil = image_path_to_pil(str(img_path))
@@ -517,13 +517,13 @@ class Ml10DairyDiseaseVectorDetectionPlugin(PluginRuntimeMixin, ModelPluginPort)
             row = build_inline_result(self.MODEL_ID, detections)
             row.pop("model_id", None)
             row["annotated_image"] = render_annotated_image(image_pil, detections)
-            # Same per-detection crops predict_inline returns, but only on the first row:
-            # the platform's explainability panel only ever reads dataSample[0] (see
-            # runXaiExplain in ws-sources.js), so repeating up to 5 JPEG crops on every
-            # row would only bloat the batch response. Without it the panel falls back to
-            # a full-scene Grad-CAM request that carries no image_base64 at all.
-            if first:
-                row["heatmap_crops"] = build_heatmap_crops(image_pil, detections, max_crops=5)
+            # Same per-detection crops predict_inline returns, on every row: each instance in
+            # the platform's results table must carry its own crops (an empty column on rows
+            # 1..N looked like a failed prediction). The crops are much smaller than the
+            # annotated_image already present on every row. The explainability panel reads
+            # dataSample[0] (runXaiExplain in ws-sources.js); without crops it would fall back
+            # to a full-scene Grad-CAM request that carries no image_base64 at all.
+            row["heatmap_crops"] = build_heatmap_crops(image_pil, detections, max_crops=5)
             return {"filename": img_path.name, **row}
         except Exception as exc:  # pylint: disable=broad-exception-caught  # per-image error row
             logger.warning("Error procesando %s: %s", img_path.name, exc)

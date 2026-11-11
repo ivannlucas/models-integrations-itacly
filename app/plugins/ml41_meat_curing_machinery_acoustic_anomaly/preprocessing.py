@@ -12,11 +12,19 @@ import base64
 import tempfile
 from pathlib import Path
 
-import librosa
-import numpy as np
+from app.domain.services.numba_cache import configure_numba_cache
 
-from app.domain.services.exceptions import InvalidAudioError
-from app.plugins.ml41_meat_curing_machinery_acoustic_anomaly.constants import (
+# Before librosa: its @numba.jit(cache=True) functions need a writable cache dir, otherwise
+# predict/train fail in the container with "cannot cache function '__o_fold': no locator
+# available" (see app/domain/services/numba_cache.py).
+configure_numba_cache()
+
+# pylint: disable=wrong-import-position,wrong-import-order,ungrouped-imports  # after configure_numba_cache
+import librosa  # noqa: E402
+import numpy as np  # noqa: E402
+
+from app.domain.services.exceptions import InvalidAudioError  # noqa: E402
+from app.plugins.ml41_meat_curing_machinery_acoustic_anomaly.constants import (  # noqa: E402
     AUDIO_SR,
     HOP_LENGTH,
     N_FFT,

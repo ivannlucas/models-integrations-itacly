@@ -752,11 +752,11 @@ class TestPredictBatchWithMocks:
                 assert len(result.predictions) == 1
                 assert result.predictions[0]["status"] == "error"
 
-    def test_predict_batch_first_row_has_heatmap_crops_like_inline(self):
-        """Verify the first batch row carries the same heatmap_crops predict_inline returns.
+    def test_predict_batch_every_row_has_heatmap_crops_like_inline(self):
+        """Verify every batch row carries the same heatmap_crops predict_inline returns.
 
-        The platform's explainability panel only reads dataSample[0] and, without
-        heatmap_crops there, falls back to a Grad-CAM request with no image_base64.
+        The platform's results table shows heatmap_crops per instance (an empty value on
+        rows 1..N looked like a failure), and the explainability panel reads dataSample[0].
         """
         mock_detector = self._make_mock_detector([(0.9, [10, 20, 50, 60])])
         mock_classifier = _make_mock_classifier()
@@ -769,13 +769,14 @@ class TestPredictBatchWithMocks:
                 for name in ("a.jpg", "b.jpg"):
                     Image.new("RGB", (100, 100), color="red").save(str(Path(tmp) / name))
                 result = plugin.predict_batch(data_path=tmp)
-                inline = plugin.predict_inline(features={"image_path": str(Path(tmp) / "a.jpg")})
+                inline_a = plugin.predict_inline(features={"image_path": str(Path(tmp) / "a.jpg")})
+                inline_b = plugin.predict_inline(features={"image_path": str(Path(tmp) / "b.jpg")})
 
         first, second = result.predictions
         assert first["filename"] == "a.jpg"
-        assert first["heatmap_crops"] == inline.heatmap_crops
-        # Only row 0 is read for XAI — don't repeat the crops on every row.
-        assert "heatmap_crops" not in second
+        assert first["heatmap_crops"] == inline_a.heatmap_crops
+        assert second["heatmap_crops"] == inline_b.heatmap_crops
+        assert second["heatmap_crops"]
         # annotated_image is unchanged and still on every row.
         assert first["annotated_image"] and second["annotated_image"]
 
