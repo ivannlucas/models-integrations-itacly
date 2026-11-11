@@ -25,6 +25,7 @@ import torch  # noqa: E402  pylint: disable=wrong-import-position
 from keras import layers, models  # noqa: E402  pylint: disable=wrong-import-position
 from ultralytics import YOLO  # noqa: E402  pylint: disable=wrong-import-position
 
+from app.domain.services.ultralytics_settings import configure_ultralytics  # noqa: E402  pylint: disable=wrong-import-position
 from app.infrastructure.artifact_store import ArtifactStore  # noqa: E402  pylint: disable=wrong-import-position
 from app.plugins.ml1_wine_pest_disease_detection.constants import (  # noqa: E402  pylint: disable=wrong-import-position
     ARTIFACT_FOLDER_NAME,
@@ -147,6 +148,7 @@ def load_model_bundle() -> dict:
     and the RandomForest risk regressor (no_gases variant, production config)."""
     class_mapping = _load_class_mapping()
 
+    configure_ultralytics()
     yolo_model = YOLO(str(_store.path(YOLO_WEIGHTS_FILENAME)))
 
     ensemble: dict[str, "models.Model"] = {}

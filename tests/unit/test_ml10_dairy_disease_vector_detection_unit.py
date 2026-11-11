@@ -979,11 +979,13 @@ class TestLoadDetectorAndClassifier:
                    return_value=mock_classifier), \
              patch(_LOADER_MOD + ".torch.load",
                    return_value=mock_state_dict), \
+             patch(_LOADER_MOD + ".configure_ultralytics") as mock_configure, \
              patch.dict(sys.modules, {"ultralytics": mock_ultralytics}):
             det, _, names = load_detector_and_classifier(torch.device("cpu"))
 
         assert names == class_names
         assert det is mock_detector
+        mock_configure.assert_called_once()  # Ultralytics' MLflow/telemetry off before YOLO use
         mock_classifier.load_state_dict.assert_called_once_with(mock_state_dict)
         mock_classifier.eval.assert_called_once()
 
