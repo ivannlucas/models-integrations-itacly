@@ -15,6 +15,7 @@ import logging
 import os
 import tempfile
 import time
+import zipfile
 from typing import Any
 
 import torch
@@ -77,6 +78,8 @@ from app.plugins.ml4_lactic_cnn_thermal_early_disease_detection.preprocessing im
 from app.plugins.ml4_lactic_cnn_thermal_early_disease_detection.train_dto import TrainResponse
 
 logger = logging.getLogger(__name__)
+
+_LABELS_FILENAME = "ID_Labels.csv"
 
 # Hyperparameters logged to the retrain's MLflow run (manifest.training, see constants.py).
 _TRAIN_PARAMS = {
@@ -194,9 +197,31 @@ def _train_epoch(model, train_loader, criterion, optimizer, device) -> None:
 
 def _single_subdir_or_self(folder: str) -> str:
     """The only entry of ``folder`` when it is a directory (ZIP with a root folder), else folder."""
-    entries = os.listdir(folder)
+    entries = [e for e in os.listdir(folder) if e != "__MACOSX"]
     if len(entries) == 1 and os.path.isdir(os.path.join(folder, entries[0])):
         return os.path.join(folder, entries[0])
+    return folder
+
+
+def _is_zip(local_path: str) -> bool:
+    """True for a ZIP file, by extension or by content (an s3:// key may have no ".zip" suffix)."""
+    return os.path.isfile(local_path) and (
+        local_path.lower().endswith(".zip") or zipfile.is_zipfile(local_path)
+    )
+
+
+def _labels_root(folder: str) -> str:
+    """Directory under ``folder`` holding ID_Labels.csv (root first, then any depth).
+
+    A user-built ZIP may wrap the dataset in one or more folders (or add ``__MACOSX/``); the
+    TIDS layout is anchored on ID_Labels.csv, so that file locates the dataset root.
+    """
+    if os.path.exists(os.path.join(folder, _LABELS_FILENAME)):
+        return folder
+    for root, dirs, files in os.walk(folder):
+        dirs[:] = sorted(d for d in dirs if d != "__MACOSX")
+        if _LABELS_FILENAME in files:
+            return root
     return folder
 
 
@@ -227,11 +252,12 @@ def _predict_batch_image(model, device, root: str, fname: str, idx: int) -> dict
 
 def _read_labeled_images(data_root: str) -> tuple[list[str], list[int]]:
     """Read ID_Labels.csv (TIDS layout) and resolve every labeled image path."""
-    csv_path = os.path.join(data_root, "ID_Labels.csv")
+    csv_path = os.path.join(data_root, _LABELS_FILENAME)
     if not os.path.exists(csv_path):
         raise ValueError(
-            "data_path debe contener 'ID_Labels.csv' con columnas 'ID' y 'label' "
-            "(0=Healthy, 1=SCM), igual que el dataset TIDS original."
+            "data_path debe ser un ZIP o una carpeta con 'ID_Labels.csv' (columnas 'ID' y "
+            "'label', 0=Healthy, 1=SCM) y las imágenes en TIDS_cropped/{healthy,SCM}/<ID>.jpg, "
+            "igual que el dataset TIDS original."
         )
 
     paths: list[str] = []
@@ -258,11 +284,16 @@ def _read_labeled_images(data_root: str) -> tuple[list[str], list[int]]:
 def _load_training_set(data_path: str, tmp_dir: str) -> tuple[list[str], list[int]]:
     """Resolve the training folder (extracting a ZIP into ``tmp_dir``) and read its labels."""
     with local_file_path(data_path) as local_path:
-        if os.path.isfile(local_path) and local_path.lower().endswith(".zip"):
+        if _is_zip(local_path):
             safe_extract_zip(local_path, tmp_dir)
-            data_root = _single_subdir_or_self(tmp_dir)
+            data_root = _labels_root(tmp_dir)
+        elif os.path.isdir(local_path):
+            data_root = _labels_root(local_path)
         else:
-            data_root = local_path
+            raise ValueError(
+                f"data_path no es un ZIP ni una carpeta: {data_path}. Sube un .zip con "
+                f"'{_LABELS_FILENAME}' y TIDS_cropped/{{healthy,SCM}}/<ID>.jpg."
+            )
         paths, labels = _read_labeled_images(data_root)
 
     if len(paths) < MIN_TRAIN_SAMPLES:
@@ -376,7 +407,7 @@ class Ml4LacticCnnThermalEarlyDiseaseDetectionPlugin(PluginRuntimeMixin, ModelPl
             predictions: list[dict] = []
             with local_file_path(data_path) as local_data_path:
                 image_dir = local_data_path
-                if local_data_path.lower().endswith(".zip"):
+                if _is_zip(local_data_path):
                     temp_dir = tempfile.mkdtemp(prefix="ml4_thermal_batch_")
                 with removing_dir(temp_dir):
                     if temp_dir:

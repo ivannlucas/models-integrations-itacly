@@ -313,10 +313,10 @@ def run_retraining(raw_df: pd.DataFrame, model_paths: dict[str, str]) -> dict[st
 def load_retraining_input(data_path: str) -> pd.DataFrame:
     """Load the labeled CSV/parquet and validate the training contract columns."""
     with local_file_path(data_path) as local_path:
-        if str(local_path).endswith(".csv"):
-            raw = pd.read_csv(local_path)
-        else:
-            raw = pd.read_parquet(local_path)
+        # Parquet by content (magic "PAR1"), not by suffix: an s3:// key may have no extension.
+        with open(local_path, "rb") as fh:
+            is_parquet = fh.read(4) == b"PAR1"
+        raw = pd.read_parquet(local_path) if is_parquet else pd.read_csv(local_path)
     missing = [c for c in TRAIN_HARD_REQUIRED_COLUMNS if c not in raw.columns]
     if missing:
         raise ValueError(
