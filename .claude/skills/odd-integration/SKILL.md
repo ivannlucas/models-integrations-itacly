@@ -34,7 +34,7 @@ cambios de código**. Todo el registro vive en un único fichero:
 `generate_baseline.py` y `s3_baseline.py` son completamente genéricos y dirigidos por esa
 configuración — no se editan para dar de alta un modelo nuevo. Si al integrar `{{PLUGIN_NAME}}`
 te encuentras necesitando tocar alguno de esos ficheros, para: probablemente el modelo tiene un
-tipo de dato (`multimodal`, o un caso no cubierto por `tabular`/`image`/`video`) que requiere
+tipo de dato (`multimodal`, o un caso no cubierto por `tabular`/`image`/`video`/`audio`) que requiere
 diseño nuevo, no una integración mecánica — confírmalo con el usuario antes de escribir código
 Python en este repo.
 
@@ -59,6 +59,8 @@ Fuera de este repo, sube a S3 (bucket `S3_BASELINE_BUCKET`, mismo bucket que usa
   `datasets/{{PLUGIN_NAME}}/train.csv` — el mismo split/fuente que ya se usó como golden dataset
   en la skill `verification` de este repo, nunca datos sintéticos nuevos.
 - **Imagen/vídeo**: las imágenes/vídeos de entrenamiento sueltas bajo `datasets/{{PLUGIN_NAME}}/`.
+- **Audio**: grabaciones **normales** de entrenamiento (`.wav`/`.flac`/`.ogg`/`.mp3`) bajo
+  `datasets/{{PLUGIN_NAME}}/`; se admiten subcarpetas (no colisionan ficheros con el mismo nombre).
 
 No crees nada bajo la carpeta local `datasets/` de `{{ODD_REPO_PATH}}` — esa carpeta es efímera,
 la crea y borra el propio proceso de bootstrap en cada arranque; los datos reales viven solo en
@@ -93,21 +95,36 @@ Añade un objeto nuevo al array `"models"`. Campos según el tipo:
 }
 ```
 
+**Audio** (hermano: `modelo-41`, ml41). Endpoints `/detect/{model}/audio` (`audio_b64`) y
+`/detect/{model}/batch/audio` (`audios`). El extractor `logmel` lleva copiados los parámetros
+log-Mel del plugin ml41 (`preprocessors.py`): un modelo de audio con otro preprocesado necesita
+otro extractor, es decir, código Python.
+```json
+{
+  "name": "{{PLUGIN_NAME}}",
+  "_label": "<descripción legible, cosmética>",
+  "type": "audio",
+  "s3_dataset_prefix": "datasets/{{PLUGIN_NAME}}/",
+  "extractor": "logmel"
+}
+```
+
 Reglas de este fichero, verificadas contra las 16 entradas existentes — no son sugerencias:
 
 - `"name"` es la clave de unión de todo el sistema: debe ser **idéntica byte a byte** al
   `model_key`/`model_id` que el front (`retech-lote2-xai-plataforma`) envía como segmento de ruta
   `{model_name}` en `/detect/{model_name}`. No hay ninguna tabla de mapeo aparte — si no coincide,
   el endpoint de detección da 404 aunque el baseline exista.
-- `"type"` tiene que ser exactamente `"tabular"` o `"image"` (`"video"`/`"multimodal"` existen en
-  código pero ningún modelo real los usa hoy) — cualquier otro valor hace fallar el bootstrap con
-  `"unknown type"`.
+- `"type"` tiene que ser exactamente `"tabular"`, `"image"` o `"audio"` (`"video"`/`"multimodal"`
+  existen en código pero ningún modelo real los usa hoy) — cualquier otro valor hace fallar el
+  bootstrap con `"unknown type"`.
 - `feature_cols`/`categorical_cols`: saca los nombres reales del `predict_dto.py`/`manifest.yaml`
   de `app/plugins/{{PLUGIN_NAME}}/` en este repo, nunca inventados. `categorical_cols` es siempre
   subconjunto de `feature_cols`, nunca una lista aparte.
 - `"max_samples": 5000` es la convención sin excepción en las 10 entradas tabulares actuales — no
   te desvíes sin motivo real.
-- `"extractor": "clip"` es la convención sin excepción en las 6 entradas de imagen actuales.
+- `"extractor": "clip"` es la convención sin excepción en las 6 entradas de imagen actuales;
+  `"extractor": "logmel"` en las de audio.
 - `"_label"` es puramente decorativo (no lo lee ningún código) — no dediques tiempo a pulirlo más
   allá de una frase clara.
 
@@ -147,7 +164,7 @@ o comprobar directamente en S3 que existe `baselines/{{PLUGIN_NAME}}/baseline.js
 
 - Nunca se toca código Python (`main.py`, `detector.py`, `preprocessors.py`,
   `baseline_bootstrap.py`, etc.) para dar de alta un modelo — si parece necesario, para y
-  pregunta; es señal de que el modelo no encaja en `tabular`/`image` tal cual están definidos.
+  pregunta; es señal de que el modelo no encaja en `tabular`/`image`/`audio` tal cual están definidos.
 - Nunca se genera o sube a mano un `baseline.json` — siempre lo genera `bootstrap_baselines()` (o
   el endpoint `/baseline/.../from-source`) a partir de los datos reales de entrenamiento.
 - Nunca se inventan `feature_cols`/`categorical_cols` — salen del contrato real del plugin
