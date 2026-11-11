@@ -7,6 +7,9 @@ ENV PORT="8080"
 ENV HOST="0.0.0.0"
 ENV LOG_LEVEL=INFO
 ENV TORCH_HOME=/app/.cache/torch
+# librosa (ml41) JIT-compiles with numba cache=True; site-packages is root-owned and the
+# luceit user has no home, so numba needs an explicit writable cache dir.
+ENV NUMBA_CACHE_DIR=/tmp/numba_cache
 
 WORKDIR /app
 EXPOSE ${PORT}
