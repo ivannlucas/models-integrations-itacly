@@ -1,0 +1,24 @@
+id,filename,ground_truth_species,esperado_prediction,esperado_confidence,esperado_total_detections,esperado_species_counts,nota
+caso_001,10478.jpg,cf,cf,0.6837,1,"{""cf"": 1}",
+caso_002,12793.jpg,cf,cf,0.626,1,"{""cf"": 1}",
+caso_003,17671.jpg,cf,cf,0.4423,1,"{""cf"": 1}",
+caso_004,1992.jpg,cf,cf,0.4836,2,"{""cf"": 1, ""rd"": 1}","Ground truth de la imagen es solo 'cf' (único class_id en el .txt), pero el detector añade 1 caja 'rd' de baja confianza (0.3291) — falso positivo real del detector, no un bug de wiring (ver mAP real 0.871 en verification_report.md)."
+caso_005,11897.jpg,sz,sz,0.7134,1,"{""sz"": 1}",
+caso_006,12517.jpg,sz,sz,0.74,1,"{""sz"": 1}",
+caso_007,13944.jpg,sz,sz,0.7341,1,"{""sz"": 1}",
+caso_008,6455.jpg,sz,sz,0.748,1,"{""sz"": 1}",
+caso_009,11110.jpg,rd,rd,0.5671,2,"{""rd"": 2}",
+caso_010,12705.jpg,rd,rd,0.6638,1,"{""rd"": 1}",
+caso_011,634.jpg,rd,rd,0.6561,1,"{""rd"": 1}",
+caso_012,9408.jpg,rd,rd,0.4917,2,"{""rd"": 2}",
+caso_013,1084.jpg,tc,tc,0.6825,1,"{""tc"": 1}",
+caso_014,12389.jpg,tc,tc,0.7233,4,"{""tc"": 4}",
+caso_015,15174.jpg,tc,tc,0.7074,1,"{""tc"": 1}",
+caso_016,15454.jpg,tc,tc,0.7499,1,"{""tc"": 1}",
+caso_017,10890.jpg,os,os,0.6966,1,"{""os"": 1}",
+caso_018,15542.jpg,os,os,0.7051,2,"{""os"": 2}",
+caso_019,8424.jpg,os,os,0.5906,1,"{""os"": 1}",
+caso_020,968.jpg,os,none,0.0,0,{},"Falso negativo real del detector (ground truth tiene 'os' pero conf<0.28 para todas las cajas candidatas) — no es un bug de wiring, es exactamente el tipo de error que mide recall=0.856 en verification_report.md."
+caso_021,9180.jpg,multi (sz+tc),tc,0.706,2,"{""tc"": 1, ""sz"": 1}",
+caso_022,7670.jpg,multi (sz+os),sz,0.6855,3,"{""sz"": 2, ""os"": 1}",
+caso_023,8892.jpg,multi (sz+rd),rd,0.6257,1,"{""rd"": 1}","Ground truth multi-especie (sz+rd) pero el detector solo recupera 1 caja 'rd' con conf>=0.28 — recall parcial real, coherente con recall=0.856 agregado, no un bug."
