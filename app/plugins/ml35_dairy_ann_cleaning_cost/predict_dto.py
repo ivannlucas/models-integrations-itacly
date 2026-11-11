@@ -54,9 +54,18 @@ class PredictInlineResponse(PluginDTO):
     """Inline prediction response: ANN water consumption + computed PU."""
 
     model_id: str
-    consumo_agua_l: float = Field(..., description="Consumo de agua de refrigeración predicho (L)")
+    consumo_agua_l: float = Field(
+        ..., description="Consumo de agua predicho en la pasteurización (L)"
+    )
     pu_logrado: float = Field(
         ..., description="Unidades de pasteurización (fórmula determinista, debe ser ≥ 13)"
+    )
+    xai_feature_values: dict[str, float] | None = Field(
+        default=None,
+        description=(
+            "Las 8 features exactas que recibe la ANN, con temp_proceso_leche/temp_agua_servicio "
+            "ya autocompletados si no se aportaron — mismo vector que usa predict_batch, para SHAP."
+        ),
     )
 
 

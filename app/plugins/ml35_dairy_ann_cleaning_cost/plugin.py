@@ -72,11 +72,15 @@ def _infer(model: Any, scaler_x: Any, scaler_y: Any, df: pd.DataFrame) -> float:
 
 
 def _resolve_features(features: dict) -> dict:
-    """Fill temp_proceso_leche/temp_agua_servicio defaults when the caller omits them."""
+    """Fill temp_proceso_leche/temp_agua_servicio defaults when the caller omits them.
+
+    A blank CSV cell reaches here as NaN (not None) in predict_batch, so both count as
+    omitted — otherwise the NaN would flow straight into the ANN.
+    """
     data = dict(features)
-    if data.get("temp_proceso_leche") is None:
+    if pd.isna(data.get("temp_proceso_leche")):
         data["temp_proceso_leche"] = data["temp_setpoint_leche"]
-    if data.get("temp_agua_servicio") is None:
+    if pd.isna(data.get("temp_agua_servicio")):
         data["temp_agua_servicio"] = data["temp_proceso_leche"] + 10.0
     return data
 
@@ -94,10 +98,17 @@ def _load_train_frame(data_path: str) -> pd.DataFrame:
     """Read the training CSV, derive the optional temperatures and check the required columns."""
     with local_file_path(data_path) as local_path:
         df = pd.read_csv(local_path)
-    if "temp_proceso_leche" not in df.columns and "temp_setpoint_leche" in df.columns:
-        df["temp_proceso_leche"] = df["temp_setpoint_leche"]
-    if "temp_agua_servicio" not in df.columns and "temp_proceso_leche" in df.columns:
-        df["temp_agua_servicio"] = df["temp_proceso_leche"] + 10.0
+    # Same defaults as _resolve_features, also for blank cells in an existing column.
+    if "temp_setpoint_leche" in df.columns:
+        if "temp_proceso_leche" not in df.columns:
+            df["temp_proceso_leche"] = df["temp_setpoint_leche"]
+        df["temp_proceso_leche"] = df["temp_proceso_leche"].fillna(df["temp_setpoint_leche"])
+    if "temp_proceso_leche" in df.columns:
+        if "temp_agua_servicio" not in df.columns:
+            df["temp_agua_servicio"] = df["temp_proceso_leche"] + 10.0
+        df["temp_agua_servicio"] = df["temp_agua_servicio"].fillna(
+            df["temp_proceso_leche"] + 10.0
+        )
 
     missing = [c for c in FEATURES + [TARGET_COL] if c not in df.columns]
     if missing:
@@ -112,6 +123,26 @@ def _mae_r2(y_real: np.ndarray, y_pred: np.ndarray) -> tuple[float, float]:
     ss_tot = np.sum((y_real - np.mean(y_real)) ** 2)
     r2 = float(1 - ss_res / ss_tot) if ss_tot else 0.0
     return mae, r2
+
+
+def _show_run_training_metrics(metrics: dict) -> None:
+    """With a retraining run in ``metrics["mlflow"]``, show its metrics instead of the served ones.
+
+    The test/validation numbers describe the served model, not this run. train() only logs
+    mae/r2 on the fine-tuning CSV itself, so show those as training-set metrics instead (the
+    nested "mlflow" dict is not rendered by the platform).
+    """
+    run_metrics = metrics.get("mlflow", {}).get("metrics", {})
+    if not isinstance(run_metrics.get("r2"), (int, float)):
+        return
+    for key in [k for k in metrics if k.startswith(("test_", "val_"))]:
+        del metrics[key]
+    metrics["train_r2"] = run_metrics["r2"]
+    if isinstance(run_metrics.get("mae"), (int, float)):
+        metrics["train_mae"] = run_metrics["mae"]
+    if isinstance(run_metrics.get("n_samples"), (int, float)):
+        metrics["n_samples"] = int(run_metrics["n_samples"])
+    metrics.pop("split", None)
 
 
 class Ml35DairyAnnCleaningCostPlugin(PluginRuntimeMixin, ModelPluginPort):
@@ -169,6 +200,11 @@ class Ml35DairyAnnCleaningCostPlugin(PluginRuntimeMixin, ModelPluginPort):
         """ANN single-sample inference with PU validation."""
         model, scaler_x, scaler_y = ctx
         data = _resolve_features(features)
+        # Batch rows skip the request schema: a blank or "n/a" cell arrives as NaN, which
+        # would slip past the PU check below (NaN < 13 is False) and return a NaN prediction.
+        missing = [f for f in FEATURES if pd.isna(data.get(f))]
+        if missing:
+            raise ValueError(f"Faltan valores obligatorios: {', '.join(missing)}")
 
         temp_setpoint = float(data["temp_setpoint_leche"])
         temp_proceso = float(data["temp_proceso_leche"])
@@ -193,6 +229,7 @@ class Ml35DairyAnnCleaningCostPlugin(PluginRuntimeMixin, ModelPluginPort):
             model_id=MODEL_ID,
             consumo_agua_l=round(consumo, 2),
             pu_logrado=round(pu, 4),
+            xai_feature_values=xai_feature_values(data, FEATURES) or None,
         )
 
     def _run_optimize(  # pylint: disable=too-many-locals
@@ -280,12 +317,22 @@ class Ml35DairyAnnCleaningCostPlugin(PluginRuntimeMixin, ModelPluginPort):
             for idx, row in df.iterrows():
                 with row_error_capture(predictions, {"row": int(idx)}, what=f"fila {idx}"):
                     row_dict = row.to_dict()
-                    pred = self._run_predict(row_dict, ctx)
+                    try:
+                        pred = self._run_predict(row_dict, ctx)
+                    except PuConstraintViolationError as exc:
+                        # Not a failure: the row is processed and deliberately left without a
+                        # prediction. The flag lets the summary tell these apart from real errors.
+                        logger.info("Fila %s rechazada por la regla de seguridad: %s", idx, exc)
+                        predictions.append(
+                            {"row": int(idx), "rejected_by_safety_rule": 1, "error": str(exc)}
+                        )
+                        continue
                     predictions.append(
                         {
                             "row": int(idx),
                             "consumo_agua_l": pred.consumo_agua_l,
                             "pu_logrado": pred.pu_logrado,
+                            "rejected_by_safety_rule": 0,
                             "xai_feature_values": xai_feature_values(
                                 _resolve_features(row_dict), FEATURES
                             )
@@ -373,9 +420,11 @@ class Ml35DairyAnnCleaningCostPlugin(PluginRuntimeMixin, ModelPluginPort):
             model_name=MODEL_ID,
             version=VERSION,
             description=(
-                "Red neuronal ANN (PyTorch) + algoritmo genético (pygad) para optimización "
-                "del consumo de agua de refrigeración en pasteurización HTST láctea. "
-                "Modo inline: predice consumo_agua_l. Modo optimize: sugiere setpoints óptimos."
+                "Predicción del consumo de agua en la pasteurización de leche (HTST) según las "
+                "condiciones de operación y el estado del equipo, con una red neuronal ANN "
+                "(PyTorch). No predice un coste económico ni el agua del ciclo CIP. Devuelve "
+                "consumo_agua_l y pu_logrado (condición de seguridad PU ≥ 13; las filas que no "
+                "la cumplen se rechazan)."
             ),
             task_type="regression_prescriptive",
             framework=FRAMEWORK,
@@ -391,21 +440,22 @@ class Ml35DairyAnnCleaningCostPlugin(PluginRuntimeMixin, ModelPluginPort):
                 InputField(
                     name="temp_setpoint_leche",
                     type="float",
-                    description="Setpoint de temperatura de leche (°C, ≥ 72)",
+                    description="Consigna de temperatura de la leche (°C, ≥ 72)",
                 ),
                 InputField(
                     name="temp_proceso_leche",
                     type="float",
                     description=(
-                        "Temperatura de proceso real (°C); si no se aporta = temp_setpoint_leche"
+                        "(Opcional) Temperatura de proceso de la leche (°C). Si no se indica, "
+                        "el modelo usa la consigna de temperatura de la leche."
                     ),
                 ),
                 InputField(
                     name="temp_agua_servicio",
                     type="float",
                     description=(
-                        "Temperatura del agua de servicio (°C); si no se aporta = "
-                        "temp_proceso_leche + 10"
+                        "(Opcional) Temperatura del agua de servicio (°C). Si no se indica, "
+                        "el modelo usa la temperatura de proceso + 10 °C."
                     ),
                 ),
                 InputField(
@@ -414,54 +464,53 @@ class Ml35DairyAnnCleaningCostPlugin(PluginRuntimeMixin, ModelPluginPort):
                 InputField(
                     name="horas_desde_limpieza",
                     type="float",
-                    description="Horas desde la última limpieza — proxy de fouling (h)",
+                    description="Horas desde el último ciclo de limpieza (h)",
                 ),
                 InputField(
                     name="presion_diferencial_bar",
                     type="float",
-                    description="Presión diferencial en el intercambiador de calor (bar)",
+                    description="Presión diferencial (bar)",
                 ),
             ],
             outputs=[
                 OutputField(
                     name="consumo_agua_l",
                     type="float",
-                    description="Consumo de agua de refrigeración predicho (L) [modo inline]",
+                    description="Consumo de agua estimado (L)",
                 ),
                 OutputField(
                     name="pu_logrado",
                     type="float",
-                    description="Unidades de pasteurización logradas (PU ≥ 13 requerido)",
+                    description=(
+                        "Unidades de pasteurización (PU) resultantes. Condición de seguridad: "
+                        "PU ≥ 13."
+                    ),
                 ),
                 OutputField(
-                    name="opt_temp_leche",
-                    type="float",
-                    description="Setpoint óptimo de temperatura leche (°C) [modo optimize]",
-                ),
-                OutputField(
-                    name="opt_temp_agua",
-                    type="float",
-                    description="Temperatura óptima agua de servicio (°C) [modo optimize]",
-                ),
-                OutputField(
-                    name="opt_flujo",
-                    type="float",
-                    description="Caudal óptimo de leche (L/h) [modo optimize]",
-                ),
-                OutputField(
-                    name="ahorro_pct",
-                    type="float",
-                    description="Ahorro de agua vs. baseline estándar (%) [modo optimize]",
+                    name="rejected_by_safety_rule",
+                    type="int",
+                    description=(
+                        "[Batch] 1 si la fila se rechazó por la regla de seguridad (PU < 13 o "
+                        "setpoint < 72 °C) y no tiene predicción; 0 si la predicción es válida"
+                    ),
                 ),
             ],
+            # Served model, from the a35 repo's models/metrics/{test,val}_metrics.txt (MAE/RMSE
+            # in L). Keys use the platform's split-prefix convention (test_r2 -> "R² (test set)").
             metrics={
-                "r2_test": 0.9932,
-                "mae_l": 341.58,
-                "rmse_l": 417.75,
-                "mae_relativo_pct": 1.39,
-                "n_test": 750,
+                "test_r2": 0.9932,
+                "test_mae": 341.58,
+                "test_rmse": 417.75,
+                "test_mae_relative_pct": 1.39,
+                "val_r2": 0.9935,
+                "val_mae": 339.19,
+                "val_rmse": 416.84,
+                "val_mae_relative_pct": 1.40,
+                "test_samples": 750,
                 "split": "70/15/15",
             },
             runtime_stats=self._runtime_stats(),
         )
-        return add_mlflow_run_to_stats(base, mlflow_run_id)
+        stats = add_mlflow_run_to_stats(base, mlflow_run_id)
+        _show_run_training_metrics(stats.metrics)
+        return stats
