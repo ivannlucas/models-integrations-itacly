@@ -9,6 +9,7 @@ from torch import nn
 from torchvision import models
 
 from app.domain.services.torch_device import safe_torch_device
+from app.domain.services.ultralytics_settings import configure_ultralytics
 from app.infrastructure.artifact_store import ArtifactStore
 from app.plugins.ml10_dairy_disease_vector_detection.constants import (
     ARTIFACT_FOLDER_NAME,
@@ -72,6 +73,7 @@ def load_detector_and_classifier(device: torch.device):
 
     # Load YOLO detector (lazy import to avoid heavy ultralytics import at module level)
     from ultralytics import YOLO  # noqa: PLC0415  # pylint: disable=import-outside-toplevel
+    configure_ultralytics()
     detector = YOLO(str(detector_path))
 
     # Load MobileNetV3 classifier

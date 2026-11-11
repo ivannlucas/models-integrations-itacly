@@ -44,6 +44,8 @@ Thumbs.db
 
 # Large media files
 *.mp4
+# ...except the small test videos of outputs/<aNN>/datos_prueba/ (ml5 batch input, ~4 MB)
+!outputs/*/datos_prueba/*.mp4
 *.tiff
 *.avi
 *.flv
@@ -103,6 +105,11 @@ inbox/*/codigo/
 # Model artifacts live in S3 (artifacts/fixed/...) — never commit local copies
 # (refrigeracion_model.pkl for ml40 alone is 171 MB)
 /artifacts/
+
+# Ultralytics' default runs_dir/weights_dir (<repo>/runs, <repo>/weights). The YOLO plugins move
+# them out (app/domain/services/ultralytics_settings.py); this is the safety net.
+/runs/
+/weights/
 
 # Claude Code local settings (per-machine permissions/config, not shared config)
 .claude/settings.local.json
