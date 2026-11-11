@@ -11,6 +11,8 @@ import logging
 import shutil
 import tempfile
 import zipfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 import numpy as np
@@ -43,6 +45,7 @@ from app.plugins.ml7_cereals_grain_pest_detection.constants import (
     TRAIN_PATIENCE,
     TRAIN_SEED,
     TRAIN_WORKERS,
+    TRAINING_CLASS_ID_TO_CODE,
     VERSION,
 )
 from app.plugins.ml7_cereals_grain_pest_detection.mlflow_utils import (
@@ -90,8 +93,72 @@ def _resolve_dataset_yaml(data_path: str) -> Path:
         if candidate.exists():
             return candidate
     raise ValueError(
-        f"data_path debe ser un dataset.yaml de YOLO o un directorio que lo contenga: {data_path}"
+        f"data_path debe ser un ZIP, un dataset.yaml de YOLO o un directorio que lo contenga: "
+        f"{data_path}"
     )
+
+
+def _is_zip(path: Path) -> bool:
+    """True for a ZIP file, by extension or by content (s3:// downloads keep the key's suffix)."""
+    return path.is_file() and (path.suffix.lower() == ".zip" or zipfile.is_zipfile(path))
+
+
+def _zip_dataset_yaml(extract_dir: Path) -> Path:
+    """dataset.yaml of an extracted training ZIP, rewritten to point inside ``extract_dir``.
+
+    The ZIP may hold the dataset at its root or inside one top-level folder. The split paths of
+    its yaml are not trusted: the delivered create_dataset_yaml() writes absolute paths of the
+    author's machine, and a user's yaml could point anywhere in the container. They are replaced
+    by the layout TrainRequest documents (images/{train,val[,test]} next to the yaml).
+    """
+    entries = [e for e in extract_dir.iterdir() if e.name != "__MACOSX"]
+    root = entries[0] if len(entries) == 1 and entries[0].is_dir() else extract_dir
+    dataset_yaml = _resolve_dataset_yaml(str(root))
+    base = dataset_yaml.parent
+    with open(dataset_yaml, encoding="utf-8") as fh:
+        cfg = yaml.safe_load(fh) or {}
+
+    names = cfg.get("names")
+    n_classes = len(names) if names is not None else cfg.get("nc")
+    if n_classes != len(TRAINING_CLASS_ID_TO_CODE):
+        raise ValueError(
+            f"El dataset.yaml declara {n_classes} clases; el detector usa "
+            f"{len(TRAINING_CLASS_ID_TO_CODE)} ({', '.join(TRAINING_CLASS_ID_TO_CODE.values())})."
+        )
+    for split in ("train", "val"):
+        if not (base / "images" / split).is_dir():
+            raise ValueError(f"El ZIP no contiene images/{split}/ junto a {dataset_yaml.name}")
+
+    cfg.update(path=str(base), train="images/train", val="images/val")
+    if (base / "images" / "test").is_dir():
+        cfg["test"] = "images/test"
+    else:
+        cfg.pop("test", None)
+    with open(dataset_yaml, "w", encoding="utf-8") as fh:
+        yaml.safe_dump(cfg, fh, sort_keys=False)
+    return dataset_yaml
+
+
+@contextmanager
+def _local_dataset_yaml(data_path: str) -> Iterator[Path]:
+    """Yield the dataset.yaml to train on, from a ZIP (local or s3://), a dir or a yaml.
+
+    A ZIP is extracted with safe_extract_zip to a temp dir, removed on exit. A local dir or
+    yaml is used in place, as before.
+    """
+    with local_file_path(data_path) as local_path:
+        local = Path(local_path)
+        if _is_zip(local):
+            extract_dir = Path(tempfile.mkdtemp(prefix="ml7_train_data_"))
+            try:
+                safe_extract_zip(str(local), str(extract_dir))
+                yield _zip_dataset_yaml(extract_dir)
+            finally:
+                shutil.rmtree(extract_dir, ignore_errors=True)
+        elif data_path.startswith("s3://"):
+            raise ValueError(f"Un data_path s3:// debe ser un ZIP con el dataset YOLO: {data_path}")
+        else:
+            yield _resolve_dataset_yaml(local_path)
 
 
 def _count_images(dataset_yaml: Path, split: str) -> int:
@@ -108,10 +175,13 @@ def _count_images(dataset_yaml: Path, split: str) -> int:
         return 0
 
 
-def _validate_best(best_weights: Path, dataset_yaml: Path, device) -> dict[str, float]:
+def _validate_best(
+    best_weights: Path, dataset_yaml: Path, device, project_dir: Path
+) -> dict[str, float]:
     """Evaluate the fine-tuned checkpoint on the val split.
 
-    Same as src/training/validation.py::validate_model().
+    Same as src/training/validation.py::validate_model(). ``project_dir`` is train()'s temp dir:
+    without it Ultralytics writes runs/detect/val-N under its global runs_dir.
     """
     val_model = _load_yolo_from_path(best_weights)
     val_metrics = val_model.val(
@@ -122,6 +192,9 @@ def _validate_best(best_weights: Path, dataset_yaml: Path, device) -> dict[str, 
         device=device,
         plots=False,
         conf=TRAIN_EVAL_CONF,
+        project=str(project_dir),
+        name="val",
+        exist_ok=True,
     )
     return {
         "map50": float(val_metrics.box.map50),
@@ -261,12 +334,19 @@ class Ml7CerealsGrainPestDetectionPlugin(PluginRuntimeMixin, ModelPluginPort):
         using the untouched served model). The fine-tuned checkpoint is written only to
         a temp dir and uploaded to MLflow — the served artifacts/.../best.pt is never
         overwritten (see inbox/a07/manifest.yaml::training).
+
+        ``data_path``: a ZIP of the YOLO dataset (local or s3://, like the other image plugins),
+        or a local dataset root / dataset.yaml.
         """
         # Without a run the retrained checkpoint would be lost: fail before training.
         require_train_tracker(mlflow_run_id)
-        dataset_yaml = _resolve_dataset_yaml(data_path)
-        device = safe_device()
+        with _local_dataset_yaml(data_path) as dataset_yaml:
+            return self._train_on_dataset(dataset_yaml, mlflow_run_id)
 
+    @staticmethod
+    def _train_on_dataset(dataset_yaml: Path, mlflow_run_id: str) -> TrainResponse:
+        """Fine-tune on a resolved dataset.yaml, validate and upload best.pt to MLflow."""
+        device = safe_device()
         train_project_dir = Path(tempfile.mkdtemp(prefix="ml7_train_"))
         upload_dir = Path(tempfile.mkdtemp(prefix="ml7_train_upload_"))
         try:
@@ -292,7 +372,7 @@ class Ml7CerealsGrainPestDetectionPlugin(PluginRuntimeMixin, ModelPluginPort):
             if not best_weights.exists():
                 raise RuntimeError(f"Entrenamiento finalizado pero no se generó {best_weights}")
 
-            val = _validate_best(best_weights, dataset_yaml, device)
+            val = _validate_best(best_weights, dataset_yaml, device, train_project_dir)
             n_images = _count_images(dataset_yaml, "train")
 
             shutil.copy2(best_weights, upload_dir / MODEL_FILENAME)

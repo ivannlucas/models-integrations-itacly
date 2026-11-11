@@ -8,18 +8,21 @@ from app.application.dto.train_dto import MlflowRunId
 class TrainRequest(TrainRequestBase):
     """Fine-tune the YOLO detector on a new annotated image dataset.
 
-    ``data_path`` must point to a YOLO-format dataset root — a directory containing
-    ``images/{train,val,test}`` + ``labels/{train,val,test}`` and a ``dataset.yaml``
-    describing them (same layout ``scripts/data_processing.py`` produces in the
-    delivered code from raw Pascal VOC XML annotations). There is no CSV-based training
-    for this model — it is an object detector, not a tabular regressor/classifier.
+    ``data_path`` points to a YOLO-format dataset — ``images/{train,val[,test]}`` +
+    ``labels/{train,val[,test]}`` and a ``dataset.yaml`` with the 5 classes (same layout
+    ``scripts/data_processing.py`` produces in the delivered code from raw Pascal VOC XML
+    annotations). Usually a ZIP (local or ``s3://``) with the dataset at its root or in one
+    top-level folder; the split paths of its yaml are replaced by that layout. A local
+    dataset root or ``dataset.yaml`` is used as is. There is no CSV-based training for this
+    model — it is an object detector, not a tabular regressor/classifier.
     """
 
     data_path: str = Field(
         ...,
         description=(
-            "Path to a YOLO-format dataset root (images/{train,val,test} + "
-            "labels/{train,val,test} + dataset.yaml), or directly to a dataset.yaml file."
+            "ZIP (local or s3://) of a YOLO-format dataset: images/{train,val[,test]} + "
+            "labels/{train,val[,test]} + dataset.yaml with the 5 classes. Also accepts a local "
+            "dataset root or dataset.yaml."
         ),
     )
     mlflow_run_id: MlflowRunId = Field(
