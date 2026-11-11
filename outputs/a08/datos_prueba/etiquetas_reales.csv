@@ -1,0 +1,13 @@
+id,filename,ground_truth_cereal,ground_truth_categoria
+arroz_hongos,archive(2)_Rice_Leaf_AUG_Brown_Spot_aug_0_8462.jpg,arroz,hongos
+arroz_insectos,archive(1)_dataset_Rice_stem_borer_0057.JPG,arroz,insectos
+arroz_otros,archive(2)_Rice_Leaf_AUG_Leaf_scald_aug_0_2383.jpg,arroz,otros
+arroz_sano,archive(2)_Rice_Leaf_AUG_Healthy_Rice_Leaf_aug_0_513.jpg,arroz,sano
+maiz_hongos,archive(4)_New_Plant_Diseases_Dataset(Augmented)_New_Plant_Diseases_Dataset(Augmented)_train_Corn_(maize)___Common_rust__RS_Rust 2291.JPG,maiz,hongos
+maiz_insectos,archive(3)_Train_maize_fall_armyworm_00000091.jpg,maiz,insectos
+maiz_sano,archive(3)_Train_Healthy_Maize_Corn_Health (551).jpg,maiz,sano
+sorgo_hongos,archive_Sorghum_Disease_Image_Dataset_Cereal_Grain_molds_Cereal Grain molds (White Fungi)t505.jpg,sorgo,hongos
+trigo_hongos,archive(5)_data_train_Blast_blast_99.png,trigo,hongos
+trigo_insectos,archive(3)_Train_Wheat_mite_24759.jpg,trigo,insectos
+trigo_otros,Wheat_Coccinellid_Wheat_Coccinellid_train_images_Wheat_Coccin_0462_jpg.rf.5bfe984c39e3c535f25ec5c7b546acba.jpg,trigo,otros
+trigo_sano,archive(5)_data_train_Healthy_healthy_243.png,trigo,sano

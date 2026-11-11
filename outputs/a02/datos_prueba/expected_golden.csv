@@ -1,0 +1,19 @@
+id,filename,ground_truth_label,esperado_prediction,esperado_confidence,esperado_prob_black_rot,esperado_prob_downy_mildew,esperado_prob_healthy,esperado_prob_powdery_mildew,esperado_prob_trunk_disease
+caso_001_black_rot,image (567).JPG,black_rot,black_rot,0.999735,0.999735,0.0,0.0,0.0,0.000265
+caso_002_black_rot,image (888).JPG,black_rot,black_rot,0.999979,0.999979,0.0,0.0,0.0,2.1e-05
+caso_003_black_rot,image (457).JPG,black_rot,black_rot,0.999964,0.999964,0.0,0.0,0.0,3.6e-05
+caso_004_black_rot,image (406).JPG,black_rot,black_rot,0.969956,0.969956,0.0,0.000122,0.0,0.029922
+caso_005_downy_mildew,Downy Mildew_89.jpg,downy_mildew,downy_mildew,0.989935,1e-06,0.989935,1.6e-05,0.010046,3e-06
+caso_006_downy_mildew,Downy Mildew_480.jpg,downy_mildew,downy_mildew,0.99994,1e-06,0.99994,0.0,5.8e-05,0.0
+caso_007_downy_mildew,Downy Mildew_701.jpg,downy_mildew,downy_mildew,0.999888,0.0,0.999888,0.0,0.000112,0.0
+caso_008_healthy,image (250).JPG,healthy,healthy,0.999701,0.000247,2e-06,0.999701,2.2e-05,2.7e-05
+caso_009_healthy,Healthy Leaves_959.jpg,healthy,healthy,0.999681,0.0,0.000242,0.999681,7.7e-05,0.0
+caso_010_healthy,Healthy Leaves_1239.jpg,healthy,healthy,0.999975,0.0,1.3e-05,0.999975,1.1e-05,0.0
+caso_011_healthy,image (124).JPG,healthy,healthy,0.999244,0.000697,0.0,0.999244,2e-06,5.7e-05
+caso_012_powdery_mildew,Powdery Mildew_272.jpg,powdery_mildew,powdery_mildew,0.998776,0.0,0.001213,1e-05,0.998776,0.0
+caso_013_powdery_mildew,Powdery Mildew_152.jpg,powdery_mildew,powdery_mildew,0.961269,0.0,0.000532,0.038199,0.961269,0.0
+caso_014_powdery_mildew,Powdery Mildew_300.jpg,powdery_mildew,powdery_mildew,0.999012,1e-06,0.000984,3e-06,0.999012,0.0
+caso_015_trunk_disease,image (365).JPG,trunk_disease,trunk_disease,0.999995,5e-06,0.0,0.0,0.0,0.999995
+caso_016_trunk_disease,image (862).JPG,trunk_disease,trunk_disease,0.984186,0.013286,0.002374,0.0,0.000155,0.984186
+caso_017_trunk_disease,image (281).JPG,trunk_disease,trunk_disease,0.999808,0.000192,0.0,0.0,0.0,0.999808
+caso_018_trunk_disease,image (1174).JPG,trunk_disease,trunk_disease,0.999289,0.000711,0.0,0.0,0.0,0.999289
