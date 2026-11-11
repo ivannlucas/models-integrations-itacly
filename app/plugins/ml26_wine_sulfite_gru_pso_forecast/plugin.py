@@ -54,10 +54,23 @@ from app.plugins.ml26_wine_sulfite_gru_pso_forecast.predict_dto import (
     LotPrediction,
     PredictBatchResponse,
     PredictInlineResponse,
+    XaiLotPrediction,
 )
 from app.plugins.ml26_wine_sulfite_gru_pso_forecast.train_dto import TrainResponse
 
 logger = logging.getLogger(__name__)
+
+
+def _xai_fields(model: model_loader.LoadedModel, window: np.ndarray) -> dict:
+    """XAI input of one scored (window, n_features) window, shared by inline and batch.
+
+    The 22 engineered model features of the window's last step plus the whole unnormalised
+    window — what the explainability service explains — never the raw reading columns.
+    """
+    return {
+        "xai_feature_values": dict(zip(model.feature_names, (float(v) for v in window[-1]))),
+        "xai_feature_window": np.asarray(window, dtype=float).tolist(),
+    }
 
 
 def _load_train_frame(data_path: str) -> pd.DataFrame:
@@ -193,11 +206,6 @@ class Ml26WineSulfiteGruPsoForecastPlugin(PluginRuntimeMixin, ModelPluginPort):
                 lots, readings = preprocessing.frames_from_inline(features)
                 predictions, window = self._lot_predictions(model, lots, readings)
                 prediction = predictions[0]
-            # Both paths expose the same contract: the 22 engineered model features of the
-            # scored window's last step (what the explainability service explains), not the raw
-            # reading columns.
-            xai = dict(zip(model.feature_names, (float(v) for v in window[0, -1])))
-            xai_window = np.asarray(window[0], dtype=float).tolist()
             self._record_timed(started)
             logger.info(
                 "predict_inline done — lot=%s so2=%.3f risk=%.3f source=%s",
@@ -211,8 +219,7 @@ class Ml26WineSulfiteGruPsoForecastPlugin(PluginRuntimeMixin, ModelPluginPort):
                 model_id=MODEL_ID,
                 model_name=MODEL_ID,
                 model_source=model.source,
-                xai_feature_values=xai,
-                xai_feature_window=xai_window,
+                **_xai_fields(model, window[0]),
             )
 
     # ── predict_batch ─────────────────────────────────────────────────────────
@@ -227,7 +234,14 @@ class Ml26WineSulfiteGruPsoForecastPlugin(PluginRuntimeMixin, ModelPluginPort):
             with local_file_path(data_path) as local_path:
                 df = pd.read_csv(local_path)
             lots, readings = preprocessing.frames_from_batch_csv(df)
-            predictions, _ = self._lot_predictions(model, lots, readings)
+            lot_predictions, windows = self._lot_predictions(model, lots, readings)
+            # Every lot carries its own XAI input, as inline does: the platform explains a
+            # batch from these (it used to send 9 raw reading columns instead, which the XAI
+            # service zero-filled into a point the model never scored).
+            predictions = [
+                XaiLotPrediction(**p.model_dump(), **_xai_fields(model, windows[i]))
+                for i, p in enumerate(lot_predictions)
+            ]
             self._record_timed(started)
             logger.info("predict_batch done — %d lots, source=%s", len(predictions), model.source)
             return PredictBatchResponse(

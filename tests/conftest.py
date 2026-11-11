@@ -144,7 +144,7 @@ from app.plugins.ml41_meat_curing_machinery_acoustic_anomaly.train_dto import (
 )
 from app.plugins.ml26_wine_sulfite_gru_pso_forecast.exceptions import InvalidWineryInputError
 from app.plugins.ml26_wine_sulfite_gru_pso_forecast.predict_dto import (
-    LotPrediction as Ml26LotPrediction,
+    XaiLotPrediction as Ml26LotPrediction,
     PredictBatchResponse as Ml26BatchResp,
     PredictInlineResponse as Ml26InlineResp,
     PredictRequest as Ml26_Request,

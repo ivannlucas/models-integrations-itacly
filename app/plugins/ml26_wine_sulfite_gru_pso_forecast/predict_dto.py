@@ -137,14 +137,9 @@ class LotPrediction(PluginDTO):
     )
 
 
-class PredictInlineResponse(LotPrediction):
-    """Inline response for a single lot."""
+class XaiLotPrediction(LotPrediction):
+    """A lot forecast plus the exact model input the explainability service explains."""
 
-    model_id: str
-    model_name: str
-    model_source: str = Field(
-        ..., description="fixed (artefacto del equipo de IA) o mlflow:<run_id>"
-    )
     xai_feature_values: dict[str, Any] | None = Field(
         default=None,
         description="Las 22 features del último paso de la ventana — consumido por el servicio XAI",
@@ -155,6 +150,16 @@ class PredictInlineResponse(LotPrediction):
             "La ventana completa (24 pasos x 22 features, sin normalizar, en el orden de "
             "xai_feature_values) que puntuó la GRU — el servicio XAI la explica tal cual."
         ),
+    )
+
+
+class PredictInlineResponse(XaiLotPrediction):
+    """Inline response for a single lot."""
+
+    model_id: str
+    model_name: str
+    model_source: str = Field(
+        ..., description="fixed (artefacto del equipo de IA) o mlflow:<run_id>"
     )
 
 
@@ -176,12 +181,12 @@ class PredictBatchRequest(BatchRequestBase):
 
 
 class PredictBatchResponse(PluginDTO):
-    """Batch response: one forecast per lot."""
+    """Batch response: one forecast per lot, each with its own XAI input (same as inline)."""
 
     model_id: str
     model_source: str
     n_lots: int
-    predictions: list[LotPrediction]
+    predictions: list[XaiLotPrediction]
 
 
 PredictRequest = Annotated[

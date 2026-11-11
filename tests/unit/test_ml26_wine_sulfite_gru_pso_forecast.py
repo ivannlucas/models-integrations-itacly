@@ -463,6 +463,15 @@ def test_real_plugin_batch(tmp_path):
     resp = plugin.predict_batch(data_path=str(path))
     assert resp.n_lots == 2
     assert {p.lot_id for p in resp.predictions} == {"LOT-T1", "LOT-T2"}
+    # Every lot carries its own XAI input, same contract as inline (the platform explains
+    # batch results from it): the model's engineered features, not raw reading columns.
+    for pred in resp.predictions:
+        assert list(pred.xai_feature_values) == plugin._model.feature_names
+        assert len(pred.xai_feature_window) == 24
+        # pylint: disable-next=unsubscriptable-object,no-member  # pydantic fields
+        assert pred.xai_feature_window[-1] == list(pred.xai_feature_values.values())
+    by_lot = {p.lot_id: p.xai_feature_values for p in resp.predictions}
+    assert by_lot["LOT-T1"]["wine_type_red"] == 1.0 and by_lot["LOT-T2"]["wine_type_white"] == 1.0
 
 
 def test_real_plugin_stats_contract():
