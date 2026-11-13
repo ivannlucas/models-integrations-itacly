@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pandas as pd
 import pytest
+import numpy as np
 import torch
 from PIL import Image
 from pydantic import ValidationError
@@ -295,3 +296,44 @@ def test_compute_and_encode_cam():
     assert decoded.size == (image_cam.MAX_HEATMAP_SIZE, 320)
     cam = image_cam.class_activation_map(feature_map, weight, 1)
     assert cam.shape == (7, 7) and 0.0 <= cam.min() and cam.max() <= 1.0
+
+
+def test_cam_zone_contributions_matches_the_explainability_grid():
+    """3x3 zones, same naming as the XAI service's top_features, highest first, all 9."""
+    cam = np.zeros((7, 7), dtype=np.float32)
+    cam[:2, 5:] = 1.0  # hot top-right corner
+    zones = image_cam.cam_zone_contributions(cam)
+    assert len(zones) == 9
+    assert zones[0]["feature"] == "region_0_2" and zones[0]["value"] == "grid(0,2)"
+    assert [z["contribution"] for z in zones] == sorted((z["contribution"] for z in zones), reverse=True)
+    assert {z["feature"] for z in zones} == {f"region_{i}_{j}" for i in range(3) for j in range(3)}
+    assert all(0.0 <= z["contribution"] <= 1.0 for z in zones)
+
+
+def test_ml4_every_batch_row_has_its_own_zone_contributions(tmp_path):
+    """QA: batch rows showed the heatmap but not the per-zone contribution of inline."""
+    from torch import nn  # pylint: disable=import-outside-toplevel
+
+    from app.plugins.ml4_lactic_cnn_thermal_early_disease_detection import plugin as ml4
+
+    class _Tiny(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.classifier = nn.Sequential(nn.Dropout(), nn.Linear(4, 2))
+
+        def forward(self, x, return_features=False):
+            feat = torch.zeros(1, 4, 7, 7)
+            feat[:, :, 6, 0] = x.mean() + 1  # activation only at the bottom-left
+            logits = self.classifier(feat.mean(dim=(2, 3)))
+            return (logits, feat) if return_features else logits
+
+    model = _Tiny().eval()
+    with torch.no_grad():
+        model.classifier[1].weight.fill_(1.0)
+    for name in ("a.jpg", "b.jpg"):
+        Image.new("RGB", (64, 48), (200, 30, 30)).save(tmp_path / name)
+    rows = [ml4._predict_batch_image(model, "cpu", str(tmp_path), n, i) for i, n in enumerate(["a.jpg", "b.jpg"])]
+    for row in rows:
+        assert row["heatmap_url"].startswith("data:image/jpeg;base64,")
+        assert row["zone_contributions"][0]["feature"] == "region_2_0"
+        assert len(row["zone_contributions"]) == 9
