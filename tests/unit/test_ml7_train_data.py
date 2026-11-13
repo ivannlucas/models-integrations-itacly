@@ -148,3 +148,19 @@ def test_validate_best_writes_inside_the_train_dir(tmp_path, monkeypatch):
     plugin._validate_best(tmp_path / "best.pt", tmp_path / "dataset.yaml", "cpu", tmp_path)  # pylint: disable=protected-access
     assert calls["project"] == str(tmp_path)
     assert calls["name"] == "val"
+
+
+def test_prediction_zip_sent_to_train_says_so(tmp_path):
+    """QA sent modelo-7-batch.zip (images only) to /train: the error now says what it looks like.
+
+    Before, it read 'data_path debe ser un ZIP, un dataset.yaml ... : /tmp/ml7_train_data_xxx',
+    which was confusing (it was a ZIP) and showed a temp path.
+    """
+    imgs = tmp_path / "batch"
+    imgs.mkdir()
+    for i in range(3):
+        (imgs / f"{i}.jpg").write_bytes(b"jpg")
+    with pytest.raises(ValueError, match=r"3 imágenes sin dataset.yaml: parece un ZIP de predicción") as exc:
+        with plugin._local_dataset_yaml(str(_zip(imgs, tmp_path / "modelo-7-batch.zip"))):  # pylint: disable=protected-access
+            pass
+    assert "/tmp" not in str(exc.value) and "images/{train,val}" in str(exc.value)
