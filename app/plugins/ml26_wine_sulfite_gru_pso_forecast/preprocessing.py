@@ -55,6 +55,44 @@ def _check_stage_progress(frame: pd.DataFrame, label: str) -> None:
         raise InvalidWineryInputError(f"{label}: stage_progress debe estar en [0, 1]")
 
 
+LOT_CONSTANT_COLUMNS = ["wine_type", "volume_l", "ambient_temp_c"]
+
+
+def check_lot_constants(frame: pd.DataFrame, label: str) -> None:
+    """wine_type, volume_l and ambient_temp_c describe the tank: one value per lot_id."""
+    if frame[LOT_CONSTANT_COLUMNS].isna().any().any():
+        lots = sorted(frame.loc[frame[LOT_CONSTANT_COLUMNS].isna().any(axis=1), "lot_id"]
+                      .astype(str).unique().tolist())
+        raise InvalidWineryInputError(
+            f"{label}: wine_type, volume_l y ambient_temp_c son obligatorios en todas las filas; "
+            f"faltan en los lotes {lots[:10]}"
+        )
+    distinct = frame.groupby("lot_id")[LOT_CONSTANT_COLUMNS].nunique()
+    bad = distinct[(distinct > 1).any(axis=1)]
+    if not bad.empty:
+        detail = "; ".join(
+            f"{lot}: {', '.join(c for c in LOT_CONSTANT_COLUMNS if row[c] > 1)}"
+            for lot, row in bad.head(10).iterrows()
+        )
+        raise InvalidWineryInputError(
+            f"{label}: wine_type/volume_l/ambient_temp_c deben ser constantes dentro de cada "
+            f"lote (describen el depósito); varían en {len(bad)} lote(s): {detail}"
+        )
+
+
+def check_training_frame(frame: pd.DataFrame) -> None:
+    """The rules prediction enforces, also on the training CSV (allowed values, per-lot constants).
+
+    Without them a training CSV with e.g. wine_type "tinto" or a lot whose volume changes
+    trained silently (unknown categories become all-zero one-hot columns) and produced a model
+    that prediction would then refuse to be fed with the same data.
+    """
+    label = "CSV de entrenamiento"
+    _check_categories(frame, "wine_type", WINE_TYPES, label)
+    _check_categories(frame, "stage", STAGES, label)
+    check_lot_constants(frame, label)
+
+
 def build_raw_frame(lots: pd.DataFrame, readings: pd.DataFrame) -> pd.DataFrame:
     """Validate and merge lote/lecturas tables like load_raw_inference_frame does."""
     _check_columns(lots, LOT_COLUMNS, "lote")
@@ -106,12 +144,8 @@ def frames_from_batch_csv(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]
     lote/lecturas.
     """
     _check_columns(df, LOT_COLUMNS + READING_REQUIRED_COLUMNS[1:], "CSV batch")
+    check_lot_constants(df, "CSV batch")
     lots = df[LOT_COLUMNS].drop_duplicates()
-    if lots["lot_id"].duplicated().any():
-        bad = sorted(lots.loc[lots["lot_id"].duplicated(), "lot_id"].astype(str).unique().tolist())
-        raise InvalidWineryInputError(
-            f"CSV batch: wine_type/volume_l/ambient_temp_c no constantes dentro del lote {bad}"
-        )
     readings = df.drop(columns=["wine_type", "volume_l", "ambient_temp_c"])
     return lots.reset_index(drop=True), readings
 
