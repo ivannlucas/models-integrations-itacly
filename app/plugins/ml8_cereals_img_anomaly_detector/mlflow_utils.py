@@ -14,6 +14,7 @@ from app.plugins.ml8_cereals_img_anomaly_detector.model_loader import (
     MultiTaskMobileNetV3Large,
     _safe_device,
 )
+from app.plugins.ml8_cereals_img_anomaly_detector.ood import load_reference
 
 
 @require_user_model
@@ -47,4 +48,6 @@ def _load(local_path: str) -> dict:
         "idx_to_class": checkpoint["idx_to_class"],
         "idx_to_cereal": checkpoint["idx_to_cereal"],
         "model_id": "ml8-cereals-img-anomaly-detector",
+        # Computed by train() from that run's own data; runs from before the gate have none.
+        "ood": load_reference(local_path),
     }
