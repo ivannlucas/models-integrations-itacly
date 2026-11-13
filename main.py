@@ -36,7 +36,11 @@ async def lifespan(fastapi_app: FastAPI):
     fastapi_app.state.load_errors = {}
     for entry in _active_entries:
         try:
-            container = ModelContainer(plugin=entry.plugin_class(), model_id=entry.model_id)
+            container = ModelContainer(
+                plugin=entry.plugin_class(),
+                model_id=entry.model_id,
+                extra_predict_exceptions=entry.extra_predict_exceptions,
+            )
             container.init()
             fastapi_app.state.containers[entry.model_id] = container
             logger.info("Model '%s' loaded successfully.", entry.model_id)
@@ -110,6 +114,7 @@ for _entry in _active_entries:
         train_request_type=_entry.train_request_type,
         train_response_type=_entry.train_response_type,
         extra_predict_exceptions=_entry.extra_predict_exceptions,
+        async_predict=_entry.async_predict,
     )
     app.include_router(_router, prefix=_entry.prefix, tags=[_entry.model_id])
 

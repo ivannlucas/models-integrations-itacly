@@ -14,6 +14,10 @@ import threading
 from typing import Any
 
 from app.application.use_cases.get_stats_use_case import GetStatsUseCase
+from app.application.use_cases.predict_job_use_cases import (
+    GetPredictJobUseCase,
+    SubmitPredictJobUseCase,
+)
 from app.application.use_cases.predict_model_use_case import PredictModelUseCase
 from app.application.use_cases.train_job_use_cases import GetTrainJobUseCase, SubmitTrainJobUseCase
 from app.application.use_cases.train_model_use_case import TrainModelUseCase
@@ -21,6 +25,8 @@ from app.domain.ports.model_plugin_port import ModelPluginPort
 from app.domain.services.exceptions import BaseReloadError, NoPreviousBaseVersionError
 from app.domain.services.model_runtime_service import ModelRuntimeService
 from app.infrastructure import base_model_publisher
+from app.infrastructure.predict_jobs.mlflow_job_store import MLflowPredictJobStore
+from app.infrastructure.predict_jobs.process_executor import ProcessPredictExecutor
 from app.infrastructure.train_jobs.mlflow_job_store import MLflowTrainJobStore
 from app.infrastructure.train_jobs.process_executor import ProcessTrainExecutor
 
@@ -46,7 +52,12 @@ class ModelContainer:  # pylint: disable=too-many-instance-attributes  # DI wiri
     classes need to be injected here.
     """
 
-    def __init__(self, plugin: ModelPluginPort, model_id: str = "") -> None:
+    def __init__(
+        self,
+        plugin: ModelPluginPort,
+        model_id: str = "",
+        extra_predict_exceptions: tuple[type[Exception], ...] = (),
+    ) -> None:
         """Recibe el plugin concreto y crea los casos de uso."""
         folder = getattr(type(plugin), "BASE_ARTIFACT_FOLDER", None)
         self._base_store = base_model_publisher._store_for(folder) if folder else None
@@ -65,6 +76,14 @@ class ModelContainer:  # pylint: disable=too-many-instance-attributes  # DI wiri
             plugin, model_id, train_job_store, ProcessTrainExecutor()
         )
         self.get_train_job_use_case = GetTrainJobUseCase(model_id, train_job_store)
+        # Async batch prediction (POST /predict?wait=false, only models with async_predict in the
+        # registry): same pattern, one MLflow run per job, prediction in a child process.
+        predict_job_store = MLflowPredictJobStore()
+        self.submit_predict_job_use_case = SubmitPredictJobUseCase(
+            plugin, model_id, predict_job_store, ProcessPredictExecutor(),
+            extra_predict_exceptions=extra_predict_exceptions,
+        )
+        self.get_predict_job_use_case = GetPredictJobUseCase(model_id, predict_job_store)
 
     def _wire(self, plugin: ModelPluginPort) -> None:
         """(Re)build the service and use cases around *plugin*. Each attribute is replaced

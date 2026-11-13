@@ -247,6 +247,32 @@ Solo para los modelos que guardan el reentreno en su run de MLflow (aplicativos 
 `train()` no debe sobrescribir el artefacto fijo en disco (se comparte con el proceso que sirve
 predicciones). Los de modelo base versionado siguen siendo síncronos.
 
+## Predicción asíncrona (por lotes)
+
+Solo los modelos con `async_predict=True` en `app/registry.py` (hoy ml5, vídeo de comportamiento
+bovino). `POST /models/<model-id>/predict?wait=false&job_id=<id>` con un cuerpo `mode=batch` lanza la
+predicción en un proceso aparte y responde `202`; `GET /models/<model-id>/predict/jobs/<id>` devuelve el
+estado y, al terminar bien, en `result` el mismo cuerpo que habría devuelto `POST /predict` síncrono.
+Sin `wait` (o con `wait=true`) `/predict` es síncrono como siempre; `mode=inline` siempre es síncrono.
+
+```bash
+curl -s -X POST "$BASE/models/ml5-meat-cow-behaviour/predict?wait=false&job_id=<task_id>" \
+  -H 'Content-Type: application/json' -d '{"mode": "batch", "data_path": "s3://<bucket>/video.mp4"}'
+# 202 {"job_id": "<task_id>", "status": "queued", ...}
+curl -s "$BASE/models/ml5-meat-cow-behaviour/predict/jobs/<task_id>"
+```
+
+El `job_id` lo elige el cliente (el orquestador manda el id de su tarea) y hace el POST idempotente;
+sin él se genera uno. Cada trabajo es un run del experimento de MLflow `PREDICT_JOB_EXPERIMENT`
+(`datagia-async-predict`) con etiquetas `async_predict.*` y el resultado en
+`async_predict/result.json.gz`. Códigos: `409` si ya hay `PREDICT_JOB_MAX_CONCURRENT` (1) en curso en el
+pod, `501` si el modelo no tiene predicción asíncrona, `400` `job_id` no válido, `503` MLflow no
+accesible; un `failed` lleva `http_status` (413, 422 o 500, lo que habría dado el síncrono).
+Variables: `PREDICT_JOB_HEARTBEAT_S` (60), `PREDICT_JOB_STALE_AFTER_S` (600 → `PredictJobLost`),
+`PREDICT_JOB_MAX_DURATION_S` (43200 → `PredictJobTimeout`), `PREDICT_JOB_NICE` (10). El proceso hijo
+carga su propia copia del modelo: en GPU hace falta memoria para dos. Diseño:
+`docs/superpowers/specs/2026-11-13-prediccion-asincrona.md`.
+
 ## Tests
 
 **Use one test file for each module. It should be named test_your_module_name.**

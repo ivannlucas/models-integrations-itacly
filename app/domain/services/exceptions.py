@@ -181,3 +181,15 @@ class TrainJobResultUnreadableError(Exception):
 
     Maps to 500, not 503: MLflow answers, but the artifact is missing or not a JSON file.
     """
+
+
+class PredictJobBusyError(Exception):
+    """Raised when an async batch prediction is requested while the model already runs
+    PREDICT_JOB_MAX_CONCURRENT of them in this process.
+
+    Maps to 409 (the orchestrator resubmits later; the POST is idempotent by job_id).
+    """
+
+
+class AsyncPredictNotSupportedError(Exception):
+    """Raised when ``wait=false`` is asked of a model without async prediction (→ 501)."""

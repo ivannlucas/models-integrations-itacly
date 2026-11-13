@@ -435,6 +435,9 @@ class ModelEntry:
     train_request_type: Any | None = None
     train_response_type: Any | None = None
     extra_predict_exceptions: tuple[type[Exception], ...] = field(default_factory=tuple)
+    # POST /predict?wait=false (batch) runs in the background; see
+    # docs/superpowers/specs/2026-11-13-prediccion-asincrona.md. Opt-in: long video models only.
+    async_predict: bool = False
 
 
 # ── Registry ──────────────────────────────────────────────────────────────────
@@ -481,6 +484,7 @@ REGISTRY: list[ModelEntry] = [
         predict_request_type=Ml5Cow_Request,
         predict_response_type=Ml5Cow_Response,
         extra_predict_exceptions=(InvalidVideoError, InvalidImageError, InsufficientFramesError),
+        async_predict=True,  # a farm video takes hours on CPU, tens of minutes on GPU
         train_request_type=Ml5Cow_TrainReq,
         train_response_type=Ml10Dairy_TrainResp,  # same shared TrainResponse DTO as ml10
     ),
