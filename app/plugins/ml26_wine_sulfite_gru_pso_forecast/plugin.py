@@ -80,6 +80,7 @@ def _load_train_frame(data_path: str) -> pd.DataFrame:
     missing = [c for c in TRAIN_HARD_REQUIRED_COLUMNS if c not in raw_df.columns]
     if missing:
         raise ValueError(f"CSV falta columnas requeridas: {missing}")
+    preprocessing.check_training_frame(raw_df)
     target_only = raw_df.get("target_only", pd.Series(False, index=raw_df.index))
     operational = ~target_only.fillna(False).astype(bool)
     if raw_df.loc[operational, "stage_progress"].isna().any():

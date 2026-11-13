@@ -1,4 +1,4 @@
-"""Class Activation Map overlay for the CNN image classifiers (ml2, ml4)."""
+"""Class Activation Map overlay and per-zone summary for the CNN image classifiers (ml2, ml4)."""
 from __future__ import annotations
 
 import base64
@@ -25,6 +25,37 @@ def class_activation_map(
     if cam.max() > 0:
         cam = cam / cam.max()
     return cam
+
+
+# Same summary the explainability service gives for an inline image (Grad-CAM there,
+# retech-lote2-xai-explicabilidad vision/gradcam.py::_grid_regions): the map, at the 224x224
+# network input size, split into a 3x3 grid; each zone's contribution is its mean activation.
+ZONE_GRID = 3
+ZONE_MAP_SIZE = 224
+
+
+def cam_zone_contributions(cam: np.ndarray) -> list[dict]:
+    """Mean activation of each 3x3 zone of a [0, 1] CAM, highest first.
+
+    ``feature`` is ``region_{row}_{col}`` (row 0 = top, col 0 = left) and ``value`` is
+    ``grid(row,col)``, the same naming as the explainability service's ``top_features``, so the
+    platform renders batch rows like the inline explanation. All 9 zones are returned.
+    """
+    # pylint: disable-next=no-member  # cv2 is a C extension; pylint cannot see its members
+    full = cv2.resize(cam.astype(np.float32), (ZONE_MAP_SIZE, ZONE_MAP_SIZE))
+    h, w = full.shape
+    zones = []
+    for i in range(ZONE_GRID):
+        for j in range(ZONE_GRID):
+            patch = full[i * h // ZONE_GRID:(i + 1) * h // ZONE_GRID,
+                         j * w // ZONE_GRID:(j + 1) * w // ZONE_GRID]
+            zones.append({
+                "feature": f"region_{i}_{j}",
+                "contribution": round(float(patch.mean()), 6),
+                "value": f"grid({i},{j})",
+            })
+    zones.sort(key=lambda z: z["contribution"], reverse=True)
+    return zones
 
 
 def compute_and_encode_cam(

@@ -58,13 +58,19 @@ TARGET_CLASS_LABEL = "Etiqueta_Num"
 TARGET_REG_COLUMN = "Grado_Infeccion"
 STRATIFY_COLUMN = "Etiqueta_Clase"
 
+# Etiqueta_Clase (patología de toda la serie, constante dentro de cada ID_Serie) es la que
+# estratifica el reparto de series; sin ella el split del original falla con KeyError.
 TRAIN_HARD_REQUIRED_COLUMNS = [
-    DATE_COLUMN, SERIES_COLUMN, TARGET_CLASS_COLUMN, TARGET_REG_COLUMN
+    DATE_COLUMN, SERIES_COLUMN, TARGET_CLASS_COLUMN, TARGET_REG_COLUMN, STRATIFY_COLUMN
 ] + RAW_FIXED_COLUMNS
 
 # manifest.yaml -> training.hyperparams (config.yaml -> split)
 TRAIN_TEST_SIZE = 0.30
 TRAIN_VAL_TEST_RATIO = 0.50
+# Series mínimas por valor de Etiqueta_Clase para el reparto 70/15/15 estratificado: el 30 %
+# apartado debe tener >= 2 series de cada clase para volver a estratificarse en val/test, y
+# floor(0.3 * 7) = 2 (con 6 puede quedar 1 y sklearn falla).
+MIN_SERIES_PER_STRATUM = 7
 TRAIN_RANDOM_SEED = 42
 EPOCHS = 50
 BATCH_SIZE = 512

@@ -584,3 +584,52 @@ def test_real_plugin_unloaded_raises():
         Ml26WineSulfiteGruPsoForecastPlugin().predict_inline(
             features={"feature_window": [[0.0] * 22] * 24}
         )
+
+
+# --- Training enforces the same input rules as prediction (QA: they were only in predict) ------
+
+@pytest.mark.parametrize("column, value, message", [
+    ("wine_type", "tinto", "wine_type"),
+    ("stage", "crianza", "stage"),
+    ("stage", np.nan, "stage"),
+])
+def test_real_plugin_train_rejects_values_prediction_rejects(tmp_path, column, value, message):
+    """A training CSV with a wine_type/stage prediction would refuse is rejected up front."""
+    csv = tmp_path / "bad_values.csv"
+    frame = _sequential_training_frame()
+    frame[column] = frame[column].astype(object)
+    frame.loc[5, column] = value
+    frame.to_csv(csv, index=False)
+    with pytest.raises(ValueError, match=f"valores no soportados en '{message}'"):
+        _real_plugin().train(data_path=str(csv), mlflow_run_id="run-1")
+
+
+@pytest.mark.parametrize("column", ["wine_type", "volume_l", "ambient_temp_c"])
+def test_real_plugin_train_requires_constant_tank_columns_per_lot(tmp_path, column):
+    """wine_type/volume_l/ambient_temp_c describe the tank: one value per lot, as in predict."""
+    csv = tmp_path / "not_constant.csv"
+    frame = _sequential_training_frame()
+    frame.loc[3, column] = "white" if column == "wine_type" else 9999.0  # lot L00 is red
+    frame.to_csv(csv, index=False)
+    with pytest.raises(ValueError, match=rf"constantes dentro de cada lote.*L00: {column}"):
+        _real_plugin().train(data_path=str(csv), mlflow_run_id="run-1")
+
+
+def test_real_training_csv_passes_the_training_rules():
+    """outputs/a26/datos_prueba/train.csv (real lots, incl. target_only rows) is accepted."""
+    # pylint: disable-next=import-outside-toplevel
+    from app.plugins.ml26_wine_sulfite_gru_pso_forecast import preprocessing
+
+    preprocessing.check_training_frame(pd.read_csv("outputs/a26/datos_prueba/train.csv"))
+
+
+def test_batch_constant_rule_names_the_lot_and_column():
+    """The batch message now says which column varies (it used to list only the lot)."""
+    # pylint: disable-next=import-outside-toplevel
+    from app.plugins.ml26_wine_sulfite_gru_pso_forecast import preprocessing
+    from app.plugins.ml26_wine_sulfite_gru_pso_forecast.exceptions import InvalidWineryInputError
+
+    frame = _sequential_training_frame(n_lots=2, steps=3)
+    frame.loc[1, "ambient_temp_c"] = 20.0
+    with pytest.raises(InvalidWineryInputError, match="L00: ambient_temp_c"):
+        preprocessing.frames_from_batch_csv(frame)

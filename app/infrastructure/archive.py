@@ -42,6 +42,23 @@ def _limit(name: str, default: int) -> int:
         return default
 
 
+# Metadata that macOS/Windows add when a user zips a folder: the __MACOSX/ tree, AppleDouble
+# "._<name>" companions (they keep the image extension but are not images) and folder files.
+# Extracting them broke the plugins that look for one wrapper folder (ml5, ml8) and made image
+# plugins try to decode "._foto.jpg"; they are never data, so they are skipped for every plugin.
+_OS_METADATA_DIRS = frozenset({"__MACOSX"})
+_OS_METADATA_FILES = frozenset({".DS_Store", "Thumbs.db", "desktop.ini"})
+
+
+def is_os_metadata(name: str) -> bool:
+    """True for a ZIP member (or path) that is OS metadata, not user data."""
+    parts = [p for p in name.replace("\\", "/").split("/") if p]
+    if any(p in _OS_METADATA_DIRS for p in parts):
+        return True
+    base = parts[-1] if parts else ""
+    return base in _OS_METADATA_FILES or base.startswith("._")
+
+
 def _member_path(dest_real: str, name: str) -> str:
     path = os.path.realpath(os.path.join(dest_real, name))
     if path != dest_real and not path.startswith(dest_real + os.sep):
@@ -105,6 +122,9 @@ def _copy_member(
 def safe_extract_zip(zip_path: str, dest_dir: str) -> None:
     """Extract *zip_path* into *dest_dir* within the size, file-count and ratio limits.
 
+    OS metadata (``__MACOSX/``, ``._*``, ``.DS_Store``…) is not extracted (see
+    :func:`is_os_metadata`).
+
     Raises ``ArchiveLimitExceededError`` (→ 413) when a limit is exceeded and ``ValueError``
     (→ 400 in /train) when the file is not a valid ZIP. Partially extracted files are left in
     *dest_dir*; callers already extract into a temp dir that they remove in ``finally``.
@@ -120,12 +140,16 @@ def safe_extract_zip(zip_path: str, dest_dir: str) -> None:
         raise ValueError(f"El fichero no es un ZIP válido: {exc}") from exc
 
     with zf:
-        members = [m for m in zf.infolist() if not m.is_dir()]
+        wanted = [m for m in zf.infolist() if not is_os_metadata(m.filename)]
+        skipped = len(zf.infolist()) - len(wanted)
+        if skipped:
+            logger.info("Skipping %d OS metadata entries (__MACOSX, ._*, .DS_Store)", skipped)
+        members = [m for m in wanted if not m.is_dir()]
         _check_members(members, dest_dir, limits)
 
         dest_real = os.path.realpath(dest_dir)
         written_total = 0
-        for member in zf.infolist():
+        for member in wanted:
             target = _member_path(dest_real, member.filename)
             if member.is_dir():
                 os.makedirs(target, exist_ok=True)

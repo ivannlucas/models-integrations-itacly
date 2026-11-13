@@ -44,6 +44,11 @@ class InsufficientTelemetryHistoryError(ValueError):
     """Raised when fewer than seq_len valid rows of telemetry history are provided (ml46)."""
 
 
+class InvalidTelemetryInputError(ValueError):
+    """Raised when a telemetry CSV/row-set breaks the input contract (ml46): missing columns,
+    unparseable timestamps. A ValueError, so /train answers 400; /predict maps it to 422."""
+
+
 class InsufficientCycleHistoryError(ValueError):
     """Raised when a cycle (run_id) has fewer minutes of history than the lag features need.
 
@@ -176,3 +181,15 @@ class TrainJobResultUnreadableError(Exception):
 
     Maps to 500, not 503: MLflow answers, but the artifact is missing or not a JSON file.
     """
+
+
+class PredictJobBusyError(Exception):
+    """Raised when an async batch prediction is requested while the model already runs
+    PREDICT_JOB_MAX_CONCURRENT of them in this process.
+
+    Maps to 409 (the orchestrator resubmits later; the POST is idempotent by job_id).
+    """
+
+
+class AsyncPredictNotSupportedError(Exception):
+    """Raised when ``wait=false`` is asked of a model without async prediction (→ 501)."""

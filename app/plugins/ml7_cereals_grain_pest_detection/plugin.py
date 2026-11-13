@@ -113,6 +113,20 @@ def _zip_dataset_yaml(extract_dir: Path) -> Path:
     """
     entries = [e for e in extract_dir.iterdir() if e.name != "__MACOSX"]
     root = entries[0] if len(entries) == 1 and entries[0].is_dir() else extract_dir
+    if not any((root / rel).is_file() for rel in ("dataset.yaml", "splits/dataset.yaml")):
+        n_images = sum(1 for f in root.rglob("*") if f.suffix.lower() in IMAGE_EXTENSIONS)
+        hint = (
+            f" Contiene {n_images} imágenes sin dataset.yaml: parece un ZIP de predicción por "
+            "lotes (solo imágenes), que no sirve para entrenar." if n_images else ""
+        )
+        raise ValueError(
+            "El ZIP de entrenamiento no contiene dataset.yaml (en la raíz o dentro de una única "
+            "carpeta raíz). Estructura esperada (dataset YOLO): dataset.yaml con las "
+            f"{len(TRAINING_CLASS_ID_TO_CODE)} clases "
+            f"({', '.join(TRAINING_CLASS_ID_TO_CODE.values())}) "
+            "+ images/{train,val}/ + labels/{train,val}/ (un .txt YOLO por imagen); "
+            "images/test/ es opcional." + hint
+        )
     dataset_yaml = _resolve_dataset_yaml(str(root))
     base = dataset_yaml.parent
     with open(dataset_yaml, encoding="utf-8") as fh:

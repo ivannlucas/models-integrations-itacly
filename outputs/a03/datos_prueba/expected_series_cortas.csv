@@ -1,0 +1,4 @@
+id_serie,n_filas,clase_real_ultima_hora,fecha_evaluacion_original,esperado_diagnostico_ia,esperado_confianza_clasificacion,esperado_grado_severidad
+585,50,BLACK_ROT,2020-04-28 01:00:00,MILDIU,0.6364,0.6976
+594,133,MILDIU,2022-11-10 11:00:00,BOTRYTIS,0.442,0.318
+953,153,BOTRYTIS,2016-05-08 08:00:00,BOTRYTIS,0.6967,0.544

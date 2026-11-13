@@ -29,7 +29,11 @@ from app.application.dto.stats_dto import InputField, OutputField, StatsResponse
 from app.domain.ports.model_plugin_port import ModelPluginPort
 from app.domain.services.batch_rows import row_error_capture
 from app.domain.services.exceptions import InvalidImageError
-from app.domain.services.image_cam import compute_and_encode_cam
+from app.domain.services.image_cam import (
+    cam_zone_contributions,
+    class_activation_map,
+    compute_and_encode_cam,
+)
 from app.domain.services.mlflow_artifacts import (
     add_mlflow_run_to_stats,
     removing_dir,
@@ -239,6 +243,12 @@ def _predict_batch_image(model, device, root: str, fname: str, idx: int) -> dict
         feature_map, model.classifier[1].weight,
         result["predicted_class_index"], image,
     )
+    # Contribution of each zone of this image, from the same CAM as heatmap_url. Inline gets
+    # it from the explainability service; in batch the platform only explains the first
+    # image, so without this the other rows had a heatmap but no zone breakdown.
+    row["zone_contributions"] = cam_zone_contributions(class_activation_map(
+        feature_map, model.classifier[1].weight, result["predicted_class_index"],
+    ))
     if idx == 0 or result["predicted_class_index"] != 0:
         # Echo the first image back so the platform can request a real
         # GradCAM explanation for the batch (mirrors the inline flow,

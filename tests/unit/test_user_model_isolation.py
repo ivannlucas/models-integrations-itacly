@@ -292,6 +292,9 @@ def ml8(monkeypatch, tmp_path):
     monkeypatch.setattr(plugin, "image_base64_to_tensor", lambda *a, **k: MagicMock())
     monkeypatch.setattr(plugin, "image_path_to_tensor_and_image",
                         lambda *a, **k: (MagicMock(), None))
+    # Inference goes through forward_with_features (logits + features for «desconocido»);
+    # route it to the fake model's call so the probe sees which model served the request.
+    monkeypatch.setattr(plugin, "forward_with_features", lambda model, x: model(x))
     instance = plugin.Ml8CerealsImgAnomalyDetectorPlugin()
     instance.load()
     images = _zip_with(tmp_path, "grain.jpg")

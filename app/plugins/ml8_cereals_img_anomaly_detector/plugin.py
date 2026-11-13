@@ -11,6 +11,7 @@ from collections import Counter
 from pathlib import Path
 from typing import NamedTuple
 
+import numpy as np
 import torch
 from PIL import Image
 from torch import nn
@@ -21,7 +22,7 @@ from torchvision import transforms
 from app.application.dto.stats_dto import InputField, OutputField, StatsResponse
 from app.domain.ports.model_plugin_port import ModelPluginPort
 from app.domain.services.batch_rows import row_error_capture
-from app.domain.services.exceptions import ModelNotLoadedError
+from app.domain.services.exceptions import InvalidImageError, ModelNotLoadedError
 from app.domain.services.mlflow_artifacts import (
     add_mlflow_run_to_stats,
     removing_dir,
@@ -44,7 +45,15 @@ from app.plugins.ml8_cereals_img_anomaly_detector.mlflow_utils import (
 from app.plugins.ml8_cereals_img_anomaly_detector.model_loader import (
     MultiTaskMobileNetV3Large,
     _safe_device,
+    base_artifact_file,
     load_model_bundle,
+)
+from app.plugins.ml8_cereals_img_anomaly_detector.ood import (
+    OOD_OUTLIERS_FILENAME,
+    OOD_REFERENCE_FILENAME,
+    apply_gate,
+    build_reference,
+    forward_with_features,
 )
 from app.plugins.ml8_cereals_img_anomaly_detector.postprocessing import (
     build_batch_response,
@@ -63,7 +72,6 @@ from app.plugins.ml8_cereals_img_anomaly_detector.train_dto import TrainResponse
 
 logger = logging.getLogger(__name__)
 
-_SUPPORTED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
 
 _TRAIN_SEED = 42
 _TRAIN_PARAMS = {
@@ -98,7 +106,7 @@ def _scan_split(data_root: Path, split_names: tuple) -> list:
                 if not cat_dir.is_dir():
                     continue
                 for p in cat_dir.iterdir():
-                    if p.suffix.lower() in _SUPPORTED_EXTENSIONS:
+                    if p.suffix.lower() in IMAGE_EXTENSIONS:
                         records.append((str(p), categoria, cereal))
     return records
 
@@ -277,9 +285,14 @@ def _load_records(tmp_dir: str) -> tuple[list, list]:
     val_records = _scan_split(data_root, ("validation", "val"))
 
     if not train_records:
+        found = sorted(e.name for e in data_root.iterdir())[:10]
         raise ValueError(
-            "No se encontraron imágenes de entrenamiento. "
-            "Estructura esperada: {cereal}/train/{categoria}/*.jpg"
+            "No se encontraron imágenes de entrenamiento. Estructura esperada del ZIP: "
+            "{cereal}/train/{categoria}/<imagen> (y, opcionalmente, "
+            "{cereal}/validation/{categoria}/<imagen>; sin ella se reparte 80/20), con "
+            f"{{cereal}} en {CEREAL_NAMES} y {{categoria}} en {CATEGORY_NAMES}, en minúsculas "
+            f"y sin tildes; imágenes {sorted(IMAGE_EXTENSIONS)}. Puede ir dentro de una única "
+            f"carpeta raíz. En la raíz del ZIP se ha encontrado: {found}."
         )
     if not val_records:
         random.shuffle(train_records)
@@ -440,14 +453,12 @@ def _checkpoint(model: nn.Module) -> dict:
     }
 
 
-def _predict_image(bundle: dict, image_path: Path) -> dict:
-    """Batch row of one image (the caller turns errors into ``error`` rows)."""
-    tensor, image = image_path_to_tensor_and_image(
-        image_path, image_size=bundle["image_size"]
-    )
-    tensor = tensor.to(bundle["device"])
+def _classify(bundle: dict, tensor: torch.Tensor) -> dict:
+    """Prediction dict of one preprocessed image, with the «desconocido» gate applied."""
     with torch.no_grad():
-        logits_cat, logits_cer = bundle["model"](tensor)
+        logits_cat, logits_cer, feats = forward_with_features(
+            bundle["model"], tensor.to(bundle["device"])
+        )
     result = build_inline_response(
         logits_cat,
         logits_cer,
@@ -455,6 +466,53 @@ def _predict_image(bundle: dict, image_path: Path) -> dict:
         idx_to_cereal=bundle["idx_to_cereal"],
         model_id=bundle["model_id"],
     )
+    return apply_gate(result, bundle.get("ood"), feats)
+
+
+def _features(model: nn.Module, records: list, device) -> np.ndarray:
+    """Pooled features of (path, …) records with the inference preprocessing (for the gate)."""
+    model.eval()
+    feats = []
+    with torch.no_grad():
+        for path, *_ in records:
+            try:
+                tensor, _ = image_path_to_tensor_and_image(path)
+            except InvalidImageError:
+                continue
+            feats.append(forward_with_features(model, tensor.to(device))[2].cpu().numpy()[0])
+    return np.array(feats, dtype=np.float32)
+
+
+def _outlier_features(model: nn.Module, device) -> np.ndarray | None:
+    """Features of the base artifact's outlier images (other domains) with *model*.
+
+    They train the «desconocido» regression of a retrained model as they did the base one.
+    Without ``ood_outliers.zip`` the gate falls back to the k-NN distance alone.
+    """
+    zip_path = base_artifact_file(OOD_OUTLIERS_FILENAME)
+    if zip_path is None:
+        logger.warning("ml8: sin %s — «desconocido» solo por distancia k-NN",
+                       OOD_OUTLIERS_FILENAME)
+        return None
+    with tempfile.TemporaryDirectory(prefix="ml8_ood_") as tmp:
+        safe_extract_zip(zip_path, tmp)
+        records = [(str(p),) for p in sorted(Path(tmp).rglob("*"))
+                   if p.is_file() and p.suffix.lower() in IMAGE_EXTENSIONS]
+        return _features(model, records, device)
+
+
+def _write_model(model_dir: str, checkpoint: dict, reference) -> None:
+    """The run's ``model`` folder: checkpoint + its «desconocido» reference."""
+    torch.save(checkpoint, os.path.join(model_dir, MODEL_FILENAME))
+    reference.save(os.path.join(model_dir, OOD_REFERENCE_FILENAME))
+
+
+def _predict_image(bundle: dict, image_path: Path) -> dict:
+    """Batch row of one image (the caller turns errors into ``error`` rows)."""
+    tensor, image = image_path_to_tensor_and_image(
+        image_path, image_size=bundle["image_size"]
+    )
+    result = _classify(bundle, tensor)
     result["filename"] = image_path.name
     result["annotated_image"] = encode_image_base64(image)
     return result
@@ -508,24 +566,15 @@ class Ml8CerealsImgAnomalyDetectorPlugin(PluginRuntimeMixin, ModelPluginPort):
         with removing_dir(user_temp_dir):
             tensor = image_base64_to_tensor(
                 features["image_base64"], image_size=bundle["image_size"]
-            ).to(bundle["device"])
-
+            )
             bundle["model"].eval()
-            with torch.no_grad():
-                logits_cat, logits_cer = bundle["model"](tensor)
+            result = _classify(bundle, tensor)
 
             self._record()
             logger.info(
                 "predict_inline done — count=%d mlflow=%s", self._predict_count, bool(mlflow_run_id)
             )
-
-            return PredictInlineResponse(**build_inline_response(
-                logits_cat,
-                logits_cer,
-                idx_to_class=bundle["idx_to_class"],
-                idx_to_cereal=bundle["idx_to_cereal"],
-                model_id=bundle["model_id"],
-            ))
+            return PredictInlineResponse(**result)
 
     def predict_batch(
         self, *, data_path: str, mlflow_run_id: str = ""
@@ -587,7 +636,9 @@ class Ml8CerealsImgAnomalyDetectorPlugin(PluginRuntimeMixin, ModelPluginPort):
                 OutputField(
                     name="categoria", type="str", description="Categoría predicha (anomalía/estado)"
                 ),
-                OutputField(name="cereal", type="str", description="Tipo de cereal predicho"),
+                OutputField(
+                    name="cereal", type="str", description="Tipo de cereal predicho o 'desconocido'"
+                ),
                 OutputField(
                     name="confianza_categoria",
                     type="float",
@@ -603,6 +654,30 @@ class Ml8CerealsImgAnomalyDetectorPlugin(PluginRuntimeMixin, ModelPluginPort):
                 ),
                 OutputField(
                     name="probabilidades_cereal", type="dict", description="Probabilidad por cereal"
+                ),
+                OutputField(
+                    name="es_desconocido",
+                    type="bool",
+                    description=(
+                        "La imagen no se parece a las de entrenamiento; entonces categoria y "
+                        "cereal valen 'desconocido'"
+                    ),
+                ),
+                OutputField(
+                    name="categoria_modelo", type="str",
+                    description="Categoría que daría la red sin el filtro de 'desconocido'",
+                ),
+                OutputField(
+                    name="cereal_modelo", type="str",
+                    description="Cereal que daría la red sin el filtro de 'desconocido'",
+                ),
+                OutputField(
+                    name="puntuacion_ood", type="float",
+                    description="Distancia a las imágenes de entrenamiento (mayor = más distinta)",
+                ),
+                OutputField(
+                    name="umbral_ood", type="float",
+                    description="Umbral de puntuacion_ood a partir del cual es 'desconocido'",
                 ),
                 OutputField(
                     name="annotated_image",
@@ -652,7 +727,16 @@ class Ml8CerealsImgAnomalyDetectorPlugin(PluginRuntimeMixin, ModelPluginPort):
             h1, h2, t1, t2 = _fit(setup, tracker)
 
             checkpoint = _checkpoint(setup.model)
+            # «desconocido» reference of this retrained model: bank = its training images,
+            # threshold calibrated on the validation images (not in the bank).
+            reference = build_reference(
+                _features(setup.model, train_records, device),
+                _features(setup.model, val_records, device),
+                _outlier_features(setup.model, device),
+            )
             tracker.log_metrics({
+                "ood_threshold": reference.threshold,
+                "ood_logreg": float(reference.method == "logreg"),
                 "best_val_acc_cat": _best(h2["val_acc_cat"], h1["val_acc_cat"]),
                 "best_val_acc_cer": _best(h2["val_acc_cer"], h1["val_acc_cer"]),
                 "train_samples": len(train_records),
@@ -660,7 +744,7 @@ class Ml8CerealsImgAnomalyDetectorPlugin(PluginRuntimeMixin, ModelPluginPort):
             })
             upload_model_to_mlflow(
                 tracker,
-                lambda model_dir: torch.save(checkpoint, os.path.join(model_dir, MODEL_FILENAME)),
+                lambda model_dir: _write_model(model_dir, checkpoint, reference),
                 prefix="ml8_mlflow_",
             )
 

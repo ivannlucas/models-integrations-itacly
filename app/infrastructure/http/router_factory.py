@@ -7,6 +7,7 @@ from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.responses import JSONResponse
 
 from app.application.dto.base_version_dto import RollbackRequest, RollbackResponse
+from app.application.dto.predict_job_dto import PredictJobResponse
 from app.application.dto.stats_dto import StatsResponse
 from app.application.dto.train_dto import (
     TrainRequest as _DefaultTrainRequest,
@@ -14,16 +15,18 @@ from app.application.dto.train_dto import (
 )
 from app.application.dto.train_job_dto import TrainJobResponse
 from app.domain.services.exceptions import (
-    ArchiveLimitExceededError,
+    AsyncPredictNotSupportedError,
     BaseReloadError,
     BaseVersionNotFoundError,
     ModelPersistenceError,
     NoPreviousBaseVersionError,
+    PredictJobBusyError,
     TrainJobBusyError,
     TrainJobResultUnreadableError,
     TrainJobStoreUnavailableError,
     UserModelUnavailableError,
 )
+from app.domain.services.predict_job import predict_error_http_status
 from app.domain.services.train_job import train_error_http_status
 
 logger = logging.getLogger(__name__)
@@ -35,6 +38,7 @@ class _RouteContext:
     model_id: str
     version: str
     get_container: Callable[[Request], Any]
+    async_predict: bool = False
 
 
 def _container_getter(model_id: str) -> Callable[[Request], Any]:
@@ -103,6 +107,39 @@ def _add_stats(router: APIRouter, ctx: _RouteContext) -> None:
             ) from exc
 
 
+def _submit_predict_job(ctx: _RouteContext, container: Any, body: Any, job_id: str):
+    """POST /predict?wait=false: 202 + the job of a batch prediction run in the background."""
+    model_id = ctx.model_id
+    try:
+        if not ctx.async_predict:
+            raise AsyncPredictNotSupportedError(
+                f"El modelo '{model_id}' no admite predicción asíncrona: usa POST /predict sin "
+                "wait=false."
+            )
+        record = container.submit_predict_job_use_case.execute(body, job_id=job_id)
+    except AsyncPredictNotSupportedError as exc:
+        raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except PredictJobBusyError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except TrainJobStoreUnavailableError as exc:
+        logger.exception("Could not register async prediction for model '%s'", model_id)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"No se pudo registrar la predicción: {exc}",
+        ) from exc
+    except Exception as exc:
+        logger.exception("Unexpected error registering async prediction for model '%s'", model_id)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)
+        ) from exc
+    return JSONResponse(
+        status_code=status.HTTP_202_ACCEPTED,
+        content=PredictJobResponse.from_record(record).model_dump(mode="json"),
+    )
+
+
 def _add_predict(
     router: APIRouter,
     ctx: _RouteContext,
@@ -112,27 +149,70 @@ def _add_predict(
 ) -> None:
     model_id, _get_container = ctx.model_id, ctx.get_container
 
-    @router.post("/predict")
-    def predict(request: Request, body: predict_request_type) -> predict_response_type:
-        """Run prediction (inline or batch) and return typed response."""
+    @router.post("/predict", responses={202: {"model": PredictJobResponse}})
+    def predict(
+        request: Request, body: predict_request_type, wait: bool = True, job_id: str = ""
+    ) -> predict_response_type:
+        """Run prediction (inline or batch) and return typed response.
+
+        ``wait=false`` (batch, models with async prediction) runs it in the background and returns
+        202 + the job (``job_id``: idempotency key chosen by the caller); follow it with
+        GET /predict/jobs/{job_id}. An inline request is always answered synchronously.
+        """
         container = _get_container(request)
+        if not wait and getattr(body, "mode", None) == "batch":
+            return _submit_predict_job(ctx, container, body, job_id)
         try:
             return container.predict_use_case.execute(body)
-        except ArchiveLimitExceededError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_413_CONTENT_TOO_LARGE, detail=str(exc)
-            ) from exc
         except Exception as exc:
-            if isinstance(exc, UserModelUnavailableError) or (
-                extra_predict_exceptions and isinstance(exc, extra_predict_exceptions)
-            ):
-                raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)
-                ) from exc
-            logger.exception("Unexpected error during prediction for model '%s'", model_id)
+            # Same mapping the async job stores as http_status (predict_error_http_status).
+            code = predict_error_http_status(exc, extra_predict_exceptions)
+            if code == status.HTTP_500_INTERNAL_SERVER_ERROR:
+                logger.exception("Unexpected error during prediction for model '%s'", model_id)
+            raise HTTPException(status_code=code, detail=str(exc)) from exc
+
+
+def _add_predict_status(router: APIRouter, ctx: _RouteContext) -> None:
+    model_id, _get_container = ctx.model_id, ctx.get_container
+
+    @router.get("/predict/jobs/{job_id}")
+    def predict_status(request: Request, job_id: str) -> PredictJobResponse:
+        """State (and result once succeeded) of a batch prediction started with wait=false."""
+        container = _get_container(request)
+        if not ctx.async_predict:
+            raise HTTPException(
+                status_code=status.HTTP_501_NOT_IMPLEMENTED,
+                detail=f"El modelo '{model_id}' no admite predicción asíncrona.",
+            )
+        try:
+            record = container.get_predict_job_use_case.execute(job_id)
+        except TrainJobStoreUnavailableError as exc:
+            logger.exception("Could not read prediction job %s for model '%s'", job_id, model_id)
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=f"No se pudo consultar la predicción: {exc}",
+            ) from exc
+        except TrainJobResultUnreadableError as exc:
+            logger.error(
+                "Result of prediction job %s for model '%s' is unreadable: %s",
+                job_id, model_id, exc,
+            )
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)
             ) from exc
+        except Exception as exc:
+            logger.exception(
+                "Unexpected error reading prediction job %s for model '%s'", job_id, model_id
+            )
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)
+            ) from exc
+        if record is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"No hay predicción {job_id} para el modelo {model_id}",
+            )
+        return PredictJobResponse.from_record(record)
 
 
 def _add_train(router: APIRouter, ctx: _RouteContext, _train_req: Any, _train_resp: Any) -> None:
@@ -281,6 +361,7 @@ def make_model_router(  # pylint: disable=too-many-arguments
     train_request_type: Any,
     train_response_type: Any,
     extra_predict_exceptions: tuple[type[Exception], ...] = (),
+    async_predict: bool = False,
 ) -> APIRouter:
     """Create a FastAPI router for a model plugin.
 
@@ -293,7 +374,7 @@ def make_model_router(  # pylint: disable=too-many-arguments
     2. Adding a ModelEntry to app/registry.py
     """
     router = APIRouter()
-    ctx = _RouteContext(model_id, version, _container_getter(model_id))
+    ctx = _RouteContext(model_id, version, _container_getter(model_id), async_predict)
     # Same registration order as always (it is the order of the routes in the OpenAPI schema).
     _add_health(router, ctx)
     _add_stats(router, ctx)
@@ -308,4 +389,5 @@ def make_model_router(  # pylint: disable=too-many-arguments
     )
     _add_rollback(router, ctx)
     _add_train_status(router, ctx)
+    _add_predict_status(router, ctx)
     return router

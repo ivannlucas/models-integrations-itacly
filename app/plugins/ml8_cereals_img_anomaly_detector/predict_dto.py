@@ -43,6 +43,20 @@ class PredictInlineResponse(PluginDTO):
     confianza_cereal: float
     probabilidades_categoria: dict[str, float]
     probabilidades_cereal: dict[str, float]
+    es_desconocido: bool = Field(
+        False, description="La imagen no se parece a las de entrenamiento: categoria y cereal "
+        "valen 'desconocido' (confianzas y probabilidades siguen siendo las de la red)"
+    )
+    categoria_modelo: str | None = Field(
+        None, description="Categoría que daría la red sin el filtro"
+    )
+    cereal_modelo: str | None = Field(None, description="Cereal que daría la red sin el filtro")
+    puntuacion_ood: float | None = Field(
+        None, description="Distancia (1 - similitud coseno) a las imágenes de entrenamiento"
+    )
+    umbral_ood: float | None = Field(
+        None, description="Umbral por encima del cual la imagen es 'desconocido'"
+    )
 
 
 class PredictBatchResponse(BatchResponseBase):

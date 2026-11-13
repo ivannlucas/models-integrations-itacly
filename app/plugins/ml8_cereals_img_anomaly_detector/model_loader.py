@@ -14,6 +14,7 @@ from app.plugins.ml8_cereals_img_anomaly_detector.constants import (
     IMAGE_SIZE,
     MODEL_FILENAME,
 )
+from app.plugins.ml8_cereals_img_anomaly_detector.ood import load_reference
 
 logger = logging.getLogger(__name__)
 
@@ -100,6 +101,15 @@ _ARCH_CLASSES = {
 }
 
 
+def base_artifact_file(filename: str) -> str | None:
+    """Local path of an optional file of the base artifact folder, or None if absent."""
+    try:
+        path = _store.path(filename)
+    except FileNotFoundError:
+        return None
+    return str(path) if path.exists() else None
+
+
 def load_model_bundle() -> dict:
     """Load the PyTorch model from the checkpoint stored in ArtifactStore."""
     device = _safe_device()
@@ -153,6 +163,8 @@ def load_model_bundle() -> dict:
 
     return {
         "model_id": "ml8-cereals-img-anomaly-detector",
+        # «desconocido» reference of the served checkpoint (ood.py); None disables the gate.
+        "ood": load_reference(str(model_path.parent)),
         "arch": arch,
         "model": model,
         "device": device,

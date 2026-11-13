@@ -31,6 +31,7 @@ from sklearn.metrics import (
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder, StandardScaler
 
+from app.domain.services.exceptions import InsufficientDataError
 from app.infrastructure.artifact_store import local_file_path
 from app.plugins.ml3_wine_disease_pest_forecast.constants import (
     ARCHITECTURES,
@@ -38,6 +39,7 @@ from app.plugins.ml3_wine_disease_pest_forecast.constants import (
     EARLY_STOPPING_PATIENCE,
     EPOCHS,
     LEARNING_RATES,
+    MIN_SERIES_PER_STRATUM,
     MODEL_FEATURES,
     SERIES_COLUMN,
     STRATIFY_COLUMN,
@@ -164,11 +166,56 @@ def _build_models(
 _SEQ_COLUMNS = (TARGET_CLASS_LABEL, TARGET_REG_COLUMN, SERIES_COLUMN)
 
 
+def _validate_series_split(df: pd.DataFrame) -> None:
+    """Fail with a clear message when the series cannot be split 70/15/15 stratified.
+
+    Without this, too few series surface as raw sklearn errors ("With n_samples=1,
+    test_size=0.5 ... the resulting train set will be empty", "The least populated class
+    in y has only 1 member"). The split itself is the original's; this only checks that
+    it is feasible before running it.
+    """
+    labels_per_series = df.groupby(SERIES_COLUMN)[STRATIFY_COLUMN].nunique()
+    mixed = labels_per_series[labels_per_series > 1].index.tolist()
+    if mixed:
+        raise InsufficientDataError(
+            f"{STRATIFY_COLUMN} debe ser constante dentro de cada {SERIES_COLUMN} (es la "
+            f"patología de toda la serie); estas series tienen varios valores: {mixed[:10]}."
+        )
+    classes = sorted(df[TARGET_CLASS_COLUMN].astype(str).unique())
+    if len(classes) < 2:
+        raise InsufficientDataError(
+            f"{TARGET_CLASS_COLUMN} necesita al menos 2 clases distintas para entrenar el "
+            f"clasificador; el fichero solo tiene {classes}."
+        )
+    per_stratum = df.drop_duplicates(subset=[SERIES_COLUMN])[STRATIFY_COLUMN].value_counts()
+    short = per_stratum[per_stratum < MIN_SERIES_PER_STRATUM]
+    if not short.empty:
+        detail = ", ".join(f"{label}: {count}" for label, count in short.sort_index().items())
+        raise InsufficientDataError(
+            f"Datos insuficientes para el reparto de series 70/15/15 (entrenamiento/validación/"
+            f"test) estratificado por {STRATIFY_COLUMN}: se necesitan al menos "
+            f"{MIN_SERIES_PER_STRATUM} series ({SERIES_COLUMN} distintos) por cada valor de "
+            f"{STRATIFY_COLUMN}. Series por valor con menos de las necesarias: {detail}."
+        )
+
+
+def _require_windows(splits: dict[str, tuple]) -> None:
+    """Each split needs at least one WINDOW_SIZE-hour window, or training cannot run."""
+    empty = [name for name, (x, _, _) in splits.items() if len(x) == 0]
+    if empty:
+        raise InsufficientDataError(
+            f"Ninguna serie del conjunto de {', '.join(empty)} tiene más de {WINDOW_SIZE} filas "
+            f"horarias, así que no se puede formar ninguna ventana de {WINDOW_SIZE} h. Cada serie "
+            f"necesita al menos {WINDOW_SIZE + 1} filas consecutivas tras limpiar los datos."
+        )
+
+
 def _encode_and_split(df: pd.DataFrame) -> tuple[LabelEncoder, tuple, tuple]:
     """Encode the class label and split series 70/15/15 (stratified, seed 42).
 
     Returns (le, (train_df, val_df, test_df), (n_train_ids, n_val_ids, n_test_ids)).
     """
+    _validate_series_split(df)
     le = LabelEncoder()
     df[TARGET_CLASS_LABEL] = le.fit_transform(df[TARGET_CLASS_COLUMN].astype(str))
     logger.info("Clases a entrenar: %s", le.classes_)
@@ -275,6 +322,7 @@ def run_retraining(raw_df: pd.DataFrame, model_paths: dict[str, str]) -> dict[st
     logger.info("Series repartidas: Train %d, Val %d, Test %d", *n_ids)
 
     scaler, train, val, test = _scale_and_window(frames)
+    _require_windows({"entrenamiento": train, "validación": val, "test": test})
     logger.info(
         "Tensores: train %s, val %s, test %s", train[0].shape, val[0].shape, test[0].shape,
     )
@@ -321,6 +369,7 @@ def load_retraining_input(data_path: str) -> pd.DataFrame:
     if missing:
         raise ValueError(
             f"CSV de entrenamiento — faltan columnas requeridas del contrato: {missing}. "
-            f"Además, se recomienda incluir {STRATIFY_COLUMN} para el split estratificado."
+            f"{STRATIFY_COLUMN} es la patología de cada serie (constante por {SERIES_COLUMN}) "
+            f"y estratifica el reparto de series en entrenamiento/validación/test."
         )
     return raw
