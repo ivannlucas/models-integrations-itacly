@@ -31,6 +31,12 @@ from app.infrastructure.artifact_store import local_file_path
 from app.plugins.ml46_dairy_fouling_clog_detection import model_loader
 from app.plugins.ml46_dairy_fouling_clog_detection import preprocessing
 from app.plugins.ml46_dairy_fouling_clog_detection import postprocessing
+from app.plugins.ml46_dairy_fouling_clog_detection._vendor.common import (
+    ASSET_FAMILIES,
+    LAST_MAINT_TYPES,
+    MILK_TYPES,
+    PHASES,
+)
 from app.plugins.ml46_dairy_fouling_clog_detection._vendor.data import (
     align_future_labels,
     derive_maintenance_from_telemetry,
@@ -182,13 +188,41 @@ def _score_last_window(rows: list[dict], model, train_cfg, feature_artifacts) ->
     )
     if window[1] == -1:
         raise InsufficientTelemetryHistoryError(
-            "No hay ninguna ventana válida de 120 minutos en producción (sin mantenimiento "
-            "activo) dentro del historial recibido."
+            preprocessing.no_window_reason(raw_df, train_cfg.seq_len)
         )
 
     return postprocessing.run_inference_single_window(
         model, sequences, feature_indices, train_cfg, window,
     )
+
+
+# /stats contract of the recommended/optional columns. The three ambient/batch columns used to
+# be reported as strings although the pipeline reads them as numbers (QA saw them typed as text).
+_INPUT_TYPES = {
+    "maintenance_active": "int",
+    "ambient_T_C": "float",
+    "ambient_RH_pct": "float",
+    "batch_thermal_history_factor": "float",
+}
+_INPUT_DESCRIPTIONS = {
+    "phase": (
+        f"Recomendado — fase operativa, en inglés: {', '.join(PHASES)}. Solo una fila "
+        "production sin mantenimiento puede cerrar una ventana; sin la columna, todo es production."
+    ),
+    "maintenance_active": "Recomendado — 1 durante un mantenimiento, 0 si no (vacío = 0).",
+    "asset_family": f"Opcional — familia del intercambiador: {', '.join(ASSET_FAMILIES)}.",
+    "milk_type": f"Opcional — producto: {', '.join(MILK_TYPES)} (none = sin leche, p. ej. CIP).",
+    "maintenance_type": (
+        f"Opcional — tipo del mantenimiento en curso: {', '.join(LAST_MAINT_TYPES)} "
+        "(vacío = other durante un mantenimiento, none fuera de él)."
+    ),
+    "ambient_T_C": "Opcional — temperatura ambiente (°C).",
+    "ambient_RH_pct": "Opcional — humedad relativa ambiente (%).",
+    "batch_thermal_history_factor": "Opcional — factor de historia térmica del lote (≈1).",
+    "last_maintenance_type": (
+        f"Opcional — tipo del último mantenimiento del activo: {', '.join(LAST_MAINT_TYPES)}."
+    ),
+}
 
 
 class Ml46DairyFoulingClogDetectionPlugin(PluginRuntimeMixin, ModelPluginPort):
@@ -246,10 +280,10 @@ class Ml46DairyFoulingClogDetectionPlugin(PluginRuntimeMixin, ModelPluginPort):
                 raw_df = pd.read_csv(local_path)
             pred_df = _score_all_windows(raw_df, model, train_cfg, feature_artifacts)
             if len(pred_df) == 0:
-                logger.warning("predict_batch — no valid production windows found in %s", data_path)
-                self._record()
-                return PredictBatchResponse(
-                    model_id=MODEL_ID, predictions=[], alerts=[], output_path=None
+                # Used to crash with KeyError 'asset_id' (HTTP 500) before reaching an empty
+                # answer; an explained 422 tells the user what to fix (e.g. phase in Spanish).
+                raise InsufficientTelemetryHistoryError(
+                    preprocessing.no_window_reason(raw_df, train_cfg.seq_len)
                 )
 
             explained, alerts = postprocessing.explain_and_alert(
@@ -424,6 +458,7 @@ class Ml46DairyFoulingClogDetectionPlugin(PluginRuntimeMixin, ModelPluginPort):
         missing = [c for c in TRAIN_HARD_REQUIRED_COLUMNS if c not in raw_df.columns]
         if missing:
             raise ValueError(f"CSV falta columnas requeridas: {missing}")
+        raw_df = preprocessing.normalize_raw_telemetry(raw_df)
 
         telemetry_df = load_telemetry(raw_df, self._train_cfg, require_targets=True)
         maintenance_df = derive_maintenance_from_telemetry(telemetry_df)
@@ -443,9 +478,8 @@ class Ml46DairyFoulingClogDetectionPlugin(PluginRuntimeMixin, ModelPluginPort):
         dataset = WindowDataset(sequences, asset_ids, feature_indices, self._train_cfg)
         if len(dataset) == 0:
             raise ValueError(
-                "No se encontraron ventanas válidas de entrenamiento en el CSV: se necesitan al "
-                f"menos {self._train_cfg.seq_len} filas consecutivas en producción (sin "
-                "mantenimiento activo) por activo/ciclo."
+                "No se encontraron ventanas válidas de entrenamiento en el CSV. "
+                + preprocessing.no_window_reason(raw_df, self._train_cfg.seq_len)
             )
         return dataset, sequences
 
@@ -519,21 +553,11 @@ class Ml46DairyFoulingClogDetectionPlugin(PluginRuntimeMixin, ModelPluginPort):
             + [
                 InputField(
                     name=name,
-                    type="string" if name in ("phase",) else "int",
-                    description=(
-                        "Recomendado — mejora la delimitación de producción/CIP/mantenimiento."
-                    ),
+                    type=_INPUT_TYPES.get(name, "string"),
+                    description=_INPUT_DESCRIPTIONS[name],
+                    **({} if name in RAW_RECOMMENDED_COLUMNS else {"default": None}),
                 )
-                for name in RAW_RECOMMENDED_COLUMNS
-            ]
-            + [
-                InputField(
-                    name=name,
-                    type="string",
-                    default=None,
-                    description="Opcional — contexto adicional del activo/producto.",
-                )
-                for name in RAW_OPTIONAL_COLUMNS
+                for name in RAW_RECOMMENDED_COLUMNS + RAW_OPTIONAL_COLUMNS
             ]
         )
         outputs = [

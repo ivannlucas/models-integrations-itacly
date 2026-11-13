@@ -166,6 +166,8 @@ def _run_loader(
                         {k: v[i] for k, v in out.items()}, train_cfg,
                     )
                 )
+    if not rows:  # no valid window: the caller reports why (sorting an empty frame raised KeyError)
+        return pd.DataFrame()
     return (
         pd.DataFrame(rows)
         .sort_values(["asset_id", "timestamp", "sequence_id"])

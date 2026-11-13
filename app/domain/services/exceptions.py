@@ -44,6 +44,11 @@ class InsufficientTelemetryHistoryError(ValueError):
     """Raised when fewer than seq_len valid rows of telemetry history are provided (ml46)."""
 
 
+class InvalidTelemetryInputError(ValueError):
+    """Raised when a telemetry CSV/row-set breaks the input contract (ml46): missing columns,
+    unparseable timestamps. A ValueError, so /train answers 400; /predict maps it to 422."""
+
+
 class InsufficientCycleHistoryError(ValueError):
     """Raised when a cycle (run_id) has fewer minutes of history than the lag features need.
 
