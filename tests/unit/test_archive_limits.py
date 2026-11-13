@@ -88,3 +88,69 @@ def test_invalid_env_value_falls_back_to_the_default(tmp_path, monkeypatch):
     """An unparsable env limit falls back to the default instead of failing."""
     monkeypatch.setenv("ARCHIVE_MAX_FILES", "200000  # comentario de un --env-file")
     safe_extract_zip(_zip(tmp_path / "ok.zip", {"a.jpg": b"x"}), str(tmp_path / "out"))
+
+
+def test_skips_os_metadata_created_when_zipping_on_macos_or_windows(tmp_path):
+    """__MACOSX/, AppleDouble ._* files and .DS_Store/Thumbs.db are never extracted.
+
+    With them, a ZIP made with "Compress" in Finder had two top-level entries (wrapper folder
+    + __MACOSX) and the plugins that look for one wrapper folder (ml5, ml8) failed.
+    """
+    src = _zip(tmp_path / "mac.zip", {
+        "dataset/trigo/train/sano/a.jpg": b"img",
+        "__MACOSX/dataset/trigo/train/sano/._a.jpg": b"meta",
+        "dataset/trigo/train/sano/._b.jpg": b"meta",
+        "dataset/.DS_Store": b"ds", "dataset/Thumbs.db": b"tb",
+    })
+    out = tmp_path / "out"
+    safe_extract_zip(src, str(out))
+    assert [p.name for p in out.iterdir()] == ["dataset"]
+    files = sorted(str(p.relative_to(out)) for p in out.rglob("*") if p.is_file())
+    assert files == ["dataset/trigo/train/sano/a.jpg"]
+
+
+def test_ml8_training_zip_built_on_macos_is_read(tmp_path):
+    """ml8: wrapper folder + __MACOSX used to give 'No se encontraron imágenes de entrenamiento'."""
+    from app.plugins.ml8_cereals_img_anomaly_detector.plugin import _load_records
+
+    members = {f"cereales/trigo/train/sano/{i}.jpg": b"img" for i in range(5)}
+    members.update({f"__MACOSX/cereales/trigo/train/sano/._{i}.jpg": b"m" for i in range(5)})
+    members["cereales/maiz/train/hongos/x.webp"] = b"img"
+    out = tmp_path / "out"
+    safe_extract_zip(_zip(tmp_path / "ml8.zip", members), str(out))
+    train, val = _load_records(str(out))
+    assert len(train) + len(val) == 6
+
+
+def test_ml8_training_error_explains_the_expected_structure(tmp_path):
+    """A wrong layout (accents/capitals) gets the exact folder names and what was found."""
+    from app.plugins.ml8_cereals_img_anomaly_detector.plugin import _load_records
+
+    out = tmp_path / "out"
+    members = {"Maíz/train/sano/a.jpg": b"img", "Trigo/train/sano/b.jpg": b"img"}
+    safe_extract_zip(_zip(tmp_path / "bad.zip", members), str(out))
+    with pytest.raises(ValueError, match=r"'arroz', 'maiz', 'sorgo', 'trigo'.*'Maíz', 'Trigo'"):
+        _load_records(str(out))
+
+
+def test_ml5_training_zip_built_on_macos_finds_its_wrapper_folder(tmp_path):
+    """ml5: the CVAT layout inside one wrapper folder, with __MACOSX next to it."""
+    from app.plugins.ml5_meat_cow_behaviour import plugin as ml5
+
+    members = {
+        "dataset/raw_frames/clip1/img_00001.jpg": b"img",
+        "dataset/annotations/clip1/annotations/instances_default.json": b"{}",
+        "__MACOSX/dataset/raw_frames/clip1/._img_00001.jpg": b"m",
+    }
+    seen = {}
+
+    def fake_load_all_clips(raw_frames_dir, annotations_dir):
+        seen["dirs"] = (raw_frames_dir, annotations_dir)
+        return {"images": []}
+
+    src = _zip(tmp_path / "ml5.zip", members)
+    import unittest.mock as mock  # pylint: disable=import-outside-toplevel
+    with mock.patch.object(ml5, "load_all_clips", fake_load_all_clips):
+        with pytest.raises(ValueError):  # empty fake dataset; we only check the layout was found
+            ml5._load_training_clips(src, str(tmp_path / "out"))
+    assert seen["dirs"][0].endswith("dataset/raw_frames")
