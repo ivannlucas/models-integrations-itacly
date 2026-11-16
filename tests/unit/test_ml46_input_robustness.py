@@ -59,9 +59,12 @@ def _telemetry(rows: int = 420, maintenance=(200, 230)) -> pd.DataFrame:
 
 @pytest.fixture(scope="module")
 def plugin():
-    """The real plugin (local artifacts), fine-tuning for a single epoch."""
+    """The real plugin (local artifacts, or S3 when configured), fine-tuning for a single epoch."""
     instance = ml46.Ml46DairyFoulingClogDetectionPlugin()
-    instance.load()
+    try:
+        instance.load()
+    except FileNotFoundError as exc:  # no local copy and no STORAGE_BUCKET to download it from
+        pytest.skip(f"ml46 artifacts not available (they live in S3): {exc}")
     instance._train_cfg = dataclasses.replace(instance._train_cfg, epochs=1)
     return instance
 
