@@ -119,43 +119,52 @@ def _crear_ventanas(
     )
 
 
+class _WindowBatchesBase:
+    """Batches of windows cut on demand; ``shuffle_seed`` reshuffles them every epoch.
+
+    Shuffling is what ``model.fit(x, y, shuffle=True)`` did over the stacked windows. Without
+    ``targets`` it yields only the windows (for ``predict``). Plain Python, so the tests need
+    no Keras: importing TensorFlow in the pytest process makes a later torch/triton import
+    segfault. _window_batches_class() adds the keras.utils.PyDataset base when training.
+    """
+
+    def __init__(self, windows: _Windows, batch_size: int, *,
+                 shuffle_seed: int | None = None, targets: bool = True) -> None:
+        self._windows = windows
+        self._batch_size = batch_size
+        self._targets = targets
+        self._rng = None if shuffle_seed is None else np.random.default_rng(shuffle_seed)
+        self._order = np.arange(len(windows))
+        self.on_epoch_end()
+
+    def __len__(self) -> int:
+        return math.ceil(len(self._windows) / self._batch_size)
+
+    def __getitem__(self, index: int):
+        idx = self._order[index * self._batch_size:(index + 1) * self._batch_size]
+        x = self._windows.take(idx)
+        if not self._targets:
+            return x
+        return x, {"out_class": self._windows.y_class[idx], "out_reg": self._windows.y_reg[idx]}
+
+    def on_epoch_end(self) -> None:
+        """Reshuffle the window order (Keras calls it after every epoch)."""
+        if self._rng is not None:
+            self._rng.shuffle(self._order)
+
+
 @functools.cache
 def _window_batches_class():
-    """keras.utils.PyDataset over a _Windows (built lazily: TensorFlow is imported lazily)."""
+    """_WindowBatchesBase as a keras.utils.PyDataset (built lazily: TensorFlow is lazy)."""
     # pylint: disable-next=import-outside-toplevel,import-error
     import keras
 
-    class WindowBatches(keras.utils.PyDataset):
-        """Batches of windows cut on demand; ``shuffle_seed`` reshuffles them every epoch.
+    class WindowBatches(_WindowBatchesBase, keras.utils.PyDataset):
+        """The PyDataset model.fit/predict consume."""
 
-        Shuffling is what ``model.fit(x, y, shuffle=True)`` did over the stacked windows.
-        Without ``targets`` it yields only the windows (for ``predict``).
-        """
-
-        def __init__(self, windows: _Windows, batch_size: int, *,
-                     shuffle_seed: int | None = None, targets: bool = True) -> None:
-            super().__init__()
-            self._windows = windows
-            self._batch_size = batch_size
-            self._targets = targets
-            self._rng = None if shuffle_seed is None else np.random.default_rng(shuffle_seed)
-            self._order = np.arange(len(windows))
-            self.on_epoch_end()
-
-        def __len__(self) -> int:
-            return math.ceil(len(self._windows) / self._batch_size)
-
-        def __getitem__(self, index: int):
-            idx = self._order[index * self._batch_size:(index + 1) * self._batch_size]
-            x = self._windows.take(idx)
-            if not self._targets:
-                return x
-            return x, {"out_class": self._windows.y_class[idx],
-                       "out_reg": self._windows.y_reg[idx]}
-
-        def on_epoch_end(self) -> None:
-            if self._rng is not None:
-                self._rng.shuffle(self._order)
+        def __init__(self, *args, **kwargs) -> None:
+            keras.utils.PyDataset.__init__(self)
+            _WindowBatchesBase.__init__(self, *args, **kwargs)
 
     return WindowBatches
 
