@@ -19,6 +19,7 @@ from tests.unit.train_job_fakes import (
     InMemoryJobStore,
     NiceReportingTrainPlugin,
     NumpyMetricsTrainPlugin,
+    OomKilledTrainPlugin,
     RaisingTrainPlugin,
     SlowTrainPlugin,
 )
@@ -202,6 +203,23 @@ def test_hung_training_is_stopped_after_max_duration_and_frees_the_model(tmp_pat
     assert not executor.is_busy()
 
 
+def test_child_killed_by_the_system_is_reported_at_once_with_the_cause(tmp_path):
+    """An OOM-killed child (SIGKILL) fails its job right away, not when the heartbeat goes stale.
+
+    error_type stays TrainJobLost (the orchestrator maps it), and the error says SIGKILL/OOM.
+    """
+    store = FileJobStore(str(tmp_path))
+    executor = ProcessTrainExecutor(heartbeat_s=60)
+    _submit(executor, store, "run-oom", OomKilledTrainPlugin)
+    record = _terminal(store, "run-oom")
+    assert (record.status, record.error_type, record.http_status) == (
+        TrainJobStatus.FAILED, "TrainJobLost", 500
+    )
+    assert "SIGKILL" in record.error and "memoria" in record.error
+    assert record.error.startswith("El proceso de entrenamiento terminó inesperadamente")
+    _wait(lambda: not executor.is_busy(), timeout=15, what="executor free")
+
+
 def test_training_child_runs_at_lower_cpu_priority(tmp_path):
     """The training child runs with the configured extra niceness."""
     store, executor = FileJobStore(str(tmp_path)), ProcessTrainExecutor(heartbeat_s=0.2, nice=5)
@@ -227,8 +245,11 @@ class _FakeProc:
 
     pid = 4242
 
-    def __init__(self, dies_on: str = "terminate", finishes: bool = False) -> None:
+    def __init__(
+        self, dies_on: str = "terminate", finishes: bool = False, exitcode: int | None = 0
+    ) -> None:
         self.alive = not finishes
+        self.exitcode = exitcode if finishes else None
         self.dies_on = dies_on
         self.calls: list[str] = []
 
@@ -260,11 +281,36 @@ def _queued_store(status=TrainJobStatus.RUNNING, **extra):
 
 
 def test_watchdog_does_nothing_when_the_child_ends_in_time():
-    """The watchdog only joins a child that ends in time."""
-    proc, store = _FakeProc(finishes=True), _queued_store()
+    """The watchdog only joins a child that ends in time after saving its result."""
+    proc, store = _FakeProc(finishes=True), _queued_store(TrainJobStatus.SUCCEEDED)
     process_executor._watch(proc, "run-w", store, 5)
     assert proc.calls == ["join"]
-    assert store.get("run-w").status is TrainJobStatus.RUNNING
+    assert store.get("run-w").status is TrainJobStatus.SUCCEEDED
+
+
+@pytest.mark.parametrize("exitcode,expected", [
+    (-9, "SIGKILL"),
+    (-11, "SIGSEGV"),
+    (1, "código de salida 1"),
+])
+def test_watchdog_fails_a_job_whose_child_died_without_a_result(exitcode, expected):
+    """A child that ended leaving its job non-terminal died outside Python: reported with why."""
+    proc, store = _FakeProc(finishes=True, exitcode=exitcode), _queued_store()
+    process_executor._watch(proc, "run-w", store, 5)
+    record = store.get("run-w")
+    assert (record.status, record.error_type, record.http_status) == (
+        TrainJobStatus.FAILED, "TrainJobLost", 500
+    )
+    assert expected in record.error
+    assert ("memoria" in record.error) == (exitcode == -9)
+
+
+def test_watchdog_keeps_a_job_the_dead_child_already_finished():
+    """A non-zero exit after the child saved a terminal state never overwrites it."""
+    proc = _FakeProc(finishes=True, exitcode=-9)
+    store = _queued_store(TrainJobStatus.FAILED, error="boom", error_type="ValueError")
+    process_executor._watch(proc, "run-w", store, 5)
+    assert store.get("run-w").error_type == "ValueError"
 
 
 def test_watchdog_kills_a_child_that_ignores_sigterm():

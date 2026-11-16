@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import signal
 import time
 from dataclasses import asdict, replace
 
@@ -166,6 +167,14 @@ class SlowTrainPlugin(EchoTrainPlugin):
     def train(self, *, data_path: str, mlflow_run_id: str) -> FakeTrainResponse:
         time.sleep(float(data_path))
         return super().train(data_path=data_path, mlflow_run_id=mlflow_run_id)
+
+
+class OomKilledTrainPlugin(EchoTrainPlugin):
+    """Dies by SIGKILL mid-training, as the container's OOM killer does."""
+
+    def train(self, *, data_path: str, mlflow_run_id: str) -> FakeTrainResponse:
+        os.kill(os.getpid(), signal.SIGKILL)
+        raise AssertionError("unreachable")
 
 
 class NumpyMetricsTrainPlugin(EchoTrainPlugin):

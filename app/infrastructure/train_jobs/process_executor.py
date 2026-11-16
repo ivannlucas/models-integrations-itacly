@@ -20,11 +20,13 @@ from typing import Any
 from app.domain.ports.train_executor_port import TrainExecutorPort
 from app.domain.ports.train_job_store_port import TrainJobStorePort
 from app.domain.services.train_job import (
+    LOST_ERROR_TYPE,
     TIMEOUT_ERROR_TYPE,
     TrainJobStatus,
     max_duration_error,
     train_error_http_status,
 )
+from app.infrastructure.process_exit import describe_child_exit
 
 logger = logging.getLogger(__name__)
 
@@ -164,15 +166,45 @@ def _stop(proc: Any) -> None:
         proc.join()
 
 
+def report_dead_child(proc: Any, job_id: str, store: Any, *, error_type: str, label: str) -> None:
+    """Mark the job failed if its finished child left it non-terminal (it died outside Python).
+
+    Without this the job only turns lost once its heartbeat goes stale (minutes later) and with no
+    cause; the exit code tells SIGKILL (the container's OOM killer) from a crash. ``error_type``
+    stays the lost one, so consumers keep their mapping; ``error`` says what happened. Shared by
+    training and prediction jobs: both status enums have FAILED.
+    """
+    try:
+        current = store.get(job_id)
+        if current is None or current.status.is_terminal:
+            return
+        reason = describe_child_exit(proc.exitcode)
+        logger.error(
+            "Job %s: child pid=%s ended (exitcode=%s) without saving its result: %s",
+            job_id, proc.pid, proc.exitcode, reason,
+        )
+        store.save(replace(
+            current, status=type(current.status).FAILED, updated_at=time.time(),
+            error_type=error_type, http_status=500,
+            error=f"El proceso de {label} terminó inesperadamente: {reason}.",
+        ))
+    except Exception:  # pylint: disable=broad-exception-caught  # watchdog must never crash
+        logger.exception("Could not report the dead child of job %s", job_id)
+
+
 def _watch(proc: Any, job_id: str, store: TrainJobStorePort, max_duration_s: float) -> None:
     """Stop the child once it exceeds ``max_duration_s`` and report the job failed.
 
     The failure is reported with error type TrainJobTimeout.
 
     A hung train() keeps heart-beating, so the stale check alone would leave it running forever.
+    A child that dies before reporting (OOM kill, native crash) is reported at once, with why.
     """
     proc.join(max_duration_s)
     if not proc.is_alive():
+        report_dead_child(
+            proc, job_id, store, error_type=LOST_ERROR_TYPE, label="entrenamiento",
+        )
         return
     logger.error(
         "Training job %s exceeded %.0f s; stopping pid=%s", job_id, max_duration_s, proc.pid
