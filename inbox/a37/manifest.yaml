@@ -206,6 +206,20 @@ known_issues:
      una versión anterior del código. No afecta a la verificación (los índices train/val/test y
      las distribuciones sí están completos y consistentes), pero se documenta como discrepancia
      de procedencia sin resolver silenciosamente."
+  - "[QUIRK REAL DEL MOTOR DE REGLAS: accumulator PUEDE PERDER UNA ALERTA MÁS GRAVE EN LA VISTA
+     LEGACY] symbolic_engine.py::check_rule_evidence evalúa accumulator con DOS bloques `if`
+     independientes (no elif): PS1_mean bajo (WARNING/CRITICAL) y PS1_std alto (WARNING) pueden
+     dispararse ambos en el mismo ciclo. check_rules()/la vista 'legacy' que alimenta
+     alerts_all.parquet colapsa por componente con un dict comprehension
+     ({a['component']: a for a in rule_alerts}) que se queda con la ÚLTIMA entrada en orden de
+     evaluación (ps1_std, evaluado después) -- si PS1_mean disparó CRITICAL y PS1_std solo
+     WARNING, la vista legacy pierde silenciosamente el CRITICAL y deja un WARNING. El propio
+     equipo de IA es consciente de esto: build_rule_evidence_detail calcula explícitamente un
+     campo would_be_overwritten_in_legacy para auditarlo en la salida auxiliar
+     alerts_rule_evidence_detail.parquet. Esto NO se corrige en el plugin -- se replica
+     fielmente (es el comportamiento real desplegado), documentado aquí y en known_issues de la
+     ficha técnica, y se expone también el detalle completo (todas las reglas, no solo la
+     'legacy') para que quien consuma la API pueda ver la alerta perdida si la necesita."
   - "[a39 DEPENDE DE ESTE MODELO] El ticket DATAPLAT-525 (a39, capa XAI) está ligado a a37:
      reutiliza su especificación y dataset, y hay que comprobar que las explicaciones se
      muestran junto a la predicción de a37 en el front. No empezar a39 hasta que este plugin
