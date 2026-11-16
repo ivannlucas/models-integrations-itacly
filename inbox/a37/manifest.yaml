@@ -98,11 +98,18 @@ training:
     El procedimiento completo (incl. el tensor schema_v1 de 600x40, el escalado StandardScaler
     sobre las 40 columnas, y el guardrail de clases ausentes por split) está íntegro en
     src/training/trainer.py (935 líneas) -- portar esto fielmente es el grueso del trabajo de
-    plugin-integration. A diferencia de a1 (Deep Ensemble CNN, ~4h20min CPU), este LSTM(64)
-    sobre 1543 secuencias de (600,40), batch 256, 50 épocas, es computacionalmente ligero
-    (estimación: minutos, no horas, en CPU) -- PENDIENTE DE VERIFICAR con una ejecución real
-    antes de decidir si expone /train síncrono o vía /train?wait=false (infraestructura ya
-    disponible en el repo desde PR #27).
+    plugin-integration.
+  duracion_estimada: >
+    [VERIFICADO CON EJECUCIÓN REAL en plugin-integration] 60 ciclos reales (20 por clase cooler,
+    36.000 filas de sensor) -> 305s de principio a fin (build + fit con early stopping + eval +
+    guardado), CPU vía Keras 3 backend=torch, sin GPU -- igual que el entorno del propio equipo
+    de IA (memoria: CPU, sin GPU, Intel Core i7-13620H). NO es tan ligero como se estimó
+    inicialmente (se esperaban "minutos, no horas" sin verificar): escalar a los 1543 ciclos
+    reales del split de referencia completo tomaría considerablemente más (el early stopping
+    con un dataset de 60 ciclos converge mucho antes que con 1543, así que la extrapolación
+    lineal del tiempo por ciclo subestima el total). Se recomienda exponer /train únicamente vía
+    /train?wait=false (infraestructura genérica ya disponible en el repo desde la PR de
+    entrenamiento asíncrono) para el dataset completo, no como llamada síncrona por defecto.
 
 golden_cases:
   source_note: >
