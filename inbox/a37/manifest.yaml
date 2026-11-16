@@ -184,13 +184,16 @@ known_issues:
      configuración de producción recomendada (memoria, sección 'Selección de la configuración
      de referencia'). Este plugin sirve exclusivamente esa combinación; las otras 3 quedan fuera
      de alcance salvo que se pida explícitamente lo contrario."
-  - "[PYTHON 3.14 DE ESTE SANDBOX NO TIENE WHEEL DE tensorflow==2.19.0] Solo existe
-     tensorflow==2.22.0rc0 para Python 3.14 en este entorno de desarrollo -- mismo tipo de
-     bloqueo que tuvo a1 con TensorFlow (resuelto ahí con Keras 3 backend=torch, pero a37 usa
-     tf.keras.models.load_model directamente, no backend=torch). Pendiente de resolver en
-     plugin-integration: probar si .keras carga igual con 2.22.0rc0, o replicar la arquitectura
-     en Keras 3 standalone + backend=torch como se hizo con a1 (más robusto, evita depender de
-     wheels de TF para una versión de Python concreta)."
+  - "[RESUELTO -- VERIFICADO CONTRA EL ARTEFACTO REAL] Python 3.14 de este sandbox no tiene
+     wheel de tensorflow==2.19.0 (solo 2.22.0rc0), mismo bloqueo que tuvo a1. Resuelto igual que
+     a1: best_model.keras carga sin ningún error con Keras 3 standalone + backend=torch, sin
+     TensorFlow en absoluto (el formato .keras de Keras 3 es el mismo que usa tf.keras desde
+     TF 2.16+). Arquitectura cargada verificada: Masking(0.0) -> LSTM(64) -> Dense(64,relu) -> 4
+     heads softmax (cooler=3, valve=4, pump=3, accumulator=4 clases), 31.950 parámetros, igual
+     que trainer.py::build_multitask_lstm. Se ejecutó predict() real sobre los 20 golden_cases
+     (tensor real X_schema_v1.npy + scaler.json + class_mappings.json reales) y los 20/20
+     reproducen EXACTAS las clases predichas y el riesgo a 4 decimales ya registrados arriba --
+     el plugin puede construirse sobre Keras 3 standalone sin depender de TensorFlow."
   - "[requirements.txt SOLO FIJA tensorflow EXACTO] numpy/pandas/scikit-learn/pyarrow son rangos
      (>=X,<Y), no versiones exactas -- a diferencia de a19 (scikit-learn), aquí no hay pin
      exacto de sklearn que pueda romper por versión al cargar nada (StandardScaler se
