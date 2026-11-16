@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import signal
 import time
 from dataclasses import replace
 from typing import Annotated, Literal, Union
@@ -166,6 +167,14 @@ class SlowPredictPlugin(EchoPredictPlugin):
 
     def predict_batch(self, *, data_path: str, mlflow_run_id: str = "") -> FakeBatchResponse:
         time.sleep(3600)
+        raise AssertionError("unreachable")
+
+
+class OomKilledPredictPlugin(EchoPredictPlugin):
+    """Dies by SIGKILL mid-prediction, as the container's OOM killer does."""
+
+    def predict_batch(self, *, data_path: str, mlflow_run_id: str = "") -> FakeBatchResponse:
+        os.kill(os.getpid(), signal.SIGKILL)
         raise AssertionError("unreachable")
 
 

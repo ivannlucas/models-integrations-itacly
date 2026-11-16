@@ -12,6 +12,7 @@ from tests.unit.predict_job_fakes import (
     FakeBatchRequest,
     FilePredictJobStore,
     InMemoryPredictJobStore,
+    OomKilledPredictPlugin,
     SlowPredictPlugin,
 )
 
@@ -64,6 +65,22 @@ def test_concurrency_limit_and_watchdog(tmp_path):
     while executor.is_busy() and time.time() < deadline:
         time.sleep(0.1)
     assert not executor.is_busy()
+
+
+def test_child_killed_by_the_system_is_reported_at_once_with_the_cause(tmp_path):
+    """An OOM-killed child fails its job right away as PredictJobLost, saying SIGKILL/OOM."""
+    store, executor = FilePredictJobStore(str(tmp_path)), ProcessPredictExecutor(heartbeat_s=60)
+    _queue(store, "t-oom")
+    executor.submit(
+        job_id="t-oom", plugin_class=OomKilledPredictPlugin,
+        request=FakeBatchRequest(data_path="x"), store=store,
+    )
+    record = _terminal(store, "t-oom")
+    assert (record.status, record.error_type, record.http_status) == (
+        PredictJobStatus.FAILED, "PredictJobLost", 500
+    )
+    assert record.error.startswith("El proceso de predicción terminó inesperadamente")
+    assert "SIGKILL" in record.error and "memoria" in record.error
 
 
 def test_run_predict_job_never_overwrites_a_terminal_job():

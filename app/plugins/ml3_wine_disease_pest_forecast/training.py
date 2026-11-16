@@ -9,11 +9,20 @@ voting on the test split — comparable with the memoria's Tabla 11/12.
 
 Ports the delivered code 1:1 (same operations, in the same order; the long functions are split
 into helpers only); TensorFlow stays imported lazily to keep the module light for unit tests.
+
+One deliberate difference: the original stacks every window into one array (crear_secuencias)
+before fitting. With stride 1 that is 168x the scaled rows (~11 GiB for the delivered 1.6M-row
+dataset, plus Keras' own copy), which kills the pod. Here each split keeps its scaled rows once
+and the windows are cut batch by batch (_Windows + _window_batches): the same windows, targets,
+batch size, epochs and per-epoch shuffle, with memory that no longer grows 168x with the CSV.
 """
 from __future__ import annotations
 
+import functools
 import gc
 import logging
+import math
+from dataclasses import dataclass
 from typing import Any
 
 import joblib
@@ -59,28 +68,103 @@ from app.plugins.ml3_wine_disease_pest_forecast.feature_engineering import (
 logger = logging.getLogger(__name__)
 
 
-def _crear_secuencias(
-    df: pd.DataFrame, window_size: int, features: list[str], columns: tuple[str, str, str],
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Port of train.crear_secuencias: tabular frame -> 3D window tensors (stride 1).
+@dataclass(frozen=True)
+class _Windows:
+    """The stride-1 windows of one split, not materialized.
 
-    ``columns`` is (t_class, t_reg, series_col) of the original signature.
+    Window ``i`` is ``features[starts[i]:starts[i] + window]`` (what train.crear_secuencias
+    stacked) and its targets are ``y_class[i]`` / ``y_reg[i]``.
+    """
+
+    features: np.ndarray  # (rows, n_features) float32: the split's series, concatenated
+    starts: np.ndarray  # (n_windows,) int64
+    y_class: np.ndarray  # (n_windows,) int8
+    y_reg: np.ndarray  # (n_windows,) float32
+    window: int
+
+    def __len__(self) -> int:
+        return len(self.starts)
+
+    def take(self, idx: np.ndarray) -> np.ndarray:
+        """Windows ``idx`` stacked: ``(len(idx), window, n_features)`` float32."""
+        return self.features[self.starts[idx][:, None] + np.arange(self.window)]
+
+
+def _crear_ventanas(
+    df: pd.DataFrame, window_size: int, features: list[str], columns: tuple[str, str, str],
+) -> _Windows:
+    """train.crear_secuencias without stacking: same windows (stride 1) and targets.
+
+    ``columns`` is (t_class, t_reg, series_col) of the original signature. A series of n rows
+    gives the windows starting at rows 0..n-window_size-1, each labeled with the row after it.
     """
     t_class, t_reg, series_col = columns
-    x, y_c, y_r = [], [], []
+    feats, starts, y_c, y_r = [], [], [], []
+    offset = 0
     for _, grupo in df.groupby(series_col, sort=False):
-        data_features = grupo[features].values
-        data_class = grupo[t_class].values
-        data_reg = grupo[t_reg].values
-        for i in range(len(data_features) - window_size):
-            x.append(data_features[i:i + window_size])
-            y_c.append(data_class[i + window_size])
-            y_r.append(data_reg[i + window_size])
-    return (
-        np.array(x, dtype=np.float32),
-        np.array(y_c, dtype=np.int8),
-        np.array(y_r, dtype=np.float32),
+        n_rows = len(grupo)
+        feats.append(grupo[features].to_numpy(dtype=np.float32))
+        if n_rows > window_size:
+            starts.append(offset + np.arange(n_rows - window_size, dtype=np.int64))
+            y_c.append(grupo[t_class].to_numpy()[window_size:])
+            y_r.append(grupo[t_reg].to_numpy()[window_size:])
+        offset += n_rows
+    return _Windows(
+        features=(np.concatenate(feats) if feats
+                  else np.zeros((0, len(features)), dtype=np.float32)),
+        starts=np.concatenate(starts) if starts else np.zeros(0, dtype=np.int64),
+        y_class=(np.concatenate(y_c) if y_c else np.zeros(0)).astype(np.int8),
+        y_reg=(np.concatenate(y_r) if y_r else np.zeros(0)).astype(np.float32),
+        window=window_size,
     )
+
+
+@functools.cache
+def _window_batches_class():
+    """keras.utils.PyDataset over a _Windows (built lazily: TensorFlow is imported lazily)."""
+    # pylint: disable-next=import-outside-toplevel,import-error
+    import keras
+
+    class WindowBatches(keras.utils.PyDataset):
+        """Batches of windows cut on demand; ``shuffle_seed`` reshuffles them every epoch.
+
+        Shuffling is what ``model.fit(x, y, shuffle=True)`` did over the stacked windows.
+        Without ``targets`` it yields only the windows (for ``predict``).
+        """
+
+        def __init__(self, windows: _Windows, batch_size: int, *,
+                     shuffle_seed: int | None = None, targets: bool = True) -> None:
+            super().__init__()
+            self._windows = windows
+            self._batch_size = batch_size
+            self._targets = targets
+            self._rng = None if shuffle_seed is None else np.random.default_rng(shuffle_seed)
+            self._order = np.arange(len(windows))
+            self.on_epoch_end()
+
+        def __len__(self) -> int:
+            return math.ceil(len(self._windows) / self._batch_size)
+
+        def __getitem__(self, index: int):
+            idx = self._order[index * self._batch_size:(index + 1) * self._batch_size]
+            x = self._windows.take(idx)
+            if not self._targets:
+                return x
+            return x, {"out_class": self._windows.y_class[idx],
+                       "out_reg": self._windows.y_reg[idx]}
+
+        def on_epoch_end(self) -> None:
+            if self._rng is not None:
+                self._rng.shuffle(self._order)
+
+    return WindowBatches
+
+
+def _window_batches(windows: _Windows, *, shuffle_seed: int | None = None,
+                    targets: bool = True):
+    """The PyDataset of ``windows`` in batches of BATCH_SIZE."""
+    return _window_batches_class()(windows, BATCH_SIZE, shuffle_seed=shuffle_seed,
+                                   targets=targets)
 
 
 def _compilar(modelo, lr):
@@ -199,9 +283,9 @@ def _validate_series_split(df: pd.DataFrame) -> None:
         )
 
 
-def _require_windows(splits: dict[str, tuple]) -> None:
+def _require_windows(splits: dict[str, _Windows]) -> None:
     """Each split needs at least one WINDOW_SIZE-hour window, or training cannot run."""
-    empty = [name for name, (x, _, _) in splits.items() if len(x) == 0]
+    empty = [name for name, windows in splits.items() if len(windows) == 0]
     if empty:
         raise InsufficientDataError(
             f"Ninguna serie del conjunto de {', '.join(empty)} tiene más de {WINDOW_SIZE} filas "
@@ -239,10 +323,10 @@ def _encode_and_split(df: pd.DataFrame) -> tuple[LabelEncoder, tuple, tuple]:
     return le, frames, (len(train_ids), len(val_ids), len(test_ids))
 
 
-def _scale_and_window(frames: tuple) -> tuple[StandardScaler, tuple, tuple, tuple]:
-    """Fit the StandardScaler on train, scale the 3 splits and build their window tensors.
+def _scale_and_window(frames: tuple) -> tuple[StandardScaler, _Windows, _Windows, _Windows]:
+    """Fit the StandardScaler on train, scale the 3 splits and index their windows.
 
-    Returns (scaler, (x, y_c, y_r) of train, of val, of test).
+    Returns (scaler, windows of train, of val, of test).
     """
     train_df, val_df, test_df = frames
     scaler = StandardScaler()
@@ -251,14 +335,16 @@ def _scale_and_window(frames: tuple) -> tuple[StandardScaler, tuple, tuple, tupl
     val_df[MODEL_FEATURES] = scaler.transform(val_df[MODEL_FEATURES])
     test_df[MODEL_FEATURES] = scaler.transform(test_df[MODEL_FEATURES])
 
-    logger.info("Empaquetando secuencias en tensores 3D...")
-    train = _crear_secuencias(train_df, WINDOW_SIZE, MODEL_FEATURES, _SEQ_COLUMNS)
-    val = _crear_secuencias(val_df, WINDOW_SIZE, MODEL_FEATURES, _SEQ_COLUMNS)
-    test = _crear_secuencias(test_df, WINDOW_SIZE, MODEL_FEATURES, _SEQ_COLUMNS)
+    logger.info("Indexando ventanas de %d h...", WINDOW_SIZE)
+    train = _crear_ventanas(train_df, WINDOW_SIZE, MODEL_FEATURES, _SEQ_COLUMNS)
+    val = _crear_ventanas(val_df, WINDOW_SIZE, MODEL_FEATURES, _SEQ_COLUMNS)
+    test = _crear_ventanas(test_df, WINDOW_SIZE, MODEL_FEATURES, _SEQ_COLUMNS)
     return scaler, train, val, test
 
 
-def _fit_models(modelos: list, train: tuple, val: tuple, model_paths: dict[str, str]) -> list[int]:
+def _fit_models(
+    modelos: list, train: _Windows, val: _Windows, model_paths: dict[str, str]
+) -> list[int]:
     """Fit each network with early stopping + best checkpoint; return the epochs each ran."""
     # pylint: disable-next=import-outside-toplevel,import-error,no-name-in-module
     from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint
@@ -271,20 +357,21 @@ def _fit_models(modelos: list, train: tuple, val: tuple, model_paths: dict[str, 
         c_check = ModelCheckpoint(filepath=model_paths[modelo.name], monitor="val_loss",
                                   save_best_only=True, mode="min")
         hist = modelo.fit(
-            train[0], {"out_class": train[1], "out_reg": train[2]},
-            validation_data=(val[0], {"out_class": val[1], "out_reg": val[2]}),
-            epochs=EPOCHS, batch_size=BATCH_SIZE, callbacks=[c_stop, c_check], verbose=0,
+            _window_batches(train, shuffle_seed=TRAIN_RANDOM_SEED),
+            validation_data=_window_batches(val),
+            epochs=EPOCHS, callbacks=[c_stop, c_check], verbose=0,
         )
         epochs_executed.append(len(hist.history["loss"]))
     return epochs_executed
 
 
-def _ensemble_test_metrics(modelos: list, test: tuple) -> dict[str, float]:
+def _ensemble_test_metrics(modelos: list, test: _Windows) -> dict[str, float]:
     """Hold-out metrics: ensemble soft voting on test (same as train.py save_metrics DEL block)."""
-    x_test, y_test_c, y_test_r = test
+    y_test_c, y_test_r = test.y_class, test.y_reg
     preds_clases_prob, preds_regresion = [], []
     for modelo in modelos:
-        preds = modelo.predict(x_test, verbose=0)  # [class probabilities, severity]
+        # [class probabilities, severity]
+        preds = modelo.predict(_window_batches(test, targets=False), verbose=0)
         preds_clases_prob.append(preds[0])
         preds_regresion.append(preds[1])
     media_probs = np.mean(preds_clases_prob, axis=0)
@@ -323,9 +410,7 @@ def run_retraining(raw_df: pd.DataFrame, model_paths: dict[str, str]) -> dict[st
 
     scaler, train, val, test = _scale_and_window(frames)
     _require_windows({"entrenamiento": train, "validación": val, "test": test})
-    logger.info(
-        "Tensores: train %s, val %s, test %s", train[0].shape, val[0].shape, test[0].shape,
-    )
+    logger.info("Ventanas: train %d, val %d, test %d", len(train), len(val), len(test))
     del frames, df
     gc.collect()
 
@@ -351,9 +436,9 @@ def run_retraining(raw_df: pd.DataFrame, model_paths: dict[str, str]) -> dict[st
         "le": le,
         "scaler": scaler,
         "models": modelos,
-        "n_windows_train": int(len(train[0])),
-        "n_windows_val": int(len(val[0])),
-        "n_windows_test": int(len(test[0])),
+        "n_windows_train": len(train),
+        "n_windows_val": len(val),
+        "n_windows_test": len(test),
         "epochs_executed": epochs_executed,
     }
 

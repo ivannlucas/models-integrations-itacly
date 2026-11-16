@@ -20,6 +20,7 @@ from app.application.use_cases.predict_model_use_case import PredictModelUseCase
 from app.domain.ports.predict_executor_port import PredictExecutorPort
 from app.domain.ports.predict_job_store_port import PredictJobStorePort
 from app.domain.services.predict_job import (
+    LOST_ERROR_TYPE,
     TIMEOUT_ERROR_TYPE,
     PredictJobStatus,
     max_duration_error,
@@ -30,6 +31,7 @@ from app.infrastructure.train_jobs.process_executor import (
     _lower_priority,
     _stop,
     _warn_if_multiple_workers,
+    report_dead_child,
 )
 
 logger = logging.getLogger(__name__)
@@ -111,9 +113,15 @@ def _child_main(*, nice: int, **job: Any) -> None:
 
 
 def _watch(proc: Any, job_id: str, store: PredictJobStorePort, max_duration_s: float) -> None:
-    """Stop the child once it exceeds ``max_duration_s`` and report the job PredictJobTimeout."""
+    """Stop the child once it exceeds ``max_duration_s`` and report the job PredictJobTimeout.
+
+    A child that dies before reporting (OOM kill, native crash) is reported at once, with why.
+    """
     proc.join(max_duration_s)
     if not proc.is_alive():
+        report_dead_child(
+            proc, job_id, store, error_type=LOST_ERROR_TYPE, label="predicción",
+        )
         return
     logger.error(
         "Prediction job %s exceeded %.0f s; stopping pid=%s", job_id, max_duration_s, proc.pid

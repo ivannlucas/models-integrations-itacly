@@ -108,8 +108,14 @@ def test_split_without_windows_is_a_clear_error():
     """Series of <= WINDOW_SIZE rows produce no window: say so instead of training on nothing."""
     import numpy as np  # pylint: disable=import-outside-toplevel
 
-    empty = (np.zeros((0, WINDOW_SIZE, 3)), np.zeros(0), np.zeros(0))
-    full = (np.zeros((4, WINDOW_SIZE, 3)), np.zeros(4), np.zeros(4))
+    def windows(n):
+        return training._Windows(
+            features=np.zeros((n + WINDOW_SIZE, 3), dtype=np.float32),
+            starts=np.arange(n), y_class=np.zeros(n, dtype=np.int8),
+            y_reg=np.zeros(n, dtype=np.float32), window=WINDOW_SIZE,
+        )
+
+    empty, full = windows(0), windows(4)
     with pytest.raises(InsufficientDataError, match=rf"validación.*{WINDOW_SIZE + 1} filas"):
         training._require_windows({"entrenamiento": full, "validación": empty, "test": full})
     training._require_windows({"entrenamiento": full, "validación": full, "test": full})

@@ -120,27 +120,47 @@ def _split_normal_clips(combo: tuple, hyperparams: dict) -> tuple:
     if not normal_wavs:
         raise ValueError(f"No .wav files under {combo_root / 'normal'}")
 
-    specs = np.stack([wav_to_logmel(str(p)) for p in normal_wavs], axis=0)  # (N,1,mels,frames)
-
+    # Same permutation of the sorted clips as the original, but each clip is read straight into
+    # its split (no stacked copy of the whole set) and normalized in place: 512 KiB per clip, so
+    # the old list + stack + split + normalized copies held ~4x a ~1,000-clip combination.
     # pylint: disable-next=no-member  # legacy RandomState, as the original
-    idx = np.random.RandomState(TRAINING_SPLIT_SEED).permutation(len(specs))
-    cut = int(TRAINING_SPLIT_RATIO * len(specs))
-    train_raw, val_raw = specs[idx[:cut]], specs[idx[cut:]]
-    if len(val_raw) == 0 or len(train_raw) < hyperparams["batch_size"]:
+    idx = np.random.RandomState(TRAINING_SPLIT_SEED).permutation(len(normal_wavs))
+    cut = int(TRAINING_SPLIT_RATIO * len(normal_wavs))
+    n_train, n_val = cut, len(normal_wavs) - cut
+    if n_val == 0 or n_train < hyperparams["batch_size"]:
         raise ValueError(
-            f"{machine}/{machine_id}/{snr}: {len(specs)} clips normales no bastan. "
-            f"El split 80/20 deja {len(train_raw)} de entrenamiento y {len(val_raw)} de "
+            f"{machine}/{machine_id}/{snr}: {len(normal_wavs)} clips normales no bastan. "
+            f"El split 80/20 deja {n_train} de entrenamiento y {n_val} de "
             "validación, y el original "
             f"descarta el último lote incompleto (drop_last): hacen falta al menos "
             f"{hyperparams['batch_size']} clips de entrenamiento y 1 de validación."
         )
 
+    train_raw = _load_logmels([normal_wavs[i] for i in idx[:cut]])
+    val_raw = _load_logmels([normal_wavs[i] for i in idx[cut:]])
     norm_mean, norm_std = float(train_raw.mean()), float(train_raw.std())
     return (
-        normalize_logmel(train_raw, norm_mean, norm_std),
-        normalize_logmel(val_raw, norm_mean, norm_std),
+        _normalize_in_place(train_raw, norm_mean, norm_std),
+        _normalize_in_place(val_raw, norm_mean, norm_std),
         (norm_mean, norm_std),
     )
+
+
+def _load_logmels(wavs: list[Path]) -> np.ndarray:
+    """``np.stack`` of each clip's log-mel, preallocated (no list of per-clip arrays)."""
+    first = wav_to_logmel(str(wavs[0]))
+    out = np.empty((len(wavs), *first.shape), dtype=first.dtype)
+    out[0] = first
+    for i, wav in enumerate(wavs[1:], start=1):
+        out[i] = wav_to_logmel(str(wav))
+    return out
+
+
+def _normalize_in_place(spec: np.ndarray, norm_mean: float, norm_std: float) -> np.ndarray:
+    """``normalize_logmel`` without the copy: same float32 operations, same values."""
+    spec -= norm_mean
+    spec /= norm_std + 1e-6
+    return spec
 
 
 def _fit_maha(model, train_data: np.ndarray, device, machine: str) -> tuple:
@@ -174,8 +194,7 @@ def _score_abnormal(fitted: _FittedCombination, combo_root: Path) -> tuple[dict,
     if not (abnormal_dir.is_dir() and any(abnormal_dir.glob("*.wav"))):
         return None
     abnormal_wavs = sorted(abnormal_dir.glob("*.wav"))
-    abn_specs = np.stack([wav_to_logmel(str(p)) for p in abnormal_wavs], axis=0)
-    abn_specs_norm = normalize_logmel(abn_specs, *fitted.norm)
+    abn_specs_norm = _normalize_in_place(_load_logmels(abnormal_wavs), *fitted.norm)
 
     normal_mse, normal_maha = _scores(fitted, fitted.val_data)
     abnormal_mse, abnormal_maha = _scores(fitted, abn_specs_norm)
