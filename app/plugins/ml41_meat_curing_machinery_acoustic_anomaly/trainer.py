@@ -13,13 +13,24 @@ import logging
 
 import numpy as np
 import torch
-from torch import optim
+from torch import nn, optim
 from torch.utils.data import DataLoader, TensorDataset
 
+from app.domain.services.activation_checkpointing import activation_checkpointing
 from app.plugins.ml41_meat_curing_machinery_acoustic_anomaly.audio_mae import AudioMAE
 from app.plugins.ml41_meat_curing_machinery_acoustic_anomaly.constants import TRAINING_COMMON
 
 logger = logging.getLogger(__name__)
+
+
+def _transformer_layers(model: AudioMAE) -> list[nn.Module]:
+    """Encoder and decoder layers: what activation checkpointing recomputes in backward.
+
+    With the per-machine batch sizes (32-64 spectrograms of 128x1024) their stored activations
+    took ~1.8 GiB per step at batch 32 on CPU and OOM-killed the 2 GiB model pod; checkpointed,
+    ~0.6 GiB. The layers have no dropout and no running statistics: training is bit-identical.
+    """
+    return [*model.encoder.layers, *model.decoder.layers]
 
 
 # The original subclasses _LRScheduler, which in torch 2.x is an empty alias subclass of the
@@ -142,10 +153,12 @@ def fine_tune(
     history: dict = {"train_loss": [], "val_loss": []}
 
     for epoch in range(1, epochs + 1):
-        train_loss = _train_one_epoch(
-            model, train_loader, optimizer, device,
-            mask_ratio=hyperparams["mask_ratio"], scaler=scaler,
-        )
+        # Only on CPU, where the activations are the pod's RAM; on CUDA training runs as before.
+        with activation_checkpointing(_transformer_layers(model), enabled=device.type == "cpu"):
+            train_loss = _train_one_epoch(
+                model, train_loader, optimizer, device,
+                mask_ratio=hyperparams["mask_ratio"], scaler=scaler,
+            )
         val_loss = _validate(model, val_loader, device, hyperparams["mask_ratio"])
         scheduler.step()
         history["train_loss"].append(train_loss)

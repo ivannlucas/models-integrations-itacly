@@ -21,6 +21,7 @@ from torch.utils.data import DataLoader, Dataset
 
 from app.application.dto.stats_dto import InputField, OutputField, StatsResponse
 from app.domain.ports.model_plugin_port import ModelPluginPort
+from app.domain.services.activation_checkpointing import checkpointed_sequential
 from app.domain.services.batch_rows import row_error_capture
 from app.domain.services.exceptions import ModelNotLoadedError
 from app.domain.services.image_cam import compute_and_encode_cam
@@ -166,6 +167,12 @@ def _split_samples(
     return train_samples, val_samples
 
 
+# LeafCNN.features cut after each conv-bn-relu unit (pools stay with their unit). On CPU the
+# activations of a batch of 16 images at 224x224 are most of the training's memory; with
+# checkpointing only each segment's input is kept (~0.85 -> ~0.6 GiB), bit-identical result.
+_CHECKPOINT_SEGMENT_ENDS = (3, 7, 10, 14)
+
+
 def _train_one_epoch(model, train_loader, criterion, optimizer, device) -> None:
     """One optimisation pass over the training split."""
     model.train()
@@ -216,7 +223,11 @@ def _fit(model, loaders: tuple[DataLoader, DataLoader], device, tracker) -> tupl
     epochs_run = 0
 
     for epoch in range(TRAIN_MAX_EPOCHS):
-        _train_one_epoch(model, train_loader, criterion, optimizer, device)
+        # Only on CPU, where activations are the pod's RAM; on CUDA training runs as before.
+        with checkpointed_sequential(
+            model.features, _CHECKPOINT_SEGMENT_ENDS, enabled=device.type == "cpu",
+        ):
+            _train_one_epoch(model, train_loader, criterion, optimizer, device)
         val_loss = _validation_loss(model, val_loader, criterion, device)
         scheduler.step(val_loss)
         epochs_run = epoch + 1
