@@ -1,4 +1,7 @@
-"""ml41 training loads the clips without extra copies, with bit-identical results.
+"""ml41 training fits in less memory, with bit-identical results.
+
+It loads the clips without extra copies, and recomputes the transformer activations in
+backward instead of storing them (activation checkpointing).
 
 The previous code kept the list of spectrograms, the stacked array, the 80/20 split and the
 normalized copies alive at once (about 4 copies of the dataset, 512 KiB per clip); with a full
@@ -11,8 +14,12 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+import torch
 
+from app.domain.services.activation_checkpointing import activation_checkpointing
 from app.plugins.ml41_meat_curing_machinery_acoustic_anomaly import plugin as ml41
+from app.plugins.ml41_meat_curing_machinery_acoustic_anomaly import trainer
+from app.plugins.ml41_meat_curing_machinery_acoustic_anomaly.audio_mae import AudioMAE
 from app.plugins.ml41_meat_curing_machinery_acoustic_anomaly.constants import (
     TRAINING_HYPERPARAMS_BY_MACHINE,
     TRAINING_SPLIT_RATIO,
@@ -82,3 +89,63 @@ def test_normalize_in_place_matches_normalize_logmel():
     got = ml41._normalize_in_place(data.copy(), -38.123456789, 14.987654321)
     assert got.dtype == np.float32
     np.testing.assert_array_equal(got, expected)
+
+
+def _tiny_mae() -> AudioMAE:
+    """The delivered AudioMAE, shrunk to run in a unit test (same module graph)."""
+    torch.manual_seed(0)
+    return AudioMAE(
+        img_size=(32, 64), patch_size=(16, 16), embed_dim=32, depth=2, num_heads=2,
+        decoder_embed_dim=16, decoder_depth=2, decoder_num_heads=2,
+    )
+
+
+def _train_steps(model: AudioMAE, checkpointed: bool, steps: int = 3) -> list[float]:
+    """A few AdamW steps of trainer._train_one_epoch's update, with or without checkpointing."""
+    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
+    data = torch.randn(4, 1, 32, 64, generator=torch.Generator().manual_seed(1))
+    losses = []
+    for step in range(steps):
+        torch.manual_seed(100 + step)  # random_masking draws from the global RNG
+        optimizer.zero_grad()
+        if checkpointed:
+            with activation_checkpointing(trainer._transformer_layers(model)):
+                loss, _, _ = model(data, mask_ratio=0.5)
+        else:
+            loss, _, _ = model(data, mask_ratio=0.5)
+        loss.backward()
+        optimizer.step()
+        losses.append(loss.item())
+    return losses
+
+
+def test_activation_checkpointing_trains_bit_identically():
+    """Recomputing the encoder/decoder layers in backward changes no loss and no weight."""
+    plain, checkpointed = _tiny_mae(), _tiny_mae()
+    assert _train_steps(plain, False) == _train_steps(checkpointed, True)
+    ref = plain.state_dict()
+    got = checkpointed.state_dict()
+    assert list(got) == list(ref)  # same module tree: checkpoints stay loadable
+    for key, value in ref.items():
+        assert torch.equal(got[key], value), key
+
+
+def test_activation_checkpointing_stores_far_fewer_activations():
+    """Only each layer's input is kept for backward, not its attention/MLP activations."""
+    def saved_bytes(checkpointed: bool) -> int:
+        model, total = _tiny_mae(), [0]
+
+        def pack(tensor):
+            total[0] += tensor.numel() * tensor.element_size()
+            return tensor
+
+        data = torch.randn(4, 1, 32, 64, generator=torch.Generator().manual_seed(1))
+        with torch.autograd.graph.saved_tensors_hooks(pack, lambda tensor: tensor):
+            if checkpointed:
+                with activation_checkpointing(trainer._transformer_layers(model)):
+                    model(data, mask_ratio=0.5)
+            else:
+                model(data, mask_ratio=0.5)
+        return total[0]
+
+    assert saved_bytes(True) * 2 < saved_bytes(False)

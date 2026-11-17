@@ -21,6 +21,7 @@ from torchvision import transforms
 
 from app.application.dto.stats_dto import InputField, OutputField, StatsResponse
 from app.domain.ports.model_plugin_port import ModelPluginPort
+from app.domain.services.activation_checkpointing import activation_checkpointing
 from app.domain.services.batch_rows import row_error_capture
 from app.domain.services.exceptions import InvalidImageError, ModelNotLoadedError
 from app.domain.services.mlflow_artifacts import (
@@ -234,7 +235,13 @@ def _run_phase(setup: _TrainSetup, optimizer, *, epochs: int, patience: int, pha
     history: dict = {"val_acc_cat": [], "val_acc_cer": []}
     logger.info("Iniciando %s", phase_name)
     for epoch in range(epochs):
-        tr_loss, tr_acc_cat, tr_acc_cer = _train_epoch(setup, optimizer)
+        # MobileNetV3 blocks recomputed in backward, only on CPU (activations are the pod's RAM
+        # there): ~0.9 -> ~0.4 GiB per step in Fase 2, bit-identical result. In Fase 1 the
+        # frozen backbone records nothing, so it runs once, as before.
+        with activation_checkpointing(
+            setup.model.features, enabled=setup.device.type == "cpu",
+        ):
+            tr_loss, tr_acc_cat, tr_acc_cer = _train_epoch(setup, optimizer)
         val = _validate_epoch(setup)
         history["val_acc_cat"].append(val[1])
         history["val_acc_cer"].append(val[2])

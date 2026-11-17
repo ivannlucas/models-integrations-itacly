@@ -12,7 +12,7 @@ import shutil
 import tempfile
 import zipfile
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
 
 import numpy as np
@@ -218,6 +218,29 @@ def _validate_best(
     }
 
 
+def _checkpoint_layers_on_cpu(model, device, stack: ExitStack) -> None:
+    """While Ultralytics trains on CPU, recompute each YOLO layer's activations in backward.
+
+    On CPU the activations of a batch of 32 images at 512 px are the pod's RAM (~6 GiB, far over
+    the pod limit); checkpointed, each layer keeps only its input. The result is the same: see
+    app/domain/services/activation_checkpointing.py. It is switched on at on_train_start, once
+    the trainer has built its model and taken the EMA copy (a copy of a shadowed forward would
+    keep calling the original layers), and off at on_train_end or when ``stack`` closes.
+    """
+    if device.type != "cpu":
+        return
+    # Lazy: importing this module must not import torch.
+    from app.domain.services.activation_checkpointing import (  # noqa: PLC0415 # pylint: disable=import-outside-toplevel
+        activation_checkpointing,
+    )
+
+    model.add_callback(
+        "on_train_start",
+        lambda trainer: stack.enter_context(activation_checkpointing(trainer.model.model)),
+    )
+    model.add_callback("on_train_end", lambda _trainer: stack.close())
+
+
 class Ml7CerealsGrainPestDetectionPlugin(PluginRuntimeMixin, ModelPluginPort):
     """YOLO detector for stored-grain pest species."""
 
@@ -365,22 +388,24 @@ class Ml7CerealsGrainPestDetectionPlugin(PluginRuntimeMixin, ModelPluginPort):
         upload_dir = Path(tempfile.mkdtemp(prefix="ml7_train_upload_"))
         try:
             model = load_yolo()  # fresh instance from the served base checkpoint
-            model.train(
-                data=str(dataset_yaml),
-                device=device,
-                workers=TRAIN_WORKERS,
-                epochs=TRAIN_EPOCHS,
-                imgsz=IMG_SIZE,
-                batch=TRAIN_BATCH_SIZE,
-                seed=TRAIN_SEED,
-                patience=TRAIN_PATIENCE,
-                pretrained=True,
-                plots=False,
-                project=str(train_project_dir),
-                name="train",
-                exist_ok=True,
-                **TRAIN_HYPERPARAMS,
-            )
+            with ExitStack() as checkpointing:
+                _checkpoint_layers_on_cpu(model, device, checkpointing)
+                model.train(
+                    data=str(dataset_yaml),
+                    device=device,
+                    workers=TRAIN_WORKERS,
+                    epochs=TRAIN_EPOCHS,
+                    imgsz=IMG_SIZE,
+                    batch=TRAIN_BATCH_SIZE,
+                    seed=TRAIN_SEED,
+                    patience=TRAIN_PATIENCE,
+                    pretrained=True,
+                    plots=False,
+                    project=str(train_project_dir),
+                    name="train",
+                    exist_ok=True,
+                    **TRAIN_HYPERPARAMS,
+                )
 
             best_weights = train_project_dir / "train" / "weights" / "best.pt"
             if not best_weights.exists():
