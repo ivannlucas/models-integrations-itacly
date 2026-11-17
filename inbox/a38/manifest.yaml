@@ -1,0 +1,1089 @@
+# Manifest a38 — generado con el skill manifest-extraction (2026-11-17).
+# Fuentes y notación de trazabilidad:
+#   [C] inbox/a38/codigo/ (repo del equipo de IA, HEAD bfb3e13 "Add changes v1.6 in readme", 2026-09-30)
+#   [M] memoria "38 - Modelo predictivo basado en DNLS para la detección de fallas en maquinaria
+#       vitivinícola - v1.6.docx" (versión 1.6, 29/09/2026)
+#   [A] artefactos/métricas entregados en codigo/models/ y codigo/data/
+#   [V] comprobado por el agente ejecutando el código/artefactos entregados (no es dato del equipo de IA)
+model_id: ml38_wine_machinery_fault_detection
+endpoint_id: ml38-wine-machinery-fault-detection
+sector: vitivinicola
+nombre: "Modelo predictivo basado en DNLS para la detección de fallas en maquinaria vitivinícola"
+acronimo: DNLS-VINO
+organismo: Air-Institute
+lote: 2
+version_memoria: "1.6"
+task_type: hierarchical_classification
+task_type_note: >
+  Pipeline jerárquico tabular de dos niveles [M] §5.1, [C] src/predict/predictor.py::run_inference:
+  (1) RandomForest multiclase → familia de fallo (7 clases); (2) si la familia predicha no es
+  "healthy" y existe modelo para ella, un MLP Keras binario específico de esa familia → severidad
+  (0 = leve = nivel 1; 1 = significativo = niveles > 1). El componente "DNLS"/neurosimbólico se
+  reduce a un término físico en la pérdida de entrenamiento de los MLP de severidad
+  (L = BCE + λphys·mean(relu(vib_band_low_norm − σ(z)))); la propia memoria aclara que NO es un
+  sistema neurosimbólico completo [M] §1, §5.1, §10. En inferencia no interviene ninguna regla
+  simbólica: es RF + MLP.
+
+framework:
+  # [C] codigo/requirements.txt — ASCII, LF, sin BOM, versiones fijadas (==). 139 líneas, incluye
+  # Jupyter/ipykernel/etc. de análisis. Núcleo de inferencia/entrenamiento:
+  - scikit-learn==1.7.2     # RandomForestClassifier + StandardScaler (artefactos pickled con 1.7.2)
+  - tensorflow==2.20.0      # entrenamiento original con tf.GradientTape
+  - keras==3.12.1           # MLP de severidad (Keras 3 Functional, pickled dentro de severity_models.pkl)
+  - numpy==2.2.6
+  - pandas==2.3.3
+  - scipy==1.15.3           # kurtosis/skew/rfft de la extracción de features (modo raw)
+  - pyarrow==23.0.1         # lectura del parquet procesado
+  - joblib==1.5.3
+  - PyYAML                  # config/config.yaml
+  # Entorno de referencia del equipo: Python 3.10 [M] §5.3; traza E2E con Python 3.10.20 (conda "m38")
+  # [C] traceability/e2e_summary.txt.
+
+artifacts:
+  folder: models/artifacts/
+  files:
+    - name: family_rf.pkl
+      md5: a093b090c65488d5987de2dc34c6100b   # [V] md5sum sobre la entrega
+      content: "RandomForestClassifier(n_estimators=800, min_samples_leaf=2, class_weight='balanced', random_state=42), entrenado con las 877 muestras"
+      classes: [alignment, bearing, cavitation, electrical, healthy, mechanical_other, unbalance]
+    - name: family_scaler.pkl
+      md5: 748030baf3e5722df584c37ea5395a5e
+      content: "StandardScaler ajustado sobre las 24 features (numpy, sin feature_names_in_: el ORDEN de columnas es el contrato)"
+    - name: severity_models.pkl
+      md5: f9c73cb78a8bfffa4bca13acd93b84c1
+      content: "dict familia → keras.Model Functional 24→Dense(64,relu)→Dropout(0.3)→Dense(32,relu)→Dense(1) (logit). Familias: alignment, bearing, cavitation, electrical, mechanical_other, unbalance (no healthy)"
+    - name: severity_scalers.pkl
+      md5: f207a9cf68f0988c0aeaf074a5f62d98
+      content: "dict familia → StandardScaler ajustado sobre las muestras de esa familia con severidad > 0"
+  serving_note: >
+    Los cuatro .pkl son los que sirve el plugin, bit a bit (md5 arriba). Los MLP de severidad son
+    objetos Keras 3 serializados con pickle bajo backend TensorFlow; en el servidor del repo el
+    backend de Keras es torch (ml1 fija KERAS_BACKEND=torch al importarse desde registry.py).
+    [V] Con sklearn 1.5.2 + keras 3.15.1 (entorno del repo) y AMBOS backends (torch y tensorflow)
+    se reproduce data/predictions/predictions.csv: 877/877 familias idénticas y
+    severity_confidence con |Δ| máx. 3.6e-7 (torch) / 1.2e-7 (tensorflow).
+
+data:
+  processed: data/processed/feature_dataset.parquet   # 877 filas × 27 columnas (24 features + family, severity, group_id) [C][M] §3.2
+  manifest: data/processed/input_manifest.csv           # trazabilidad muestra → ficheros raw NLN-EMP
+  splits: data/splits/fold_assignments.csv              # asignación OOF (GroupKFold por group_id, 5 folds: 176/176/175/175/175)
+  raw_source: "NLN-EMP — Motor Current and Vibration Monitoring Dataset (4TU.ResearchData, v4, CC0), DOI 10.4121/2b61183e-c14f-4131-829b-cc4822c369d0.v4. No incluido en la entrega (solo un extracto recortado en data/examples/raw/)."
+  n_groups: 114          # [V] group_id = (motor, velocidad, fallo); 2-36 ventanas por grupo
+  channels_used: "[V] Las 877 muestras usan SOLO vibración ch1 (rodamiento lado no accionado del motor, horizontal, g) y eléctrico ch1 (corriente fase 1, A): input_manifest.csv"
+  window_length_samples: {vibration: 240000, electrical: 300000}  # [V] estimado por Parseval desde vib/ele_spectral_energy y *_rms (12 s y 15 s a FS=20 kHz, [M] §8.2)
+  operating_configurations: {"Motor-2": [50, 75, 100], "Motor-4": [70]}   # [V] input_manifest.csv; coincide con [M] Tabla 2
+
+inputs:
+  # Modo principal ("inline"/"batch"): el vector tabular de 24 features, EN ESTE ORDEN
+  # ([C] src/data_processing/build_dataset.py::FEATURE_NAMES; mismo orden que las columnas del
+  # parquet, que es el que ven los scalers). Rangos = min/max del dataset de entrenamiento [V].
+  features:
+    - {name: vib_mean, unit: g, train_range: [-0.0151034, 0.00484116]}
+    - {name: vib_std, unit: g, train_range: [0.208694, 0.823231]}
+    - {name: vib_max, unit: g, train_range: [0.694251, 38.7701]}
+    - {name: vib_min, unit: g, train_range: [-42.4954, -0.701982]}
+    - {name: vib_rms, unit: g, train_range: [0.208701, 0.823233]}
+    - {name: vib_kurtosis, unit: "-", train_range: [-0.645034, 700.051]}   # scipy kurtosis(bias=False), exceso (Fisher)
+    - {name: vib_skewness, unit: "-", train_range: [-2.31264, 2.13623]}
+    - {name: vib_spectral_energy, unit: "g²·(N)", train_range: [1.25449e+09, 1.95182e+10]}   # sum(|rfft|²): depende de N
+    - {name: vib_spectral_centroid, unit: "bin FFT", train_range: [46611.7, 86067.7]}       # en índice de bin, no en Hz: depende de N
+    - {name: vib_band_low, unit: "fracción", train_range: [0.000226163, 0.388016]}         # energía 0-200 Hz / total
+    - {name: vib_band_mid, unit: "fracción", train_range: [0.0017853, 0.317117]}           # 200-1000 Hz
+    - {name: vib_band_high, unit: "fracción", train_range: [0.00100156, 0.289181]}         # 1000-5000 Hz
+    - {name: vib_amp_1x, unit: "|rfft|", train_range: [6.60796, 30397.4]}                  # pico ±2 Hz en rpm/60: depende de N y de motor/velocidad
+    - {name: vib_amp_2x, unit: "|rfft|", train_range: [8.57082, 36714.6]}
+    - {name: vib_ratio_2x_1x, unit: "-", train_range: [0.368723, 24.6922]}
+    - {name: ele_mean, unit: A, train_range: [0.0691556, 0.205233]}
+    - {name: ele_std, unit: A, train_range: [8.28312, 22.4329]}
+    - {name: ele_max, unit: A, train_range: [12.585, 34.1997]}
+    - {name: ele_min, unit: A, train_range: [-34.1933, -12.1153]}
+    - {name: ele_rms, unit: A, train_range: [8.28533, 22.4331]}
+    - {name: ele_kurtosis, unit: "-", train_range: [-1.53249, -1.30359]}
+    - {name: ele_skewness, unit: "-", train_range: [-0.0103557, 0.00794825]}
+    - {name: ele_spectral_energy, unit: "A²·(N)", train_range: [3.09074e+12, 2.26462e+13]}
+    - {name: ele_spectral_centroid, unit: "bin FFT", train_range: [6213.07, 32944.8]}
+  # Modo secundario ("raw"): réplica de scripts/predict_raw.py [C][M] §8.2 — el servicio calcula
+  # las 24 features desde una pareja de CSV raw (time + columnas de señal).
+  raw:
+    vibration_csv: {type: path, description: "CSV raw de vibración; columna 0 = time, siguientes = segmentos de señal (g)"}
+    current_csv: {type: path, description: "CSV raw eléctrico del mismo ensayo/condición (A)"}
+    motor: {type: str, allowed: ["Motor-2", "Motor-4"]}
+    speed: {type: int, allowed: {"Motor-2": [50, 75, 100], "Motor-4": [70]}}
+    window_index: {type: int, default: 0, description: "columna de señal posterior a time (0 = primera); si sólo hay una columna se usa esa"}
+  derived_if_missing: {}   # ninguna feature se rellena: las 24 son obligatorias en modo tabular
+
+outputs:
+  predict_inline:
+    - {name: family, type: str, description: "Familia de fallo predicha (RF.predict)"}
+    - {name: severity, type: "int|null", description: "0 = leve (nivel 1), 1 = significativo (nivel > 1); null si family=healthy o sin modelo de severidad"}
+    - {name: severity_label, type: str, values: ["sin fallo", "leve", "significativo", "modelo no disponible"]}
+    - {name: severity_confidence, type: "float|null", description: "σ(logit) del MLP de severidad = P(severidad significativa). La salida 'confidence' del original; null cuando no hay severidad"}
+    - {name: family_probabilities, type: "dict[str,float]", description: "AÑADIDO por la integración: RF.predict_proba por clase. No cambia la predicción (RF.predict = argmax de predict_proba). El original no lo devuelve."}
+  predict_batch: "Una fila por muestra con las mismas claves que predict_inline (+ row). Entrada: CSV o parquet con las 24 columnas; family/severity/group_id se ignoran si vienen. [C] run_inference_pipeline"
+  raw: "Mismas claves que predict_inline + features calculadas (xai_feature_values) + avisos de dominio"
+  original_format_note: "El original escribe predictions.csv (sample_id, true_*, pred_family, pred_severity, severity_confidence) [M] §8.3; el plugin devuelve JSON con la misma información."
+
+training:
+  supported: true
+  evidence: >
+    [C] scripts/train.py → src/main.py::train → src/training/train_models.py::train_family_model
+    (GroupKFold CV + RF final con todo el dataset) y src/training/train_severity_models.py::
+    train_severity_models (GroupKFold CV + MLP final por familia). Entrena EXACTAMENTE los cuatro
+    artefactos servidos (save_family_model / save_severity_models). La traza E2E del equipo
+    ([C] traceability/e2e_summary.txt, train_exit=0) los regeneró así.
+  target_column: family          # nivel 1 (multiclase)
+  secondary_target: severity     # nivel 2: entero, -1 = no disponible; binarizado 1→0, >1→1 por familia
+  required_columns:
+    features: [vib_mean, vib_std, vib_max, vib_min, vib_rms, vib_kurtosis, vib_skewness,
+               vib_spectral_energy, vib_spectral_centroid, vib_band_low, vib_band_mid,
+               vib_band_high, vib_amp_1x, vib_amp_2x, vib_ratio_2x_1x, ele_mean, ele_std,
+               ele_max, ele_min, ele_rms, ele_kurtosis, ele_skewness, ele_spectral_energy,
+               ele_spectral_centroid]
+    labels: [family, severity, group_id]
+    source: codigo_entrenamiento   # [C] src/main.py::train (X = df.drop(family, severity, group_id))
+    format: "Mismo esquema que data/processed/feature_dataset.parquet (CSV o parquet)"
+  split:
+    strategy: "GroupKFold(n_splits=min(5, nº grupos)) por group_id — determinista, sin barajar [C][M] §6.3"
+    final_model: "RF y MLP finales reentrenados con TODO el dataset tras la CV [C]"
+    no_fixed_test: "No hay partición hold-out fija; la memoria usa CV/OOF como evidencia [M] §6.3"
+  hyperparams:
+    # [C] config/config.yaml (consumido por el código vía config.get con los mismos valores por defecto)
+    # = [M] §6.2 "Hiperparámetros Clave"
+    random_state: 42
+    n_splits: 5
+    family_model:
+      algorithm: RandomForestClassifier
+      n_estimators: 800
+      min_samples_leaf: 2
+      max_depth: null
+      class_weight: balanced
+      scaler: StandardScaler
+    severity_model:
+      architecture: "Dense(64, relu) → Dropout(0.3) → Dense(32, relu) → Dense(1) logit"
+      hidden_layers: [64, 32]
+      dropout: 0.3            # solo tras la primera capa oculta [C] _build_severity_model
+      activation: relu
+      optimizer: Adam
+      learning_rate: 0.001
+      batch_size: 32
+      epochs: 40              # fijo, sin early stopping [M] §6.4
+      shuffle_buffer: 1000
+      loss: "BCE(from_logits) + lambda_phys · mean(relu(vib_band_low_norm − sigmoid(logit)))"
+      lambda_phys: 0.3
+      low_band_index: 9       # vib_band_low en FEATURE_NAMES; normalizado min-max con los datos de entrenamiento
+      binarization: "severity == 1 → 0; severity > 1 → 1; severity <= 0 excluida"
+      skip_rules: "familia healthy excluida; familia con < 2 niveles de severidad o < 2 grupos → sin modelo"
+      scaler: "StandardScaler por familia"
+  metrics_returned:
+    - family_cv_accuracy_mean
+    - family_cv_accuracy_std
+    - family_cv_macro_f1_mean
+    - family_cv_macro_f1_std
+    - severity_cv (por familia: accuracy_mean/std, macro_f1_mean/std)
+    - n_samples
+    - n_groups
+    - training_time_s
+  not_ported: >
+    scripts.predict_oof (OOF completo, 255 s [M] Tabla 7) no se repite en /train: es evaluación,
+    no produce el modelo servido. /train reproduce scripts.train (CV por folds + refit final).
+  duracion_estimada: "72 s en Intel i7-9700 CPU [M] Tabla 7; [V] /train real sobre las 877 filas: 23 s de entrenamiento, 26 s la petición completa (WSL, CPU, backend Keras torch)"
+  determinism: >
+    RF y GroupKFold deterministas (random_state=42). Los MLP de severidad NO son bit-reproducibles
+    (inicialización, barajado y oneDNN) — lo declara la propia memoria [M] §6.3.
+  source: codigo_entrenamiento
+
+constraints:
+  severidad_condicionada: "La severidad solo se estima si la familia predicha no es healthy y existe modelo para ella [C][M] §5.1, §8.2"
+  configuraciones_operativas_raw:
+    allowed: {"Motor-2": [50, 75, 100], "Motor-4": [70]}
+    descripcion: >
+      [M] §3.1 Tabla 2, §8.2 y §10: --motor/--speed deben corresponder a una configuración
+      documentada del banco NLN-EMP y no deben elegirse de forma arbitraria (condicionan la
+      frecuencia de giro de las features 1X/2X). El plugin rechaza (422, excepción de dominio)
+      una combinación motor/velocidad fuera de esta lista en el modo raw.
+  rpm_por_configuracion: "[C] preprocess.get_rpm: Motor-2 → 1470·speed/100; cualquier otro motor → 2950·speed/100"
+
+metrics_reported:
+  # Evidencia principal de generalización = OOF (GroupKFold, 5 folds) [M] §7.3; [A] *_oof.json
+  dataset: oof_group_kfold
+  n_samples: 877
+  family_oof:                   # [M] Tabla 10 = [A] family_classification_report_oof.json
+    accuracy: 0.6180
+    macro_f1: 0.5914
+  family_cv_folds:              # [M] Tabla 9 = [A] training_family_metrics.json
+    accuracy_mean: 0.6180
+    accuracy_std: 0.1133
+    macro_f1_mean: 0.6070
+    macro_f1_std: 0.1111
+  family_oof_per_class:         # [M] Tabla 11
+    alignment: {precision: 0.4717, recall: 0.7463, f1: 0.5780, support: 67}
+    bearing: {precision: 0.7982, recall: 0.9667, f1: 0.8744, support: 180}
+    cavitation: {precision: 0.8718, recall: 0.8500, f1: 0.8608, support: 40}
+    electrical: {precision: 0.1429, recall: 0.2000, f1: 0.1667, support: 40}
+    healthy: {precision: 0.7377, recall: 0.4580, f1: 0.5651, support: 393}
+    mechanical_other: {precision: 0.4022, recall: 0.6429, f1: 0.4948, support: 112}
+    unbalance: {precision: 0.6857, recall: 0.5333, f1: 0.6000, support: 45}
+  severity_oof:                 # [M] Tablas 12-14 = [A] severity_classification_report_oof.json
+    n_evaluated: 303            # 34,55 % de 877 (familia bien predicha + severidad válida)
+    accuracy: 0.5974
+    macro_f1: 0.4334
+    class_0_nivel1: {precision: 0.2254, recall: 0.2051, f1: 0.2148, support: 78}
+    class_1_nivel_mayor_1: {precision: 0.7328, recall: 0.7556, f1: 0.7440, support: 225}
+  severity_cv_per_family:       # [A] training_severity_metrics.json (no aparece en la memoria)
+    alignment: {accuracy_mean: 0.6433, macro_f1_mean: 0.3745}
+    bearing: {accuracy_mean: 0.5905, macro_f1_mean: 0.4493}
+    cavitation: {accuracy_mean: 0.6600, macro_f1_mean: 0.5556}
+    electrical: {accuracy_mean: 0.0, macro_f1_mean: 0.0}
+    mechanical_other: {accuracy_mean: 0.4133, macro_f1_mean: 0.3153}
+    unbalance: {accuracy_mean: 0.8000, macro_f1_mean: 0.7333}
+  in_sample_no_es_evidencia:    # [A] family/severity_classification_report.json — modelo final sobre sus propios datos [M] §8.3
+    family_accuracy: 1.0
+    severity_accuracy: 0.9578
+  kpi_objetivo:
+    tecnico: "Accuracy y Macro-F1 en torno a 0,60 (referencia, no umbral rígido) [M] §2, §7.1"
+    negocio: "CU02: +15 % de vida útil de la maquinaria — NO demostrado; requiere validación operacional en planta [M] §2, §9.4"
+  exploratorio_no_usar: "[M] Tabla 8 (RF ~0,90 accuracy, etc.) es exploratoria y la propia memoria dice que no es evidencia"
+
+tolerance_policy:
+  family: "coincidencia exacta de la etiqueta (RF determinista)"
+  severity: "coincidencia exacta (0/1/null) y misma severity_label"
+  severity_confidence: >
+    |obtenido − esperado| ≤ 0.05 (5 % de la escala de probabilidad). Valor POR DEFECTO del skill
+    verification: metrics_reported solo contiene métricas de clasificación (accuracy/F1), no un
+    error de regresión del que derivar una tolerancia sobre la probabilidad. Se señala como
+    default en el verification_report.
+  note: "Los golden cases verifican fidelidad de la integración frente al modelo entregado, no generalización (ver known_issues)."
+
+# 21 casos seleccionados de forma determinista (script reproducible en el verification_report):
+# por familia, la primera ventana (sample_id más bajo) del fold 1, 3, 5, 2, 4 (en ese orden)
+# hasta 3 casos por familia, según data/splits/fold_assignments.csv. input = las 24 features de
+# data/processed/feature_dataset.parquet para ese sample_id; expected = salida del modelo final
+# entregado en data/predictions/predictions.csv (mismo sample_id). Ningún input es sintético.
+golden_cases:
+  - id: caso_001
+    source: dataset_split_oof_fold  # data/splits/fold_assignments.csv fold=1; expected = data/predictions/predictions.csv
+    trace: {sample_id: 609, group_id: 76, fold: 1, motor: Motor-4, speed: 70, fault: "align angular 2", window_index: 0, true_family: alignment, true_severity: 2}
+    input:
+      vib_mean: -0.005718175768852234
+      vib_std: 0.42906988992946227
+      vib_max: 1.5283167362213137
+      vib_min: -1.643216609954834
+      vib_rms: 0.4291079910444507
+      vib_kurtosis: -0.2531877061711847
+      vib_skewness: -0.15851220995016826
+      vib_spectral_energy: 5303991738.652221
+      vib_spectral_centroid: 68044.93841031744
+      vib_band_low: 0.050611669001294594
+      vib_band_mid: 0.021985104544864614
+      vib_band_high: 0.0030005915895847638
+      vib_amp_1x: 1528.7180223246012
+      vib_amp_2x: 8356.588675256617
+      vib_ratio_2x_1x: 5.46640292923004
+      ele_mean: 0.07906975956940675
+      ele_std: 21.82986932574939
+      ele_max: 32.976229894632446
+      ele_min: -33.0021120380256
+      ele_rms: 21.830012524187254
+      ele_kurtosis: -1.4883853698644058
+      ele_skewness: 0.0007581846145781544
+      ele_spectral_energy: 21445006785112.848
+      ele_spectral_centroid: 20303.6162483759
+    expected:
+      family: alignment
+      severity: 1
+      severity_label: "significativo"
+      severity_confidence: 0.719050943851471
+  - id: caso_002
+    source: dataset_split_oof_fold  # data/splits/fold_assignments.csv fold=3; expected = data/predictions/predictions.csv
+    trace: {sample_id: 621, group_id: 79, fold: 3, motor: Motor-4, speed: 70, fault: "align angular 5", window_index: 0, true_family: alignment, true_severity: 5}
+    input:
+      vib_mean: -0.004650727311770121
+      vib_std: 0.38031442424919387
+      vib_max: 1.6919970512390137
+      vib_min: -1.8531084060668943
+      vib_rms: 0.3803428592158979
+      vib_kurtosis: 0.39315480283603765
+      vib_skewness: -0.13963519837645813
+      vib_spectral_energy: 4166850912.39071
+      vib_spectral_centroid: 69198.00883792878
+      vib_band_low: 0.0809138579440682
+      vib_band_mid: 0.017003897436467706
+      vib_band_high: 0.003395689286385543
+      vib_amp_1x: 1536.5977502699297
+      vib_amp_2x: 11889.156563851457
+      vib_ratio_2x_1x: 7.737325244479598
+      ele_mean: 0.07549890649938604
+      ele_std: 21.97926959657624
+      ele_max: 33.4779281002629
+      ele_min: -33.52804928500545
+      ele_rms: 21.97939926576391
+      ele_kurtosis: -1.4872457616617485
+      ele_skewness: -0.0003419812887602196
+      ele_spectral_energy: 21739486877003.945
+      ele_spectral_centroid: 20298.596880108395
+    expected:
+      family: alignment
+      severity: 1
+      severity_label: "significativo"
+      severity_confidence: 0.7714857459068298
+  - id: caso_003
+    source: dataset_split_oof_fold  # data/splits/fold_assignments.csv fold=5; expected = data/predictions/predictions.csv
+    trace: {sample_id: 644, group_id: 83, fold: 5, motor: Motor-4, speed: 70, fault: "align combination 4", window_index: 0, true_family: alignment, true_severity: 4}
+    input:
+      vib_mean: -0.007509596993525823
+      vib_std: 0.5849616848584132
+      vib_max: 3.4859061241149902
+      vib_min: -3.7615358829498287
+      vib_rms: 0.5850098860697984
+      vib_kurtosis: 0.45750053502234644
+      vib_skewness: -0.11625532280245297
+      vib_spectral_energy: 9858052533.543596
+      vib_spectral_centroid: 73434.80104908922
+      vib_band_low: 0.2265963240912656
+      vib_band_mid: 0.12612928868039616
+      vib_band_high: 0.002099709016913046
+      vib_amp_1x: 1901.8053007243748
+      vib_amp_2x: 26446.120459295355
+      vib_ratio_2x_1x: 13.905798058867166
+      ele_mean: 0.07810266480311519
+      ele_std: 22.08799802820428
+      ele_max: 33.6444729234174
+      ele_min: -33.907382395233746
+      ele_rms: 22.08813611240672
+      ele_kurtosis: -1.48853576367426
+      ele_skewness: -0.0004902682240969085
+      ele_spectral_energy: 21955134457430.156
+      ele_spectral_centroid: 19981.887003110263
+    expected:
+      family: alignment
+      severity: 1
+      severity_label: "significativo"
+      severity_confidence: 0.9959688186645508
+  - id: caso_004
+    source: dataset_split_oof_fold  # data/splits/fold_assignments.csv fold=1; expected = data/predictions/predictions.csv
+    trace: {sample_id: 15, group_id: 2, fold: 1, motor: Motor-2, speed: 100, fault: "bearing bpfi 3", window_index: 0, true_family: bearing, true_severity: 3}
+    input:
+      vib_mean: 0.0034918621679147083
+      vib_std: 0.6316158741265534
+      vib_max: 3.3543527126312256
+      vib_min: -3.047037124633789
+      vib_rms: 0.6316255263603981
+      vib_kurtosis: 0.14296981101588413
+      vib_skewness: 0.10340966836652236
+      vib_spectral_energy: 11490134388.739616
+      vib_spectral_centroid: 65489.88905057475
+      vib_band_low: 0.00848210520470388
+      vib_band_mid: 0.10383644945431435
+      vib_band_high: 0.11732823331522425
+      vib_amp_1x: 56.420965865960426
+      vib_amp_2x: 198.9288675357265
+      vib_ratio_2x_1x: 3.5257969169309304
+      ele_mean: 0.17463898603716177
+      ele_std: 20.403641560946916
+      ele_max: 31.984400921759548
+      ele_min: -31.41344267878095
+      ele_rms: 20.404388932850807
+      ele_kurtosis: -1.4679894244998037
+      ele_skewness: 0.0025256815036321717
+      ele_spectral_energy: 18736631392447.96
+      ele_spectral_centroid: 7995.30706039964
+    expected:
+      family: bearing
+      severity: 1
+      severity_label: "significativo"
+      severity_confidence: 0.981412410736084
+  - id: caso_005
+    source: dataset_split_oof_fold  # data/splits/fold_assignments.csv fold=3; expected = data/predictions/predictions.csv
+    trace: {sample_id: 0, group_id: 0, fold: 3, motor: Motor-2, speed: 100, fault: "bearing bpfi 1", window_index: 0, true_family: bearing, true_severity: 1}
+    input:
+      vib_mean: 0.0023579681913057965
+      vib_std: 0.45641145248320314
+      vib_max: 2.3718833923339844
+      vib_min: -2.50435471534729
+      vib_rms: 0.4564175434531613
+      vib_kurtosis: 0.10637215351268425
+      vib_skewness: -0.12022238859167902
+      vib_spectral_energy: 5999689692.732476
+      vib_spectral_centroid: 61888.349795888615
+      vib_band_low: 0.009419405973037278
+      vib_band_mid: 0.22209822123442652
+      vib_band_high: 0.04976420600446751
+      vib_amp_1x: 82.1539724577968
+      vib_amp_2x: 284.9280313186327
+      vib_ratio_2x_1x: 3.4682197678307096
+      ele_mean: 0.17675583046073776
+      ele_std: 20.626009992386575
+      ele_max: 33.19080587672985
+      ele_min: -32.69196009624735
+      ele_rms: 20.626767338330858
+      ele_kurtosis: -1.4527918622846017
+      ele_skewness: 0.0012930001987681184
+      ele_spectral_energy: 19147264805491.043
+      ele_spectral_centroid: 9331.81761383444
+    expected:
+      family: bearing
+      severity: 0
+      severity_label: "leve"
+      severity_confidence: 0.0361674167215824
+  - id: caso_006
+    source: dataset_split_oof_fold  # data/splits/fold_assignments.csv fold=5; expected = data/predictions/predictions.csv
+    trace: {sample_id: 10, group_id: 1, fold: 5, motor: Motor-2, speed: 100, fault: "bearing bpfi 2", window_index: 0, true_family: bearing, true_severity: 2}
+    input:
+      vib_mean: 0.0014115619162718455
+      vib_std: 0.5821074740970343
+      vib_max: 3.003484010696411
+      vib_min: -2.840149402618408
+      vib_rms: 0.5821091855542849
+      vib_kurtosis: 0.06763308564032178
+      vib_skewness: 0.14804647660872428
+      vib_spectral_energy: 9758969701.177595
+      vib_spectral_centroid: 65602.58114902378
+      vib_band_low: 0.00858100447758467
+      vib_band_mid: 0.11128256513433735
+      vib_band_high: 0.10238729053396303
+      vib_amp_1x: 85.94055589832054
+      vib_amp_2x: 223.87226572698992
+      vib_ratio_2x_1x: 2.6049664603730496
+      ele_mean: 0.17744533720169128
+      ele_std: 20.310112758299546
+      ele_max: 32.7731556268413
+      ele_min: -32.5998543680829
+      ele_rms: 20.3108878954746
+      ele_kurtosis: -1.4608829167831632
+      ele_skewness: 0.002100300755659457
+      ele_spectral_energy: 18565364427816.902
+      ele_spectral_centroid: 9165.32085788316
+    expected:
+      family: bearing
+      severity: 1
+      severity_label: "significativo"
+      severity_confidence: 0.9745036363601683
+  - id: caso_007
+    source: dataset_split_oof_fold  # data/splits/fold_assignments.csv fold=1; expected = data/predictions/predictions.csv
+    trace: {sample_id: 678, group_id: 89, fold: 1, motor: Motor-4, speed: 70, fault: "cavitation discharge 1", window_index: 0, true_family: cavitation, true_severity: 1}
+    input:
+      vib_mean: -0.0032110230127970377
+      vib_std: 0.4437560691860928
+      vib_max: 1.6475677490234375
+      vib_min: -1.703768968582153
+      vib_rms: 0.44376768653010445
+      vib_kurtosis: -0.2684259498117503
+      vib_skewness: -0.159042062504116
+      vib_spectral_energy: 5671875131.465832
+      vib_spectral_centroid: 80826.01332487095
+      vib_band_low: 0.020144975917234242
+      vib_band_mid: 0.00885369263260556
+      vib_band_high: 0.001980773796488138
+      vib_amp_1x: 2545.1766302880656
+      vib_amp_2x: 7946.241912426953
+      vib_ratio_2x_1x: 3.122078765706869
+      ele_mean: 0.07401983331712512
+      ele_std: 19.589482065409083
+      ele_max: 29.8155456584586
+      ele_min: -29.521377813361948
+      ele_rms: 19.5896219087227
+      ele_kurtosis: -1.492152393222458
+      ele_skewness: 0.0016530833972230642
+      ele_spectral_energy: 17269144964132.643
+      ele_spectral_centroid: 21139.543991145183
+    expected:
+      family: cavitation
+      severity: 0
+      severity_label: "leve"
+      severity_confidence: 0.1247759535908699
+  - id: caso_008
+    source: dataset_split_oof_fold  # data/splits/fold_assignments.csv fold=3; expected = data/predictions/predictions.csv
+    trace: {sample_id: 683, group_id: 90, fold: 3, motor: Motor-4, speed: 70, fault: "cavitation discharge 2", window_index: 0, true_family: cavitation, true_severity: 2}
+    input:
+      vib_mean: -0.0032207561035950977
+      vib_std: 0.449381780002284
+      vib_max: 1.64107084274292
+      vib_min: -1.6900122165679932
+      vib_rms: 0.4493933215657528
+      vib_kurtosis: -0.22918403054675052
+      vib_skewness: -0.13064958678568617
+      vib_spectral_energy: 5816586655.267538
+      vib_spectral_centroid: 82200.4942246242
+      vib_band_low: 0.014757147079706106
+      vib_band_mid: 0.010544913029755087
+      vib_band_high: 0.0019176883423918814
+      vib_amp_1x: 1929.6605700817606
+      vib_amp_2x: 7350.933694289522
+      vib_ratio_2x_1x: 3.8094439033596283
+      ele_mean: 0.07870855671002563
+      ele_std: 18.690809641305833
+      ele_max: 27.8427190413852
+      ele_min: -27.939372876006747
+      ele_rms: 18.690975364716273
+      ele_kurtosis: -1.4935316661076865
+      ele_skewness: 0.0011098047052755461
+      ele_spectral_energy: 15721144193331.348
+      ele_spectral_centroid: 22032.134326460753
+    expected:
+      family: cavitation
+      severity: 1
+      severity_label: "significativo"
+      severity_confidence: 0.7672272324562073
+  - id: caso_009
+    source: dataset_split_oof_fold  # data/splits/fold_assignments.csv fold=2; expected = data/predictions/predictions.csv
+    trace: {sample_id: 688, group_id: 91, fold: 2, motor: Motor-4, speed: 70, fault: "cavitation discharge 3", window_index: 0, true_family: cavitation, true_severity: 3}
+    input:
+      vib_mean: -0.004317101364334424
+      vib_std: 0.4542187109701105
+      vib_max: 1.5946030616760254
+      vib_min: -1.7295479774475098
+      vib_rms: 0.45423922635494474
+      vib_kurtosis: -0.23681749925372086
+      vib_skewness: -0.1178982684479878
+      vib_spectral_energy: 5942973522.380352
+      vib_spectral_centroid: 85769.25935744608
+      vib_band_low: 0.01281967621610531
+      vib_band_mid: 0.010961000949356635
+      vib_band_high: 0.001812900154916799
+      vib_amp_1x: 2361.1143278810864
+      vib_amp_2x: 7109.4518994271475
+      vib_ratio_2x_1x: 3.0110578786657944
+      ele_mean: 0.08104106625136569
+      ele_std: 16.984767807733128
+      ele_max: 25.057871394290547
+      ele_min: -24.954421689616048
+      ele_rms: 16.984961146173596
+      ele_kurtosis: -1.4953770897100926
+      ele_skewness: 0.0023072878050780757
+      ele_spectral_energy: 12982296514784.936
+      ele_spectral_centroid: 23609.879345180154
+    expected:
+      family: cavitation
+      severity: 1
+      severity_label: "significativo"
+      severity_confidence: 0.9457056522369384
+  - id: caso_010
+    source: dataset_split_oof_fold  # data/splits/fold_assignments.csv fold=1; expected = data/predictions/predictions.csv
+    trace: {sample_id: 64, group_id: 11, fold: 1, motor: Motor-2, speed: 100, fault: "broken rotor bar", window_index: 0, true_family: electrical, true_severity: -1}
+    input:
+      vib_mean: 0.0015277696152528129
+      vib_std: 0.8203664141081947
+      vib_max: 2.8495609760284424
+      vib_min: -2.522367238998413
+      vib_rms: 0.8203678366907953
+      vib_kurtosis: -0.28472254547906584
+      vib_skewness: 0.2877251684118465
+      vib_spectral_energy: 19382564817.171013
+      vib_spectral_centroid: 56210.1364686944
+      vib_band_low: 0.0036080268670405434
+      vib_band_mid: 0.058267581974534036
+      vib_band_high: 0.010793491344819049
+      vib_amp_1x: 71.24912061178706
+      vib_amp_2x: 698.4349487822096
+      vib_ratio_2x_1x: 9.802716758986037
+      ele_mean: 0.18072581023689477
+      ele_std: 20.390348873022784
+      ele_max: 32.7804641447319
+      ele_min: -32.889382093007995
+      ele_rms: 20.39114977096846
+      ele_kurtosis: -1.4588731431015878
+      ele_skewness: 0.0021998521223505264
+      ele_spectral_energy: 18712424286276.637
+      ele_spectral_centroid: 11832.543989538704
+    expected:
+      family: electrical
+      severity: 0
+      severity_label: "leve"
+      severity_confidence: 0.0044495831243693
+  - id: caso_011
+    source: dataset_split_oof_fold  # data/splits/fold_assignments.csv fold=3; expected = data/predictions/predictions.csv
+    trace: {sample_id: 201, group_id: 24, fold: 3, motor: Motor-2, speed: 100, fault: "stator short 1", window_index: 0, true_family: electrical, true_severity: 1}
+    input:
+      vib_mean: 0.0030217589686314266
+      vib_std: 0.6658065943970597
+      vib_max: 2.427220344543457
+      vib_min: -1.718592643737793
+      vib_rms: 0.6658134514786219
+      vib_kurtosis: -0.22095396108587728
+      vib_skewness: 0.5246369324748316
+      vib_spectral_energy: 12767520492.327639
+      vib_spectral_centroid: 55756.28914989709
+      vib_band_low: 0.006569917030854651
+      vib_band_mid: 0.2037110530774004
+      vib_band_high: 0.014632300388067874
+      vib_amp_1x: 223.64584346538516
+      vib_amp_2x: 119.70995157592452
+      vib_ratio_2x_1x: 0.5352657116969849
+      ele_mean: 0.193357278656326
+      ele_std: 20.28336807237549
+      ele_max: 33.19524882465615
+      ele_min: -33.03206907448725
+      ele_rms: 20.284289669511995
+      ele_kurtosis: -1.4675243518655252
+      ele_skewness: 0.0009913899567247054
+      ele_spectral_energy: 18517040749960.19
+      ele_spectral_centroid: 13446.794637546423
+    expected:
+      family: electrical
+      severity: 0
+      severity_label: "leve"
+      severity_confidence: 0.033683143556118
+  - id: caso_012
+    source: dataset_split_oof_fold  # data/splits/fold_assignments.csv fold=5; expected = data/predictions/predictions.csv
+    trace: {sample_id: 601, group_id: 74, fold: 5, motor: Motor-2, speed: 75, fault: "stator short 2", window_index: 0, true_family: electrical, true_severity: 2}
+    input:
+      vib_mean: 0.002052145277460416
+      vib_std: 0.35297582927639254
+      vib_max: 1.340317726135254
+      vib_min: -1.2202978134155271
+      vib_rms: 0.3529817946489547
+      vib_kurtosis: -0.42375942024116675
+      vib_skewness: 0.0016207153617917146
+      vib_spectral_energy: 3588494358.900573
+      vib_spectral_centroid: 70706.96067446687
+      vib_band_low: 0.0045570203200418526
+      vib_band_mid: 0.03343484991241551
+      vib_band_high: 0.007236062387514058
+      vib_amp_1x: 43.17942655025533
+      vib_amp_2x: 47.08667352641403
+      vib_ratio_2x_1x: 1.0904886256584783
+      ele_mean: 0.17611296477058203
+      ele_std: 14.035012587608183
+      ele_max: 21.1260333621276
+      ele_min: -20.770098025002294
+      ele_rms: 14.036117487064592
+      ele_kurtosis: -1.5320807793509865
+      ele_skewness: 0.004843738187066266
+      ele_spectral_energy: 8866962444931.875
+      ele_spectral_centroid: 13409.399358994882
+    expected:
+      family: electrical
+      severity: 1
+      severity_label: "significativo"
+      severity_confidence: 0.7552488446235657
+  - id: caso_013
+    source: dataset_split_oof_fold  # data/splits/fold_assignments.csv fold=1; expected = data/predictions/predictions.csv
+    trace: {sample_id: 69, group_id: 12, fold: 1, motor: Motor-2, speed: 100, fault: "healthy 1", window_index: 0, true_family: healthy, true_severity: 1}
+    input:
+      vib_mean: 0.0010638405879338586
+      vib_std: 0.38789452939677616
+      vib_max: 1.2821435928344729
+      vib_min: -1.2856245040893557
+      vib_rms: 0.3878959882400732
+      vib_kurtosis: -0.3601010683403949
+      vib_skewness: 0.23735228071919023
+      vib_spectral_energy: 4333375669.191098
+      vib_spectral_centroid: 51416.621141819014
+      vib_band_low: 0.014988096790171062
+      vib_band_mid: 0.26945405968487757
+      vib_band_high: 0.018000212035722777
+      vib_amp_1x: 92.78588398996443
+      vib_amp_2x: 195.09303472456304
+      vib_ratio_2x_1x: 2.1026154659973693
+      ele_mean: 0.1777857061843986
+      ele_std: 19.945538467141546
+      ele_max: 32.2590092801274
+      ele_min: -31.69029880074465
+      ele_rms: 19.946330802970923
+      ele_kurtosis: -1.4590617328425208
+      ele_skewness: 0.0033145436675510983
+      ele_spectral_energy: 17904947411650.445
+      ele_spectral_centroid: 6818.825170827198
+    expected:
+      family: healthy
+      severity: null
+      severity_label: "sin fallo"
+      severity_confidence: null
+  - id: caso_014
+    source: dataset_split_oof_fold  # data/splits/fold_assignments.csv fold=3; expected = data/predictions/predictions.csv
+    trace: {sample_id: 105, group_id: 13, fold: 3, motor: Motor-2, speed: 100, fault: "healthy 2", window_index: 0, true_family: healthy, true_severity: 2}
+    input:
+      vib_mean: 0.0018149063736200336
+      vib_std: 0.623030313732292
+      vib_max: 2.4505555629730225
+      vib_min: -1.7476677894592283
+      vib_rms: 0.6230329571655927
+      vib_kurtosis: -0.013519811010878069
+      vib_skewness: 0.516185275468616
+      vib_spectral_energy: 11179392791.794788
+      vib_spectral_centroid: 55453.674124816906
+      vib_band_low: 0.007592530213525242
+      vib_band_mid: 0.2886875701047347
+      vib_band_high: 0.021331705852332294
+      vib_amp_1x: 139.3870317861155
+      vib_amp_2x: 140.0311614307123
+      vib_ratio_2x_1x: 1.0046211589865761
+      ele_mean: 0.18451378158412704
+      ele_std: 20.34501021518573
+      ele_max: 33.4434098125278
+      ele_min: -33.455397885039
+      ele_rms: 20.34584689787098
+      ele_kurtosis: -1.4529572593221978
+      ele_skewness: 0.00218504377641011
+      ele_spectral_energy: 18629438909979.258
+      ele_spectral_centroid: 12659.069445473306
+    expected:
+      family: healthy
+      severity: null
+      severity_label: "sin fallo"
+      severity_confidence: null
+  - id: caso_015
+    source: dataset_split_oof_fold  # data/splits/fold_assignments.csv fold=5; expected = data/predictions/predictions.csv
+    trace: {sample_id: 135, group_id: 14, fold: 5, motor: Motor-2, speed: 100, fault: "healthy 3", window_index: 0, true_family: healthy, true_severity: 3}
+    input:
+      vib_mean: 0.0016970876852671305
+      vib_std: 0.5962383310445846
+      vib_max: 2.303558588027954
+      vib_min: -2.0259499549865723
+      vib_rms: 0.5962407462707016
+      vib_kurtosis: -0.27518064058426983
+      vib_skewness: 0.12195351151595196
+      vib_spectral_energy: 10238570197.609077
+      vib_spectral_centroid: 55634.91401808341
+      vib_band_low: 0.009901358401125352
+      vib_band_mid: 0.15585250931374053
+      vib_band_high: 0.013155619542940885
+      vib_amp_1x: 99.23078586957526
+      vib_amp_2x: 234.09160313706957
+      vib_ratio_2x_1x: 2.359062271472475
+      ele_mean: 0.18977338982811492
+      ele_std: 20.219094223290245
+      ele_max: 32.4241344631161
+      ele_min: -32.381177203284295
+      ele_rms: 20.219984795982803
+      ele_kurtosis: -1.4589890003983563
+      ele_skewness: 0.0016491948058029767
+      ele_spectral_energy: 18399770959390.867
+      ele_spectral_centroid: 12798.861051080796
+    expected:
+      family: healthy
+      severity: null
+      severity_label: "sin fallo"
+      severity_confidence: null
+  - id: caso_016
+    source: dataset_split_oof_fold  # data/splits/fold_assignments.csv fold=1; expected = data/predictions/predictions.csv
+    trace: {sample_id: 172, group_id: 17, fold: 1, motor: Motor-2, speed: 100, fault: "impeller 2", window_index: 0, true_family: mechanical_other, true_severity: 2}
+    input:
+      vib_mean: 0.0015528464317321783
+      vib_std: 0.39300253009891783
+      vib_max: 1.330476999282837
+      vib_min: -1.3631820678710938
+      vib_rms: 0.39300559791966244
+      vib_kurtosis: -0.3986971621671467
+      vib_skewness: 0.20559273422437874
+      vib_spectral_energy: 4448327368.45023
+      vib_spectral_centroid: 53897.74176738911
+      vib_band_low: 0.01124816327398663
+      vib_band_mid: 0.18252975331371735
+      vib_band_high: 0.016939201810782942
+      vib_amp_1x: 73.77713375521584
+      vib_amp_2x: 376.4111547904522
+      vib_ratio_2x_1x: 5.102002959186809
+      ele_mean: 0.18783469438393507
+      ele_std: 19.517876615605868
+      ele_max: 30.843167966252548
+      ele_min: -30.9616947752805
+      ele_rms: 19.518780429484544
+      ele_kurtosis: -1.4622206616286133
+      ele_skewness: 0.0015485832779158876
+      ele_spectral_energy: 17145813210087.21
+      ele_spectral_centroid: 13782.22496266881
+    expected:
+      family: mechanical_other
+      severity: 1
+      severity_label: "significativo"
+      severity_confidence: 0.983081579208374
+  - id: caso_017
+    source: dataset_split_oof_fold  # data/splits/fold_assignments.csv fold=3; expected = data/predictions/predictions.csv
+    trace: {sample_id: 175, group_id: 18, fold: 3, motor: Motor-2, speed: 100, fault: "impeller 3", window_index: 0, true_family: mechanical_other, true_severity: 3}
+    input:
+      vib_mean: 0.0017123177647590641
+      vib_std: 0.3744961193576042
+      vib_max: 1.2050867080688477
+      vib_min: -1.3071060180664062
+      vib_rms: 0.3745000339733396
+      vib_kurtosis: -0.4659859923094931
+      vib_skewness: 0.10331476310382026
+      vib_spectral_energy: 4039292483.7870626
+      vib_spectral_centroid: 52614.04194733061
+      vib_band_low: 0.019318611255625232
+      vib_band_mid: 0.18843317051416267
+      vib_band_high: 0.01655423224333556
+      vib_amp_1x: 72.53492260120262
+      vib_amp_2x: 264.9724615745823
+      vib_ratio_2x_1x: 3.6530329396623467
+      ele_mean: 0.19356725272585137
+      ele_std: 19.102343204911712
+      ele_max: 30.6398308021344
+      ele_min: -30.315981961719448
+      ele_rms: 19.10332390448229
+      ele_kurtosis: -1.4603796258778472
+      ele_skewness: 0.002876196480077596
+      ele_spectral_energy: 16423850362032.566
+      ele_spectral_centroid: 13596.564672248907
+    expected:
+      family: mechanical_other
+      severity: 1
+      severity_label: "significativo"
+      severity_confidence: 0.9373299479484558
+  - id: caso_018
+    source: dataset_split_oof_fold  # data/splits/fold_assignments.csv fold=5; expected = data/predictions/predictions.csv
+    trace: {sample_id: 179, group_id: 19, fold: 5, motor: Motor-2, speed: 100, fault: "loose foot motor", window_index: 0, true_family: mechanical_other, true_severity: -1}
+    input:
+      vib_mean: 0.0028970834116141
+      vib_std: 0.5441224472720582
+      vib_max: 1.7872273921966553
+      vib_min: -1.6846656799316406
+      vib_rms: 0.5441301597206568
+      vib_kurtosis: -0.5505958865568172
+      vib_skewness: 0.2385436330289664
+      vib_spectral_energy: 8527277675.735322
+      vib_spectral_centroid: 56214.76326596601
+      vib_band_low: 0.037633194282044445
+      vib_band_mid: 0.1255564748135202
+      vib_band_high: 0.007229792850426029
+      vib_amp_1x: 560.6746655509431
+      vib_amp_2x: 9418.333910013183
+      vib_ratio_2x_1x: 16.798215593690752
+      ele_mean: 0.18884607202097134
+      ele_std: 20.301002336600433
+      ele_max: 32.86323705328785
+      ele_min: -32.447413932871946
+      ele_rms: 20.30188066927727
+      ele_kurtosis: -1.454344383438881
+      ele_skewness: 0.0011883749472313982
+      ele_spectral_energy: 18549090970004.426
+      ele_spectral_centroid: 13936.274116390468
+    expected:
+      family: mechanical_other
+      severity: 1
+      severity_label: "significativo"
+      severity_confidence: 0.9994754195213318
+  - id: caso_019
+    source: dataset_split_oof_fold  # data/splits/fold_assignments.csv fold=1; expected = data/predictions/predictions.csv
+    trace: {sample_id: 852, group_id: 109, fold: 1, motor: Motor-4, speed: 70, fault: "unbalance motor 5", window_index: 0, true_family: unbalance, true_severity: 5}
+    input:
+      vib_mean: -0.002883989065885544
+      vib_std: 0.3966932608132318
+      vib_max: 1.529628038406372
+      vib_min: -1.7484426498413086
+      vib_rms: 0.39670374408060094
+      vib_kurtosis: 0.2158396039135031
+      vib_skewness: -0.1709553104261736
+      vib_spectral_energy: 4532606725.727007
+      vib_spectral_centroid: 70357.88822258708
+      vib_band_low: 0.04985701594333975
+      vib_band_mid: 0.02043173201823985
+      vib_band_high: 0.0032589556300630265
+      vib_amp_1x: 5597.737420672203
+      vib_amp_2x: 7375.016934130812
+      vib_ratio_2x_1x: 1.3174996217010853
+      ele_mean: 0.08387927501753678
+      ele_std: 21.8011591789378
+      ele_max: 32.95943081933715
+      ele_min: -33.35102804322
+      ele_rms: 21.801320539778352
+      ele_kurtosis: -1.4880383786388458
+      ele_skewness: -0.00017972013072303425
+      ele_spectral_energy: 21388708766302.832
+      ele_spectral_centroid: 19371.983414784772
+    expected:
+      family: unbalance
+      severity: 1
+      severity_label: "significativo"
+      severity_confidence: 0.9111899733543396
+  - id: caso_020
+    source: dataset_split_oof_fold  # data/splits/fold_assignments.csv fold=3; expected = data/predictions/predictions.csv
+    trace: {sample_id: 842, group_id: 107, fold: 3, motor: Motor-4, speed: 70, fault: "unbalance motor 3", window_index: 0, true_family: unbalance, true_severity: 3}
+    input:
+      vib_mean: -0.0020328309635321297
+      vib_std: 0.4106581486310423
+      vib_max: 1.6250252723693848
+      vib_min: -1.6424357891082764
+      vib_rms: 0.41066318003785235
+      vib_kurtosis: 0.04968771653423776
+      vib_skewness: -0.15423628727499258
+      vib_spectral_energy: 4857073868.109007
+      vib_spectral_centroid: 71506.98556130259
+      vib_band_low: 0.04001608834762193
+      vib_band_mid: 0.01897225432905998
+      vib_band_high: 0.003045057967666381
+      vib_amp_1x: 899.8618391588761
+      vib_amp_2x: 7576.486418775308
+      vib_ratio_2x_1x: 8.419610754661013
+      ele_mean: 0.08619436062282831
+      ele_std: 21.882321540562508
+      ele_max: 32.976216749816096
+      ele_min: -33.0026378306796
+      ele_rms: 21.882491299492592
+      ele_kurtosis: -1.488721647401429
+      ele_skewness: -0.0007508934150018353
+      ele_spectral_energy: 21548288505734.34
+      ele_spectral_centroid: 20046.62628973169
+    expected:
+      family: unbalance
+      severity: 1
+      severity_label: "significativo"
+      severity_confidence: 0.9782146215438844
+  - id: caso_021
+    source: dataset_split_oof_fold  # data/splits/fold_assignments.csv fold=5; expected = data/predictions/predictions.csv
+    trace: {sample_id: 857, group_id: 110, fold: 5, motor: Motor-4, speed: 70, fault: "unbalance motor 6", window_index: 0, true_family: unbalance, true_severity: 6}
+    input:
+      vib_mean: -0.0031249758849541346
+      vib_std: 0.40535545065550865
+      vib_max: 1.695328950881958
+      vib_min: -1.7151474952697754
+      vib_rms: 0.40536749604576355
+      vib_kurtosis: 0.21531809012592706
+      vib_skewness: -0.16309100399962265
+      vib_spectral_energy: 4732785959.432369
+      vib_spectral_centroid: 69131.51930439776
+      vib_band_low: 0.059051708167437614
+      vib_band_mid: 0.01910374165333465
+      vib_band_high: 0.002972315291806529
+      vib_amp_1x: 8593.932786349154
+      vib_amp_2x: 7181.749956569186
+      vib_ratio_2x_1x: 0.8356767658188488
+      ele_mean: 0.07998938349646044
+      ele_std: 21.715084391056752
+      ele_max: 33.1420780425204
+      ele_min: -32.8015221405246
+      ele_rms: 21.71523171444847
+      ele_kurtosis: -1.4888560489997196
+      ele_skewness: 0.0020793708225837673
+      ele_spectral_energy: 21220096039898.156
+      ele_spectral_centroid: 20301.674907401415
+    expected:
+      family: unbalance
+      severity: 1
+      severity_label: "significativo"
+      severity_confidence: 0.9876866936683656
+
+# Comprobación adicional del modo raw. NO es un golden case: la salida esperada no viene de un
+# split de test ni de una tabla auditada de la memoria, sino del JSON de ejemplo que deja el
+# equipo en la entrega. Sirve para comprobar que el plugin replica scripts.predict_raw, no para
+# medir acierto (la familia real del ejemplo es alignment y el modelo dice mechanical_other).
+reference_checks:
+  - id: raw_example_entrega
+    source: "data/predictions/raw_example_prediction.json + data/examples/raw/{vibration,current}_example.csv [C]; comando en [M] §8.2"
+    input: {vibration_csv: data/examples/raw/vibration_example.csv, current_csv: data/examples/raw/current_example.csv, motor: Motor-4, speed: 70, window_index: 0}
+    expected: {family: mechanical_other, severity: 0, severity_label: leve, severity_confidence: 0.015418630093336105}
+    true_condition: "align angular 3 (familia alignment, severidad 3) [C] example_metadata.json"
+    caveat: "Extracto recortado a 4096 filas; las ventanas de entrenamiento tienen 240000/300000 muestras → features fuera de escala (ver known_issues)"
+
+known_issues:
+  - id: KI-01
+    tipo: encoding
+    detalle: >
+      requirements.txt está bien (ASCII, LF, sin BOM, 139 dependencias fijadas con ==; incluye
+      Jupyter y utilidades de análisis que no son de inferencia). Los ficheros de traceability/
+      (artifact_summary.json, train.log, predict_oof.log, get_stats.log) están en UTF-16LE con BOM
+      y CRLF; no son funcionales, pero hay que abrirlos con esa codificación.
+  - id: KI-02
+    tipo: golden_cases
+    detalle: >
+      No existe split de test hold-out: data/splits/ solo contiene fold_assignments.csv (asignación
+      OOF). Los golden cases salen de ese fichero + el parquet real, y su expected es la salida del
+      modelo final entregado (predictions.csv). Ese modelo final se entrenó con las 877 filas, así
+      que los casos validan la fidelidad de la integración (mismo preprocesado y misma salida que
+      el original), no la capacidad de generalización. La única evidencia de generalización es la
+      OOF del equipo (macro-F1 familia 0,5914).
+  - id: KI-03
+    tipo: entorno
+    detalle: >
+      Los .pkl se generaron con scikit-learn 1.7.2 y el repo fija scikit-learn==1.5.2 (pin por el
+      servicio de explicabilidad). Al cargar se emite InconsistentVersionWarning. [V] Con 1.5.2 la
+      predicción coincide 877/877 con predictions.csv. Riesgo residual: sklearn no garantiza
+      compatibilidad de pickles entre versiones; si cambia el pin hay que repetir la comprobación.
+  - id: KI-04
+    tipo: entorno
+    detalle: >
+      Los MLP de severidad son objetos Keras 3 dentro de un pickle, guardados con backend
+      TensorFlow. En el servidor del repo Keras corre con backend torch (ml1 fija
+      KERAS_BACKEND=torch al importarse desde registry.py). [V] Cargados con backend torch dan las
+      mismas probabilidades (|Δ| ≤ 3.6e-7). El plugin usa solo keras.ops (independiente del
+      backend) y no importa TensorFlow. El entrenamiento original usa tf.GradientTape, que no
+      funciona con backend torch: el plugin porta el mismo procedimiento con model.fit y una
+      pérdida keras.ops matemáticamente idéntica (ver docstring de training.py).
+  - id: KI-05
+    tipo: modo_raw_longitud
+    detalle: >
+      [V] Las ventanas de entrenamiento tienen 240000 muestras de vibración (12 s) y 300000 de
+      corriente (15 s) a 20 kHz. vib/ele_spectral_energy, *_spectral_centroid (en bins) y
+      vib_amp_1x/2x dependen de la longitud de la señal. Los CSV de ejemplo de la entrega están
+      recortados a 4096 filas, así que sus features quedan fuera de la escala de entrenamiento
+      ([V] vib_spectral_energy 1,6e6 frente a un mínimo de entrenamiento de 1,25e9;
+      vib_spectral_centroid 1483 frente a un mínimo de 46612; ele_spectral_energy 3,9e9 frente a
+      3,1e12). Por eso el ejemplo oficial ("align angular 3",
+      familia real alignment) sale como mechanical_other. Ni el código ni la memoria validan la
+      longitud. El plugin devuelve la predicción con un aviso explícito (input_warnings) cuando
+      la longitud no coincide; no la rechaza. DECISIÓN PENDIENTE: avisar o rechazar (422).
+  - id: KI-06
+    tipo: modo_raw_canal
+    detalle: >
+      [V] Las 877 muestras de entrenamiento usan solo el canal 1 de vibración (rodamiento lado no
+      accionado del motor, horizontal) y el canal 1 eléctrico (corriente fase 1). La memoria (§8.2,
+      Tablas 15-16) presenta predict_raw como aplicable a cualquier canal chN, incluidos los de
+      tensión (ch4-6, en V), que el modelo nunca ha visto. El plugin no puede saber el canal a
+      partir de un CSV sin nombre normalizado; se documenta en /stats y en el DTO.
+  - id: KI-07
+    tipo: modo_raw_rpm
+    detalle: >
+      get_rpm usa 1470 rpm (Motor-2) y 2950 rpm (resto) nominales × velocidad/100. La memoria
+      (Tabla 2) documenta 740/1110/1480 rpm (Motor-2) y 2070-2085 rpm (Motor-4 al 70 %), y el
+      código da 735/1102,5/1470 y 2065. Diferencia pequeña (<1 %), pero no es la que dice la
+      memoria. El plugin replica el código, que es con lo que se entrenó.
+  - id: KI-08
+    tipo: rendimiento
+    detalle: >
+      Familia electrical muy débil en OOF (F1 0,1667) y su modelo de severidad tiene CV
+      accuracy = macro-F1 = 0,0 ([A] training_severity_metrics.json, dato que no aparece en la
+      memoria). La clase de severidad 0 (nivel 1) también es débil (F1 OOF 0,2148). Las salidas de
+      severidad para electrical no deberían usarse para decidir.
+  - id: KI-09
+    tipo: etiquetado
+    detalle: >
+      extract_severity toma el último número del nombre del fallo: "healthy 1/2/3" acaba con
+      severidad 1/2/3 aunque son repeticiones de la condición sana, no severidades, y "coupling 2D"
+      queda en -1. No afecta al modelo servido (healthy no tiene modelo de severidad), pero sí al
+      CSV que se pase a /train si se construye con la misma regla.
+  - id: KI-10
+    tipo: dominio
+    detalle: >
+      El dataset es un banco de ensayo motor-bomba centrífuga (NLN-EMP), no maquinaria de bodega.
+      No hay validación sobre maquinaria vitivinícola real [M] §1, §10. El KPI CU02 (+15 % de vida
+      útil) no está demostrado: requiere validación con datos reales antes de desplegar.
+  - id: KI-11
+    tipo: memoria
+    detalle: >
+      La memoria sigue la estructura estándar de la plantilla, con estas diferencias: la sección de
+      arquitectura se llama "Arquitectura general" (no "Arquitectura y Algoritmos"); no hay tabla de
+      métricas de test hold-out (la evaluación es CV/OOF); no hay tabla de escenarios de negocio.
+      §6.2 dice que algunos parámetros de config.yaml no se consumen dinámicamente, pero en el
+      código v1.6 sí se leen (config.get con los mismos valores por defecto). §5.2 describe la
+      salida como CSV con "probabilidades asociadas"; el original solo da severity_confidence.
+  - id: KI-12
+    tipo: reproducibilidad
+    detalle: >
+      La traza E2E del equipo registra un primer intento fallido al leer el parquet ("OSError
+      Repetition level histogram size mismatch", Python por defecto) y otro correcto con el
+      entorno conda m38. [V] pyarrow 25 (entorno del repo) lee el parquet sin error.
+  - id: KI-14
+    tipo: reentrenamiento_version_sklearn
+    detalle: >
+      [V] /train sobre las 877 filas da CV de familia macro-F1 0,6064 ± 0,1105 y accuracy 0,6168
+      ± 0,1117, frente a los 0,6070 / 0,6180 declarados (Tabla 9). Diagnóstico
+      (outputs/a38/evidence/family_cv_parity.py): en el mismo entorno, el port del plugin y el
+      train_family_model original dan resultados idénticos (diferencia < 1e-12), y los folds
+      GroupKFold coinciden con fold_assignments.csv. Con scikit-learn 1.7.2 (la del equipo), el
+      original reproduce exactamente 0,607003. La diferencia sale solo del pin
+      scikit-learn==1.5.2 del repo, que hace crecer el RandomForest de forma ligeramente
+      distinta. No afecta al modelo servido (sus .pkl se predicen 877/877 igual), solo a los
+      reentrenos. Las métricas CV de severidad varían entre ejecuciones (MLP no determinista,
+      [M] §6.3).
+  - id: KI-15
+    tipo: dependencias
+    detalle: >
+      El plugin no añade dependencias. Leer parquet en /predict batch y /train requiere pyarrow,
+      que no está en requirements.txt: llega como dependencia transitiva de mlflow. Los CSV no lo
+      necesitan.
+  - id: KI-13
+    tipo: entregable
+    detalle: >
+      En el repo de integración la memoria v1.2 estaba versionada y el working tree la sustituye
+      por la v1.6 (sin commitear, cambio previo a esta integración). Este manifest usa la v1.6.

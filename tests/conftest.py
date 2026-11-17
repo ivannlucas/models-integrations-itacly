@@ -154,6 +154,21 @@ from app.plugins.ml26_wine_sulfite_gru_pso_forecast.train_dto import (
     TrainRequest as Ml26_TrainReq,
     TrainResponse as Ml26TrainResp,
 )
+from app.plugins.ml38_wine_machinery_fault_detection.exceptions import (
+    FeatureContractError as Ml38FeatureContractError,
+    UnsupportedOperatingConfigurationError as Ml38UnsupportedConfigError,
+)
+from app.plugins.ml38_wine_machinery_fault_detection.predict_dto import (
+    PredictBatchResponse as Ml38BatchResp,
+    PredictInlineResponse as Ml38InlineResp,
+    PredictRequest as Ml38_Request,
+    PredictResponse as Ml38_Response,
+)
+from app.plugins.ml38_wine_machinery_fault_detection.train_dto import (
+    SeverityCvMetrics as Ml38SeverityCv,
+    TrainRequest as Ml38_TrainReq,
+    TrainResponse as Ml38TrainResp,
+)
 from app.plugins.ml31_cereals_residue_optimizer.predict_dto import (
     PredictBatchResponse as Ml31ResidueBatchResp,
     PredictOptimizeResponse as Ml31ResidueOptimizeResp,
@@ -1052,6 +1067,62 @@ def _ml26_train(plugin: FakePlugin, *, data_path: str) -> Ml26TrainResp:
         val_overall_rmse=1.56,
         val_overall_mae=0.83,
         mlflow_run_id="run-test-ml26",
+        upload_warning=None,
+    )
+
+
+def _ml38_inline(plugin: FakePlugin, *, features: dict, model_key, threshold) -> Ml38InlineResp:
+    """Fake inline response for ml38 wine machinery fault detection (golden caso_001 values).
+
+    A raw request (model_key="raw") answers with the signal-length warning the real plugin gives
+    for the trimmed example CSVs of the delivery.
+    """
+    _ = plugin, threshold
+    is_raw = model_key == "raw" or "vibration_csv" in features
+    return Ml38InlineResp(
+        model_id="ml38-wine-machinery-fault-detection",
+        family="alignment",
+        severity=1,
+        severity_label="significativo",
+        severity_confidence=0.719050943851471,
+        family_probabilities={"alignment": 0.91, "healthy": 0.09},
+        input_warnings=["La señal de vibración tiene 4096 muestras"] if is_raw else [],
+        xai_feature_values={"vib_rms": 0.2721},
+    )
+
+
+def _ml38_batch(plugin: FakePlugin, *, data_path: str) -> Ml38BatchResp:
+    """Fake batch response for ml38: one healthy row and one faulty row."""
+    _ = plugin, data_path
+    return Ml38BatchResp(
+        model_id="ml38-wine-machinery-fault-detection",
+        predictions=[
+            {"row": 0, "family": "healthy", "severity": None, "severity_label": "sin fallo",
+             "severity_confidence": None},
+            {"row": 1, "family": "bearing", "severity": 0, "severity_label": "leve",
+             "severity_confidence": 0.0362},
+        ],
+        output_path=None,
+    )
+
+
+def _ml38_train(plugin: FakePlugin, *, data_path: str) -> Ml38TrainResp:
+    """Fake retraining response for ml38 (delivered CV metrics, training_*_metrics.json)."""
+    _ = plugin, data_path
+    return Ml38TrainResp(
+        detail="Reentrenamiento completado (familia + severidad)",
+        family_cv_accuracy_mean=0.618,
+        family_cv_accuracy_std=0.1133,
+        family_cv_macro_f1_mean=0.607,
+        family_cv_macro_f1_std=0.1111,
+        severity_cv={"bearing": Ml38SeverityCv(accuracy_mean=0.5905, accuracy_std=0.0758,
+                                               macro_f1_mean=0.4493, macro_f1_std=0.1027)},
+        families=["alignment", "bearing", "cavitation", "electrical", "healthy",
+                  "mechanical_other", "unbalance"],
+        n_samples=877,
+        n_groups=114,
+        training_time_s=72.0,
+        mlflow_run_id="run-test-ml38",
         upload_warning=None,
     )
 
@@ -2674,6 +2745,7 @@ FAKE_FACTORIES: dict[str, tuple[Callable, Callable]] = {
     "ml16-meat-raw-material-price-alert": (_ml16_inline, _ml16_batch),
     "ml15-wine-ipi-price-forecast": (_ml15_inline, _ml15_batch),
     "ml13-wine-price-fluctuation-prediction": (_ml13_inline, _ml13_batch),
+    "ml38-wine-machinery-fault-detection": (_ml38_inline, _ml38_batch),
 }
 
 
@@ -2832,6 +2904,7 @@ TRAIN_FACTORIES: dict[str, Callable] = {
     "ml4-lactic-cnn-thermal-early-disease-detection": _ml4_thermal_train,
     "ml6-meat-poultry-disease-classification": _ml6_poultry_train,
     "ml13-wine-price-fluctuation-prediction": _ml13_train,
+    "ml38-wine-machinery-fault-detection": _ml38_train,
 }
 
 
@@ -3231,6 +3304,17 @@ TEST_REGISTRY: list[ModelEntry] = [
         extra_predict_exceptions=(InsufficientDataError,),
         train_request_type=Ml14_TrainReq,
         train_response_type=Ml14TrainResp,
+    ),
+    ModelEntry(
+        model_id="ml38-wine-machinery-fault-detection",
+        prefix="/models/ml38-wine-machinery-fault-detection",
+        version="1.0.0",
+        plugin_class=FakePlugin,
+        predict_request_type=Ml38_Request,
+        predict_response_type=Ml38_Response,
+        extra_predict_exceptions=(Ml38UnsupportedConfigError, Ml38FeatureContractError),
+        train_request_type=Ml38_TrainReq,
+        train_response_type=Ml38TrainResp,
     ),
 ]
 

@@ -1,0 +1,37 @@
+# flake8 . --extend-exclude=dist,build --statistics (estado final; incluye inbox/a38/codigo, que no se commitea)
+./inbox/a38/codigo/scripts/get_stats.py
+./inbox/a38/codigo/scripts/predict.py
+./inbox/a38/codigo/scripts/predict_oof.py
+./inbox/a38/codigo/scripts/train.py
+./inbox/a38/codigo/src/data_processing/load_data.py
+./inbox/a38/codigo/src/data_processing/preprocess.py
+./inbox/a38/codigo/src/get_stats/column_info.py
+./inbox/a38/codigo/src/predict/postprocess.py
+./inbox/a38/codigo/src/predict/predictor.py
+./inbox/a38/codigo/src/training/train_models.py
+./inbox/a38/codigo/src/training/train_severity_models.py
+./inbox/a38/codigo/src/utils/logging.py
+./outputs/a08/datos_prueba/generar_datos_prueba.py
+./outputs/a26/datos_prueba/generar_datos_prueba.py
+1     E128 continuation line under-indented for visual indent
+4     E231 missing whitespace after ','
+3     E302 expected 2 blank lines, found 1
+5     E303 too many blank lines (2)
+1     E741 ambiguous variable name 'l'
+1     F841 local variable 'hb_test_norm' is assigned to but never used
+1     W291 trailing whitespace
+9     W292 no newline at end of file
+1     W293 blank line contains whitespace
+1     W391 blank line at end of file
+exit=1
+
+# flake8 sin inbox/ (lo que llega al repo)
+./outputs/a08/datos_prueba/generar_datos_prueba.py:77:64: E128 continuation line under-indented for visual indent
+                                                               encoding="utf-8")
+                                                               ^
+./outputs/a26/datos_prueba/generar_datos_prueba.py:73:28: E741 ambiguous variable name 'l'
+    picked += sorted(l for l in train_lots if lot_types[l] == wt)[:4]
+                           ^
+1     E128 continuation line under-indented for visual indent
+1     E741 ambiguous variable name 'l'
+exit=1
