@@ -542,6 +542,41 @@ def ml46(monkeypatch, tmp_path):
     }
 
 
+# ── ml37 ──────────────────────────────────────────────────────────────────────
+
+@pytest.fixture
+def ml37(monkeypatch, tmp_path):
+    """ml37 plugin with model loading/inference replaced by a Probe; returns (probe, calls)."""
+    # pylint: disable-next=import-outside-toplevel
+    from app.plugins.ml37_wine_press_predictive_maintenance import plugin
+
+    probe = Probe()
+    monkeypatch.setattr(plugin.model_loader, "load_model_bundle",
+                        lambda: {"name": BASE, "scaler": None})
+    monkeypatch.setattr(plugin, "download_user_model_from_mlflow",
+                        lambda run_id: ({"name": f"USER-{run_id}", "scaler": None},
+                                        tempfile.mkdtemp()))
+    monkeypatch.setattr(plugin.preprocessing, "cycle_from_readings",
+                        lambda readings: (np.zeros((1, 1), dtype=np.float32), {}))
+    monkeypatch.setattr(plugin.preprocessing, "apply_scaler", lambda X, scaler: X)
+
+    def run_inference(bundle, X_scaled):
+        _ = X_scaled
+        probe.touch(bundle["name"])
+        raise _Stop
+
+    monkeypatch.setattr(plugin.inference, "run_inference", run_inference)
+    instance = plugin.Ml37WinePressPredictiveMaintenancePlugin()
+    instance.load()
+    csv = _csv_with(tmp_path, ["cycle_id", "t", *plugin.PHYSICAL_SENSORS])
+    return probe, {
+        "predict_inline": lambda run_id: instance.predict_inline(
+            features={"readings": [{"t": 0.0}]}, mlflow_run_id=run_id),
+        "predict_batch": lambda run_id: instance.predict_batch(
+            data_path=csv, mlflow_run_id=run_id),
+    }
+
+
 # ── ml13 / ml14 / ml18 / ml26 (integrated from main) ───────────────────────────────
 
 @pytest.fixture
@@ -777,7 +812,7 @@ CASES = [("ml5", "predict_inline"),
          ("ml2", "predict_inline"), ("ml2", "predict_batch"), ("ml2", "stats")] + [
     (name, method)
     for name in ("ml1", "ml4", "ml6", "ml8", "ml13", "ml14", "ml17", "ml18", "ml21", "ml24",
-                 "ml25", "ml26", "ml30", "ml34", "ml35", "ml46")
+                 "ml25", "ml26", "ml30", "ml34", "ml35", "ml37", "ml46")
     for method in ("predict_inline", "predict_batch")
 ]
 
