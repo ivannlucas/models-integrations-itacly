@@ -1,0 +1,253 @@
+model_id: ml39-wine-predictive-maintenance-xai
+sector: vitivinicola
+nombre: "Implementación del modelo XAI para la visualización de los ciclos de reparación o mantenimiento de la maquinaria"
+task_type: explainability_layer (Integrated Gradients + SHAP, sobre un clasificador multitarea de secuencias ya entrenado)
+framework: [tensorflow==2.19.0 (import directo, no vía Keras 3 standalone), shap>=0.45,<1, scikit-learn (t-SNE/calibración, no usado en vivo), numpy, pandas, scipy, matplotlib/seaborn (solo reportes offline)]
+
+# ── Relación con a37 (OBLIGATORIO leer antes de tocar plugin-integration) ──────────────────────
+# a39 NO es un modelo nuevo de dominio: es la capa de explicabilidad (XAI) del Entregable 37
+# (ml37-wine-press-predictive-maintenance). Opera sobre el MISMO dataset, la MISMA arquitectura
+# LSTM multitarea y el MISMO run_id de referencia (no_virtual_v1__rand_scool) que a37 -- no
+# entrena nada propio. Confirmado con evidencia real (ver known_issues):
+#   - best_model.keras de a39 es BIT A BIT IDÉNTICO al de a37 (md5 c9852308aee35d871bd5a10f2d277b5b)
+#   - scaler.json / class_mappings.json / train_config.json de a39 tienen contenido numérico
+#     idéntico a los de a37 (solo difiere el formato/whitespace del JSON, no los valores)
+# Precedente ya resuelto en este mismo repo para esta misma relación (modelo base + modelo XAI
+# companion): ml47_dairy_dnsl_pasteurization_fault_detection (base) +
+# ml48_dairy_dnsl_critical_point_detection (XAI companion, con su propia copia de los pesos de
+# ml47 bajo su propio ARTIFACT_FOLDER_NAME, y predict_inline/predict_batch con include_shap/
+# include_cam). a39 debe seguir exactamente ese mismo patrón, no inventar uno nuevo.
+
+# ── Decisión de alcance: qué de la capa XAI entregada se sirve EN VIVO vs. qué queda OFFLINE ──
+# El entregable de a39 (src/xai/xai_analysis.py, run_xai_analysis) implementa 4 técnicas:
+# Integrated Gradients, SHAP GradientExplainer, t-SNE del embedding latente, y calibración
+# (Brier Score / reliability diagram) + concordancia neurosimbólica. El comando `xai` del CLI
+# original es un barrido batch de AUDITORÍA sobre TODO el split de test de un run_id (genera
+# PNGs/CSV/manifest), y el propio README dice explícitamente que NO admite --input-package
+# (no se puede pedir una explicación de un ciclo nuevo bajo demanda con el CLI tal cual).
+#
+# Sin embargo, verificado con el código real (ver golden_cases): tanto `_integrated_gradients`
+# (línea 143 de xai_analysis.py) como `shap.GradientExplainer(...).shap_values(...)` son
+# funciones genuinamente aplicables a UN SOLO ciclo nuevo (no dependen de iterar el test set
+# completo, solo de tener un tensor de entrada y el modelo cargado) -- técnicamente SÍ se puede
+# construir un endpoint predict_inline/predict_batch que explique un ciclo bajo demanda,
+# reutilizando esas mismas funciones tal cual, igual que ml48 ya hace con Grad-CAM/SHAP.
+#
+# DECISIÓN (para que el ticket DATAPLAT-525 cumpla su objetivo real: "mostrar la explicación
+# junto a la predicción de a37 en el front"):
+#   - EN VIVO (predict_inline/predict_batch del plugin ml39): Integrated Gradients por ciclo y
+#     por head, siempre: importancia por sensor (|IG| medio sobre los 600 timesteps) para la
+#     clase predicha. SHAP por ciclo y por head como opción (include_shap, análogo a ml48),
+#     con un `shap_background.npy` persistido como artefacto propio (muestras fijas de train,
+#     mismo rol que en ml48) -- más costoso en CPU, igual que advierte la memoria de ml48.
+#   - OFFLINE / fuera del contrato del plugin: t-SNE del embedding latente, calibración
+#     (Brier Score, reliability diagram), concordancia IG-SHAP a nivel de todo el test set, y
+#     concordancia neurosimbólica agregada. Son análisis de AUDITORÍA sobre el conjunto de test
+#     completo (no una explicación de un ciclo concreto) y así los trata el propio entregable;
+#     seguirán ejecutándose como el script CLI original (`python src/main.py xai`), no como
+#     parte de la API. Esto NO es una omisión silenciada: queda documentado aquí y debe quedar
+#     documentado también en la ficha técnica/funcional de a39.
+
+artifacts:
+  folder: models/artifacts/no_virtual_v1__rand_scool/
+  files:
+    - best_model.keras      # idéntico al de a37, ver nota de relación arriba
+    - scaler.json
+    - class_mappings.json
+    - train_config.json
+  # Artefacto NUEVO que plugin-integration debe generar (no viene en el entregable tal cual,
+  # el entregable muestrea el background de SHAP en caliente dentro de run_xai_analysis):
+  nuevo_artefacto_a_persistir:
+    shap_background.npy: "muestra fija de shap_n_bg ciclos de train (ver xai.profiles.*.shap_n_bg
+      en config.yaml: 24 en audit, 80 en full), tomada con rng=np.random.default_rng(42) sobre
+      train_idx del split oficial de a37 -- debe fijarse una vez y persistirse, no re-muestrearse
+      en cada predict_inline (mismo patrón que ml48/shap_background.npy)."
+
+inputs:
+  fixed:
+    # Idéntico al contrato de inputs de a37 -- mismo ciclo, mismos 14 sensores físicos, mismo
+    # orden. No se derivan inputs nuevos propios de a39.
+    - {nombre: sensores_ciclo, tipo: "array (600, 14) float", descripcion: "Serie temporal de los 14 sensores físicos de un ciclo completo, en el orden fijo PS1..VS1 -- igual que a37"}
+    - {nombre: mlflow_run_id, tipo: string, descripcion: "No aplica a reentrenamiento (a39 no entrena); reservado por consistencia de contrato con el resto de plugins del repo"}
+    - {nombre: include_shap, tipo: bool, descripcion: "Si true, añade importancia SHAP por sensor y por head (coste alto en CPU, ~pocos segundos por ciclo); por defecto false. Mismo patrón que ml48."}
+
+outputs:
+  predict_inline:
+    - {nombre: "ig_importance_<target>", descripcion: "dict sensor->float: |IG| medio sobre los 600 timesteps para la clase predicha de ese head (cooler/valve/pump/accumulator), calculado con target_class_idx=None (clase de máxima confianza) -- igual semántica que xai_analysis.py"}
+    - {nombre: "shap_importance_<target>", descripcion: "dict sensor->float, solo si include_shap=true: |SHAP| medio sobre los 600 timesteps y las clases, usando shap_background.npy persistido como contexto fijo"}
+  neurosymbolic_concordance_note:
+    - "NO expuesto en el endpoint en vivo -- ver 'Decisión de alcance' arriba. Queda como análisis offline (script CLI heredado)."
+
+constraints:
+  reutilizacion_estricta_de_artefactos: "a39 nunca reajusta ni reentrena scaler/mappings/modelo
+    con datos propios -- los consume tal cual de a37 (principio de diseño explícito de la
+    memoria, sección 4.3: 'Reutilización estricta de artefactos operativos')."
+  shap_opcional_por_coste: "shap.GradientExplainer tarda varios segundos por ciclo en CPU
+    (confirmado con una ejecución real en este entorno) -- debe ser opt-in (include_shap),
+    nunca el comportamiento por defecto de predict_inline/predict_batch, mismo patrón que
+    ml48 (include_shap=false por defecto, n_samples limitado en batch)."
+
+metrics_reported:
+  # TODAS las cifras de esta sección son IDÉNTICAS a las de a37 (mismo modelo, mismo test set) --
+  # confirmado también en la Tabla 5 de la memoria de a39 (coincide dígito a dígito con
+  # metrics_test.json de a37). Se citan aquí solo como contexto para los criterios de "robustez
+  # explicativa" de abajo, NO como una métrica nueva de a39.
+  cooler: {accuracy: 0.9668, balanced_accuracy: 0.9667, f1_macro: 0.9666, support: 331}
+  valve: {accuracy: 0.4683, balanced_accuracy: 0.2804, f1_macro: 0.2499, support: 331}
+  pump: {accuracy: 0.6495, balanced_accuracy: 0.5677, f1_macro: 0.5624, support: 331}
+  accumulator: {accuracy: 0.5498, balanced_accuracy: 0.5452, f1_macro: 0.5299, support: 331}
+
+  # Métricas PROPIAS de la capa XAI (memoria, Tablas 4/5/6 y texto) -- referencia de tolerancia
+  # para la verificación posterior del perfil `full`, no caso verificable 1:1 porque dependen
+  # de muestreo aleatorio (SHAP/t-SNE), aunque son reproducibles con seed=42 fijo:
+  separabilidad_latente_silhouette: {cooler: 0.5196, valve: -0.0448, pump: 0.0232, accumulator: 0.0011}
+  brier_score: {cooler: 0.0177, valve: 0.1512, pump: 0.1427, accumulator: 0.1377}
+  concordancia_ig_shap_spearman_r_perfil_full: {cooler: 0.9165, valve: 0.6484, pump: 0.6044, accumulator: 0.7978}
+  concordancia_ig_shap_spearman_r_perfil_audit: {cooler: 0.9253, valve: 0.8681, pump: 0.5824, accumulator: 0.6264}
+  umbral_robustez_explicativa_memoria: "r de Spearman IG-SHAP > 0.70 por head. Con perfil full
+    (el que reporta la memoria): cooler y accumulator lo superan, valve y pump NO. Con perfil
+    audit (el que se ejecutaría por defecto sin --profile): el dictamen de valve y accumulator
+    se INVIERTE respecto al de full -- ver known_issues, es una discrepancia real y citada
+    explícitamente en el propio README del entregable, no un hallazgo nuevo de esta extracción."
+  tasa_confirmacion_neurosimbolica: {cooler: 0.990, valve: 0.014, pump: 0.158, accumulator: 0.244}
+  kpi_negocio: >
+    Reducción del 20% del tiempo de inactividad no planificado (heredado de a37). La propia
+    memoria de a39 lo marca expresamente como NOT_DEMONSTRATED -- ningún análisis XAI mide ni
+    puede medir este KPI, porque el dataset UCI no registra downtime/intervenciones reales.
+
+training:
+  supported: false
+  target_column: null
+  required_columns: null
+  hyperparams: null
+  metrics_returned: null
+  source: codigo_entrenamiento
+  source_note: >
+    Verificado explícitamente en el código (no asumido por el texto): el único comando `train`
+    del CLI de a39 (src/main.py, delegando en src/training/trainer.py) es una copia literal del
+    entrenamiento de a37 -- no es un entrenamiento propio de la capa XAI. El paquete src/xai/ no
+    define ninguna función de entrenamiento; Integrated Gradients y SHAP son deterministas dado
+    un modelo ya entrenado y una semilla fija (seed=42), no tienen parámetros que ajustar. Por
+    tanto training.supported=false es correcto para el ALCANCE de este plugin (la capa XAI), no
+    porque "falte" código de entrenamiento -- ese código existe pero pertenece a a37 y ya está
+    cubierto por su propio plugin (ml37-wine-press-predictive-maintenance). No se re-expone
+    aquí para no duplicar la superficie de reentrenamiento de dos plugins sobre el mismo modelo.
+
+golden_cases:
+  source_note: >
+    Los 20 casos de abajo son los MISMOS 20 cycle_id reales que inbox/a37/manifest.yaml (mismo
+    dataset, mismo test split, mismo run_id no_virtual_v1__rand_scool) -- elegidos así a
+    propósito para que la verificación de a39 pueda cruzarse directamente con la de a37 (misma
+    predicción base, explicación nueva). Los valores de ig_top3_por_head de abajo son REALES:
+    calculados en esta extracción ejecutando _integrated_gradients tal cual está en
+    inbox/a39/codigo/src/xai/xai_analysis.py (steps=50, target_class_idx=None, es decir sobre
+    la clase de máxima confianza -- perfil `full`), cargando el artefacto real
+    artifacts/ml37_wine_press_predictive_maintenance/best_model.keras con TensorFlow real
+    (ver known_issues sobre el entorno) y el tensor real X.npy de
+    inbox/a37/codigo/data/processed/tensors/. NO son cifras inventadas ni extrapoladas.
+  verificacion_cualitativa: >
+    El hallazgo cualitativo de la memoria se reproduce de forma independiente: para `cooler`,
+    el sensor dominante en varios ciclos es PS6 (presión) o PS4, NO un sensor térmico (TS*) como
+    cabría esperar físicamente -- coincide exactamente con lo que describe la memoria ("el
+    sensor con mayor |IG| es PS6, no un sensor térmico"). Esto confirma que la ejecución real
+    de esta extracción reproduce el comportamiento documentado, no un artefacto de mi propio
+    script.
+  tolerancia: "Para plugin-integration: coincidencia exacta de ranking (top-3 sensores, mismo
+    orden) y valores |IG| con tolerancia relativa 1% (determinista dado el modelo, el tensor de
+    entrada y steps=50 fijos -- no hay aleatoriedad en Integrated Gradients, a diferencia de
+    SHAP/t-SNE). Para SHAP, ver known_issues sobre reproducibilidad antes de fijar una
+    tolerancia -- probablemente haga falta fijar literalmente la misma secuencia de
+    np.random.default_rng(42) y los mismos índices de background para que el golden case sea
+    determinista bit a bit."
+  cases:
+    - {cycle_id: 33, ig_top3_por_head: {cooler: {PS6: 0.000318, TS4: 0.000241, TS1: 0.000224}, valve: {PS6: 0.000153, PS5: 0.00014, TS4: 0.000138}, pump: {FS1: 0.000153, EPS1: 0.000095, VS1: 0.00009}, accumulator: {PS6: 0.000229, TS4: 0.000171, FS1: 0.000168}}}
+    - {cycle_id: 220, ig_top3_por_head: {cooler: {PS6: 0.000335, TS4: 0.000298, TS1: 0.000233}, valve: {TS3: 0.000123, TS4: 0.000112, TS1: 0.000107}, pump: {TS1: 0.00024, FS1: 0.000207, PS6: 0.000154}, accumulator: {FS2: 0.000131, TS1: 0.00012, TS4: 0.000116}}}
+    - {cycle_id: 340, ig_top3_por_head: {cooler: {PS6: 0.000237, TS1: 0.000182, TS3: 0.00017}, valve: {PS6: 0.000165, FS1: 0.000149, TS4: 0.000147}, pump: {FS1: 0.00048, TS1: 0.000394, VS1: 0.000382}, accumulator: {PS6: 0.000127, TS4: 0.000127, PS5: 0.000114}}}
+    - {cycle_id: 556, ig_top3_por_head: {cooler: {TS4: 0.000154, PS6: 0.000122, TS3: 0.000103}, valve: {TS3: 0.000142, VS1: 0.000126, TS4: 0.00011}, pump: {VS1: 0.000138, TS3: 0.000097, PS6: 0.000075}, accumulator: {VS1: 0.00028, FS2: 0.000172, TS1: 0.000147}}}
+    - {cycle_id: 593, ig_top3_por_head: {cooler: {TS1: 0.000312, PS6: 0.00031, TS4: 0.00024}, valve: {FS2: 0.000207, TS1: 0.000205, TS4: 0.000182}, pump: {VS1: 0.000513, FS2: 0.000356, TS1: 0.000323}, accumulator: {TS1: 0.000227, FS2: 0.00017, TS3: 0.00015}}}
+    - {cycle_id: 688, ig_top3_por_head: {cooler: {PS6: 0.00012, TS1: 0.000106, TS4: 0.000099}, valve: {TS3: 0.000154, TS4: 0.000128, PS6: 0.000108}, pump: {VS1: 0.000122, TS3: 0.000083, PS6: 0.000075}, accumulator: {VS1: 0.000212, FS2: 0.00019, TS1: 0.000137}}}
+    - {cycle_id: 858, ig_top3_por_head: {cooler: {PS5: 0.000037, VS1: 0.000033, PS6: 0.000032}, valve: {PS5: 0.00017, PS6: 0.000167, TS4: 0.000099}, pump: {VS1: 0.000119, PS5: 0.000101, PS6: 0.000085}, accumulator: {VS1: 0.00019, PS5: 0.000127, PS6: 0.000114}}}
+    - {cycle_id: 1126, ig_top3_por_head: {cooler: {PS1: 0.000008, VS1: 0.000008, EPS1: 0.000007}, valve: {VS1: 0.000026, PS1: 0.000022, FS1: 0.000021}, pump: {EPS1: 0.000061, PS1: 0.000043, VS1: 0.000031}, accumulator: {PS1: 0.000071, EPS1: 0.000062, PS3: 0.000053}}}
+    - {cycle_id: 1175, ig_top3_por_head: {cooler: {FS1: 0.000008, PS1: 0.000008, EPS1: 0.000008}, valve: {TS4: 0.000034, TS3: 0.00003, FS1: 0.000029}, pump: {EPS1: 0.000065, PS1: 0.000047, VS1: 0.000032}, accumulator: {PS1: 0.000084, PS3: 0.000083, FS1: 0.000067}}}
+    - {cycle_id: 1206, ig_top3_por_head: {cooler: {FS1: 0.000023, TS3: 0.000021, EPS1: 0.00002}, valve: {TS3: 0.000057, TS4: 0.000051, FS1: 0.00005}, pump: {VS1: 0.000141, TS3: 0.00014, TS4: 0.000119}, accumulator: {TS3: 0.000209, FS1: 0.00019, TS4: 0.000187}}}
+    - {cycle_id: 1275, ig_top3_por_head: {cooler: {TS3: 0.000025, PS1: 0.000022, TS4: 0.000019}, valve: {VS1: 0.000038, TS3: 0.000033, TS4: 0.000028}, pump: {TS3: 0.000077, VS1: 0.000073, TS4: 0.000067}, accumulator: {TS3: 0.000093, TS4: 0.000085, TS2: 0.000074}}}
+    - {cycle_id: 1471, ig_top3_por_head: {cooler: {TS1: 0.000558, PS6: 0.000534, PS5: 0.00046}, valve: {PS5: 0.000187, PS4: 0.000151, PS6: 0.000148}, pump: {TS4: 0.000186, PS5: 0.00017, PS4: 0.00015}, accumulator: {TS4: 0.000211, PS5: 0.000204, PS4: 0.000195}}}
+    - {cycle_id: 1722, ig_top3_por_head: {cooler: {PS4: 0.000227, TS1: 0.00019, TS2: 0.000181}, valve: {PS4: 0.000245, PS5: 0.000082, TS4: 0.000056}, pump: {PS4: 0.000215, VS1: 0.000117, TS4: 0.000083}, accumulator: {PS4: 0.000145, TS4: 0.000059, VS1: 0.000058}}}
+    - {cycle_id: 1742, ig_top3_por_head: {cooler: {PS4: 0.000315, TS1: 0.000275, TS2: 0.000244}, valve: {PS4: 0.000205, PS5: 0.000071, TS4: 0.000051}, pump: {PS4: 0.00021, TS4: 0.000095, VS1: 0.000093}, accumulator: {PS4: 0.000164, TS2: 0.000085, TS4: 0.000075}}}
+    - {cycle_id: 1792, ig_top3_por_head: {cooler: {PS4: 0.000081, TS2: 0.000064, PS5: 0.000058}, valve: {PS4: 0.000153, VS1: 0.000059, PS5: 0.000044}, pump: {PS4: 0.000199, VS1: 0.00011, TS4: 0.000075}, accumulator: {PS4: 0.000126, VS1: 0.00006, TS2: 0.000057}}}
+    - {cycle_id: 1821, ig_top3_por_head: {cooler: {PS4: 0.000504, TS1: 0.00049, PS6: 0.000377}, valve: {PS4: 0.000207, PS5: 0.000075, PS6: 0.000061}, pump: {PS4: 0.000252, TS4: 0.000114, VS1: 0.000107}, accumulator: {PS4: 0.000195, TS2: 0.000102, TS1: 0.000092}}}
+    - {cycle_id: 1842, ig_top3_por_head: {cooler: {PS4: 0.003605, TS1: 0.003385, PS6: 0.002427}, valve: {PS4: 0.00044, TS1: 0.000301, PS6: 0.000227}, pump: {PS4: 0.000707, TS1: 0.000516, TS4: 0.000403}, accumulator: {PS4: 0.000301, TS1: 0.000189, TS2: 0.000166}}}
+    - {cycle_id: 1876, ig_top3_por_head: {cooler: {TS1: 0.000384, PS4: 0.000383, PS6: 0.000308}, valve: {PS4: 0.000215, PS5: 0.000072, VS1: 0.000072}, pump: {PS4: 0.000252, VS1: 0.000129, TS4: 0.000113}, accumulator: {PS4: 0.000173, TS2: 0.000098, PS6: 0.000086}}}
+    - {cycle_id: 1919, ig_top3_por_head: {cooler: {TS2: 0.000077, PS4: 0.000074, PS5: 0.000072}, valve: {PS4: 0.000217, PS5: 0.00008, VS1: 0.000067}, pump: {PS4: 0.000294, TS4: 0.000148, VS1: 0.000132}, accumulator: {PS4: 0.000235, TS4: 0.000103, PS5: 0.000086}}}
+    - {cycle_id: 2169, ig_top3_por_head: {cooler: {PS4: 0.000212, TS1: 0.00018, PS5: 0.000175}, valve: {PS4: 0.000235, PS5: 0.000088, VS1: 0.000055}, pump: {PS4: 0.000212, VS1: 0.000105, TS4: 0.000084}, accumulator: {PS4: 0.000157, TS4: 0.000064, TS2: 0.000058}}}
+
+known_issues:
+  - "[a39 NO ES UN MODELO NUEVO -- ES LA CAPA XAI DE a37] Confirmado con evidencia real: los
+     pesos (best_model.keras) de a39 son MD5-idénticos a los de a37 (c9852308aee35d871bd5a10f2d277b5b).
+     scaler.json/class_mappings.json/train_config.json tienen contenido numérico idéntico (solo
+     cambia el formato JSON). Ver sección 'Relación con a37' al principio de este manifest."
+  - "[ORIGEN DEL DATASET] Heredado de a37: NO es un dataset vitivinícola real, es el UCI
+     'Condition Monitoring of Hydraulic Systems' (banco de pruebas de laboratorio). Debe quedar
+     igual de explícito en la documentación de a39 -- no se diluye por ser 'solo explicabilidad'."
+  - "[ALCANCE EN VIVO vs OFFLINE, decisión explícita] El entregable completo incluye 4 técnicas
+     XAI (IG, SHAP, t-SNE, calibración) + concordancia neurosimbólica. Solo IG (siempre) y SHAP
+     (opcional, include_shap) se sirven en vivo por ciclo en el plugin; t-SNE/calibración/
+     concordancia-agregada quedan como análisis offline de auditoría (el script CLI original
+     sobre el run completo), no se reimplementan como endpoint. Ver razonamiento completo arriba."
+  - "[DISCREPANCIA audit vs full en el criterio de robustez explicativa] Con perfil full (el que
+     reporta la memoria), el criterio r-Spearman-IG-SHAP>0.70 lo cumplen cooler y accumulator,
+     no valve ni pump. Con perfil audit (el que correría el CLI por defecto sin --profile), el
+     dictamen de valve y accumulator SE INVIERTE. Esto es textual del propio README del
+     entregable, no un hallazgo nuevo -- pero es crítico para cualquier verificación que se haga
+     del plugin: si se verifica con parámetros tipo 'audit' (steps/n_samples reducidos para que
+     el smoke test sea barato), los resultados de concordancia NO son comparables a los
+     publicados en la memoria (que usan full). El golden_cases de este manifest usa steps=50
+     (equivalente a ig_steps del perfil full) precisamente para evitar esta trampa."
+  - "[REPRODUCIBILIDAD DE SHAP] El código fija semilla (np.random.default_rng(42),
+     tf.keras.utils.set_random_seed(42), tf.config.experimental.enable_op_determinism()) --  en
+     teoría determinista. Verificado que SHAP corre en este entorno (shap.GradientExplainer
+     sobre el modelo real, forma de salida correcta por head), pero NO se ha verificado aún que
+     dé exactamente los mismos valores que el entregable original (requeriría replicar
+     exactamente la misma secuencia de llamadas al rng para el muestreo de background/explicación
+     -- pendiente para plugin-integration/verification, no bloqueante para el manifest)."
+  - "[ENTORNO: TensorFlow SÍ funciona en este sandbox para a39, a diferencia de lo que cabría
+     esperar por la experiencia de a37] a37 tuvo que evitar TensorFlow por completo (sin wheel
+     para Python 3.14 en ese momento) y cargar el modelo vía Keras 3 standalone con
+     backend=torch. a39 SÍ necesita TensorFlow real (tf.GradientTape, tf.keras.utils.set_random_seed,
+     tf.config.experimental.enable_op_determinism) porque xai_analysis.py importa tensorflow
+     directamente, no vía el paquete keras standalone. Verificado en esta extracción: pip install
+     tensorflow instala 2.22.0-rc1 (release candidate, NO la versión exacta 2.19.0 del
+     requirements.txt) para este Python 3.14, y con ella: (a) best_model.keras carga
+     correctamente con tf.keras.models.load_model, arquitectura y nº de parámetros idénticos a
+     la carga vía Keras 3 standalone que ya verificó a37 (31.950 parámetros entrenables); (b)
+     _integrated_gradients corre y reproduce el hallazgo cualitativo de la memoria (PS6/PS4
+     dominan en cooler, no los sensores térmicos esperados); (c) shap.GradientExplainer corre
+     sin errores. Pendiente para plugin-integration: decidir si fijar tensorflow==2.19.0 exacto
+     (puede no tener wheel en el entorno de despliegue real) o relajar el pin como hace a37 con
+     sus otras dependencias, documentando el riesgo de usar un release candidate (2.22.0-rc1) si
+     no hay alternativa estable para la versión de Python del entorno de producción."
+  - "[a39 NO TIENE ENTRENAMIENTO PROPIO] Verificado en código (no asumido): el comando train del
+     CLI de a39 es una copia literal del de a37 (mismo src/training/trainer.py). El paquete
+     src/xai/ no define ninguna función de entrenamiento. training.supported=false es correcto
+     para el plugin de la capa XAI; el reentrenamiento del modelo base sigue siendo competencia
+     exclusiva del plugin ml37."
+  - "[QUIRK HEREDADO DE a37, no corregido ni debe corregirse aquí] accumulator puede perder una
+     alerta de regla más grave en la vista 'legacy' de alertas (ver inbox/a37/manifest.yaml). No
+     afecta directamente a la capa XAI de a39 (que no toca alerts_all.parquet en su contrato en
+     vivo), pero si en el futuro se expone la 'concordancia neurosimbólica' como endpoint, habrá
+     que tener en cuenta esta misma limitación de a37."
+  - "[CONTRATO DE SENSORES: SIN DISCREPANCIA, verificado] HEAD_SENSORS en xai_analysis.py
+     (cooler: TS1-TS4; valve: FS1/FS2; pump: PS1/PS2/PS4/EPS1; accumulator: PS3/PS4/PS5/PS6) y
+     ACTIVE_SENSORS (los 14 sensores físicos, mismo orden PS1..VS1) coinciden con el contrato de
+     a37 (PHYSICAL_SENSORS y el agrupamiento de sensores de las reglas físicas de rules.py). No
+     hay que reconciliar nada -- confirmado, no asumido."
+
+a39_vs_a37_wiring_note: >
+  Para el front (objetivo real del ticket DATAPLAT-525): la explicación de a39 debe mostrarse
+  junto a la predicción de a37 para el MISMO ciclo. Esto implica que el front, o una capa de
+  orquestación, llame a ambos plugins con el mismo payload de 'readings' (idéntico contrato de
+  entrada) -- no hay acoplamiento de código entre los dos plugins del backend, cada uno resuelve
+  su propio artefacto de forma independiente (ver constraints arriba), pero sí hay un
+  acoplamiento de PRODUCTO: pedir una predicción de a37 y una explicación de a39 sobre datos
+  distintos del mismo equipo no tiene sentido de negocio, aunque el sistema no lo impida
+  técnicamente. Documentar esto en la ficha funcional de a39 cuando llegue docs-generation.
