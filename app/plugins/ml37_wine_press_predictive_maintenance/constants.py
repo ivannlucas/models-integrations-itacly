@@ -16,7 +16,8 @@ ARTIFACT_FOLDER_NAME = "ml37_wine_press_predictive_maintenance"
 VERSION = "1.0.0"
 FRAMEWORK = "keras3(backend=torch) + scikit-learn (StandardScaler) + numpy/pandas"
 
-# --- Artefactos (artifacts/ml37_wine_press_predictive_maintenance/, variante no_virtual_v1__rand_scool) ---
+# --- Artefactos (artifacts/ml37_wine_press_predictive_maintenance/, variante
+# no_virtual_v1__rand_scool) ---
 MODEL_FILENAME = "best_model.keras"
 SCALER_FILENAME = "scaler.json"
 CLASS_MAPPINGS_FILENAME = "class_mappings.json"

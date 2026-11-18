@@ -67,7 +67,11 @@ def _load_scaler(path: str) -> dict:
     with open(path, encoding="utf-8") as fh:
         scaler = json.load(fh)
     mean, scale = scaler.get("mean"), scaler.get("scale")
-    if not isinstance(mean, list) or not isinstance(scale, list) or len(mean) != F_SCHEMA or len(scale) != F_SCHEMA:
+    valid = (
+        isinstance(mean, list) and isinstance(scale, list)
+        and len(mean) == F_SCHEMA and len(scale) == F_SCHEMA
+    )
+    if not valid:
         raise ValueError(
             f"scaler.json inválido: 'mean'/'scale' deben ser listas de longitud {F_SCHEMA}"
         )

@@ -29,7 +29,8 @@ def download_user_model_from_mlflow(run_id: str):
     ``run_id``. ``None`` (→ UserModelUnavailableError, 422) when the run has no complete model.
     Caller MUST remove ``temp_dir`` after use (``removing_dir``)."""
     return download_run_artifacts(
-        run_id, lambda local_path: _load(local_path, run_id), prefix=f"mlflow_{ARTIFACT_FOLDER_NAME}_"
+        run_id, lambda local_path: _load(local_path, run_id),
+        prefix=f"mlflow_{ARTIFACT_FOLDER_NAME}_",
     )
 
 

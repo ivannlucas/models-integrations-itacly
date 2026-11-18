@@ -57,15 +57,15 @@ def build_schema_v1_tensor(resampled_14: np.ndarray) -> np.ndarray:
     return out
 
 
-def apply_scaler(X: np.ndarray, scaler: dict) -> np.ndarray:
+def apply_scaler(x: np.ndarray, scaler: dict) -> np.ndarray:
     """Faithful port of predictor.py::_apply_scaler — StandardScaler via plain mean/scale
     arrays (never a pickled sklearn object), scale==0 guarded to 1.0 to avoid division by zero."""
     mean = np.asarray(scaler["mean"], dtype=np.float32)
     scale = np.asarray(scaler["scale"], dtype=np.float32)
     scale = np.where(scale == 0.0, 1.0, scale)
-    shape = X.shape
-    X2d = np.asarray(X, dtype=np.float32).reshape(-1, shape[-1])
-    return ((X2d - mean) / scale).reshape(shape).astype("float32")
+    shape = x.shape
+    x2d = np.asarray(x, dtype=np.float32).reshape(-1, shape[-1])
+    return ((x2d - mean) / scale).reshape(shape).astype("float32")
 
 
 def compute_cycle_stats(resampled_14: np.ndarray) -> dict[str, float]:

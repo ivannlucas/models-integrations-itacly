@@ -25,7 +25,9 @@ class TrainResponse(PluginDTO):
 
     detail: str
     accuracy: dict[str, float] = Field(..., description="accuracy de test por head")
-    balanced_accuracy: dict[str, float] = Field(..., description="balanced_accuracy de test por head")
+    balanced_accuracy: dict[str, float] = Field(
+        ..., description="balanced_accuracy de test por head"
+    )
     f1_macro: dict[str, float] = Field(..., description="f1_macro de test por head")
     n_train: int
     n_val: int

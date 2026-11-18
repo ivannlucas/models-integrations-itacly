@@ -29,7 +29,13 @@ from app.domain.services.mlflow_artifacts import (
 )
 from app.domain.services.plugin_runtime import PluginRuntimeMixin
 from app.infrastructure.artifact_store import local_file_path
-from app.plugins.ml37_wine_press_predictive_maintenance import inference, model_loader, preprocessing, rules, training
+from app.plugins.ml37_wine_press_predictive_maintenance import (
+    inference,
+    model_loader,
+    preprocessing,
+    rules,
+    training,
+)
 from app.plugins.ml37_wine_press_predictive_maintenance.constants import (
     ARTIFACT_FOLDER_NAME,
     CLASS_MAPPINGS_FILENAME,
@@ -157,25 +163,28 @@ class Ml37WinePressPredictiveMaintenancePlugin(PluginRuntimeMixin, ModelPluginPo
             result.model.save(os.path.join(model_dir, MODEL_FILENAME))
             with open(os.path.join(model_dir, SCALER_FILENAME), "w", encoding="utf-8") as fh:
                 json.dump(result.scaler, fh)
-            with open(os.path.join(model_dir, CLASS_MAPPINGS_FILENAME), "w", encoding="utf-8") as fh:
+            mappings_path = os.path.join(model_dir, CLASS_MAPPINGS_FILENAME)
+            with open(mappings_path, "w", encoding="utf-8") as fh:
                 json.dump(result.class_mappings, fh)
             log_run_metadata(tracker, {
-                "accuracy": result.accuracy, "balanced_accuracy": result.balanced_accuracy,
-                "f1_macro": result.f1_macro, "n_train": result.n_train, "n_val": result.n_val,
-                "n_test": result.n_test, "epochs_run": result.epochs_run,
+                **result.metrics, **result.split_sizes, "epochs_run": result.epochs_run,
             })
 
         upload_model_to_mlflow(tracker, _write, prefix=f"{ARTIFACT_FOLDER_NAME}_mlflow_")
 
         logger.info(
             "ml37 train() done — n_train=%d n_val=%d n_test=%d epochs_run=%d",
-            result.n_train, result.n_val, result.n_test, result.epochs_run,
+            result.split_sizes["n_train"], result.split_sizes["n_val"],
+            result.split_sizes["n_test"], result.epochs_run,
         )
         return TrainResponse(
-            detail="Modelo LSTM multitarea reentrenado desde cero con el procedimiento del equipo de IA",
-            accuracy=result.accuracy, balanced_accuracy=result.balanced_accuracy,
-            f1_macro=result.f1_macro, n_train=result.n_train, n_val=result.n_val,
-            n_test=result.n_test, epochs_run=result.epochs_run, upload_warning=None,
+            detail="Modelo LSTM multitarea reentrenado desde cero con el procedimiento "
+            "del equipo de IA",
+            accuracy=result.metrics["accuracy"],
+            balanced_accuracy=result.metrics["balanced_accuracy"],
+            f1_macro=result.metrics["f1_macro"], n_train=result.split_sizes["n_train"],
+            n_val=result.split_sizes["n_val"], n_test=result.split_sizes["n_test"],
+            epochs_run=result.epochs_run, upload_warning=None,
         )
 
     # ── stats ─────────────────────────────────────────────────────────────────
@@ -193,9 +202,11 @@ class Ml37WinePressPredictiveMaintenancePlugin(PluginRuntimeMixin, ModelPluginPo
         ]
         outputs = [
             OutputField(name="predictions", type="dict[str, int]",
-                        description="Código real UCI predicho por head (cooler/valve/pump/accumulator)."),
+                        description="Código real UCI predicho por head "
+                        "(cooler/valve/pump/accumulator)."),
             OutputField(name="risk", type="dict[str, float]",
-                        description="Incertidumbre predictiva [0,1] por head — NO es riesgo físico."),
+                        description="Incertidumbre predictiva [0,1] por head — NO es riesgo "
+                        "físico."),
             OutputField(name="alerts", type="list[dict]",
                         description="Alertas fusionadas reglas+modelo por componente "
                         "(INFO/WARNING/CRITICAL/EMERGENCY)."),
@@ -224,8 +235,8 @@ def _predict_cycle(bundle: dict, readings: list[dict]) -> dict:
     """Run the full pipeline (resample -> schema tensor -> scale -> model -> rules) for one
     cycle's readings — shared by predict_inline and predict_batch's per-cycle loop."""
     schema_tensor, stats = preprocessing.cycle_from_readings(readings)
-    X_scaled = preprocessing.apply_scaler(schema_tensor[None, ...], bundle["scaler"])
-    row = inference.run_inference(bundle, X_scaled)[0]
+    x_scaled = preprocessing.apply_scaler(schema_tensor[None, ...], bundle["scaler"])
+    row = inference.run_inference(bundle, x_scaled)[0]
     predictions = inference.model_predictions_for_rules(row)
     alert_result = rules.evaluate_cycle_alerts(stats, predictions)
     return {

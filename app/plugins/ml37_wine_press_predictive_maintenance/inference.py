@@ -28,7 +28,22 @@ def sem_from_risk(risk: float) -> str:
     return "red"
 
 
-def run_inference(bundle: dict, X_scaled: np.ndarray) -> list[dict]:
+def _decode_row(probs_all, pos: dict[str, int], i2v: dict, class_order: dict, row_i: int) -> dict:
+    """Decode every head's softmax output for one row into pred_/risk_/sem_/p_ fields."""
+    row: dict = {}
+    for tname in TARGET_NAMES:
+        p = np.asarray(probs_all[pos[tname]][row_i])
+        idx_pred = int(np.argmax(p))
+        row[f"pred_{tname}"] = int(i2v[tname][str(idx_pred)])
+        risk = risk_from_probs(p)
+        row[f"risk_{tname}"] = round(risk, 4)
+        row[f"sem_{tname}"] = sem_from_risk(risk)
+        for j, cls_val in enumerate(class_order[tname]):
+            row[f"p_{tname}_{cls_val}"] = round(float(p[j]), 6)
+    return row
+
+
+def run_inference(bundle: dict, x_scaled: np.ndarray) -> list[dict]:
     """Run the LSTM multitask model on a (N, 600, 40) scaled batch and decode every head.
 
     Returns one dict per row with: pred_<target> (real UCI code), risk_<target>, sem_<target>,
@@ -39,25 +54,14 @@ def run_inference(bundle: dict, X_scaled: np.ndarray) -> list[dict]:
     i2v = class_mappings["mappings_index_to_value"]
     class_order = class_mappings["class_order_by_target"]
 
-    probs_all = model.predict(X_scaled, verbose=0)
+    probs_all = model.predict(x_scaled, verbose=0)
     output_names = list(getattr(model, "output_names", TARGET_NAMES))
     pos = {name: i for i, name in enumerate(output_names)}
 
-    n = X_scaled.shape[0]
-    rows: list[dict] = []
-    for row_i in range(n):
-        row: dict = {}
-        for tname in TARGET_NAMES:
-            p = np.asarray(probs_all[pos[tname]][row_i])
-            idx_pred = int(np.argmax(p))
-            row[f"pred_{tname}"] = int(i2v[tname][str(idx_pred)])
-            risk = risk_from_probs(p)
-            row[f"risk_{tname}"] = round(risk, 4)
-            row[f"sem_{tname}"] = sem_from_risk(risk)
-            for j, cls_val in enumerate(class_order[tname]):
-                row[f"p_{tname}_{cls_val}"] = round(float(p[j]), 6)
-        rows.append(row)
-    return rows
+    return [
+        _decode_row(probs_all, pos, i2v, class_order, row_i)
+        for row_i in range(x_scaled.shape[0])
+    ]
 
 
 def model_predictions_for_rules(row: dict) -> dict[str, dict]:
