@@ -502,6 +502,37 @@ def ml35(monkeypatch, tmp_path):
     }
 
 
+# ── ml38 ──────────────────────────────────────────────────────────────────────
+
+@pytest.fixture
+def ml38(monkeypatch, tmp_path):
+    """ml38 plugin with model loading/inference replaced by a Probe; returns (probe, calls)."""
+    # pylint: disable-next=import-outside-toplevel
+    from app.plugins.ml38_wine_machinery_fault_detection import plugin
+
+    probe = Probe()
+    monkeypatch.setattr(plugin, "load_artifacts", lambda: _FakeModel(BASE, probe))
+    monkeypatch.setattr(plugin, "download_user_model_from_mlflow",
+                        lambda run_id: (_FakeModel(f"USER-{run_id}", probe), tempfile.mkdtemp()))
+
+    def predict_matrix(bundle, features):
+        _ = features
+        bundle.probe.touch(bundle.name)
+        raise _Stop
+
+    monkeypatch.setattr(plugin, "predict_matrix", predict_matrix)
+    instance = plugin.Ml38WineMachineryFaultDetectionPlugin()
+    instance.load()
+    features = {name: 1.0 for name in plugin.FEATURE_NAMES}
+    csv = _csv_with(tmp_path, list(plugin.FEATURE_NAMES))
+    return probe, {
+        "predict_inline": lambda run_id: instance.predict_inline(
+            features=features, mlflow_run_id=run_id),
+        "predict_batch": lambda run_id: instance.predict_batch(
+            data_path=csv, mlflow_run_id=run_id),
+    }
+
+
 # ── ml46 ──────────────────────────────────────────────────────────────────────
 
 @pytest.fixture
@@ -777,7 +808,7 @@ CASES = [("ml5", "predict_inline"),
          ("ml2", "predict_inline"), ("ml2", "predict_batch"), ("ml2", "stats")] + [
     (name, method)
     for name in ("ml1", "ml4", "ml6", "ml8", "ml13", "ml14", "ml17", "ml18", "ml21", "ml24",
-                 "ml25", "ml26", "ml30", "ml34", "ml35", "ml46")
+                 "ml25", "ml26", "ml30", "ml34", "ml35", "ml38", "ml46")
     for method in ("predict_inline", "predict_batch")
 ]
 

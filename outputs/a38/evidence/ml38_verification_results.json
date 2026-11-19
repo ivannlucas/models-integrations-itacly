@@ -1,0 +1,1115 @@
+{
+ "endpoints": {
+  "health": {
+   "status": 200,
+   "seconds": 0.0,
+   "body_excerpt": "{\"status\": \"ok\", \"model\": \"ml38-wine-machinery-fault-detection\", \"version\": \"1.0.0\", \"loaded\": true}"
+  },
+  "stats": {
+   "status": 200,
+   "seconds": 0.0,
+   "body_excerpt": "{\"model_name\": \"ml38-wine-machinery-fault-detection\", \"version\": \"1.0.0\", \"description\": \"Diagnóstico jerárquico de fallos en un sistema motor-bomba a partir de características de vibración y corriente: un Random Forest predice la familia de fallo (alignment, bearing, cavitation, electrical, healthy, mechanical_other, unbalance) y, si no es healthy, un MLP específico de la familia (pérdida con término físico sobre la banda baja de vibración) estima la severidad binaria. Entrenado con el banco de ensayo público NLN-EMP, no con maquinaria de bodega: requiere validación con datos reales antes de "
+  },
+  "golden_caso_001": {
+   "status": 200,
+   "seconds": 0.08,
+   "body_excerpt": "{\"model_id\": \"ml38-wine-machinery-fault-detection\", \"family\": \"alignment\", \"severity\": 1, \"severity_label\": \"significativo\", \"severity_confidence\": 0.719050943851471, \"family_probabilities\": {\"alignment\": 0.7971000757909361, \"bearing\": 0.0, \"cavitation\": 0.0007827102803738318, \"electrical\": 0.0, \"healthy\": 0.07750492807352377, \"mechanical_other\": 0.024621066993234377, \"unbalance\": 0.09999121886193152}, \"input_warnings\": [], \"xai_feature_values\": {\"vib_mean\": -0.005718175768852234, \"vib_std\": 0.42906988992946227, \"vib_max\": 1.5283167362213137, \"vib_min\": -1.643216609954834, \"vib_rms\": 0.4291079"
+  },
+  "golden_caso_002": {
+   "status": 200,
+   "seconds": 0.06,
+   "body_excerpt": "{\"model_id\": \"ml38-wine-machinery-fault-detection\", \"family\": \"alignment\", \"severity\": 1, \"severity_label\": \"significativo\", \"severity_confidence\": 0.7714857459068298, \"family_probabilities\": {\"alignment\": 0.9678540640818687, \"bearing\": 0.0, \"cavitation\": 0.0, \"electrical\": 0.0, \"healthy\": 0.004214155045365018, \"mechanical_other\": 0.009367775979296618, \"unbalance\": 0.018564004893469366}, \"input_warnings\": [], \"xai_feature_values\": {\"vib_mean\": -0.004650727311770121, \"vib_std\": 0.38031442424919387, \"vib_max\": 1.6919970512390137, \"vib_min\": -1.8531084060668943, \"vib_rms\": 0.3803428592158979, \"vi"
+  },
+  "golden_caso_003": {
+   "status": 200,
+   "seconds": 0.06,
+   "body_excerpt": "{\"model_id\": \"ml38-wine-machinery-fault-detection\", \"family\": \"alignment\", \"severity\": 1, \"severity_label\": \"significativo\", \"severity_confidence\": 0.9959688186645508, \"family_probabilities\": {\"alignment\": 0.8123358399186436, \"bearing\": 0.0, \"cavitation\": 0.0014907805227354098, \"electrical\": 0.0, \"healthy\": 0.030957965374406874, \"mechanical_other\": 0.15108483682705084, \"unbalance\": 0.0041305773571620975}, \"input_warnings\": [], \"xai_feature_values\": {\"vib_mean\": -0.007509596993525823, \"vib_std\": 0.5849616848584132, \"vib_max\": 3.4859061241149902, \"vib_min\": -3.7615358829498287, \"vib_rms\": 0.5850"
+  },
+  "golden_caso_004": {
+   "status": 200,
+   "seconds": 0.05,
+   "body_excerpt": "{\"model_id\": \"ml38-wine-machinery-fault-detection\", \"family\": \"bearing\", \"severity\": 1, \"severity_label\": \"significativo\", \"severity_confidence\": 0.981412410736084, \"family_probabilities\": {\"alignment\": 0.0, \"bearing\": 0.960423437037452, \"cavitation\": 0.0, \"electrical\": 0.010790040599670647, \"healthy\": 0.019465096708171647, \"mechanical_other\": 0.009321425654705529, \"unbalance\": 0.0}, \"input_warnings\": [], \"xai_feature_values\": {\"vib_mean\": 0.0034918621679147083, \"vib_std\": 0.6316158741265534, \"vib_max\": 3.3543527126312256, \"vib_min\": -3.047037124633789, \"vib_rms\": 0.6316255263603981, \"vib_kurt"
+  },
+  "golden_caso_005": {
+   "status": 200,
+   "seconds": 0.06,
+   "body_excerpt": "{\"model_id\": \"ml38-wine-machinery-fault-detection\", \"family\": \"bearing\", \"severity\": 0, \"severity_label\": \"leve\", \"severity_confidence\": 0.03616742044687271, \"family_probabilities\": {\"alignment\": 0.0, \"bearing\": 0.9334730357883566, \"cavitation\": 0.005584247648902822, \"electrical\": 0.02316645837353047, \"healthy\": 0.025619585738957066, \"mechanical_other\": 0.011240588534168157, \"unbalance\": 0.0009160839160839161}, \"input_warnings\": [], \"xai_feature_values\": {\"vib_mean\": 0.0023579681913057965, \"vib_std\": 0.45641145248320314, \"vib_max\": 2.3718833923339844, \"vib_min\": -2.50435471534729, \"vib_rms\": 0"
+  },
+  "golden_caso_006": {
+   "status": 200,
+   "seconds": 0.06,
+   "body_excerpt": "{\"model_id\": \"ml38-wine-machinery-fault-detection\", \"family\": \"bearing\", \"severity\": 1, \"severity_label\": \"significativo\", \"severity_confidence\": 0.9745036363601685, \"family_probabilities\": {\"alignment\": 0.0008102647277125657, \"bearing\": 0.9563091439158192, \"cavitation\": 0.0, \"electrical\": 0.0027449077022392086, \"healthy\": 0.030967767782705366, \"mechanical_other\": 0.009167915871523498, \"unbalance\": 0.0}, \"input_warnings\": [], \"xai_feature_values\": {\"vib_mean\": 0.0014115619162718455, \"vib_std\": 0.5821074740970343, \"vib_max\": 3.003484010696411, \"vib_min\": -2.840149402618408, \"vib_rms\": 0.5821091"
+  },
+  "golden_caso_007": {
+   "status": 200,
+   "seconds": 0.06,
+   "body_excerpt": "{\"model_id\": \"ml38-wine-machinery-fault-detection\", \"family\": \"cavitation\", \"severity\": 0, \"severity_label\": \"leve\", \"severity_confidence\": 0.1247759610414505, \"family_probabilities\": {\"alignment\": 0.0, \"bearing\": 0.0016346153846153845, \"cavitation\": 0.981005760235003, \"electrical\": 0.0, \"healthy\": 0.016250555752930794, \"mechanical_other\": 0.0005208333333333333, \"unbalance\": 0.000588235294117647}, \"input_warnings\": [], \"xai_feature_values\": {\"vib_mean\": -0.0032110230127970377, \"vib_std\": 0.4437560691860928, \"vib_max\": 1.6475677490234375, \"vib_min\": -1.703768968582153, \"vib_rms\": 0.443767686530"
+  },
+  "golden_caso_008": {
+   "status": 200,
+   "seconds": 0.06,
+   "body_excerpt": "{\"model_id\": \"ml38-wine-machinery-fault-detection\", \"family\": \"cavitation\", \"severity\": 1, \"severity_label\": \"significativo\", \"severity_confidence\": 0.767227292060852, \"family_probabilities\": {\"alignment\": 0.0, \"bearing\": 0.0008796631655197391, \"cavitation\": 0.9965706031489661, \"electrical\": 0.0, \"healthy\": 0.0020289003521808346, \"mechanical_other\": 0.0005208333333333333, \"unbalance\": 0.0}, \"input_warnings\": [], \"xai_feature_values\": {\"vib_mean\": -0.0032207561035950977, \"vib_std\": 0.449381780002284, \"vib_max\": 1.64107084274292, \"vib_min\": -1.6900122165679932, \"vib_rms\": 0.4493933215657528, \"vi"
+  },
+  "golden_caso_009": {
+   "status": 200,
+   "seconds": 0.06,
+   "body_excerpt": "{\"model_id\": \"ml38-wine-machinery-fault-detection\", \"family\": \"cavitation\", \"severity\": 1, \"severity_label\": \"significativo\", \"severity_confidence\": 0.9457057118415833, \"family_probabilities\": {\"alignment\": 0.0, \"bearing\": 0.00125, \"cavitation\": 0.9975, \"electrical\": 0.0, \"healthy\": 0.00125, \"mechanical_other\": 0.0, \"unbalance\": 0.0}, \"input_warnings\": [], \"xai_feature_values\": {\"vib_mean\": -0.004317101364334424, \"vib_std\": 0.4542187109701105, \"vib_max\": 1.5946030616760254, \"vib_min\": -1.7295479774475098, \"vib_rms\": 0.45423922635494474, \"vib_kurtosis\": -0.23681749925372086, \"vib_skewness\": -0."
+  },
+  "golden_caso_010": {
+   "status": 200,
+   "seconds": 0.05,
+   "body_excerpt": "{\"model_id\": \"ml38-wine-machinery-fault-detection\", \"family\": \"electrical\", \"severity\": 0, \"severity_label\": \"leve\", \"severity_confidence\": 0.00444958359003067, \"family_probabilities\": {\"alignment\": 0.0, \"bearing\": 0.008401995063759767, \"cavitation\": 0.0, \"electrical\": 0.9721328384435907, \"healthy\": 0.015553164338212123, \"mechanical_other\": 0.0026620021544375627, \"unbalance\": 0.00125}, \"input_warnings\": [], \"xai_feature_values\": {\"vib_mean\": 0.0015277696152528129, \"vib_std\": 0.8203664141081947, \"vib_max\": 2.8495609760284424, \"vib_min\": -2.522367238998413, \"vib_rms\": 0.8203678366907953, \"vib_ku"
+  },
+  "golden_caso_011": {
+   "status": 200,
+   "seconds": 0.06,
+   "body_excerpt": "{\"model_id\": \"ml38-wine-machinery-fault-detection\", \"family\": \"electrical\", \"severity\": 0, \"severity_label\": \"leve\", \"severity_confidence\": 0.03368314728140831, \"family_probabilities\": {\"alignment\": 0.0, \"bearing\": 0.01090839014922274, \"cavitation\": 0.0, \"electrical\": 0.9472094011979325, \"healthy\": 0.03605252546993172, \"mechanical_other\": 0.005829683182913664, \"unbalance\": 0.0}, \"input_warnings\": [], \"xai_feature_values\": {\"vib_mean\": 0.0030217589686314266, \"vib_std\": 0.6658065943970597, \"vib_max\": 2.427220344543457, \"vib_min\": -1.718592643737793, \"vib_rms\": 0.6658134514786219, \"vib_kurtosis\":"
+  },
+  "golden_caso_012": {
+   "status": 200,
+   "seconds": 0.05,
+   "body_excerpt": "{\"model_id\": \"ml38-wine-machinery-fault-detection\", \"family\": \"electrical\", \"severity\": 1, \"severity_label\": \"significativo\", \"severity_confidence\": 0.7552488446235657, \"family_probabilities\": {\"alignment\": 0.0, \"bearing\": 0.005583046511117223, \"cavitation\": 0.0028589299461123942, \"electrical\": 0.8387813154410431, \"healthy\": 0.12282032020714441, \"mechanical_other\": 0.029956387894583218, \"unbalance\": 0.0}, \"input_warnings\": [], \"xai_feature_values\": {\"vib_mean\": 0.002052145277460416, \"vib_std\": 0.35297582927639254, \"vib_max\": 1.340317726135254, \"vib_min\": -1.2202978134155271, \"vib_rms\": 0.35298"
+  },
+  "golden_caso_013": {
+   "status": 200,
+   "seconds": 0.05,
+   "body_excerpt": "{\"model_id\": \"ml38-wine-machinery-fault-detection\", \"family\": \"healthy\", \"severity\": null, \"severity_label\": \"sin fallo\", \"severity_confidence\": null, \"family_probabilities\": {\"alignment\": 0.0, \"bearing\": 0.008166793820516643, \"cavitation\": 0.0, \"electrical\": 0.0055461306640116545, \"healthy\": 0.861508925991911, \"mechanical_other\": 0.12477814952356109, \"unbalance\": 0.0}, \"input_warnings\": [], \"xai_feature_values\": {\"vib_mean\": 0.0010638405879338586, \"vib_std\": 0.38789452939677616, \"vib_max\": 1.2821435928344729, \"vib_min\": -1.2856245040893557, \"vib_rms\": 0.3878959882400732, \"vib_kurtosis\": -0.36"
+  },
+  "golden_caso_014": {
+   "status": 200,
+   "seconds": 0.05,
+   "body_excerpt": "{\"model_id\": \"ml38-wine-machinery-fault-detection\", \"family\": \"healthy\", \"severity\": null, \"severity_label\": \"sin fallo\", \"severity_confidence\": null, \"family_probabilities\": {\"alignment\": 0.0, \"bearing\": 0.036058049293503924, \"cavitation\": 0.0, \"electrical\": 0.019217049184949868, \"healthy\": 0.9160465910297216, \"mechanical_other\": 0.02867831049182479, \"unbalance\": 0.0}, \"input_warnings\": [], \"xai_feature_values\": {\"vib_mean\": 0.0018149063736200336, \"vib_std\": 0.623030313732292, \"vib_max\": 2.4505555629730225, \"vib_min\": -1.7476677894592283, \"vib_rms\": 0.6230329571655927, \"vib_kurtosis\": -0.0135"
+  },
+  "golden_caso_015": {
+   "status": 200,
+   "seconds": 0.05,
+   "body_excerpt": "{\"model_id\": \"ml38-wine-machinery-fault-detection\", \"family\": \"healthy\", \"severity\": null, \"severity_label\": \"sin fallo\", \"severity_confidence\": null, \"family_probabilities\": {\"alignment\": 0.0, \"bearing\": 0.061157652726504086, \"cavitation\": 0.001134526558891455, \"electrical\": 0.00476905311778291, \"healthy\": 0.9065039722869195, \"mechanical_other\": 0.02643479530990227, \"unbalance\": 0.0}, \"input_warnings\": [], \"xai_feature_values\": {\"vib_mean\": 0.0016970876852671305, \"vib_std\": 0.5962383310445846, \"vib_max\": 2.303558588027954, \"vib_min\": -2.0259499549865723, \"vib_rms\": 0.5962407462707016, \"vib_ku"
+  },
+  "golden_caso_016": {
+   "status": 200,
+   "seconds": 0.05,
+   "body_excerpt": "{\"model_id\": \"ml38-wine-machinery-fault-detection\", \"family\": \"mechanical_other\", \"severity\": 1, \"severity_label\": \"significativo\", \"severity_confidence\": 0.9830815196037292, \"family_probabilities\": {\"alignment\": 0.0, \"bearing\": 0.013155213635805074, \"cavitation\": 0.0, \"electrical\": 0.004270242201698751, \"healthy\": 0.19354983261403877, \"mechanical_other\": 0.7890247115484564, \"unbalance\": 0.0}, \"input_warnings\": [], \"xai_feature_values\": {\"vib_mean\": 0.0015528464317321783, \"vib_std\": 0.39300253009891783, \"vib_max\": 1.330476999282837, \"vib_min\": -1.3631820678710938, \"vib_rms\": 0.3930055979196624"
+  },
+  "golden_caso_017": {
+   "status": 200,
+   "seconds": 0.05,
+   "body_excerpt": "{\"model_id\": \"ml38-wine-machinery-fault-detection\", \"family\": \"mechanical_other\", \"severity\": 1, \"severity_label\": \"significativo\", \"severity_confidence\": 0.9373299479484558, \"family_probabilities\": {\"alignment\": 0.0, \"bearing\": 0.003823906808631227, \"cavitation\": 0.0, \"electrical\": 0.005210825358851674, \"healthy\": 0.05145603159024943, \"mechanical_other\": 0.9395092362422676, \"unbalance\": 0.0}, \"input_warnings\": [], \"xai_feature_values\": {\"vib_mean\": 0.0017123177647590641, \"vib_std\": 0.3744961193576042, \"vib_max\": 1.2050867080688477, \"vib_min\": -1.3071060180664062, \"vib_rms\": 0.3745000339733396"
+  },
+  "golden_caso_018": {
+   "status": 200,
+   "seconds": 0.06,
+   "body_excerpt": "{\"model_id\": \"ml38-wine-machinery-fault-detection\", \"family\": \"mechanical_other\", \"severity\": 1, \"severity_label\": \"significativo\", \"severity_confidence\": 0.9994754195213318, \"family_probabilities\": {\"alignment\": 0.007452387498290346, \"bearing\": 0.014255776514539352, \"cavitation\": 0.007038188584559557, \"electrical\": 0.0009210526315789475, \"healthy\": 0.02449813192002921, \"mechanical_other\": 0.9426648847466956, \"unbalance\": 0.003169578104307246}, \"input_warnings\": [], \"xai_feature_values\": {\"vib_mean\": 0.0028970834116141, \"vib_std\": 0.5441224472720582, \"vib_max\": 1.7872273921966553, \"vib_min\": -"
+  },
+  "golden_caso_019": {
+   "status": 200,
+   "seconds": 0.06,
+   "body_excerpt": "{\"model_id\": \"ml38-wine-machinery-fault-detection\", \"family\": \"unbalance\", \"severity\": 1, \"severity_label\": \"significativo\", \"severity_confidence\": 0.9111899733543396, \"family_probabilities\": {\"alignment\": 0.012736472955218741, \"bearing\": 0.0, \"cavitation\": 0.0, \"electrical\": 0.0, \"healthy\": 0.0003852739726027397, \"mechanical_other\": 0.010795585338312996, \"unbalance\": 0.9760826677338659}, \"input_warnings\": [], \"xai_feature_values\": {\"vib_mean\": -0.002883989065885544, \"vib_std\": 0.3966932608132318, \"vib_max\": 1.529628038406372, \"vib_min\": -1.7484426498413086, \"vib_rms\": 0.39670374408060094, \"vi"
+  },
+  "golden_caso_020": {
+   "status": 200,
+   "seconds": 0.06,
+   "body_excerpt": "{\"model_id\": \"ml38-wine-machinery-fault-detection\", \"family\": \"unbalance\", \"severity\": 1, \"severity_label\": \"significativo\", \"severity_confidence\": 0.9782146215438843, \"family_probabilities\": {\"alignment\": 0.014268110605709839, \"bearing\": 0.0, \"cavitation\": 0.0, \"electrical\": 0.0, \"healthy\": 0.007037685405448291, \"mechanical_other\": 0.012010519966329522, \"unbalance\": 0.9666836840225125}, \"input_warnings\": [], \"xai_feature_values\": {\"vib_mean\": -0.0020328309635321297, \"vib_std\": 0.4106581486310423, \"vib_max\": 1.6250252723693848, \"vib_min\": -1.6424357891082764, \"vib_rms\": 0.41066318003785235, \"v"
+  },
+  "golden_caso_021": {
+   "status": 200,
+   "seconds": 0.06,
+   "body_excerpt": "{\"model_id\": \"ml38-wine-machinery-fault-detection\", \"family\": \"unbalance\", \"severity\": 1, \"severity_label\": \"significativo\", \"severity_confidence\": 0.9876866936683655, \"family_probabilities\": {\"alignment\": 0.014342380741514829, \"bearing\": 0.0017966101694915253, \"cavitation\": 0.014584510199831018, \"electrical\": 0.0, \"healthy\": 0.11446971016796416, \"mechanical_other\": 0.06195523967237762, \"unbalance\": 0.792851549048821}, \"input_warnings\": [], \"xai_feature_values\": {\"vib_mean\": -0.0031249758849541346, \"vib_std\": 0.40535545065550865, \"vib_max\": 1.695328950881958, \"vib_min\": -1.7151474952697754, \"v"
+  },
+  "batch_csv": {
+   "status": 200,
+   "seconds": 0.24,
+   "body_excerpt": "{\"model_id\": \"ml38-wine-machinery-fault-detection\", \"predictions\": [{\"row\": 0, \"family\": \"bearing\", \"severity\": 0, \"severity_label\": \"leve\", \"severity_confidence\": 0.03616742044687271, \"family_probabilities\": {\"alignment\": 0.0, \"bearing\": 0.9334730357883566, \"cavitation\": 0.005584247648902822, \"electrical\": 0.02316645837353047, \"healthy\": 0.025619585738957066, \"mechanical_other\": 0.011240588534168157, \"unbalance\": 0.0009160839160839161}, \"xai_feature_values\": {\"vib_mean\": 0.0023579681913057, \"vib_std\": 0.4564114524832031, \"vib_max\": 2.3718833923339844, \"vib_min\": -2.50435471534729, \"vib_rms\": "
+  },
+  "batch_parquet": {
+   "status": 200,
+   "seconds": 0.23,
+   "body_excerpt": "{\"model_id\": \"ml38-wine-machinery-fault-detection\", \"predictions\": [{\"row\": 0, \"family\": \"bearing\", \"severity\": 0, \"severity_label\": \"leve\", \"severity_confidence\": 0.03616742044687271, \"family_probabilities\": {\"alignment\": 0.0, \"bearing\": 0.9334730357883566, \"cavitation\": 0.005584247648902822, \"electrical\": 0.02316645837353047, \"healthy\": 0.025619585738957066, \"mechanical_other\": 0.011240588534168157, \"unbalance\": 0.0009160839160839161}, \"xai_feature_values\": {\"vib_mean\": 0.0023579681913057965, \"vib_std\": 0.45641145248320314, \"vib_max\": 2.3718833923339844, \"vib_min\": -2.50435471534729, \"vib_rm"
+  },
+  "batch_missing_column_422": {
+   "status": 422,
+   "seconds": 0.01,
+   "body_excerpt": "{\"detail\": \"Faltan columnas de características: ['vib_band_low']. Se esperan las 24 columnas de data/processed/feature_dataset.parquet.\"}"
+  },
+  "batch_row_with_nan": {
+   "status": 200,
+   "seconds": 0.06,
+   "body_excerpt": "{\"model_id\": \"ml38-wine-machinery-fault-detection\", \"predictions\": [{\"row\": 0, \"family\": \"bearing\", \"severity\": 0, \"severity_label\": \"leve\", \"severity_confidence\": 0.036167409271001816, \"family_probabilities\": {\"alignment\": 0.0, \"bearing\": 0.9334730357883566, \"cavitation\": 0.005584247648902822, \"electrical\": 0.02316645837353047, \"healthy\": 0.025619585738957066, \"mechanical_other\": 0.011240588534168157, \"unbalance\": 0.0009160839160839161}, \"xai_feature_values\": {\"vib_mean\": 0.0023579681913057, \"vib_std\": 0.4564114524832031, \"vib_max\": 2.3718833923339844, \"vib_min\": -2.50435471534729, \"vib_rms\":"
+  },
+  "raw_example": {
+   "status": 200,
+   "seconds": 0.08,
+   "body_excerpt": "{\"model_id\": \"ml38-wine-machinery-fault-detection\", \"family\": \"mechanical_other\", \"severity\": 0, \"severity_label\": \"leve\", \"severity_confidence\": 0.015418630093336105, \"family_probabilities\": {\"alignment\": 0.011860762804251862, \"bearing\": 0.07341750273940349, \"cavitation\": 0.09495664716150469, \"electrical\": 0.044502821765127154, \"healthy\": 0.32064713439555104, \"mechanical_other\": 0.43453949331336406, \"unbalance\": 0.02007563782079724}, \"input_warnings\": [\"La señal de vibración tiene 4096 muestras y el modelo se entrenó con ventanas de 240000 (12 s a 20000 Hz). La energía espectral, el centroide"
+  },
+  "raw_undocumented_config_422": {
+   "status": 422,
+   "seconds": 0.0,
+   "body_excerpt": "{\"detail\": \"Configuración motor/velocidad no documentada: motor='Motor-4', speed=50. Solo se admiten las configuraciones del dataset NLN-EMP con las que se entrenó el modelo (Motor-2: 50, 75, 100; Motor-4: 70); motor y velocidad fijan la frecuencia de giro de las características 1X/2X y no deben elegirse de forma arbitraria (memoria §8.2).\"}"
+  },
+  "raw_window_index_out_of_range_422": {
+   "status": 422,
+   "seconds": 0.02,
+   "body_excerpt": "{\"detail\": \"window_index=99 no disponible en /tmp/ml38_vibration_example.csv; el fichero contiene 16 columnas.\"}"
+  },
+  "raw_unknown_motor_schema_422": {
+   "status": 422,
+   "seconds": 0.0,
+   "body_excerpt": "{\"detail\": [{\"type\": \"literal_error\", \"loc\": [\"body\", \"raw\", \"motor\"], \"msg\": \"Input should be 'Motor-2' or 'Motor-4'\", \"input\": \"Motor-1\", \"ctx\": {\"expected\": \"'Motor-2' or 'Motor-4'\"}}]}"
+  },
+  "train_without_run_422": {
+   "status": 422,
+   "seconds": 0.0,
+   "body_excerpt": "{\"detail\": [{\"type\": \"missing\", \"loc\": [\"body\", \"mlflow_run_id\"], \"msg\": \"Field required\", \"input\": {\"data_path\": \"/tmp/ml38_batch_full.csv\"}}]}"
+  },
+  "train_empty_run_422": {
+   "status": 422,
+   "seconds": 0.0,
+   "body_excerpt": "{\"detail\": [{\"type\": \"string_too_short\", \"loc\": [\"body\", \"mlflow_run_id\"], \"msg\": \"String should have at least 1 character\", \"input\": \"  \", \"ctx\": {\"min_length\": 1}}]}"
+  },
+  "train_missing_columns_400": {
+   "status": 400,
+   "seconds": 0.01,
+   "body_excerpt": "{\"detail\": \"Faltan columnas requeridas para entrenar: ['vib_band_low']. Se esperan las 24 características más family, severity (entero, -1 si no aplica) y group_id.\"}"
+  },
+  "train_full_dataset": {
+   "status": 200,
+   "seconds": 26.34,
+   "body_excerpt": "{\"detail\": \"Reentrenamiento completado (familia + severidad)\", \"family_cv_accuracy_mean\": 0.6168, \"family_cv_accuracy_std\": 0.1117, \"family_cv_macro_f1_mean\": 0.6064, \"family_cv_macro_f1_std\": 0.1105, \"severity_cv\": {\"alignment\": {\"accuracy_mean\": 0.6733, \"accuracy_std\": 0.2554, \"macro_f1_mean\": 0.4873, \"macro_f1_std\": 0.2692}, \"bearing\": {\"accuracy_mean\": 0.6114, \"accuracy_std\": 0.0921, \"macro_f1_mean\": 0.4661, \"macro_f1_std\": 0.1301}, \"cavitation\": {\"accuracy_mean\": 0.66, \"accuracy_std\": 0.3774, \"macro_f1_mean\": 0.5556, \"macro_f1_std\": 0.3913}, \"electrical\": {\"accuracy_mean\": 0.2, \"accuracy_"
+  },
+  "predict_with_user_run": {
+   "status": 200,
+   "seconds": 0.33,
+   "body_excerpt": "{\"model_id\": \"ml38-wine-machinery-fault-detection\", \"family\": \"alignment\", \"severity\": 1, \"severity_label\": \"significativo\", \"severity_confidence\": 0.659013032913208, \"family_probabilities\": {\"alignment\": 0.7983500757909361, \"bearing\": 0.0, \"cavitation\": 0.0007827102803738318, \"electrical\": 0.0, \"healthy\": 0.07625492807352377, \"mechanical_other\": 0.024621066993234377, \"unbalance\": 0.09999121886193152}, \"input_warnings\": [], \"xai_feature_values\": {\"vib_mean\": -0.005718175768852234, \"vib_std\": 0.42906988992946227, \"vib_max\": 1.5283167362213137, \"vib_min\": -1.643216609954834, \"vib_rms\": 0.4291079"
+  },
+  "predict_with_empty_run_422": {
+   "status": 422,
+   "seconds": 0.02,
+   "body_excerpt": "{\"detail\": \"No se ha podido cargar el modelo reentrenado del run de MLflow '263275c91efb4c3b980c2dd83691eaad': el run no contiene un modelo completo o MLflow no es accesible. No se usa el modelo base en su lugar.\"}"
+  },
+  "stats_with_user_run": {
+   "status": 200,
+   "seconds": 0.01,
+   "body_excerpt": "{\"model_name\": \"ml38-wine-machinery-fault-detection\", \"version\": \"1.0.0\", \"description\": \"Diagnóstico jerárquico de fallos en un sistema motor-bomba a partir de características de vibración y corriente: un Random Forest predice la familia de fallo (alignment, bearing, cavitation, electrical, healthy, mechanical_other, unbalance) y, si no es healthy, un MLP específico de la familia (pérdida con término físico sobre la banda baja de vibración) estima la severidad binaria. Entrenado con el banco de ensayo público NLN-EMP, no con maquinaria de bodega: requiere validación con datos reales antes de "
+  },
+  "predict_base_after_train": {
+   "status": 200,
+   "seconds": 0.05,
+   "body_excerpt": "{\"model_id\": \"ml38-wine-machinery-fault-detection\", \"family\": \"alignment\", \"severity\": 1, \"severity_label\": \"significativo\", \"severity_confidence\": 0.719050943851471, \"family_probabilities\": {\"alignment\": 0.7971000757909361, \"bearing\": 0.0, \"cavitation\": 0.0007827102803738318, \"electrical\": 0.0, \"healthy\": 0.07750492807352377, \"mechanical_other\": 0.024621066993234377, \"unbalance\": 0.09999121886193152}, \"input_warnings\": [], \"xai_feature_values\": {\"vib_mean\": -0.005718175768852234, \"vib_std\": 0.42906988992946227, \"vib_max\": 1.5283167362213137, \"vib_min\": -1.643216609954834, \"vib_rms\": 0.4291079"
+  }
+ },
+ "golden": [
+  {
+   "id": "caso_001",
+   "status": 200,
+   "expected": {
+    "family": "alignment",
+    "severity": 1,
+    "severity_label": "significativo",
+    "severity_confidence": 0.719050943851471
+   },
+   "trace": {
+    "sample_id": 609,
+    "group_id": 76,
+    "fold": 1,
+    "motor": "Motor-4",
+    "speed": 70,
+    "fault": "align angular 2",
+    "window_index": 0,
+    "true_family": "alignment",
+    "true_severity": 2
+   },
+   "obtained": {
+    "family": "alignment",
+    "severity": 1,
+    "severity_label": "significativo",
+    "severity_confidence": 0.719050943851471
+   },
+   "diff_confidence": 0.0,
+   "ok": true
+  },
+  {
+   "id": "caso_002",
+   "status": 200,
+   "expected": {
+    "family": "alignment",
+    "severity": 1,
+    "severity_label": "significativo",
+    "severity_confidence": 0.7714857459068298
+   },
+   "trace": {
+    "sample_id": 621,
+    "group_id": 79,
+    "fold": 3,
+    "motor": "Motor-4",
+    "speed": 70,
+    "fault": "align angular 5",
+    "window_index": 0,
+    "true_family": "alignment",
+    "true_severity": 5
+   },
+   "obtained": {
+    "family": "alignment",
+    "severity": 1,
+    "severity_label": "significativo",
+    "severity_confidence": 0.7714857459068298
+   },
+   "diff_confidence": 0.0,
+   "ok": true
+  },
+  {
+   "id": "caso_003",
+   "status": 200,
+   "expected": {
+    "family": "alignment",
+    "severity": 1,
+    "severity_label": "significativo",
+    "severity_confidence": 0.9959688186645508
+   },
+   "trace": {
+    "sample_id": 644,
+    "group_id": 83,
+    "fold": 5,
+    "motor": "Motor-4",
+    "speed": 70,
+    "fault": "align combination 4",
+    "window_index": 0,
+    "true_family": "alignment",
+    "true_severity": 4
+   },
+   "obtained": {
+    "family": "alignment",
+    "severity": 1,
+    "severity_label": "significativo",
+    "severity_confidence": 0.9959688186645508
+   },
+   "diff_confidence": 0.0,
+   "ok": true
+  },
+  {
+   "id": "caso_004",
+   "status": 200,
+   "expected": {
+    "family": "bearing",
+    "severity": 1,
+    "severity_label": "significativo",
+    "severity_confidence": 0.981412410736084
+   },
+   "trace": {
+    "sample_id": 15,
+    "group_id": 2,
+    "fold": 1,
+    "motor": "Motor-2",
+    "speed": 100,
+    "fault": "bearing bpfi 3",
+    "window_index": 0,
+    "true_family": "bearing",
+    "true_severity": 3
+   },
+   "obtained": {
+    "family": "bearing",
+    "severity": 1,
+    "severity_label": "significativo",
+    "severity_confidence": 0.981412410736084
+   },
+   "diff_confidence": 0.0,
+   "ok": true
+  },
+  {
+   "id": "caso_005",
+   "status": 200,
+   "expected": {
+    "family": "bearing",
+    "severity": 0,
+    "severity_label": "leve",
+    "severity_confidence": 0.0361674167215824
+   },
+   "trace": {
+    "sample_id": 0,
+    "group_id": 0,
+    "fold": 3,
+    "motor": "Motor-2",
+    "speed": 100,
+    "fault": "bearing bpfi 1",
+    "window_index": 0,
+    "true_family": "bearing",
+    "true_severity": 1
+   },
+   "obtained": {
+    "family": "bearing",
+    "severity": 0,
+    "severity_label": "leve",
+    "severity_confidence": 0.03616742044687271
+   },
+   "diff_confidence": 3.725290312339702e-09,
+   "ok": true
+  },
+  {
+   "id": "caso_006",
+   "status": 200,
+   "expected": {
+    "family": "bearing",
+    "severity": 1,
+    "severity_label": "significativo",
+    "severity_confidence": 0.9745036363601683
+   },
+   "trace": {
+    "sample_id": 10,
+    "group_id": 1,
+    "fold": 5,
+    "motor": "Motor-2",
+    "speed": 100,
+    "fault": "bearing bpfi 2",
+    "window_index": 0,
+    "true_family": "bearing",
+    "true_severity": 2
+   },
+   "obtained": {
+    "family": "bearing",
+    "severity": 1,
+    "severity_label": "significativo",
+    "severity_confidence": 0.9745036363601685
+   },
+   "diff_confidence": 1.1102230246251565e-16,
+   "ok": true
+  },
+  {
+   "id": "caso_007",
+   "status": 200,
+   "expected": {
+    "family": "cavitation",
+    "severity": 0,
+    "severity_label": "leve",
+    "severity_confidence": 0.1247759535908699
+   },
+   "trace": {
+    "sample_id": 678,
+    "group_id": 89,
+    "fold": 1,
+    "motor": "Motor-4",
+    "speed": 70,
+    "fault": "cavitation discharge 1",
+    "window_index": 0,
+    "true_family": "cavitation",
+    "true_severity": 1
+   },
+   "obtained": {
+    "family": "cavitation",
+    "severity": 0,
+    "severity_label": "leve",
+    "severity_confidence": 0.1247759610414505
+   },
+   "diff_confidence": 7.450580596923828e-09,
+   "ok": true
+  },
+  {
+   "id": "caso_008",
+   "status": 200,
+   "expected": {
+    "family": "cavitation",
+    "severity": 1,
+    "severity_label": "significativo",
+    "severity_confidence": 0.7672272324562073
+   },
+   "trace": {
+    "sample_id": 683,
+    "group_id": 90,
+    "fold": 3,
+    "motor": "Motor-4",
+    "speed": 70,
+    "fault": "cavitation discharge 2",
+    "window_index": 0,
+    "true_family": "cavitation",
+    "true_severity": 2
+   },
+   "obtained": {
+    "family": "cavitation",
+    "severity": 1,
+    "severity_label": "significativo",
+    "severity_confidence": 0.767227292060852
+   },
+   "diff_confidence": 5.960464477539063e-08,
+   "ok": true
+  },
+  {
+   "id": "caso_009",
+   "status": 200,
+   "expected": {
+    "family": "cavitation",
+    "severity": 1,
+    "severity_label": "significativo",
+    "severity_confidence": 0.9457056522369384
+   },
+   "trace": {
+    "sample_id": 688,
+    "group_id": 91,
+    "fold": 2,
+    "motor": "Motor-4",
+    "speed": 70,
+    "fault": "cavitation discharge 3",
+    "window_index": 0,
+    "true_family": "cavitation",
+    "true_severity": 3
+   },
+   "obtained": {
+    "family": "cavitation",
+    "severity": 1,
+    "severity_label": "significativo",
+    "severity_confidence": 0.9457057118415833
+   },
+   "diff_confidence": 5.960464488641293e-08,
+   "ok": true
+  },
+  {
+   "id": "caso_010",
+   "status": 200,
+   "expected": {
+    "family": "electrical",
+    "severity": 0,
+    "severity_label": "leve",
+    "severity_confidence": 0.0044495831243693
+   },
+   "trace": {
+    "sample_id": 64,
+    "group_id": 11,
+    "fold": 1,
+    "motor": "Motor-2",
+    "speed": 100,
+    "fault": "broken rotor bar",
+    "window_index": 0,
+    "true_family": "electrical",
+    "true_severity": -1
+   },
+   "obtained": {
+    "family": "electrical",
+    "severity": 0,
+    "severity_label": "leve",
+    "severity_confidence": 0.00444958359003067
+   },
+   "diff_confidence": 4.656613705744661e-10,
+   "ok": true
+  },
+  {
+   "id": "caso_011",
+   "status": 200,
+   "expected": {
+    "family": "electrical",
+    "severity": 0,
+    "severity_label": "leve",
+    "severity_confidence": 0.033683143556118
+   },
+   "trace": {
+    "sample_id": 201,
+    "group_id": 24,
+    "fold": 3,
+    "motor": "Motor-2",
+    "speed": 100,
+    "fault": "stator short 1",
+    "window_index": 0,
+    "true_family": "electrical",
+    "true_severity": 1
+   },
+   "obtained": {
+    "family": "electrical",
+    "severity": 0,
+    "severity_label": "leve",
+    "severity_confidence": 0.03368314728140831
+   },
+   "diff_confidence": 3.725290312339702e-09,
+   "ok": true
+  },
+  {
+   "id": "caso_012",
+   "status": 200,
+   "expected": {
+    "family": "electrical",
+    "severity": 1,
+    "severity_label": "significativo",
+    "severity_confidence": 0.7552488446235657
+   },
+   "trace": {
+    "sample_id": 601,
+    "group_id": 74,
+    "fold": 5,
+    "motor": "Motor-2",
+    "speed": 75,
+    "fault": "stator short 2",
+    "window_index": 0,
+    "true_family": "electrical",
+    "true_severity": 2
+   },
+   "obtained": {
+    "family": "electrical",
+    "severity": 1,
+    "severity_label": "significativo",
+    "severity_confidence": 0.7552488446235657
+   },
+   "diff_confidence": 0.0,
+   "ok": true
+  },
+  {
+   "id": "caso_013",
+   "status": 200,
+   "expected": {
+    "family": "healthy",
+    "severity": null,
+    "severity_label": "sin fallo",
+    "severity_confidence": null
+   },
+   "trace": {
+    "sample_id": 69,
+    "group_id": 12,
+    "fold": 1,
+    "motor": "Motor-2",
+    "speed": 100,
+    "fault": "healthy 1",
+    "window_index": 0,
+    "true_family": "healthy",
+    "true_severity": 1
+   },
+   "obtained": {
+    "family": "healthy",
+    "severity": null,
+    "severity_label": "sin fallo",
+    "severity_confidence": null
+   },
+   "diff_confidence": null,
+   "ok": true
+  },
+  {
+   "id": "caso_014",
+   "status": 200,
+   "expected": {
+    "family": "healthy",
+    "severity": null,
+    "severity_label": "sin fallo",
+    "severity_confidence": null
+   },
+   "trace": {
+    "sample_id": 105,
+    "group_id": 13,
+    "fold": 3,
+    "motor": "Motor-2",
+    "speed": 100,
+    "fault": "healthy 2",
+    "window_index": 0,
+    "true_family": "healthy",
+    "true_severity": 2
+   },
+   "obtained": {
+    "family": "healthy",
+    "severity": null,
+    "severity_label": "sin fallo",
+    "severity_confidence": null
+   },
+   "diff_confidence": null,
+   "ok": true
+  },
+  {
+   "id": "caso_015",
+   "status": 200,
+   "expected": {
+    "family": "healthy",
+    "severity": null,
+    "severity_label": "sin fallo",
+    "severity_confidence": null
+   },
+   "trace": {
+    "sample_id": 135,
+    "group_id": 14,
+    "fold": 5,
+    "motor": "Motor-2",
+    "speed": 100,
+    "fault": "healthy 3",
+    "window_index": 0,
+    "true_family": "healthy",
+    "true_severity": 3
+   },
+   "obtained": {
+    "family": "healthy",
+    "severity": null,
+    "severity_label": "sin fallo",
+    "severity_confidence": null
+   },
+   "diff_confidence": null,
+   "ok": true
+  },
+  {
+   "id": "caso_016",
+   "status": 200,
+   "expected": {
+    "family": "mechanical_other",
+    "severity": 1,
+    "severity_label": "significativo",
+    "severity_confidence": 0.983081579208374
+   },
+   "trace": {
+    "sample_id": 172,
+    "group_id": 17,
+    "fold": 1,
+    "motor": "Motor-2",
+    "speed": 100,
+    "fault": "impeller 2",
+    "window_index": 0,
+    "true_family": "mechanical_other",
+    "true_severity": 2
+   },
+   "obtained": {
+    "family": "mechanical_other",
+    "severity": 1,
+    "severity_label": "significativo",
+    "severity_confidence": 0.9830815196037292
+   },
+   "diff_confidence": 5.960464477539063e-08,
+   "ok": true
+  },
+  {
+   "id": "caso_017",
+   "status": 200,
+   "expected": {
+    "family": "mechanical_other",
+    "severity": 1,
+    "severity_label": "significativo",
+    "severity_confidence": 0.9373299479484558
+   },
+   "trace": {
+    "sample_id": 175,
+    "group_id": 18,
+    "fold": 3,
+    "motor": "Motor-2",
+    "speed": 100,
+    "fault": "impeller 3",
+    "window_index": 0,
+    "true_family": "mechanical_other",
+    "true_severity": 3
+   },
+   "obtained": {
+    "family": "mechanical_other",
+    "severity": 1,
+    "severity_label": "significativo",
+    "severity_confidence": 0.9373299479484558
+   },
+   "diff_confidence": 0.0,
+   "ok": true
+  },
+  {
+   "id": "caso_018",
+   "status": 200,
+   "expected": {
+    "family": "mechanical_other",
+    "severity": 1,
+    "severity_label": "significativo",
+    "severity_confidence": 0.9994754195213318
+   },
+   "trace": {
+    "sample_id": 179,
+    "group_id": 19,
+    "fold": 5,
+    "motor": "Motor-2",
+    "speed": 100,
+    "fault": "loose foot motor",
+    "window_index": 0,
+    "true_family": "mechanical_other",
+    "true_severity": -1
+   },
+   "obtained": {
+    "family": "mechanical_other",
+    "severity": 1,
+    "severity_label": "significativo",
+    "severity_confidence": 0.9994754195213318
+   },
+   "diff_confidence": 0.0,
+   "ok": true
+  },
+  {
+   "id": "caso_019",
+   "status": 200,
+   "expected": {
+    "family": "unbalance",
+    "severity": 1,
+    "severity_label": "significativo",
+    "severity_confidence": 0.9111899733543396
+   },
+   "trace": {
+    "sample_id": 852,
+    "group_id": 109,
+    "fold": 1,
+    "motor": "Motor-4",
+    "speed": 70,
+    "fault": "unbalance motor 5",
+    "window_index": 0,
+    "true_family": "unbalance",
+    "true_severity": 5
+   },
+   "obtained": {
+    "family": "unbalance",
+    "severity": 1,
+    "severity_label": "significativo",
+    "severity_confidence": 0.9111899733543396
+   },
+   "diff_confidence": 0.0,
+   "ok": true
+  },
+  {
+   "id": "caso_020",
+   "status": 200,
+   "expected": {
+    "family": "unbalance",
+    "severity": 1,
+    "severity_label": "significativo",
+    "severity_confidence": 0.9782146215438844
+   },
+   "trace": {
+    "sample_id": 842,
+    "group_id": 107,
+    "fold": 3,
+    "motor": "Motor-4",
+    "speed": 70,
+    "fault": "unbalance motor 3",
+    "window_index": 0,
+    "true_family": "unbalance",
+    "true_severity": 3
+   },
+   "obtained": {
+    "family": "unbalance",
+    "severity": 1,
+    "severity_label": "significativo",
+    "severity_confidence": 0.9782146215438843
+   },
+   "diff_confidence": 1.1102230246251565e-16,
+   "ok": true
+  },
+  {
+   "id": "caso_021",
+   "status": 200,
+   "expected": {
+    "family": "unbalance",
+    "severity": 1,
+    "severity_label": "significativo",
+    "severity_confidence": 0.9876866936683656
+   },
+   "trace": {
+    "sample_id": 857,
+    "group_id": 110,
+    "fold": 5,
+    "motor": "Motor-4",
+    "speed": 70,
+    "fault": "unbalance motor 6",
+    "window_index": 0,
+    "true_family": "unbalance",
+    "true_severity": 6
+   },
+   "obtained": {
+    "family": "unbalance",
+    "severity": 1,
+    "severity_label": "significativo",
+    "severity_confidence": 0.9876866936683655
+   },
+   "diff_confidence": 1.1102230246251565e-16,
+   "ok": true
+  }
+ ],
+ "batch": {
+  "batch_csv": {
+   "status": 200,
+   "rows": 877,
+   "errors": 0,
+   "family_match": 877,
+   "severity_match": 877,
+   "confidence_nan_pattern_match": true,
+   "confidence_max_abs_diff": 1.1920928955078125e-07,
+   "in_sample_family_accuracy_vs_true": 1.0
+  },
+  "batch_parquet": {
+   "status": 200,
+   "rows": 877,
+   "errors": 0,
+   "family_match": 877,
+   "severity_match": 877,
+   "confidence_nan_pattern_match": true,
+   "confidence_max_abs_diff": 1.1920928955078125e-07,
+   "in_sample_family_accuracy_vs_true": 1.0
+  },
+  "nan_row": [
+   {
+    "row": 0,
+    "family": "bearing",
+    "severity": 0,
+    "severity_label": "leve",
+    "severity_confidence": 0.036167409271001816,
+    "family_probabilities": {
+     "alignment": 0.0,
+     "bearing": 0.9334730357883566,
+     "cavitation": 0.005584247648902822,
+     "electrical": 0.02316645837353047,
+     "healthy": 0.025619585738957066,
+     "mechanical_other": 0.011240588534168157,
+     "unbalance": 0.0009160839160839161
+    },
+    "xai_feature_values": {
+     "vib_mean": 0.0023579681913057,
+     "vib_std": 0.4564114524832031,
+     "vib_max": 2.3718833923339844,
+     "vib_min": -2.50435471534729,
+     "vib_rms": 0.4564175434531613,
+     "vib_kurtosis": 0.1063721535126842,
+     "vib_skewness": -0.120222388591679,
+     "vib_spectral_energy": 5999689692.732476,
+     "vib_spectral_centroid": 61888.349795888615,
+     "vib_band_low": 0.0094194059730372,
+     "vib_band_mid": 0.2220982212344265,
+     "vib_band_high": 0.0497642060044675,
+     "vib_amp_1x": 82.1539724577968,
+     "vib_amp_2x": 284.9280313186327,
+     "vib_ratio_2x_1x": 3.4682197678307096,
+     "ele_mean": 0.1767558304607377,
+     "ele_std": 20.62600999238657,
+     "ele_max": 33.19080587672985,
+     "ele_min": -32.69196009624735,
+     "ele_rms": 20.626767338330858,
+     "ele_kurtosis": -1.4527918622846017,
+     "ele_skewness": 0.0012930001987681,
+     "ele_spectral_energy": 19147264805491.043,
+     "ele_spectral_centroid": 9331.81761383444
+    }
+   },
+   {
+    "row": 1,
+    "error": "Valores vacíos o no numéricos: ['vib_rms']"
+   },
+   {
+    "row": 2,
+    "family": "bearing",
+    "severity": 0,
+    "severity_label": "leve",
+    "severity_confidence": 0.027040017768740654,
+    "family_probabilities": {
+     "alignment": 0.0,
+     "bearing": 0.978729619059766,
+     "cavitation": 0.0,
+     "electrical": 0.0021865203761755486,
+     "healthy": 0.016985833980577646,
+     "mechanical_other": 0.0020980265834802656,
+     "unbalance": 0.0
+    },
+    "xai_feature_values": {
+     "vib_mean": 0.0008045013497273,
+     "vib_std": 0.4738463663120298,
+     "vib_max": 2.331548929214477,
+     "vib_min": -2.450990676879883,
+     "vib_rms": 0.4738470492569686,
+     "vib_kurtosis": 0.0721669978914905,
+     "vib_skewness": -0.1116277326177603,
+     "vib_spectral_energy": 6466512198.02908,
+     "vib_spectral_centroid": 62267.44444134167,
+     "vib_band_low": 0.011134674455042,
+     "vib_band_mid": 0.3055257032741426,
+     "vib_band_high": 0.0446976426431273,
+     "vib_amp_1x": 71.88069980839542,
+     "vib_amp_2x": 283.5518329688616,
+     "vib_ratio_2x_1x": 3.9447561540893097,
+     "ele_mean": 0.1837086391050536,
+     "ele_std": 20.28763126470192,
+     "ele_max": 32.46573780686385,
+     "ele_min": -32.176972481287045,
+     "ele_rms": 20.28846300725101,
+     "ele_kurtosis": -1.4668462666368385,
+     "ele_skewness": 0.002226138435989,
+     "ele_spectral_energy": 18524496603145.53,
+     "ele_spectral_centroid": 13637.413001952757
+    }
+   }
+  ]
+ },
+ "raw": {
+  "example": {
+   "status": 200,
+   "expected": {
+    "family": "mechanical_other",
+    "severity": 0,
+    "severity_label": "leve",
+    "confidence": 0.015418630093336105
+   },
+   "obtained": {
+    "family": "mechanical_other",
+    "severity": 0,
+    "severity_label": "leve",
+    "severity_confidence": 0.015418630093336105,
+    "input_warnings": [
+     "La señal de vibración tiene 4096 muestras y el modelo se entrenó con ventanas de 240000 (12 s a 20000 Hz). La energía espectral, el centroide y las amplitudes 1X/2X dependen de la longitud: la predicción queda fuera del dominio de entrenamiento y no debe usarse para decidir.",
+     "La señal de corriente tiene 4096 muestras y el modelo se entrenó con ventanas de 300000 (15 s a 20000 Hz). La energía espectral, el centroide y las amplitudes 1X/2X dependen de la longitud: la predicción queda fuera del dominio de entrenamiento y no debe usarse para decidir."
+    ]
+   },
+   "confidence_abs_diff": 0.0,
+   "match": true
+  }
+ },
+ "train": {
+  "status": 200,
+  "body": {
+   "detail": "Reentrenamiento completado (familia + severidad)",
+   "family_cv_accuracy_mean": 0.6168,
+   "family_cv_accuracy_std": 0.1117,
+   "family_cv_macro_f1_mean": 0.6064,
+   "family_cv_macro_f1_std": 0.1105,
+   "severity_cv": {
+    "alignment": {
+     "accuracy_mean": 0.6733,
+     "accuracy_std": 0.2554,
+     "macro_f1_mean": 0.4873,
+     "macro_f1_std": 0.2692
+    },
+    "bearing": {
+     "accuracy_mean": 0.6114,
+     "accuracy_std": 0.0921,
+     "macro_f1_mean": 0.4661,
+     "macro_f1_std": 0.1301
+    },
+    "cavitation": {
+     "accuracy_mean": 0.66,
+     "accuracy_std": 0.3774,
+     "macro_f1_mean": 0.5556,
+     "macro_f1_std": 0.3913
+    },
+    "electrical": {
+     "accuracy_mean": 0.2,
+     "accuracy_std": 0.4,
+     "macro_f1_mean": 0.2,
+     "macro_f1_std": 0.4
+    },
+    "mechanical_other": {
+     "accuracy_mean": 0.3965,
+     "accuracy_std": 0.1659,
+     "macro_f1_mean": 0.3249,
+     "macro_f1_std": 0.1728
+    },
+    "unbalance": {
+     "accuracy_mean": 0.76,
+     "accuracy_std": 0.2245,
+     "macro_f1_mean": 0.6222,
+     "macro_f1_std": 0.3111
+    }
+   },
+   "severity_skipped": {},
+   "families": [
+    "alignment",
+    "bearing",
+    "cavitation",
+    "electrical",
+    "healthy",
+    "mechanical_other",
+    "unbalance"
+   ],
+   "n_samples": 877,
+   "n_groups": 114,
+   "training_time_s": 23.06,
+   "mlflow_run_id": "e8d916ea68944e309a62d964d32667d9",
+   "upload_warning": null
+  }
+ },
+ "user_model": {
+  "predict_user_run": {
+   "status": 200,
+   "body": {
+    "model_id": "ml38-wine-machinery-fault-detection",
+    "family": "alignment",
+    "severity": 1,
+    "severity_label": "significativo",
+    "severity_confidence": 0.659013032913208,
+    "family_probabilities": {
+     "alignment": 0.7983500757909361,
+     "bearing": 0.0,
+     "cavitation": 0.0007827102803738318,
+     "electrical": 0.0,
+     "healthy": 0.07625492807352377,
+     "mechanical_other": 0.024621066993234377,
+     "unbalance": 0.09999121886193152
+    },
+    "input_warnings": [],
+    "xai_feature_values": {
+     "vib_mean": -0.005718175768852234,
+     "vib_std": 0.42906988992946227,
+     "vib_max": 1.5283167362213137,
+     "vib_min": -1.643216609954834,
+     "vib_rms": 0.4291079910444507,
+     "vib_kurtosis": -0.2531877061711847,
+     "vib_skewness": -0.15851220995016826,
+     "vib_spectral_energy": 5303991738.652221,
+     "vib_spectral_centroid": 68044.93841031744,
+     "vib_band_low": 0.050611669001294594,
+     "vib_band_mid": 0.021985104544864614,
+     "vib_band_high": 0.0030005915895847638,
+     "vib_amp_1x": 1528.7180223246012,
+     "vib_amp_2x": 8356.588675256617,
+     "vib_ratio_2x_1x": 5.46640292923004,
+     "ele_mean": 0.07906975956940675,
+     "ele_std": 21.82986932574939,
+     "ele_max": 32.976229894632446,
+     "ele_min": -33.0021120380256,
+     "ele_rms": 21.830012524187254,
+     "ele_kurtosis": -1.4883853698644058,
+     "ele_skewness": 0.0007581846145781544,
+     "ele_spectral_energy": 21445006785112.848,
+     "ele_spectral_centroid": 20303.6162483759
+    }
+   }
+  },
+  "stats_mlflow_block": {
+   "params": {
+    "rf_n_estimators": "800",
+    "rf_min_samples_leaf": "2",
+    "n_splits": "5",
+    "random_state": "42",
+    "mlp_epochs": "40",
+    "mlp_batch_size": "32",
+    "mlp_learning_rate": "0.001",
+    "lambda_phys": "0.3"
+   },
+   "metrics": {
+    "family_cv_accuracy_mean": 0.6168181818181818,
+    "family_cv_accuracy_std": 0.11171793627047381,
+    "family_cv_macro_f1_mean": 0.6064456647150253,
+    "family_cv_macro_f1_std": 0.11046751227515357,
+    "severity_cv_alignment_accuracy_mean": 0.6733333333333333,
+    "severity_cv_alignment_accuracy_std": 0.2553659949625634,
+    "severity_cv_alignment_macro_f1_mean": 0.48730158730158724,
+    "severity_cv_alignment_macro_f1_std": 0.2692032606890816,
+    "severity_cv_bearing_accuracy_mean": 0.6113936781609195,
+    "severity_cv_bearing_accuracy_std": 0.09214244793141772,
+    "severity_cv_bearing_macro_f1_mean": 0.4661328791300979,
+    "severity_cv_bearing_macro_f1_std": 0.13007109941140393,
+    "severity_cv_cavitation_accuracy_mean": 0.6599999999999999,
+    "severity_cv_cavitation_accuracy_std": 0.37735924528226417,
+    "severity_cv_cavitation_macro_f1_mean": 0.5555555555555556,
+    "severity_cv_cavitation_macro_f1_std": 0.39126259692575577,
+    "severity_cv_electrical_accuracy_mean": 0.2,
+    "severity_cv_electrical_accuracy_std": 0.4,
+    "severity_cv_electrical_macro_f1_mean": 0.2,
+    "severity_cv_electrical_macro_f1_std": 0.4,
+    "severity_cv_mechanical_other_accuracy_mean": 0.3965336134453782,
+    "severity_cv_mechanical_other_accuracy_std": 0.16585399342946694,
+    "severity_cv_mechanical_other_macro_f1_mean": 0.324869816174164,
+    "severity_cv_mechanical_other_macro_f1_std": 0.1728051296938585,
+    "severity_cv_unbalance_accuracy_mean": 0.76,
+    "severity_cv_unbalance_accuracy_std": 0.22449944320643647,
+    "severity_cv_unbalance_macro_f1_mean": 0.6222222222222223,
+    "severity_cv_unbalance_macro_f1_std": 0.3111111111111111,
+    "n_samples": 877.0,
+    "n_groups": 114.0,
+    "training_time_s": 23.063984772001277
+   }
+  },
+  "base_unchanged_after_train": true
+ },
+ "stats_metrics": {
+  "oof_family_accuracy": 0.618,
+  "oof_family_macro_f1": 0.5914,
+  "cv_family_accuracy_mean": 0.618,
+  "cv_family_accuracy_std": 0.1133,
+  "cv_family_macro_f1_mean": 0.607,
+  "cv_family_macro_f1_std": 0.1111,
+  "oof_severity_accuracy": 0.5974,
+  "oof_severity_macro_f1": 0.4334,
+  "oof_severity_samples": 303,
+  "oof_samples": 877,
+  "split": "GroupKFold(5) por group_id — predicciones out-of-fold"
+ }
+}

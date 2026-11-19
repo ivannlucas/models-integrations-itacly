@@ -1,0 +1,53 @@
+{
+  "model_id": "a38",
+  "model_slug": "wine-machinery-fault-detection",
+  "fecha": "Noviembre 2026",
+  "model_key": "ml38-wine-machinery-fault-detection",
+  "version": "1.0.0 (memoria v1.6)",
+  "descripcion": "Herramienta que analiza la vibración y la corriente de un equipo con motor y bomba y te dice qué tipo de fallo parece tener (desalineación, rodamientos, cavitación, problema eléctrico, desequilibrio u otro fallo mecánico) o si está sano. Cuando detecta un fallo, indica además si parece leve o significativo.",
+  "objetivo": "Ayudarte a pasar de reparar cuando algo se rompe a revisar los equipos según su estado: saber qué tipo de fallo empieza a aparecer y cuáles conviene atender antes. Se ha desarrollado como demostrador para maquinaria de bodega (bombas de trasiego, por ejemplo), pero está entrenado con un banco de ensayo de laboratorio, no con equipos de bodega.",
+  "caso_uso": "Tomas una medida de vibración y otra de corriente del mismo equipo, a la vez y en el mismo régimen de marcha, e indicas su configuración de motor y velocidad. También puedes enviar directamente los indicadores ya calculados a partir de esas medidas. Obtienes el tipo de fallo más probable, la probabilidad de cada tipo y, si hay fallo, si parece leve o significativo. Úsalo para decidir qué equipos inspeccionar primero y qué buscar en la inspección.",
+  "que_no_responde": "No te dice cuánto le queda de vida útil al equipo ni qué reparación hacer: identifica el tipo de fallo más probable y lo clasifica como leve o significativo.",
+  "entradas_contexto": "Los datos salen de un acelerómetro en el rodamiento del motor y de una pinza amperimétrica en una de sus fases, registrados a la vez durante unos segundos de funcionamiento estable.",
+  "inputs": [
+    {"nombre": "Señal de vibración", "descripcion": "Registro del acelerómetro del rodamiento del motor (lado opuesto al acoplamiento, dirección horizontal), de unos 12 segundos."},
+    {"nombre": "Señal de corriente", "descripcion": "Registro de la corriente de una fase del motor, tomada a la vez que la vibración, de unos 15 segundos."},
+    {"nombre": "Configuración de motor y velocidad", "descripcion": "Una de las configuraciones de referencia con las que se entrenó la herramienta. Sirve para saber a qué velocidad gira el eje. Si tu equipo no se corresponde con ninguna, el resultado no está validado."},
+    {"nombre": "Indicadores ya calculados (alternativa)", "descripcion": "Si tu sistema ya calcula los 24 indicadores de vibración y corriente (niveles, picos, energía por bandas de frecuencia…), puedes enviarlos en lugar de las señales."}
+  ],
+  "outputs": [
+    {"nombre": "Tipo de fallo", "descripcion": "Desalineación, rodamientos, cavitación, eléctrico, desequilibrio, otro fallo mecánico o sano.", "interpretacion": "Te orienta sobre qué revisar. Los fallos eléctricos son los que peor reconoce: confírmalos siempre."},
+    {"nombre": "Probabilidad de cada tipo", "descripcion": "Cuánto se inclina la herramienta por cada tipo de fallo.", "interpretacion": "Si dos tipos tienen probabilidades parecidas, el diagnóstico es dudoso y conviene inspeccionar ambos."},
+    {"nombre": "Severidad", "descripcion": "Si hay fallo: leve o significativo, con un valor de 0 a 1.", "interpretacion": "Significativo = priorizar la revisión. Reconoce bastante mejor los casos significativos que los leves."},
+    {"nombre": "Avisos", "descripcion": "Mensajes cuando la medida no se parece a las de entrenamiento (por ejemplo, un registro demasiado corto).", "interpretacion": "Si aparece un aviso, no uses el resultado para decidir."}
+  ],
+  "ejemplo_interpretacion": "Si para una bomba obtienes «desalineación» con probabilidad 0,85 y severidad «significativo» con valor 0,72, conviene programar una revisión de la alineación del acoplamiento antes que la de otros equipos con fallos leves. Si en cambio obtienes «sano» con probabilidad 0,55 y «otro fallo mecánico» con 0,40, el diagnóstico no es concluyente: repite la medida o inspecciona el equipo.",
+  "margen_error": "En las pruebas con ensayos que la herramienta no había visto, acierta el tipo de fallo en unas 6 de cada 10 medidas. Es muy fiable con rodamientos y cavitación, regular con desalineación, desequilibrio y equipos sanos, y poco fiable con fallos eléctricos (acierta 1 de cada 5). En la severidad acierta unas 6 de cada 10 veces y reconoce mal los fallos leves.",
+  "revisar_manualmente": [
+    "Cualquier diagnóstico de fallo eléctrico: es el tipo que peor reconoce la herramienta.",
+    "Resultados en los que dos tipos de fallo tienen probabilidades parecidas.",
+    "Equipos que no se corresponden con las configuraciones de motor y velocidad de referencia, o medidas tomadas con otros sensores o en otras posiciones.",
+    "Cualquier resultado que venga con un aviso sobre la medida (por ejemplo, registro demasiado corto).",
+    "Un equipo diagnosticado como sano pero con síntomas evidentes (ruido, calentamiento): la herramienta no detecta 1 de cada 2 casos sanos como tales y también puede pasar por alto fallos."
+  ],
+  "que_no_hace": [
+    "No calcula la vida útil restante ni la fecha de la próxima avería.",
+    "No recomienda la reparación ni sustituye la inspección del técnico de mantenimiento.",
+    "No está validada todavía con maquinaria real de bodega: se entrenó con un banco de ensayo de laboratorio.",
+    "No da una severidad para equipos que diagnostica como sanos.",
+    "No sustituye automáticamente el modelo base al reentrenar: el modelo reentrenado solo se usa si se indica su ejecución de MLflow."
+  ],
+  "puede_equivocarse": "Sí, y bastante. Acierta el tipo de fallo en torno a 6 de cada 10 veces con ensayos de laboratorio que no había visto, y todas sus cifras proceden de un banco de pruebas motor-bomba, no de maquinaria de bodega. Requiere validación con datos reales antes de usarse en producción. El objetivo de alargar un 15 % la vida útil de la maquinaria no está demostrado: requiere seguimiento en planta antes de darlo por cumplido. Úsala para decidir qué equipos revisar primero, nunca como única base para intervenir o para dar un equipo por sano.",
+  "kpis": [
+    {"kpi": "Acertar el tipo de fallo en ensayos no vistos (acierto global)", "valor_umbral": "En torno al 60 %", "descripcion": "CUMPLE en laboratorio: 61,8 %. Requiere validación con datos reales."},
+    {"kpi": "Acierto equilibrado entre tipos de fallo (macro-F1)", "valor_umbral": "En torno a 0,60", "descripcion": "CASI: 0,59 en laboratorio, con mucha diferencia entre tipos (rodamientos 0,87; eléctricos 0,17)."},
+    {"kpi": "Incremento de la vida útil de la maquinaria (CU02)", "valor_umbral": "+15 %", "descripcion": "NO DEMOSTRADO: requiere validación operacional con datos reales de bodega y seguimiento de las intervenciones."},
+    {"kpi": "Alerta de degradación del modelo en uso", "valor_umbral": "Macro-F1 < 0,55", "descripcion": "Si en revisiones periódicas con casos confirmados baja de este valor, hay que revisar y reentrenar la herramienta."}
+  ],
+  "limitaciones": [
+    {"tipo": "Entrenado en laboratorio", "descripcion": "Aprendió de un banco de ensayo motor-bomba, no de equipos de bodega. Sus cifras de acierto requieren validación con datos reales antes de usarlo en producción."},
+    {"tipo": "Fallos eléctricos poco fiables", "descripcion": "Reconoce mal los fallos eléctricos y su severidad: confírmalos siempre con una inspección."},
+    {"tipo": "Medida como la de entrenamiento", "descripcion": "Necesita registros de la duración, el sensor y la posición de referencia, y una de las configuraciones de motor y velocidad conocidas. Con otras medidas el resultado no es fiable; el servicio avisa cuando detecta un registro de duración distinta."},
+    {"tipo": "Severidad orientativa", "descripcion": "La severidad es una señal secundaria: distingue mejor los casos significativos que los leves y depende de haber acertado el tipo de fallo."}
+  ]
+}
