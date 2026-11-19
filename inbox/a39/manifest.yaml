@@ -226,6 +226,30 @@ known_issues:
      (puede no tener wheel en el entorno de despliegue real) o relajar el pin como hace a37 con
      sus otras dependencias, documentando el riesgo de usar un release candidate (2.22.0-rc1) si
      no hay alternativa estable para la versión de Python del entorno de producción."
+  - "[DESCUBIERTO EN plugin-integration — CONTAMINACIÓN REAL DE PROCESO, NO SOLO DE TESTS]
+     importar app.registry (lo que hace main.py SIEMPRE, con o sin MODEL) importa
+     incondicionalmente el módulo de TODOS los plugins, incluido
+     ml1_wine_pest_disease_detection/model_loader.py (y, cuando se mergee, el de a37), que
+     ejecuta os.environ.setdefault('KERAS_BACKEND', 'torch') a nivel de módulo. Keras 3 fija su
+     backend en el primer import del proceso, así que esto hace que tf.keras quede respaldado
+     por el paquete keras standalone con backend=torch, NO por TensorFlow real, para el resto
+     del proceso — rompe tf.GradientTape (no puede diferenciar un tensor de torch:
+     'RuntimeError: Can't call numpy() on Tensor that requires grad'). Esto ocurre incluso con
+     MODEL=ml39-wine-predictive-maintenance-xai en solitario, porque el import de app.registry
+     no es condicional al filtro MODEL. Verificado reproduciendo el fallo real contra el
+     servidor (curl a /predict devolvía 500 con ese mensaje) antes del arreglo.
+     SOLUCIÓN APLICADA en el plugin (inference.py): Integrated Gradients detecta el backend
+     real de Keras 3 en tiempo de ejecución (keras.config.backend()) y usa tf.GradientTape o
+     torch.autograd según corresponda — misma fórmula matemática, mecanismo de autodiff
+     distinto. Verificado end-to-end contra el servidor real con el proceso contaminado
+     (backend=torch): los 20 golden cases se siguen reproduciendo exactos. SHAP NO tiene vía
+     nativa de torch en este plugin: con backend=torch, include_shap=true falla con un 500
+     explícito y diagnosticable (no un error críptico, no un resultado silenciosamente
+     incorrecto) en vez de intentar seguir. En producción cada modelo vive en su propio pod
+     (MODEL=<id> por Kubernetes), así que esta contaminación entre plugins del MISMO proceso no
+     debería darse salvo en el servidor de desarrollo multi-modelo o en la suite de tests — ahí
+     sí ocurre siempre, por eso test_ml39_inference.py corre en un subproceso con
+     KERAS_BACKEND limpiado explícitamente del entorno heredado."
   - "[a39 NO TIENE ENTRENAMIENTO PROPIO] Verificado en código (no asumido): el comando train del
      CLI de a39 es una copia literal del de a37 (mismo src/training/trainer.py). El paquete
      src/xai/ no define ninguna función de entrenamiento. training.supported=false es correcto
