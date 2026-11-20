@@ -1,0 +1,190 @@
+{
+  "model_id": "a45",
+  "model_slug": "cereals-dnsl-critical-point-detection",
+  "fecha": "Noviembre 2026",
+  "descripcion": "Sistema de monitorización inteligente de la secadora de grano de flujo mixto. Analiza de forma continua las lecturas de sus sensores, detecta comportamientos anómalos del proceso y de la maquinaria y los traduce en un estado de atención (Normal, Vigilancia o Criticidad detectada), acompañado de la evidencia que lo respalda y de una recomendación para el operador.",
+  "objetivo": "Anticipar fallos del proceso de secado y de la maquinaria (filtro obstruido, quemador degradado, atasco de la descarga, deriva del sensor de humedad, pérdidas térmicas en el plenum) antes de que afecten a la calidad del grano o provoquen una parada no planificada, explicando además qué parte de la secadora está implicada en lugar de dar solo una puntuación.",
+  "caso_uso": "El operador o el sistema de monitorización sube un fichero CSV con las lecturas de uno o varios ciclos de secado. El sistema analiza cada ventana de 240 lecturas consecutivas y devuelve, para cada una, si detecta un fallo y con qué probabilidad, el estado de atención correspondiente, la evidencia y la recomendación, para decidir si el ciclo requiere revisión.",
+  "inputs": [
+    {
+      "nombre": "timestamp",
+      "descripcion": "Marca temporal de cada lectura; no se permite mezclar formato datetime y ordinal en el mismo fichero"
+    },
+    {
+      "nombre": "cycle_id",
+      "descripcion": "Identificador del ciclo de secado"
+    },
+    {
+      "nombre": "plenum_temp",
+      "descripcion": "Temperatura del plenum"
+    },
+    {
+      "nombre": "exhaust_air_temp",
+      "descripcion": "Temperatura del aire de escape"
+    },
+    {
+      "nombre": "exhaust_air_humidity",
+      "descripcion": "Humedad del aire de escape"
+    },
+    {
+      "nombre": "static_pressure",
+      "descripcion": "Presión estática"
+    },
+    {
+      "nombre": "burner_power",
+      "descripcion": "Potencia del quemador"
+    },
+    {
+      "nombre": "fan_speed",
+      "descripcion": "Velocidad del ventilador"
+    },
+    {
+      "nombre": "discharge_frequency",
+      "descripcion": "Frecuencia del sistema de descarga"
+    },
+    {
+      "nombre": "grain_moisture_in",
+      "descripcion": "Humedad de entrada del grano"
+    },
+    {
+      "nombre": "ambient_temp",
+      "descripcion": "Temperatura ambiente"
+    },
+    {
+      "nombre": "ambient_humidity",
+      "descripcion": "Humedad ambiente"
+    },
+    {
+      "nombre": "setpoint_temp",
+      "descripcion": "Temperatura de consigna"
+    },
+    {
+      "nombre": "fault_name",
+      "descripcion": "Etiqueta de falla (NORMAL, FILTER_CLOGGED, BURNER_DEGRADED, DISCHARGE_JAM, HUMIDITY_SENSOR_DRIFT o PLENUM_THERMAL_LEAK) — solo necesaria para reentrenamiento"
+    }
+  ],
+  "outputs": [
+    {
+      "nombre": "window_index",
+      "descripcion": "Posición de la franja analizada dentro del fichero",
+      "interpretacion": "permite ordenar y localizar los resultados de un mismo ciclo"
+    },
+    {
+      "nombre": "cycle_id",
+      "descripcion": "Ciclo de secado al que pertenece la franja, si el fichero lo incluye",
+      "interpretacion": "permite agrupar los resultados por ciclo"
+    },
+    {
+      "nombre": "timestamp_init",
+      "descripcion": "Fecha y hora de la primera lectura de la franja",
+      "interpretacion": "marca el inicio de la ventana de 240 lecturas"
+    },
+    {
+      "nombre": "timestamp_end",
+      "descripcion": "Fecha y hora de la última lectura de la franja",
+      "interpretacion": "el resultado se refiere a esta franja de tiempo"
+    },
+    {
+      "nombre": "predicted_anomaly_label",
+      "descripcion": "Resultado del análisis de la franja",
+      "interpretacion": "'Fallo' si se supera el umbral de alerta, 'No Fallo' en caso contrario"
+    },
+    {
+      "nombre": "anomaly_probability",
+      "descripcion": "Nivel de confianza de que exista una anomalía en esa franja",
+      "interpretacion": "cuanto más cercano a 1, más seguro está el sistema de que hay una anomalía"
+    },
+    {
+      "nombre": "decision_threshold",
+      "descripcion": "Umbral de alerta usado para decidir Fallo/No Fallo (0,73)",
+      "interpretacion": "permite comprobar con qué margen se ha tomado la decisión"
+    },
+    {
+      "nombre": "Estado interpretativo",
+      "descripcion": "Estado de atención: Normal, Vigilancia o Criticidad detectada",
+      "interpretacion": "indica el nivel de atención que requiere la franja (ver apartado 5)"
+    },
+    {
+      "nombre": "Evidencia",
+      "descripcion": "Explicación del patrón detectado, por ejemplo la combinación de partes de la secadora implicadas",
+      "interpretacion": "ayuda a entender por qué se ha asignado ese estado"
+    },
+    {
+      "nombre": "Recomendacion",
+      "descripcion": "Acción sugerida al operador",
+      "interpretacion": "orienta qué revisar en la secadora; no sustituye el criterio del operador"
+    }
+  ],
+  "limitaciones": [
+    {
+      "tipo": "Datos y generalización",
+      "descripcion": "El modelo se ha entrenado y evaluado con datos sintéticos, por lo que debe validarse con datos reales del secadero antes de su uso en producción. Los cambios en las condiciones operativas, los sensores o la materia prima pueden reducir su rendimiento."
+    },
+    {
+      "tipo": "Tamaño mínimo de ventana",
+      "descripcion": "El modelo requiere al menos 240 lecturas consecutivas para generar una predicción. Los ciclos o archivos con una longitud inferior no pueden ser evaluados."
+    },
+    {
+      "tipo": "Umbral de decisión",
+      "descripcion": "El modelo utiliza un umbral de decisión de 0,73, seleccionado durante el proceso de validación. Su comportamiento deberá comprobarse con datos reales antes de su utilización en producción."
+    },
+    {
+      "tipo": "Detección incompleta",
+      "descripcion": "El recall de la clase Fallo es del 65,6 % en test, por lo que algunas anomalías pueden no detectarse. Un resultado “No Fallo” no garantiza la ausencia de problemas."
+    },
+    {
+      "tipo": "Interpretabilidad y perfiles PCC",
+      "descripcion": "Las explicaciones y perfiles PCC son aproximaciones al comportamiento del modelo y candidatos a indicadores de criticidad operacional; no constituyen diagnósticos causales ni PCC formales HACCP y requieren validación experta."
+    },
+    {
+      "tipo": "Apoyo a la decisión",
+      "descripcion": "Las recomendaciones generadas son orientativas. El sistema puede verse afectado por problemas de instrumentación y debe utilizarse como apoyo a la supervisión y al mantenimiento, no como sustituto del criterio técnico ni como sistema autónomo de control."
+    }
+  ],
+  "que_no_responde": "El modelo no indica qué pieza física exacta hay que reparar ni en qué plazo fallará — señala el perfil de la máquina principalmente afectado (por ejemplo, transferencia térmica, descarga o ventilación) y ofrece una recomendación de revisión, no un diagnóstico de pieza.",
+  "entradas_contexto": "Los datos provienen de los sensores IIoT instalados en la propia secadora (temperatura, humedad, presión, potencia del quemador, velocidad del ventilador, frecuencia de descarga), registrados de forma continua durante el ciclo de secado.",
+  "ejemplo_interpretacion": "Si para una ventana el modelo devuelve anomaly_probability=0,96 con Estado interpretativo='Criticidad detectada' y Evidencia referida a un perfil térmico-humedad, se interpreta como: alta probabilidad de fallo, con un patrón ya catalogado que combina temperatura y humedad — conviene revisar cuanto antes el sistema de transferencia térmica y evacuación de humedad. Si en cambio devuelve anomaly_probability=0,09 con Estado='Normal', la ventana no muestra indicios relevantes de anomalía.",
+  "margen_error": "En el conjunto de prueba, cuando el modelo avisa de un fallo acierta en torno al 96% de las veces, pero solo detecta alrededor de 2 de cada 3 fallos reales — es decir, es fiable cuando avisa, pero no hay que confiar en un 'No Fallo' como confirmación absoluta de normalidad.",
+  "revisar_manualmente": [
+    "El sistema de monitorización inteligente del secador de grano evalúa de forma continua el proceso para detectar anomalías y simplificar la toma de decisiones. Para ello, traduce los cálculos internos del modelo y las explicaciones de la capa de XAI en tres estados de atención operativos:",
+    "Normal: El proceso opera de manera estable y dentro de los márgenes de seguridad. No requiere ninguna intervención.",
+    "Vigilancia: Se detectan comportamientos ambiguos o ligeros desacoples en el sistema. No representa un fallo confirmado, sino un aviso preventivo para prestar mayor atención a la evolución del proceso.",
+    "Criticidad detectada: Existe una alta probabilidad de anomalía respaldada de forma sólida por los patrones del proceso. Requiere una inspección visual y técnica directa.",
+    "Cuando el sistema detecte la necesidad de una inspección (estado Vigilancia o Criticidad detectada), indicará el perfil de la máquina principalmente afectado (p.ej. descarga, transferencia térmica) y ofrecerá una recomendación al operador.",
+    "Es fundamental remarcar que las alertas y recomendaciones del sistema funcionan estrictamente como una herramienta de apoyo contextual para la toma de decisiones y nunca como un diagnóstico determinista absoluto."
+  ],
+  "que_no_hace": [
+    "No sustituye la inspección física periódica de la maquinaria.",
+    "No garantiza la detección de todos los fallos reales (detecta el 65,6 %).",
+    "No identifica la pieza exacta a reparar, solo ofrece recomendaciones sobre el subsistema/perfil que podría estar implicado en mayor medida.",
+    "No ha sido validado todavía con datos reales de planta, solo con datos sintéticos."
+  ],
+  "puede_equivocarse": "Sí puede equivocarse: sobre todo puede dejar pasar fallos reales (falso negativo) con más frecuencia que dar falsas alarmas. Es una ayuda para priorizar revisiones, no una garantía de que la secadora está en buen estado cuando no avisa.",
+  "kpis": [
+    {
+      "kpi": "AUC-ROC",
+      "valor_umbral": "≥ 0,850",
+      "descripcion": "Capacidad de discriminación global entre estados normales y anómalos. En prueba: 0,912 (cumple)."
+    },
+    {
+      "kpi": "F1 Macro",
+      "valor_umbral": "≥ 0,750",
+      "descripcion": "Equilibrio global entre precisión y sensibilidad (recall). En prueba: 0,867 (cumple)."
+    },
+    {
+      "kpi": "Recall Macro",
+      "valor_umbral": "≥ 0,750",
+      "descripcion": "Detección equilibrada de ambas clases. En prueba: 0,825 (cumple)."
+    },
+    {
+      "kpi": "Precision Fallo",
+      "valor_umbral": "≥ 0,900",
+      "descripcion": "Minimizar falsas alarmas en producción: cuando el sistema avisa de un fallo, acierta en el 95,7 % de los casos (cumple)."
+    },
+    {
+      "kpi": "Recall Fallo",
+      "valor_umbral": "≥ 0,600",
+      "descripcion": "Detectar una fracción significativa de los fallos reales: detecta 2 de cada 3 (65,6 %, cumple). Requiere validación con datos reales antes de fijar objetivos de negocio."
+    }
+  ]
+}

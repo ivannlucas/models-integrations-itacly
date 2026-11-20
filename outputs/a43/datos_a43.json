@@ -1,73 +1,269 @@
 {
   "model_id": "a43",
   "model_slug": "cereals-dnsl-anomaly-fault-detection",
-  "fecha": "Agosto 2026",
+  "fecha": "Noviembre 2026",
   "model_key": "ml43-cereals-dnsl-anomaly-fault-detection",
   "version": "1.0.0",
-  "descripcion": "Modelo híbrido Deep Neuro-Fuzzy (BiLSTM + reglas fuzzy tipo ANFIS/TSK, fusión tardía) que clasifica ventanas de 180 minutos de telemetría de un horno industrial de procesado de cereales como Normal o Fallo. Incorpora una capa XAI (SHAP sobre la rama temporal + activación de reglas fuzzy) que genera un estado interpretativo, bloques de subsistema implicados y acciones correctivas recomendadas (CU43+CU44 integrados en un único plugin).",
+  "descripcion": "Modelo híbrido Deep Neuro-Fuzzy (BiLSTM + reglas fuzzy tipo ANFIS/TSK, fusión tardía) que clasifica ventanas de 180 registros de telemetría de un horno industrial de procesado de cereales como Normal o Fallo. Incorpora una capa XAI (SHAP sobre la rama temporal + activación de reglas fuzzy) que genera un estado interpretativo, los bloques de subsistema implicados y acciones correctivas recomendadas (casos de uso 43 y 44 servidos como un único modelo).",
   "task_type": "classification_binary_timeseries_windowed",
   "framework": "PyTorch (torch.nn.LSTM + capa fuzzy ANFIS diferenciable) + SHAP (GradientExplainer) + scikit-learn (StandardScaler)",
   "artefacto": "best_dnf_model.pt (checkpoint + model_cfg), scaler.pkl (scaler_x + scaler_num), xai_background.npy (background SHAP)",
   "objetivo": "Detectar de forma temprana anomalías y fallos incipientes en hornos industriales de procesado de cereales (aislamiento térmico, resistencias, refractario, sensores, válvula de gas, ventilador), reduciendo el mantenimiento reactivo y las paradas no planificadas mediante mantenimiento predictivo.",
-  "caso_uso": "El sistema de monitorización del horno envía periódicamente los últimos registros de los 13 sensores (temperatura por zonas, presión, potencia, flujo de gas, humedad, velocidad de ventilador, etc.) al endpoint de predicción, en modo batch (CSV de uno o varios ciclos completos) o inline (última lectura, evaluada como punto de operación estacionario). El modelo devuelve, por cada ventana de 180 minutos, la probabilidad de anomalía y, cuando se supera el umbral, un informe con el subsistema más probablemente implicado y acciones correctivas sugeridas.",
+  "caso_uso": "El sistema de monitorización del horno aporta los últimos registros de los 13 sensores (temperatura por zonas, presión, potencia, flujo de gas, humedad, velocidad de ventilador, etc.) al endpoint de predicción, en modo batch (CSV de uno o varios ciclos completos). El modelo devuelve, por cada ventana de 180 registros, la probabilidad de anomalía, el estado interpretativo y, cuando el estado no es Normal, el subsistema más probablemente implicado y las acciones correctivas sugeridas.",
   "inputs": [
-    {"nombre": "temp_zona1", "tipo": "float", "descripcion": "Temperatura zona 1 del horno — entrada (°C)", "obligatorio": "Sí", "valor_defecto": "-"},
-    {"nombre": "temp_zona2", "tipo": "float", "descripcion": "Temperatura zona 2 del horno — parte media (°C)", "obligatorio": "Sí", "valor_defecto": "-"},
-    {"nombre": "temp_zona3", "tipo": "float", "descripcion": "Temperatura zona 3 del horno — salida (°C)", "obligatorio": "Sí", "valor_defecto": "-"},
-    {"nombre": "temp_salida_gases", "tipo": "float", "descripcion": "Temperatura de salida de gases de escape (°C)", "obligatorio": "Sí", "valor_defecto": "-"},
-    {"nombre": "presion_camara", "tipo": "float", "descripcion": "Presión interna de la cámara (mbar)", "obligatorio": "Sí", "valor_defecto": "-"},
-    {"nombre": "presion_ventilacion", "tipo": "float", "descripcion": "Presión del sistema de ventilación/extracción (mbar)", "obligatorio": "Sí", "valor_defecto": "-"},
-    {"nombre": "potencia_kw", "tipo": "float", "descripcion": "Potencia eléctrica consumida (kW)", "obligatorio": "Sí", "valor_defecto": "-"},
-    {"nombre": "flujo_gas", "tipo": "float", "descripcion": "Flujo de gas del combustible (m³/h)", "obligatorio": "Sí", "valor_defecto": "-"},
-    {"nombre": "humedad_relativa", "tipo": "float", "descripcion": "Humedad relativa interior (%)", "obligatorio": "Sí", "valor_defecto": "-"},
-    {"nombre": "temp_ambiente", "tipo": "float", "descripcion": "Temperatura ambiente exterior (°C)", "obligatorio": "Sí", "valor_defecto": "-"},
-    {"nombre": "setpoint_temp", "tipo": "float", "descripcion": "Temperatura objetivo programada (°C)", "obligatorio": "Sí", "valor_defecto": "-"},
-    {"nombre": "posicion_valvula", "tipo": "float", "descripcion": "Posición de la válvula de gas (%)", "obligatorio": "Sí", "valor_defecto": "-"},
-    {"nombre": "velocidad_ventilador", "tipo": "float", "descripcion": "Velocidad del ventilador de circulación (RPM)", "obligatorio": "Sí", "valor_defecto": "-"},
-    {"nombre": "timestamp", "tipo": "datetime", "descripcion": "Marca temporal de cada registro, para ordenar cronológicamente", "obligatorio": "Sí", "valor_defecto": "-"},
-    {"nombre": "cycle_id", "tipo": "int/string", "descripcion": "Identificador de ciclo de secado. Si falta, el CSV se trata como una única serie temporal continua", "obligatorio": "No", "valor_defecto": "serie única"}
+    {
+      "nombre": "temp_zona1",
+      "tipo": "float",
+      "descripcion": "Temperatura zona 1 del horno — entrada (°C)",
+      "obligatorio": "Sí",
+      "valor_defecto": "-"
+    },
+    {
+      "nombre": "temp_zona2",
+      "tipo": "float",
+      "descripcion": "Temperatura zona 2 del horno — parte media (°C)",
+      "obligatorio": "Sí",
+      "valor_defecto": "-"
+    },
+    {
+      "nombre": "temp_zona3",
+      "tipo": "float",
+      "descripcion": "Temperatura zona 3 del horno — salida (°C)",
+      "obligatorio": "Sí",
+      "valor_defecto": "-"
+    },
+    {
+      "nombre": "temp_salida_gases",
+      "tipo": "float",
+      "descripcion": "Temperatura de salida de gases de escape (°C)",
+      "obligatorio": "Sí",
+      "valor_defecto": "-"
+    },
+    {
+      "nombre": "presion_camara",
+      "tipo": "float",
+      "descripcion": "Presión interna de la cámara (mbar)",
+      "obligatorio": "Sí",
+      "valor_defecto": "-"
+    },
+    {
+      "nombre": "presion_ventilacion",
+      "tipo": "float",
+      "descripcion": "Presión del sistema de ventilación/extracción (mbar)",
+      "obligatorio": "Sí",
+      "valor_defecto": "-"
+    },
+    {
+      "nombre": "potencia_kw",
+      "tipo": "float",
+      "descripcion": "Potencia eléctrica consumida (kW)",
+      "obligatorio": "Sí",
+      "valor_defecto": "-"
+    },
+    {
+      "nombre": "flujo_gas",
+      "tipo": "float",
+      "descripcion": "Flujo de gas del combustible (m³/h)",
+      "obligatorio": "Sí",
+      "valor_defecto": "-"
+    },
+    {
+      "nombre": "humedad_relativa",
+      "tipo": "float",
+      "descripcion": "Humedad relativa interior (%)",
+      "obligatorio": "Sí",
+      "valor_defecto": "-"
+    },
+    {
+      "nombre": "temp_ambiente",
+      "tipo": "float",
+      "descripcion": "Temperatura ambiente exterior (°C)",
+      "obligatorio": "Sí",
+      "valor_defecto": "-"
+    },
+    {
+      "nombre": "setpoint_temp",
+      "tipo": "float",
+      "descripcion": "Temperatura objetivo programada (°C)",
+      "obligatorio": "Sí",
+      "valor_defecto": "-"
+    },
+    {
+      "nombre": "posicion_valvula",
+      "tipo": "float",
+      "descripcion": "Posición de la válvula de gas (%)",
+      "obligatorio": "Sí",
+      "valor_defecto": "-"
+    },
+    {
+      "nombre": "velocidad_ventilador",
+      "tipo": "float",
+      "descripcion": "Velocidad del ventilador de circulación (RPM)",
+      "obligatorio": "Sí",
+      "valor_defecto": "-"
+    },
+    {
+      "nombre": "timestamp",
+      "tipo": "datetime",
+      "descripcion": "Marca temporal de cada registro, para ordenar cronológicamente",
+      "obligatorio": "Sí",
+      "valor_defecto": "-"
+    },
+    {
+      "nombre": "cycle_id",
+      "tipo": "int/string",
+      "descripcion": "Identificador de ciclo de horneado. Si falta, el CSV se trata como una única serie temporal continua",
+      "obligatorio": "No",
+      "valor_defecto": "-"
+    }
   ],
   "outputs": [
-    {"nombre": "predicted_anomaly_label", "tipo": "string", "descripcion": "Etiqueta binaria de la ventana", "rango": "{'Fallo', 'No Fallo'}", "interpretacion": "'Fallo' si anomaly_probability >= decision_threshold (0.41)"},
-    {"nombre": "anomaly_probability", "tipo": "float", "descripcion": "Probabilidad de anomalía de la mezcla tardía (0.7·rama fuzzy + 0.3·rama LSTM), sigmoide aplicada", "rango": "[0, 1]", "interpretacion": "valores cercanos a 1 indican alta confianza en anomalía"},
-    {"nombre": "decision_threshold", "tipo": "float", "descripcion": "Umbral de decisión aplicado", "rango": "0.41 (fijo, seleccionado en validación)", "interpretacion": "trazabilidad del punto de corte usado en esa predicción"},
-    {"nombre": "corrective_actions", "tipo": "objeto (CU44)", "descripcion": "Estado interpretativo, bloques de subsistema implicados y acciones sugeridas — solo presente cuando la ventana se marca como anómala", "rango": "4 estados: Normal / Normal con señales / Alerta no confirmada / Anomalía confirmada", "interpretacion": "guía priorizada de qué revisar primero (combustión/flujo, térmico, ventilación/presión)"}
+    {
+      "nombre": "window_index",
+      "tipo": "int",
+      "descripcion": "Índice secuencial de la ventana dentro de la serie analizada",
+      "rango": "1, 2, 3…",
+      "interpretacion": "permite ordenar y referenciar los resultados de un mismo ciclo o serie"
+    },
+    {
+      "nombre": "cycle_id",
+      "tipo": "int/string",
+      "descripcion": "Identificador de ciclo heredado del campo de entrada cycle_id; vacío si el CSV no lo incluye",
+      "rango": "-",
+      "interpretacion": "permite agrupar los resultados por ciclo de horneado"
+    },
+    {
+      "nombre": "timestamp_init",
+      "tipo": "datetime",
+      "descripcion": "Marca temporal del primer registro de la ventana",
+      "rango": "-",
+      "interpretacion": "inicio del intervalo de 180 registros analizado"
+    },
+    {
+      "nombre": "timestamp_end",
+      "tipo": "datetime",
+      "descripcion": "Marca temporal del último registro de la ventana",
+      "rango": "-",
+      "interpretacion": "fin del intervalo; el estado devuelto se refiere a esta franja"
+    },
+    {
+      "nombre": "predicted_anomaly_label",
+      "tipo": "string",
+      "descripcion": "Etiqueta binaria de la ventana",
+      "rango": "{'Fallo', 'No Fallo'}",
+      "interpretacion": "'Fallo' si anomaly_probability ≥ decision_threshold (0,41)"
+    },
+    {
+      "nombre": "anomaly_probability",
+      "tipo": "float",
+      "descripcion": "Probabilidad de anomalía = sigmoid(0,7 · logit_fuzzy + 0,3 · logit_temporal)",
+      "rango": "[0, 1]",
+      "interpretacion": "valores cercanos a 1 indican alta confianza en anomalía"
+    },
+    {
+      "nombre": "decision_threshold",
+      "tipo": "float",
+      "descripcion": "Umbral de decisión aplicado",
+      "rango": "0,41 (fijo, seleccionado en validación)",
+      "interpretacion": "trazabilidad del punto de corte usado en esa predicción"
+    },
+    {
+      "nombre": "Estado del sistema",
+      "tipo": "string",
+      "descripcion": "Estado interpretativo de la ventana, calculado a partir del margen de anomaly_probability respecto al umbral, del acuerdo entre la rama fuzzy y la rama temporal y del soporte de las reglas fuzzy activadas",
+      "rango": "Normal / Normal con señales / Alerta no confirmada / Anomalía confirmada",
+      "interpretacion": "indica la gravedad de la situación detectada y el nivel de intervención recomendado"
+    },
+    {
+      "nombre": "Subsistemas con alteraciones",
+      "tipo": "list[string]",
+      "descripcion": "Bloques funcionales del horno con mayor evidencia de alteración (hasta 3), puntuados combinando la evidencia de la rama fuzzy y de SHAP sobre la rama temporal",
+      "rango": "combustión/control de flujo, térmico, ventilación/presión",
+      "interpretacion": "señala por dónde empezar a revisar; solo presente cuando la ventana no es Normal"
+    },
+    {
+      "nombre": "Variables con alteraciones",
+      "tipo": "list[string]",
+      "descripcion": "Hasta 3 señales de sensor de los bloques anteriores con mayor respaldo en las explicaciones de ambas ramas",
+      "rango": "subconjunto de los 13 sensores de entrada",
+      "interpretacion": "apoya el diagnóstico de la causa; solo presente cuando la ventana no es Normal"
+    },
+    {
+      "nombre": "Acciones correctivas recomendadas",
+      "tipo": "list[string]",
+      "descripcion": "Acciones sugeridas en función del estado interpretativo (hasta 4 en Anomalía confirmada, hasta 2 en Alerta no confirmada, 1 en Normal con señales; en Normal, mensaje de monitorización ordinaria)",
+      "rango": "0 a 4 acciones",
+      "interpretacion": "orientan al personal de mantenimiento; no sustituyen su criterio"
+    }
   ],
   "metricas": [
-    {"nombre": "Accuracy (test)", "valor": "0.989", "descripcion": "Exactitud global sobre el conjunto de test hold-out (checkpoint entregado, verificado)", "interpretacion": "el modelo clasifica correctamente el 98.9% de las ventanas de test"},
-    {"nombre": "F1 clase Fallo (test)", "valor": "0.905", "descripcion": "F1-score de la clase minoritaria (Fallo) sobre test — verificado tras integración", "interpretacion": "buen equilibrio entre detectar fallos reales y evitar falsas alarmas"},
-    {"nombre": "Precision/Recall Fallo (test)", "valor": "0.888 / 0.924", "descripcion": "De cada 100 alertas de fallo, ~89 son reales; se detecta el 92.4% de los fallos reales", "interpretacion": "prioriza no perder fallos reales, asumiendo algo más de falsas alarmas que otras configuraciones del mismo modelo"},
-    {"nombre": "AUC-ROC clase Fallo (test)", "valor": "0.995", "descripcion": "Capacidad discriminativa entre Normal y Fallo — verificado tras integración", "interpretacion": "separación casi perfecta entre ambas clases en el dataset sintético de test"},
-    {"nombre": "Accuracy / Recall Fallo (memoria CU43 v1.4, declarados)", "valor": "0.928 / 0.663", "descripcion": "Cifras reportadas en la memoria entregada (v1.4, 29/06/2026) — corresponden a una configuración de modelo distinta a la del checkpoint finalmente entregado (ver observaciones técnicas)", "interpretacion": "se incluyen por trazabilidad documental; las cifras de referencia para producción son las verificadas arriba, no estas"}
+    {
+      "nombre": "AUC-ROC",
+      "valor": "0,995",
+      "descripcion": "Área bajo la curva ROC para distinguir ventanas Fallo de ventanas No Fallo, considerando todos los umbrales posibles (test hold-out, 3.000 ventanas)",
+      "interpretacion": "Capacidad de discriminación muy elevada entre ambas clases."
+    },
+    {
+      "nombre": "F1 macro",
+      "valor": "0,950",
+      "descripcion": "Media no ponderada del F1 de las clases Fallo y No Fallo",
+      "interpretacion": "Muy buen equilibrio entre detección y fiabilidad."
+    },
+    {
+      "nombre": "Precision macro",
+      "valor": "0,942",
+      "descripcion": "Media no ponderada de la precisión de ambas clases",
+      "interpretacion": "Predicciones fiables en promedio para ambas clases."
+    },
+    {
+      "nombre": "Recall macro",
+      "valor": "0,959",
+      "descripcion": "Media no ponderada de la sensibilidad de ambas clases",
+      "interpretacion": "Alta capacidad de identificación de los casos reales en ambas clases."
+    },
+    {
+      "nombre": "F1 por clase",
+      "valor": "No Fallo 0,994 · Fallo 0,905",
+      "descripcion": "F1 de cada clase en test",
+      "interpretacion": "El F1 de la clase Fallo, minoritaria, es algo menor, coherente con el desbalance de clases."
+    },
+    {
+      "nombre": "Precision por clase",
+      "valor": "No Fallo 0,995 · Fallo 0,888",
+      "descripcion": "Precisión de cada clase en test",
+      "interpretacion": "De todas las ventanas que el modelo marca como Fallo, el 88,8 % son realmente fallos, ligeramente por debajo del criterio de éxito de la memoria (≥ 0,900)."
+    },
+    {
+      "nombre": "Recall por clase",
+      "valor": "No Fallo 0,993 · Fallo 0,924",
+      "descripcion": "Sensibilidad de cada clase en test",
+      "interpretacion": "Detecta el 92,4 % de las ventanas con fallo real; la tasa de falsas alarmas sobre la operación normal es de aproximadamente el 0,7 %."
+    }
   ],
   "limitaciones": [
-    {"tipo": "Dataset 100% sintético", "descripcion": "El modelo se entrena y evalúa sobre datos generados por un simulador propio (src/data_processing/generate_dataset.py), ante la ausencia de datos reales etiquetados de hornos industriales por confidencialidad del sector. Requiere validación con datos reales antes de cualquier despliegue en producción."},
-    {"tipo": "Discrepancia memoria vs. checkpoint entregado", "descripcion": "La memoria CU43 v1.4 describe hiperparámetros y métricas de una configuración de modelo anterior a la del checkpoint realmente entregado (reentrenado ~2 semanas después de cerrar la memoria). Este plugin usa el checkpoint real, verificado — ver inbox/a43/manifest.yaml known_issues."},
-    {"tipo": "Sin modo 'una fila = una predicción'", "descripcion": "La unidad mínima de inferencia es una ventana de 180 registros consecutivos (3 horas a 1 muestra/minuto). El modo inline aproxima un punto de operación puntual repitiendo la lectura 180 veces (ventana sintética estacionaria), no sustituye a un histórico real."},
-    {"tipo": "Recall moderado en ciertos tipos de falla", "descripcion": "El checkpoint entregado, pese a un recall global de 0.924, puede no detectar el 100% de las instancias de un tipo de falla concreto (ver caso 'cycle_2519_valvula_obstruida' del golden dataset, un falso negativo real reproducido y documentado, no oculto)."}
+    {
+      "tipo": "Datos de entrenamiento sintéticos",
+      "descripcion": "El modelo ha sido entrenado y evaluado con datos sintéticos generados específicamente para el proyecto. Sus métricas, comportamiento y capacidad de generalización deben validarse con datos reales del horno de cereales antes de su uso en producción."
+    },
+    {
+      "tipo": "Tamaño mínimo de ventana",
+      "descripcion": "El modelo requiere al menos 180 lecturas consecutivas para generar una predicción. Los ciclos o archivos con una longitud inferior no pueden ser evaluados."
+    },
+    {
+      "tipo": "Umbral de decisión",
+      "descripcion": "El modelo utiliza un umbral de decisión de 0,41, seleccionado durante el proceso de validación. Su comportamiento deberá comprobarse con datos reales antes de su utilización en producción."
+    },
+    {
+      "tipo": "Interpretabilidad",
+      "descripcion": "El modelo proporciona información sobre los factores y patrones relevantes para cada predicción, facilitando la comprensión de las anomalías y apoyando el diagnóstico por parte del personal técnico. La interpretación final debe realizarse en el contexto del proceso y con conocimiento experto."
+    },
+    {
+      "tipo": "Recomendaciones operativas",
+      "descripcion": "Las acciones propuestas se generan a partir del modo de fallo detectado y de la información proporcionada por la capa de interpretabilidad. Constituyen orientaciones para apoyar la toma de decisiones y no sustituyen la valoración del personal técnico cualificado."
+    }
   ],
-  "fichero_nombre": "golden_cycles.csv (7 ciclos extraídos de data/splits/test.csv: 2400, 2407, 2417, 2424, 2430, 2443, 2519)",
-  "fichero_registros": "4200 filas (7 ciclos × 600 registros/ciclo) → 35 ventanas de salida (5 por ciclo)",
-  "fichero_resultado": "1 ciclo NORMAL (0 ventanas anómalas) + 6 ciclos con falla real (aislamiento, resistencia, refractario, sensor descalibrado, ventilador, válvula), con 1-2 ventanas anómalas detectadas cada uno salvo el de válvula obstruida (falso negativo real, documentado) — ver outputs/a43/verification_report.md para el detalle ventana a ventana.",
-  "observaciones_tecnicas": "CPU estándar x86-64 suficiente para inferencia; GPU CUDA recomendable solo para reentrenamiento. RAM 8 GB mínimo. Artefactos: ~215 KB (checkpoint) + ~4 KB (scalers) + ~2.3 MB (background SHAP). Librerías núcleo: torch 2.5.1, numpy 2.4.6, pandas 3.0.3, scikit-learn 1.8.0, shap 0.51.0 (verificado con versiones ligeramente superiores en el entorno de integración, sin incidencias — ver known_issues del manifest). La capa XAI (SHAP GradientExplainer) añade latencia notable por ventana anómala explicada; se ejecuta solo cuando la ventana supera el umbral de decisión.",
-
-  "que_no_responde": "El modelo no indica la causa raíz exacta del fallo ni garantiza qué componente ha fallado — señala el subsistema con más evidencia (combustión/flujo, térmico o ventilación/presión) y sugiere qué revisar primero. La confirmación final siempre corresponde al personal de mantenimiento.",
-  "entradas_contexto": "Los datos provienen de la red de sensores IIoT instalada en el horno (temperaturas por zona, presiones, potencia, flujo de gas, humedad y velocidad de ventilador), muestreados típicamente cada minuto y volcados a un fichero CSV por ciclo de secado.",
-  "ejemplo_interpretacion": "Si para una ventana de 3 horas el sistema devuelve anomaly_probability = 0.96 (por encima del umbral 0.41), la ventana se marca como 'Fallo' y, si el estado interpretativo es 'Anomalía confirmada', se muestran las acciones sugeridas — por ejemplo, revisar la estabilidad térmica del horno si el bloque principal señalado es 'térmico'.",
-  "margen_error": "Sobre el conjunto de prueba verificado, el modelo acierta en el 98.9% de las ventanas evaluadas. Quedan sin detectar aproximadamente 1 de cada 13 fallos reales (recall 92.4%) — una probabilidad de anomalía baja no es garantía absoluta de normalidad, especialmente en fallos de aparición gradual.",
-  "revisar_manualmente": [
-    "Cuando el estado interpretativo sea 'Alerta no confirmada': el modelo detecta indicios pero no hay acuerdo suficiente entre sus dos mecanismos de análisis internos.",
-    "Cuando el estado sea 'Normal con señales': no se supera el umbral de fallo, pero hay indicios que conviene vigilar en los siguientes ciclos.",
-    "Ante cualquier fallo de tipo válvula obstruida: es el escenario donde el modelo entregado tiene más dificultad para detectar el fallo (ver limitaciones)."
-  ],
-  "que_no_hace": [
-    "No sustituye la inspección física del horno ni el criterio del personal de mantenimiento.",
-    "No funciona con una sola lectura puntual sin contexto — necesita como mínimo 3 horas de histórico de sensores por ciclo (o una lectura repetida como aproximación).",
-    "No ha sido validado todavía con datos reales de planta — el entrenamiento es 100% sobre datos sintéticos."
-  ],
-  "puede_equivocarse": "Sí, como cualquier modelo predictivo. En el conjunto de prueba detecta correctamente el 92.4% de los fallos reales, con muy pocas falsas alarmas (menos del 12% de las alertas son falsos positivos). Es una ayuda a la decisión que prioriza qué ciclos revisar antes, no una garantía de detección del 100% de los fallos ni un sustituto del mantenimiento preventivo habitual.",
-  "kpis": [
-    {"kpi": "Tasa de detección de fallos reales (recall)", "valor_umbral": "≥ 90%", "descripcion": "De cada 10 fallos reales en el horno, el modelo señala al menos 9 — verificado en el 92.4% sobre el conjunto de prueba."},
-    {"kpi": "Fiabilidad de las alertas (precisión)", "valor_umbral": "≥ 85%", "descripcion": "De cada 10 alertas de fallo generadas, al menos 8-9 corresponden a un fallo real — verificado en el 88.8% sobre el conjunto de prueba."}
-  ]
+  "fichero_nombre": "data/input/datos_prueba.csv (fichero de ejemplo incluido en el repositorio del modelo)",
+  "fichero_registros": "31.200 registros (52 ciclos de 600 registros) → 260 ventanas de 180 registros",
+  "fichero_resultado": "Con el modelo entregado y el umbral 0,41: 22 ventanas Fallo y 238 No Fallo. Cada ventana incluye además su estado interpretativo, los subsistemas y variables con alteraciones y las acciones correctivas recomendadas.",
+  "observaciones_tecnicas": "CPU estándar x86-64 (mínimo 2 vCPU) suficiente para inferencia; GPU CUDA con 4–8 GB de VRAM recomendable solo para reentrenamiento. RAM 8 GB mínimo, 16 GB recomendado. Artefactos: ~215 KB (checkpoint) + ~4 KB (scalers) + ~2,3 MB (background SHAP). Librerías núcleo: torch 2.5.1, numpy 2.4.6, pandas 3.0.3, scikit-learn 1.8.0 y shap 0.51.0 (solo para la capa XAI). La capa XAI (n_background 64, top_rules 5, top_variables 8, top_blocks 3, min_block_score 0,10) se ejecuta para todas las ventanas, también las No Fallo, para poder distinguir Normal de Normal con señales; es la parte más costosa de la inferencia. Tras un reentrenamiento, el background SHAP se re-escala con el nuevo escalador y se recomienda recalibrar el etiquetado interpretativo y los bloques de acción."
 }

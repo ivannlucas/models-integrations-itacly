@@ -106,3 +106,19 @@ contra el plugin real servido por HTTP. Puntos a destacar para el revisor humano
 4. No existe un modo `predict_inline` de "una fila = una predicción": la unidad mínima de
    inferencia es una ventana de 240 lecturas consecutivas, igual que en el precedente
    `m47_dnsl_fallas_maquinaria_pasteurizado`.
+
+## Revisión de la capa XAI (2026-11-20)
+
+Contrastada con la memoria CU45 v1.2 (Sec. 3.3, 6.3.2, 7.4 y 9.2 paso 4), `XAI.ipynb` y el
+`config/config.yaml` original:
+
+- **Configuración PCC fiel.** Subsistemas, catálogo de perfiles, `monitor_policy`
+  (0.35 / 0.15 / 0.75 / 0.05 / 1) y parámetros SHAP (64 / 5 / 8) coinciden con el original; los
+  módulos `_vendor/xai/` solo difieren en formato.
+- **Background SHAP tras reentrenar (corregido).** `train()` reajusta `scaler_x` pero subía a
+  MLflow el `xai_background.npy` del modelo base, escalado con el `scaler_x` antiguo. Ahora se
+  re-expresa en el espacio del nuevo escalador (`app/domain/services/shap_background.py`),
+  equivalente a reconstruirlo desde `xai_background.csv` (memoria Sec. 9.2, paso 2.1A).
+- **Auditoría del monitor PCC tras reentrenar: manual, no automatizable.** Un run reentrenado usa
+  el catálogo y la política calibrados para el modelo entregado; la memoria pide revisarlos con
+  `XAI.ipynb`. Documentado en las fichas.
