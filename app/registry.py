@@ -315,6 +315,13 @@ from app.plugins.ml28_meat_neuroevolutionary_raw_materials_prediction.predict_dt
     PredictRequest as Ml28Meat_Request,
     PredictResponse as Ml28Meat_Response,
 )
+from app.plugins.ml39_wine_predictive_maintenance_xai.plugin import (
+    Ml39WinePredictiveMaintenanceXaiPlugin,
+)
+from app.plugins.ml39_wine_predictive_maintenance_xai.predict_dto import (
+    PredictRequest as Ml39Wine_Request,
+    PredictResponse as Ml39Wine_Response,
+)
 from app.plugins.ml43_cereals_dnsl_anomaly_fault_detection.plugin import (
     Ml43CerealsDnslAnomalyFaultDetectionPlugin,
 )
@@ -717,6 +724,15 @@ REGISTRY: list[ModelEntry] = [
         predict_request_type=Ml28Meat_Request,
         predict_response_type=Ml28Meat_Response,
         extra_predict_exceptions=(),
+    ),
+    ModelEntry(
+        model_id="ml39-wine-predictive-maintenance-xai",
+        prefix="/models/ml39-wine-predictive-maintenance-xai",
+        version="1.0.0",
+        plugin_class=Ml39WinePredictiveMaintenanceXaiPlugin,
+        predict_request_type=Ml39Wine_Request,
+        predict_response_type=Ml39Wine_Response,
+        extra_predict_exceptions=(DataContractError,),
     ),
     ModelEntry(
         model_id="ml43-cereals-dnsl-anomaly-fault-detection",
