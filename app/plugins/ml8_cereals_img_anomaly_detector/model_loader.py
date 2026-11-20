@@ -103,11 +103,8 @@ _ARCH_CLASSES = {
 
 def base_artifact_file(filename: str) -> str | None:
     """Local path of an optional file of the base artifact folder, or None if absent."""
-    try:
-        path = _store.path(filename)
-    except FileNotFoundError:
-        return None
-    return str(path) if path.exists() else None
+    path = _store.optional_path(filename)
+    return None if path is None else str(path)
 
 
 def load_model_bundle() -> dict:

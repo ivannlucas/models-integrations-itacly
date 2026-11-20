@@ -408,6 +408,14 @@ class ArtifactStore:
                 )
         return local
 
+    def optional_path(self, filename: str) -> Path | None:
+        """Like path() for a file the model can serve without: None when it is not there."""
+        try:
+            local = self.path(filename)
+        except FileNotFoundError:
+            return None
+        return local if local.exists() else None
+
     def download_all_if_needed(self) -> None:
         """Download every file of the active version from S3, skipping up-to-date files.
 
