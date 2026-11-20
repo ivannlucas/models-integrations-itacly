@@ -31,11 +31,23 @@ class PredictInlineRequest(PluginDTO):
 class PredictInlineResponse(PluginDTO):
     """DTO para respuesta de predicción en modo inline."""
     model_id: str
-    prediction: str        # especie dominante (fly | mos | tick | no_vectors)
+    prediction: str        # especie dominante (fly | mos | tick | no_vectors | desconocido)
     confidence: float
-    vectors_count: int
+    vectors_count: int     # vectores reconocidos (sin contar los «desconocido»)
     detections: List[Dict[str, Any]]
     species_summary: Dict[str, int]
+    unknown_count: int = Field(
+        0, description="Detecciones cuyo recorte no se parece a ninguna mosca, mosquito o "
+        "garrapata de entrenamiento (species 'desconocido' en detections)"
+    )
+    es_desconocido: bool = Field(
+        False, description="Hay detecciones pero ninguna es un vector reconocido: prediction "
+        "vale 'desconocido'"
+    )
+    umbral_ood: float | None = Field(
+        None, description="Umbral de puntuacion_ood (por detección) a partir del cual el "
+        "recorte es 'desconocido'; null si el filtro no está disponible"
+    )
     annotated_image: str    # imagen con bboxes dibujadas, base64 JPEG
     heatmap_crops: List[Dict[str, Any]] = Field(default_factory=list)    # ver build_heatmap_crops
 
