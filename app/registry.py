@@ -477,7 +477,7 @@ REGISTRY: list[ModelEntry] = [
         plugin_class=Ml10DairyDiseaseVectorDetectionPlugin,
         predict_request_type=Ml10Dairy_Request,
         predict_response_type=Ml10Dairy_Response,
-        extra_predict_exceptions=(),
+        extra_predict_exceptions=(InvalidImageError,),
         train_request_type=Ml10Dairy_TrainReq,
         train_response_type=Ml10Dairy_TrainResp,
     ),

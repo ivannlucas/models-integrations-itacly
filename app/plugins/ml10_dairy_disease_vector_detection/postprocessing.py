@@ -8,10 +8,13 @@ from typing import Any
 import torch
 from PIL import Image, ImageDraw
 
+from app.domain.services.feature_ood import UNKNOWN_LABEL
+
 SPECIES_COLORS: dict[str, tuple[int, int, int]] = {
     "fly": (220, 80, 80),
     "mos": (80, 160, 220),
     "tick": (80, 200, 80),
+    UNKNOWN_LABEL: (150, 150, 150),
 }
 MAX_ANNOTATED_SIZE = 640
 JPEG_QUALITY = 70
@@ -39,7 +42,14 @@ def _draw_detection(draw, d: dict[str, Any], scale_w: float, scale_h: float) -> 
     y2 = bbox["y2"] * scale_h
     color = SPECIES_COLORS.get(d["species"], (255, 0, 0))
     draw.rectangle([x1, y1, x2, y2], outline=color, width=2)
-    draw.text((x1 + 2, max(y1 - 14, 0)), f"{d['species']} {d['cls_conf']:.2f}", fill=color)
+    # An unknown crop has no species confidence to show: cls_conf is the network's raw one.
+    label = UNKNOWN_LABEL if _is_unknown(d) else f"{d['species']} {d['cls_conf']:.2f}"
+    draw.text((x1 + 2, max(y1 - 14, 0)), label, fill=color)
+
+
+def _is_unknown(d: dict[str, Any]) -> bool:
+    """True for a detection the «desconocido» gate rejected (ood.apply_gate)."""
+    return bool(d.get("es_desconocido")) or d.get("species") == UNKNOWN_LABEL
 
 
 def render_annotated_image(image_pil, detections: list[dict[str, Any]]) -> str:
@@ -77,7 +87,11 @@ def build_heatmap_crops(
     scene, in training or at inference, so Grad-CAM against the full scene produced an
     out-of-distribution activation with no real correspondence to any detection — and picking
     only one detection to explain hid every other vector present in the same image.
+
+    «desconocido» detections get no crop: they are not a fly, mosquito or tick, so there is
+    no species prediction to explain.
     """
+    detections = [d for d in detections if not _is_unknown(d)]
     if not detections:
         return []
     img = image_pil.convert("RGB")
@@ -129,28 +143,38 @@ def build_inline_result(
 ) -> dict[str, Any]:
     """
     Construye el dict de respuesta inline a partir de la lista de detecciones.
-    La predicción dominante es la especie con mayor cls_conf.
+
+    La predicción dominante es la especie reconocida con mayor cls_conf. Las detecciones
+    «desconocido» (el recorte no se parece a ningún vector de entrenamiento, ver ood.py) no
+    cuentan como vectores: van en ``unknown_count`` y en ``detections``. Si todas lo son, la
+    predicción es «desconocido» con confianza 0 (no hay especie reconocida).
     """
-    if not detections:
+    known = [d for d in detections if not _is_unknown(d)]
+    unknown_count = len(detections) - len(known)
+    if not known:
         return {
             "model_id": model_id,
-            "prediction": "no_vectors",
+            "prediction": UNKNOWN_LABEL if unknown_count else "no_vectors",
             "confidence": 0.0,
             "vectors_count": 0,
-            "detections": [],
+            "unknown_count": unknown_count,
+            "es_desconocido": bool(unknown_count),
+            "detections": detections,
             "species_summary": {},
         }
 
-    dominant = max(detections, key=lambda d: d["cls_conf"])
+    dominant = max(known, key=lambda d: d["cls_conf"])
     species_summary: dict[str, int] = {}
-    for d in detections:
+    for d in known:
         species_summary[d["species"]] = species_summary.get(d["species"], 0) + 1
 
     return {
         "model_id": model_id,
         "prediction": dominant["species"],
         "confidence": dominant["cls_conf"],
-        "vectors_count": len(detections),
+        "vectors_count": len(known),
+        "unknown_count": unknown_count,
+        "es_desconocido": False,
         "detections": detections,
         "species_summary": species_summary,
     }

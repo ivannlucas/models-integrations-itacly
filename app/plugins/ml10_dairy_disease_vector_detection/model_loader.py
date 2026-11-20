@@ -3,11 +3,13 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 
 import torch
 from torch import nn
 from torchvision import models
 
+from app.domain.services.feature_ood import OOD_REFERENCE_FILENAME, OodReference, load_reference
 from app.domain.services.torch_device import safe_torch_device
 from app.domain.services.ultralytics_settings import configure_ultralytics
 from app.infrastructure.artifact_store import ArtifactStore
@@ -88,3 +90,18 @@ def load_detector_and_classifier(device: torch.device):
         detector_path.name, classifier_path.name, class_names,
     )
     return detector, classifier, class_names
+
+
+def base_artifact_file(filename: str) -> str | None:
+    """Local path of an optional file of the base artifact folder, or None if absent."""
+    path = _store.optional_path(filename)
+    return None if path is None else str(path)
+
+
+def load_base_reference() -> OodReference | None:
+    """«desconocido» reference of the served classifier (ood.py); None disables the gate."""
+    path = base_artifact_file(OOD_REFERENCE_FILENAME)
+    if path is None:
+        logger.warning("ml10: sin %s — sin detección de «desconocido»", OOD_REFERENCE_FILENAME)
+        return None
+    return load_reference(os.path.dirname(path), "ml10")

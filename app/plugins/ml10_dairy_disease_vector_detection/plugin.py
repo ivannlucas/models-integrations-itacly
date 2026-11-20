@@ -15,6 +15,7 @@ import tempfile
 import time
 import zipfile
 from pathlib import Path
+from typing import NamedTuple
 
 import torch
 from torch import nn
@@ -26,6 +27,7 @@ from app.application.dto.stats_dto import InputField, OutputField, RuntimeStats,
 from app.application.dto.train_dto import TrainResponse
 from app.domain.ports.model_plugin_port import ModelPluginPort
 from app.domain.services.exceptions import InvalidImageError
+from app.domain.services.feature_ood import OOD_REFERENCE_FILENAME, OodReference
 from app.domain.services.mlflow_artifacts import (
     add_mlflow_run_to_stats,
     removing_dir,
@@ -37,8 +39,16 @@ from app.domain.services.plugin_runtime import PluginRuntimeMixin
 from app.infrastructure.archive import safe_extract_zip
 from app.infrastructure.artifact_store import ArtifactStore, download_s3_file, local_file_path
 from app.plugins.ml10_dairy_disease_vector_detection.model_loader import (
+    base_artifact_file,
+    load_base_reference,
     load_detector_and_classifier,
     safe_device,
+)
+from app.plugins.ml10_dairy_disease_vector_detection.ood import (
+    OOD_CROPS_FILENAME,
+    apply_gate,
+    build_crops_reference,
+    classify_crop_with_features,
 )
 from app.plugins.ml10_dairy_disease_vector_detection.postprocessing import (
     build_heatmap_crops,
@@ -63,6 +73,8 @@ from app.plugins.ml10_dairy_disease_vector_detection.constants import (
     DEFAULT_DET_CONF,
     FRAMEWORK,
     MODEL_ID,
+    SUPPORTED_EXTENSIONS,
+    SUPPORTED_FORMATS_TEXT,
     VERSION,
 )
 from app.plugins.ml10_dairy_disease_vector_detection.mlflow_utils import (
@@ -71,8 +83,13 @@ from app.plugins.ml10_dairy_disease_vector_detection.mlflow_utils import (
 
 logger = logging.getLogger(__name__)
 
-SUPPORTED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
 _CLASSES = ["fly", "mos", "tick"]
+# What the model accepts, appended to every input-format error the user sees (the platform
+# shows the error detail verbatim, so it must say what to send instead).
+_EXPECTED_INPUT = (
+    f"Este modelo analiza fotografías ({SUPPORTED_FORMATS_TEXT}): una imagen en la predicción "
+    "individual o un ZIP de imágenes en la predicción por lotes."
+)
 # config/config.yaml of the delivered code: `seed` (src/utils/seed.py::set_seed) and
 # `splits.max_ticks` (create_classification_splits balances ticks before splitting).
 TRAIN_SEED = 42
@@ -331,6 +348,30 @@ def _fit_classifier(model, loaders: tuple, tracker: BaseMLflowTracker, device) -
             "elapsed": time.perf_counter() - t0}
 
 
+def _retrained_reference(model: nn.Module, device, train_ds, val_ds):
+    """«desconocido» reference of a retrained classifier, or None (gate off for that run).
+
+    Built like the base one (ood.build_crops_reference) with the run's own train/val crops plus
+    the base artifact's ood_crops.zip (real detector crops and other-domain crops). Without that
+    ZIP there is no reference: the run's pre-cropped images alone would flag about half of the
+    real detector crops (outputs/a10/README_ood.md).
+    """
+    zip_path = base_artifact_file(OOD_CROPS_FILENAME)
+    if zip_path is None:
+        logger.warning("ml10: sin %s — el modelo reentrenado no detecta «desconocido»",
+                       OOD_CROPS_FILENAME)
+        return None
+    with tempfile.TemporaryDirectory(prefix="ml10_ood_") as tmp:
+        safe_extract_zip(zip_path, tmp)
+        reference = build_crops_reference(
+            model, device, [path for path, _ in train_ds.samples],
+            [path for path, _ in val_ds.samples], Path(tmp),
+        )
+    logger.info("ml10: «desconocido» recalibrado (%s, umbral=%.4f)",
+                reference.method, reference.threshold)
+    return reference
+
+
 def _is_zip_input(local_data_path: str) -> bool:
     """True for a ZIP batch input, by extension or by content.
 
@@ -354,10 +395,41 @@ def _batch_image_files(local_data_path: str, extract_dir: str | None) -> list[Pa
     else:
         image_dir = Path(local_data_path)
         if not image_dir.is_dir():
-            raise ValueError(
-                f"data_path debe ser CSV, ZIP o directorio, recibido: {local_data_path}"
+            raise InvalidImageError(
+                f"Formato de fichero no soportado ({_describe_suffix(local_data_path)}). "
+                + _EXPECTED_INPUT
             )
-    return sorted(f for f in image_dir.rglob("*") if f.suffix.lower() in SUPPORTED_EXTENSIONS)
+    files = sorted(f for f in image_dir.rglob("*") if f.suffix.lower() in SUPPORTED_EXTENSIONS)
+    if not files:
+        raise InvalidImageError(
+            f"No se encontraron imágenes en los datos enviados{_found_files(image_dir)}. "
+            + _EXPECTED_INPUT
+        )
+    return files
+
+
+def _describe_suffix(path: str) -> str:
+    """'fichero .json' / 'fichero sin extensión' for the error messages."""
+    ext = os.path.splitext(path)[1].lower()
+    return f"fichero {ext}" if ext else "fichero sin extensión"
+
+
+def _found_files(folder: Path) -> str:
+    """' (contiene: 3 .json, 1 .txt)' — what a batch input without images actually holds."""
+    counts: dict[str, int] = {}
+    for f in folder.rglob("*"):
+        if f.is_file():
+            ext = f.suffix.lower() or "sin extensión"
+            counts[ext] = counts.get(ext, 0) + 1
+    if not counts:
+        return " (está vacío)"
+    top = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))[:5]
+    return " (contiene: " + ", ".join(f"{n} {ext}" for ext, n in top) + ")"
+
+
+def _threshold(clf: "_Classifier") -> float | None:
+    """umbral_ood of a response: the gate threshold of the classifier that served it."""
+    return None if clf.ood is None else round(clf.ood.threshold, 6)
 
 
 def _image_paths_from_csv(csv_path: str) -> list[Path]:
@@ -373,18 +445,46 @@ def _image_paths_from_csv(csv_path: str) -> list[Path]:
 
 
 def _load_inline_image(features: dict):
-    """PIL image of an inline request (image_path or image_base64)."""
+    """PIL image of an inline request (image_path or image_base64).
+
+    Every failure is an InvalidImageError (HTTP 422) whose message says what was wrong and what
+    to send: the platform shows it to the user as is. A data file (JSON, CSV…) arrives either
+    without any image field (tabular source) or as bytes that are not an image.
+    """
     if features.get("image_path"):
         img_path = features["image_path"]
         ext = os.path.splitext(img_path)[1].lower()
         if ext not in SUPPORTED_EXTENSIONS:
             raise InvalidImageError(
-                f"Extensión no soportada: {ext}. Usa {SUPPORTED_EXTENSIONS}"
+                f"Formato de fichero no soportado ({_describe_suffix(img_path)}). "
+                + _EXPECTED_INPUT
             )
-        return image_path_to_pil(img_path)
+        try:
+            return image_path_to_pil(img_path)
+        except InvalidImageError as exc:
+            raise InvalidImageError(
+                "El fichero recibido no es una imagen válida o está dañado. " + _EXPECTED_INPUT
+            ) from exc
     if features.get("image_base64"):
-        return image_base64_to_pil(features["image_base64"])
-    raise ValueError("features debe contener 'image_path' o 'image_base64'")
+        try:
+            return image_base64_to_pil(features["image_base64"])
+        except InvalidImageError as exc:
+            raise InvalidImageError(
+                "El fichero recibido no es una imagen (¿un JSON, CSV u otro fichero de datos?) "
+                "o está dañado. " + _EXPECTED_INPUT
+            ) from exc
+    raise InvalidImageError(
+        "No se ha recibido ninguna imagen: los ficheros de datos (JSON, CSV…) no sirven para "
+        "este modelo. " + _EXPECTED_INPUT
+    )
+
+
+class _Classifier(NamedTuple):
+    """A crop classifier with its class names and its «desconocido» reference (None: no gate)."""
+
+    model: nn.Module
+    class_names: list[str]
+    ood: OodReference | None
 
 
 class Ml10DairyDiseaseVectorDetectionPlugin(PluginRuntimeMixin, ModelPluginPort):
@@ -402,6 +502,7 @@ class Ml10DairyDiseaseVectorDetectionPlugin(PluginRuntimeMixin, ModelPluginPort)
         self._detector = None
         self._classifier = None
         self._class_names: list[str] = []
+        self._ood: OodReference | None = None
         self._device = safe_device()
 
     def load(self) -> None:
@@ -409,9 +510,12 @@ class Ml10DairyDiseaseVectorDetectionPlugin(PluginRuntimeMixin, ModelPluginPort)
         self._detector, self._classifier, self._class_names = load_detector_and_classifier(
             self._device
         )
+        # «desconocido» reference of the served classifier (ood.py); None disables the gate.
+        self._ood = load_base_reference()
         logger.info(
-            "Plugin Ml10DairyDiseaseVectorDetection listo en device=%s, clases=%s",
-            self._device, self._class_names,
+            "Plugin Ml10DairyDiseaseVectorDetection listo en device=%s, clases=%s, "
+            "desconocido=%s", self._device, self._class_names,
+            "sí" if self._ood is not None else "no",
         )
 
     def is_loaded(self) -> bool:
@@ -421,17 +525,22 @@ class Ml10DairyDiseaseVectorDetectionPlugin(PluginRuntimeMixin, ModelPluginPort)
     # ── predict_inline ────────────────────────────────────────────────────────
 
     def _user_classifier(self, mlflow_run_id: str, tag: str) -> tuple:
-        """``(classifier, class_names, temp_dir)`` of the user's run; all None for the base one."""
+        """``(_Classifier, temp_dir)`` of the user's run; ``(None, None)`` for the base one."""
         if not mlflow_run_id:
-            return None, None, None
+            return None, None
         logger.info(
             " [%s] Loading user-trained classifier from MLflow run_id=%s", tag, mlflow_run_id
         )
         loaded = download_user_classifier_from_mlflow(mlflow_run_id)
         if not loaded:
-            return None, None, None
+            return None, None
+        model, class_names, reference, temp_dir = loaded
         logger.info(" [%s] MLflow classifier loaded successfully", tag)
-        return loaded
+        return _Classifier(model, class_names, reference), temp_dir
+
+    def _base_classifier(self) -> _Classifier:
+        """The served classifier with the base «desconocido» reference."""
+        return _Classifier(self._classifier, self._class_names, self._ood)
 
     def predict_inline(
         self,
@@ -443,7 +552,8 @@ class Ml10DairyDiseaseVectorDetectionPlugin(PluginRuntimeMixin, ModelPluginPort)
     ) -> PredictInlineResponse:
         """Ejecuta inferencia en una sola imagen (base64 o path) y devuelve la predicción."""
         self._require_loaded()
-        user_clf, user_cls_names, user_temp_dir = self._user_classifier(mlflow_run_id, "INLINE")
+        user_clf, user_temp_dir = self._user_classifier(mlflow_run_id, "INLINE")
+        clf = user_clf or self._base_classifier()
 
         # The user model's temp dir is removed also when the image or thresholds are invalid.
         with removing_dir(user_temp_dir):
@@ -453,14 +563,12 @@ class Ml10DairyDiseaseVectorDetectionPlugin(PluginRuntimeMixin, ModelPluginPort)
             cls_conf = float(features.get("cls_conf_thresh", DEFAULT_CLS_CONF))
 
             t0 = time.perf_counter()
-            detections = self._run_pipeline(
-                image_pil, det_conf, cls_conf,
-                classifier=user_clf, class_names=user_cls_names,
-            )
+            detections = self._run_pipeline(image_pil, det_conf, cls_conf, clf)
 
         self._update_stats(latency_ms=(time.perf_counter() - t0) * 1000)
 
         result = build_inline_result(self.MODEL_ID, detections)
+        result["umbral_ood"] = _threshold(clf)
         # Same annotated (bbox) image predict_batch already renders per row.
         result["annotated_image"] = render_annotated_image(image_pil, detections)
         # Per-detection crops (top 5 by cls_conf) — same crop the classifier itself was fed
@@ -483,7 +591,8 @@ class Ml10DairyDiseaseVectorDetectionPlugin(PluginRuntimeMixin, ModelPluginPort)
         Devuelve las predicciones.
         """
         self._require_loaded()
-        user_clf, user_cls_names, user_temp_dir = self._user_classifier(mlflow_run_id, "BATCH")
+        user_clf, user_temp_dir = self._user_classifier(mlflow_run_id, "BATCH")
+        clf = user_clf or self._base_classifier()
 
         with removing_dir(user_temp_dir), local_file_path(data_path) as local_data_path:
             t0 = time.perf_counter()
@@ -494,28 +603,28 @@ class Ml10DairyDiseaseVectorDetectionPlugin(PluginRuntimeMixin, ModelPluginPort)
             )
             with removing_dir(extract_dir):
                 image_files = _batch_image_files(local_data_path, extract_dir)
-                if not image_files:
-                    raise ValueError(f"No se encontraron imágenes en: {data_path}")
-                predictions = [
-                    self._predict_file(img_path, user_clf, user_cls_names)
-                    for img_path in image_files
-                ]
+                if not image_files:  # CSV without image_path rows
+                    raise InvalidImageError(
+                        "No se encontraron imágenes en los datos enviados. " + _EXPECTED_INPUT
+                    )
+                predictions = [self._predict_file(img_path, clf) for img_path in image_files]
 
         self._update_stats(latency_ms=(time.perf_counter() - t0) * 1000)
         return PredictBatchResponse(
             model_id=self.MODEL_ID, predictions=predictions, output_path=None
         )
 
-    def _predict_file(self, img_path: Path, clf, class_names) -> dict:
+    def _predict_file(self, img_path: Path, clf: _Classifier) -> dict:
         """Batch row of one image (an error row when it cannot be processed)."""
         try:
-            image_pil = image_path_to_pil(str(img_path))
-            detections = self._run_pipeline(
-                image_pil, DEFAULT_DET_CONF, DEFAULT_CLS_CONF,
-                classifier=clf, class_names=class_names,
-            )
+            try:
+                image_pil = image_path_to_pil(str(img_path))
+            except InvalidImageError as exc:
+                raise InvalidImageError("No es una imagen válida o está dañada.") from exc
+            detections = self._run_pipeline(image_pil, DEFAULT_DET_CONF, DEFAULT_CLS_CONF, clf)
             row = build_inline_result(self.MODEL_ID, detections)
             row.pop("model_id", None)
+            row["umbral_ood"] = _threshold(clf)
             row["annotated_image"] = render_annotated_image(image_pil, detections)
             # Same per-detection crops predict_inline returns, on every row: each instance in
             # the platform's results table must carry its own crops (an empty column on rows
@@ -586,15 +695,14 @@ class Ml10DairyDiseaseVectorDetectionPlugin(PluginRuntimeMixin, ModelPluginPort)
     # ── private helpers ───────────────────────────────────────────────────────
     def _run_pipeline(
         self, image_pil, det_conf_thresh: float, cls_conf_thresh: float,
-        classifier=None, class_names=None,
+        clf: _Classifier | None = None,
     ) -> list[dict]:
-        """Ejecuta el pipeline de dos etapas.
+        """Ejecuta el pipeline de dos etapas (detección → recorte → clasificación + filtro).
 
-        Si se proporcionan classifier/class_names se usan en lugar de los atributos
-        de instancia (para clasificadores de usuario sin sobrescribir los generales).
+        ``clf`` es el clasificador de usuario; sin él, el base (los atributos de instancia no se
+        sobrescriben nunca).
         """
-        clf = classifier if classifier is not None else self._classifier
-        cnames = class_names if class_names is not None else self._class_names
+        clf = clf or self._base_classifier()
 
         # device=self._device is required here: without it, ultralytics picks its own device
         # via a bare torch.cuda.is_available() check, independent of safe_device() above —
@@ -614,15 +722,16 @@ class Ml10DairyDiseaseVectorDetectionPlugin(PluginRuntimeMixin, ModelPluginPort)
 
         detections = []
         for box in results[0].boxes:
-            detection = self._classify_box(image_pil, box, (clf, cnames), cls_conf_thresh)
+            detection = self._classify_box(image_pil, box, clf, cls_conf_thresh)
             if detection is not None:
                 detections.append(detection)
         return detections
 
-    def _classify_box(self, image_pil, box, classifier: tuple, cls_conf_thresh: float):
+    def _classify_box(self, image_pil, box, clf: _Classifier, cls_conf_thresh: float):
         """Detection dict of one detector box, or None if empty or below cls_conf_thresh.
 
-        ``classifier`` is ``(model, class_names)``.
+        Accepted detections then go through the «desconocido» gate (ood.apply_gate): species
+        becomes «desconocido» when the crop is unlike every training vector.
         """
         det_conf = float(box.conf[0].item())
         x1, y1, x2, y2 = map(int, box.xyxy[0])
@@ -630,16 +739,23 @@ class Ml10DairyDiseaseVectorDetectionPlugin(PluginRuntimeMixin, ModelPluginPort)
             return None
 
         tensor = crop_to_tensor(image_pil, x1, y1, x2, y2)
-        species, cls_conf = classify_crop(classifier[0], tensor, classifier[1], self._device)
+        feats = None
+        if clf.ood is None:  # no gate: same single forward as before
+            species, cls_conf = classify_crop(clf.model, tensor, clf.class_names, self._device)
+        else:
+            species, cls_conf, feats = classify_crop_with_features(
+                clf.model, tensor, clf.class_names, self._device
+            )
 
-        if cls_conf >= cls_conf_thresh:
-            return {
-                "species": species,
-                "det_conf": round(det_conf, 4),
-                "cls_conf": round(cls_conf, 4),
-                "bbox": {"x1": x1, "y1": y1, "x2": x2, "y2": y2},
-            }
-        return None
+        if cls_conf < cls_conf_thresh:
+            return None
+        detection = {
+            "species": species,
+            "det_conf": round(det_conf, 4),
+            "cls_conf": round(cls_conf, 4),
+            "bbox": {"x1": x1, "y1": y1, "x2": x2, "y2": y2},
+        }
+        return apply_gate(detection, clf.ood, feats)
 
     _image_paths_from_csv = staticmethod(_image_paths_from_csv)
 
@@ -690,17 +806,24 @@ class Ml10DairyDiseaseVectorDetectionPlugin(PluginRuntimeMixin, ModelPluginPort)
 
         test_metrics = {}
         if test_ds is not None:
-            test_loader = DataLoader(
-                test_ds, batch_size=_CLS_BATCH_SIZE, shuffle=False, num_workers=0
+            test_metrics = _cls_test_metrics(
+                model,
+                DataLoader(test_ds, batch_size=_CLS_BATCH_SIZE, shuffle=False, num_workers=0),
+                class_names, self._device,
             )
-            test_metrics = _cls_test_metrics(model, test_loader, class_names, self._device)
             logger.info("Test: accuracy=%.4f", test_metrics["test_accuracy"])
+
+        # «desconocido» gate of this retrained classifier (ood.py): its features change with
+        # training (BatchNorm statistics), so the base reference does not apply to it.
+        reference = _retrained_reference(model, self._device, train_ds, val_ds)
 
         def _write(mlflow_tmp: str) -> None:
             # Matching artifact_path="classifier", the folder mlflow_utils downloads.
             torch.save(model.state_dict(), os.path.join(mlflow_tmp, CLASSIFIER_FILENAME))
             with open(os.path.join(mlflow_tmp, CLASS_NAMES_FILENAME), "w", encoding="utf-8") as fh:
                 json.dump(class_names, fh)
+            if reference is not None:
+                reference.save(os.path.join(mlflow_tmp, OOD_REFERENCE_FILENAME))
 
         upload_model_to_mlflow(
             tracker, _write, prefix="ml10_dairy_mlflow_", artifact_path="classifier"
@@ -713,6 +836,8 @@ class Ml10DairyDiseaseVectorDetectionPlugin(PluginRuntimeMixin, ModelPluginPort)
         }
         if test_metrics:
             final_metrics["test_accuracy"] = test_metrics["test_accuracy"]
+        if reference is not None:
+            final_metrics["ood_threshold"] = reference.threshold
         tracker.log_metrics(final_metrics)
 
         return TrainResponse(
@@ -725,6 +850,7 @@ class Ml10DairyDiseaseVectorDetectionPlugin(PluginRuntimeMixin, ModelPluginPort)
                 "best_val_acc": round(fit["best_acc"] * 100, 1),
                 "test_samples": len(test_ds) if test_ds is not None else 0,
                 **test_metrics,
+                "ood_desconocido": reference is not None,
                 "time_min": round(fit["elapsed"] / 60, 1),
             },
             mlflow_run_id=mlflow_run_id,
