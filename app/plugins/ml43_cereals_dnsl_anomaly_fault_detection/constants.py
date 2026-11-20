@@ -77,6 +77,20 @@ DNF_LOSS_KWARGS = {
     "eps": 1e-8,
 }
 
+# Interpretive-state calibration of the CU44 corrective-actions layer — verbatim from
+# a43-44-neurofuzzy-anomalias-fallas/config/config.yaml::xai.corrective_actions, the values
+# the AI team calibrated in notebooks/CU44.ipynb (MONITORING_ACTION_CONFIG) and documents in
+# memoria CU44 Sec. 9. The original src/predict/xai_predictor.py passes them to DNFLExplainer;
+# without them corrective_actions.py falls back to its uncalibrated defaults (0.15/0.10/0.30/
+# 0.70), which shifts windows between Normal / Normal con señales and between Alerta no
+# confirmada / Anomalía confirmada (and so changes how many actions are suggested).
+XAI_CORRECTIVE_ACTIONS_CFG = {
+    "strong_margin": 0.25,
+    "weak_margin": 0.15,
+    "branch_gap_threshold": 0.25,
+    "support_ratio_min": 0.75,
+}
+
 NORMAL_TOKENS = [
     "0", "normal", "none", "ok", "healthy",
     "no failure", "no fallo", "sin falla", "sin fallo",

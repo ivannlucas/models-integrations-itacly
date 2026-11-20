@@ -388,3 +388,16 @@ class TestValidateSavedArtifact:
         path = tmp_path / "ok.bin"
         path.write_bytes(b"not empty")
         _validate_saved_artifact(path, loader=lambda p: p.read_bytes())  # does not raise
+
+
+def test_stats_inputs_match_the_platform_csv_table():
+    """Feedback modelo 45 (notes 16-17): timestamp and cycle_id listed first, then the 11
+    sensors with Spanish descriptions — the same table the platform shows for the CSV."""
+    resp = Ml45CerealsDnslCriticalPointDetectionPlugin().stats()
+    names = [field.name for field in resp.inputs]
+
+    assert names[:2] == ["timestamp", "cycle_id"]
+    assert names[2:] == list(SENSOR_COLUMNS)
+    assert resp.inputs[0].type == "datetime"
+    assert all("time-series" not in field.description for field in resp.inputs)
+    assert resp.inputs[2].description == "Temperatura del plénum (°C)"
