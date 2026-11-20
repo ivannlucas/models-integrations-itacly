@@ -29,6 +29,22 @@ SENSOR_COLUMNS = [
     "setpoint_temp",
 ]
 
+# Wording of the platform's "Estructura esperada del CSV" table, reused by stats() so both
+# places describe the inputs identically (developer feedback on modelo 45, note 16).
+SENSOR_DESCRIPTIONS = {
+    "plenum_temp": "Temperatura del plénum (°C)",
+    "exhaust_air_temp": "Temperatura del aire de salida (°C)",
+    "exhaust_air_humidity": "Humedad del aire de salida (%)",
+    "static_pressure": "Presión estática (mbar)",
+    "burner_power": "Potencia del quemador (%)",
+    "fan_speed": "Velocidad del ventilador (RPM)",
+    "discharge_frequency": "Frecuencia de descarga (Hz)",
+    "grain_moisture_in": "Humedad del grano a la entrada (%)",
+    "ambient_temp": "Temperatura ambiente (°C)",
+    "ambient_humidity": "Humedad ambiente (%)",
+    "setpoint_temp": "Temperatura de consigna (°C)",
+}
+
 TIMESTAMP_COLUMN = "timestamp"
 ID_COLUMN = "cycle_id"
 TARGET_COLUMN = "fault_name"

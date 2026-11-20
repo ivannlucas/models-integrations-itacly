@@ -30,6 +30,7 @@ from app.domain.services.exceptions import (
 from app.domain.services.mlflow_artifacts import removing_dir
 from app.domain.services.mlflow_tracker import BaseMLflowTracker
 from app.domain.services.plugin_runtime import PluginRuntimeMixin
+from app.domain.services.shap_background import rescale_background
 from app.infrastructure.artifact_store import local_file_path
 from app.plugins.ml43_cereals_dnsl_anomaly_fault_detection import (
     model_loader,
@@ -678,6 +679,11 @@ class Ml43CerealsDnslAnomalyFaultDetectionPlugin(PluginRuntimeMixin, ModelPlugin
     ) -> str:
         """Write and validate the retrained bundle, then upload it with its metrics to MLflow.
 
+        The SHAP background goes up re-expressed in the retrained ``scaler_x``'s space (see
+        app/domain/services/shap_background.py): the original pipeline rebuilds it from
+        xai_background.csv with the current scaler on every reprocessing, so uploading the
+        base model's copy would hand SHAP reference windows on the wrong scale.
+
         A corrupt/empty local artifact raises ``ValueError`` before any upload; an upload
         failure becomes ``ModelPersistenceError``. Returns the run_id used.
         """
@@ -694,8 +700,11 @@ class Ml43CerealsDnslAnomalyFaultDetectionPlugin(PluginRuntimeMixin, ModelPlugin
                 temp_dir / SCALER_FILENAME, _load_pickle_file
             )
 
-            if self._xai_background is not None:
-                np.save(temp_dir / XAI_BACKGROUND_FILENAME, self._xai_background)
+            background = rescale_background(
+                self._xai_background, self._scaler_x, scalers.get("scaler_x")
+            )
+            if background is not None:
+                np.save(temp_dir / XAI_BACKGROUND_FILENAME, background)
                 _validate_saved_artifact(temp_dir / XAI_BACKGROUND_FILENAME, np.load)
 
             try:
@@ -733,8 +742,8 @@ class Ml43CerealsDnslAnomalyFaultDetectionPlugin(PluginRuntimeMixin, ModelPlugin
                 ("temp_zona2", "Temperatura zona 2 (°C)"),
                 ("temp_zona3", "Temperatura zona 3 (°C)"),
                 ("temp_salida_gases", "Temperatura salida de gases (°C)"),
-                ("presion_camara", "Presión de cámara (Pa)"),
-                ("presion_ventilacion", "Presión de ventilación (Pa)"),
+                ("presion_camara", "Presión de cámara (mbar)"),
+                ("presion_ventilacion", "Presión de ventilación (mbar)"),
                 ("potencia_kw", "Potencia eléctrica (kW)"),
                 ("flujo_gas", "Flujo de gas (m³/h)"),
                 ("humedad_relativa", "Humedad relativa (%)"),
@@ -816,7 +825,7 @@ class Ml43CerealsDnslAnomalyFaultDetectionPlugin(PluginRuntimeMixin, ModelPlugin
                 "horno como Normal o Fallo, con explicabilidad SHAP + reglas fuzzy y "
                 "generación de acciones correctivas."
             ),
-            task_type="binary_classification",
+            task_type="classification_binary_timeseries_windowed",
             framework=FRAMEWORK,
             inputs=inputs,
             outputs=outputs,

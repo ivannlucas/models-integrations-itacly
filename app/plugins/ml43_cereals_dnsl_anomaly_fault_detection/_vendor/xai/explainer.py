@@ -192,6 +192,9 @@ class DNFLExplainer:  # pylint: disable=too-many-instance-attributes
             "confirmed_anomaly": "Anomalía confirmada",
         }
 
+        # Margen_umbral / Evidencia_dominante (present in the original explainer.py and in
+        # memoria CU44 v1.4) are deliberately left out: the AI developers' platform feedback
+        # for modelos 43-44 (point 5) asked for them not to be included.
         prediction = dict(action_report.get("prediction", {}))
         anomaly_prob = float(prediction.get("ensemble", {}).get("probability"))
         threshold = float(prediction.get("decision_threshold"))

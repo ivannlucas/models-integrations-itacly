@@ -57,9 +57,6 @@ class TrainResponse(PluginDTO):
     """The (fixed, non-configurable) train/val/test split ratios actually applied, derived
     from TRAIN_EXTERNAL_VAL_PCT/TRAIN_EXTERNAL_TEST_PCT — surfaced so the platform can show
     the split ratio next to n_windows_train/val/test instead of only raw counts."""
-    n_epochs: int
-    """Epochs actually run before early stopping (or TRAIN_NUM_EPOCHS if it never
-    triggered)."""
     mlflow_run_id: str | None = None
     upload_warning: str | None = Field(
         default=None,
