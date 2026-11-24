@@ -67,10 +67,10 @@ data:
   processed: data/processed/feature_dataset.parquet   # 877 filas × 27 columnas (24 features + family, severity, group_id) [C][M] §3.2
   manifest: data/processed/input_manifest.csv           # trazabilidad muestra → ficheros raw NLN-EMP
   splits: data/splits/fold_assignments.csv              # asignación OOF (GroupKFold por group_id, 5 folds: 176/176/175/175/175)
-  raw_source: "NLN-EMP — Motor Current and Vibration Monitoring Dataset (4TU.ResearchData, v4, CC0), DOI 10.4121/2b61183e-c14f-4131-829b-cc4822c369d0.v4. No incluido en la entrega (solo un extracto recortado en data/examples/raw/)."
+  raw_source: "NLN-EMP — Motor Current and Vibration Monitoring Dataset (4TU.ResearchData, v4, CC0), DOI 10.4121/2b61183e-c14f-4131-829b-cc4822c369d0.v4. No incluido en la entrega (solo un extracto recortado en data/examples/raw/). [V] Copia local completa (84 GB, fuera del repo) usada en la revisión del 2026-11-24: outputs/a38/evidence/raw_dataset/."
   n_groups: 114          # [V] group_id = (motor, velocidad, fallo); 2-36 ventanas por grupo
   channels_used: "[V] Las 877 muestras usan SOLO vibración ch1 (rodamiento lado no accionado del motor, horizontal, g) y eléctrico ch1 (corriente fase 1, A): input_manifest.csv"
-  window_length_samples: {vibration: 240000, electrical: 300000}  # [V] estimado por Parseval desde vib/ele_spectral_energy y *_rms (12 s y 15 s a FS=20 kHz, [M] §8.2)
+  window_length_samples: {vibration: 240000, electrical: 300000}  # [V] estimado por Parseval y confirmado en los ficheros raw: las 877 ventanas miden exactamente esto (12 s y 15 s a FS=20 kHz, [M] §8.2)
   operating_configurations: {"Motor-2": [50, 75, 100], "Motor-4": [70]}   # [V] input_manifest.csv; coincide con [M] Tabla 2
 
 inputs:
@@ -105,8 +105,8 @@ inputs:
   # Modo secundario ("raw"): réplica de scripts/predict_raw.py [C][M] §8.2 — el servicio calcula
   # las 24 features desde una pareja de CSV raw (time + columnas de señal).
   raw:
-    vibration_csv: {type: path, description: "CSV raw de vibración; columna 0 = time, siguientes = segmentos de señal (g)"}
-    current_csv: {type: path, description: "CSV raw eléctrico del mismo ensayo/condición (A)"}
+    vibration_csv: {type: path, description: "CSV raw de vibración; columna 0 = time, siguientes = segmentos de señal (g). Solo canal 1 y exactamente 240000 muestras (KI-05, KI-06)"}
+    current_csv: {type: path, description: "CSV raw eléctrico del mismo ensayo/condición (A). Solo corriente de fase 1 (ch1) y exactamente 300000 muestras (KI-05, KI-06)"}
     motor: {type: str, allowed: ["Motor-2", "Motor-4"]}
     speed: {type: int, allowed: {"Motor-2": [50, 75, 100], "Motor-4": [70]}}
     window_index: {type: int, default: 0, description: "columna de señal posterior a time (0 = primera); si sólo hay una columna se usa esa"}
@@ -120,7 +120,7 @@ outputs:
     - {name: severity_confidence, type: "float|null", description: "σ(logit) del MLP de severidad = P(severidad significativa). La salida 'confidence' del original; null cuando no hay severidad"}
     - {name: family_probabilities, type: "dict[str,float]", description: "AÑADIDO por la integración: RF.predict_proba por clase. No cambia la predicción (RF.predict = argmax de predict_proba). El original no lo devuelve."}
   predict_batch: "Una fila por muestra con las mismas claves que predict_inline (+ row). Entrada: CSV o parquet con las 24 columnas; family/severity/group_id se ignoran si vienen. [C] run_inference_pipeline"
-  raw: "Mismas claves que predict_inline + features calculadas (xai_feature_values) + avisos de dominio"
+  raw: "Mismas claves que predict_inline + features calculadas (xai_feature_values) + avisos de dominio (input_warnings: canal no comprobable si el fichero no se llama -chN.csv)"
   original_format_note: "El original escribe predictions.csv (sample_id, true_*, pred_family, pred_severity, severity_confidence) [M] §8.3; el plugin devuelve JSON con la misma información."
 
 training:
@@ -201,6 +201,18 @@ constraints:
       documentada del banco NLN-EMP y no deben elegirse de forma arbitraria (condicionan la
       frecuencia de giro de las features 1X/2X). El plugin rechaza (422, excepción de dominio)
       una combinación motor/velocidad fuera de esta lista en el modo raw.
+  canal_raw:
+    allowed: {vibration: ch1, electrical: ch1}
+    descripcion: >
+      Más estricto que el original (que acepta cualquier chN): el plugin rechaza (422) un fichero
+      raw cuyo nombre NLN-EMP (-chN.csv) indique otro canal, y avisa en input_warnings si el nombre
+      no permite comprobarlo. Motivo: KI-06.
+  longitud_raw:
+    allowed: {vibration: 240000, electrical: 300000}
+    descripcion: >
+      Más estricto que el original (que no valida la longitud): el plugin rechaza (422) cualquier
+      señal raw que no tenga exactamente la longitud de las ventanas de entrenamiento. Motivo: KI-05.
+      Consecuencia: el ejemplo recortado de la entrega (4096 filas) ya no se puede predecir.
   rpm_por_configuracion: "[C] preprocess.get_rpm: Motor-2 → 1470·speed/100; cualquier otro motor → 2950·speed/100"
 
 metrics_reported:
@@ -965,6 +977,18 @@ reference_checks:
     expected: {family: mechanical_other, severity: 0, severity_label: leve, severity_confidence: 0.015418630093336105}
     true_condition: "align angular 3 (familia alignment, severidad 3) [C] example_metadata.json"
     caveat: "Extracto recortado a 4096 filas; las ventanas de entrenamiento tienen 240000/300000 muestras → features fuera de escala (ver known_issues)"
+    estado: >
+      Desde la decisión de KI-05 el plugin RECHAZA este ejemplo (422, longitud no admitida). La
+      paridad con el original en modo raw se comprueba ahora con raw_dataset_entrenamiento.
+  - id: raw_dataset_entrenamiento
+    source: "Ficheros raw NLN-EMP de las 877 ventanas de input_manifest.csv (vib ch1 + corriente ch1, longitud completa); scripts en outputs/a38/evidence/raw_dataset/"
+    resultado: >
+      [V] Recalculadas desde el raw con el preprocess.py original, las 24 features reproducen el
+      parquet entregado (diferencia relativa máx. 1,1e-12); el port del plugin da exactamente lo
+      mismo que el original (diferencia 0,0). Prediciendo en modo raw desde los CSV completos:
+      877/877 familias y 484/484 severidades iguales a predictions.csv, |Δ confianza| máx. 4,5e-7
+      (backend torch). Con la ventana completa, el caso del ejemplo (align angular 3, ventana 0) da
+      alignment, que es su familia real.
 
 known_issues:
   - id: KI-01
@@ -1011,23 +1035,35 @@ known_issues:
       vib_spectral_centroid 1483 frente a un mínimo de 46612; ele_spectral_energy 3,9e9 frente a
       3,1e12). Por eso el ejemplo oficial ("align angular 3",
       familia real alignment) sale como mechanical_other. Ni el código ni la memoria validan la
-      longitud. El plugin devuelve la predicción con un aviso explícito (input_warnings) cuando
-      la longitud no coincide; no la rechaza. DECISIÓN PENDIENTE: avisar o rechazar (422).
+      longitud. [V] Medido con el dataset raw (outputs/a38/evidence/raw_dataset/): recortando las
+      877 ventanas de entrenamiento, la familia coincide con la de la ventana completa en el 96,5 %
+      de los casos con 6 s, el 91,6 % con 3 s, el 84,7 % con 1 s y el 65,9 % con 0,2 s, y los
+      errores van sobre todo a healthy. DECISIÓN (2026-11-24): el plugin RECHAZA con 422
+      (FeatureContractError) cualquier señal raw que no tenga exactamente 240000/300000 muestras.
   - id: KI-06
     tipo: modo_raw_canal
     detalle: >
       [V] Las 877 muestras de entrenamiento usan solo el canal 1 de vibración (rodamiento lado no
       accionado del motor, horizontal) y el canal 1 eléctrico (corriente fase 1). La memoria (§8.2,
       Tablas 15-16) presenta predict_raw como aplicable a cualquier canal chN, incluidos los de
-      tensión (ch4-6, en V), que el modelo nunca ha visto. El plugin no puede saber el canal a
-      partir de un CSV sin nombre normalizado; se documenta en /stats y en el DTO.
+      tensión (ch4-6, en V), que el modelo nunca ha visto. [V] Con el dataset raw, prediciendo las
+      mismas 877 ventanas con otro sensor del mismo ensayo (referencia ch1: 1,00, in-sample), el
+      acierto de familia cae a 0,45 / 0,36 / 0,38 / 0,40 con vibración ch2 / ch3 / ch4 / ch5; con
+      otros acelerómetros el modelo casi nunca reconoce una ventana sana (healthy acertado en el
+      9-38 %). Con corriente ch2/ch3 da 0,88/0,92 y con tensión ch4/ch5/ch6 0,91/0,77/0,77: la
+      corriente pesa poco en la decisión. DECISIÓN (2026-11-24): el plugin RECHAZA con 422 un
+      fichero cuyo nombre NLN-EMP (-chN.csv) indique un canal distinto de ch1, y avisa en
+      input_warnings cuando el nombre no permite comprobarlo.
   - id: KI-07
     tipo: modo_raw_rpm
     detalle: >
       get_rpm usa 1470 rpm (Motor-2) y 2950 rpm (resto) nominales × velocidad/100. La memoria
       (Tabla 2) documenta 740/1110/1480 rpm (Motor-2) y 2070-2085 rpm (Motor-4 al 70 %), y el
       código da 735/1102,5/1470 y 2065. Diferencia pequeña (<1 %), pero no es la que dice la
-      memoria. El plugin replica el código, que es con lo que se entrenó.
+      memoria. El plugin replica el código, que es con lo que se entrenó. [V] Sin efecto práctico:
+      según measurement overview.xlsx del dataset, la rpm real de cada ensayo (Motor-4: 2070-2085)
+      queda a ≤ 0,33 Hz de la frecuencia del código, dentro de la ventana de ±2 Hz en la que se
+      buscan los picos 1X/2X.
   - id: KI-08
     tipo: rendimiento
     detalle: >
@@ -1087,3 +1123,33 @@ known_issues:
     detalle: >
       En el repo de integración la memoria v1.2 estaba versionada y el working tree la sustituye
       por la v1.6 (sin commitear, cambio previo a esta integración). Este manifest usa la v1.6.
+  - id: KI-16
+    tipo: dataset_confusion_familia_montaje
+    detalle: >
+      [V] input_manifest.csv + measurement overview.xlsx: cada familia aparece en un solo montaje.
+      alignment, cavitation y unbalance solo existen en Motor-4 (70 %); bearing y electrical solo
+      en Motor-2 (50/75/100 %); healthy y mechanical_other en ambos. Parte de lo que separa el
+      clasificador es qué banco de ensayo es, no qué fallo hay: es un límite fuerte para llevarlo
+      a otra máquina (KI-10). Además, en el etiquetado (map_family) "impeller 1-3" es un
+      desequilibrio del rodete (tiene informes de equilibrado) y cae en mechanical_other, no en
+      unbalance; y "healthy noise" se midió con el otro conjunto motor-bomba en marcha.
+  - id: KI-17
+    tipo: validacion_optimista
+    detalle: >
+      [V] outputs/a38/evidence/raw_dataset/grouping_cv.py. group_id = (motor, velocidad, fallo),
+      así que en GroupKFold el mismo fallo físico a otra velocidad de Motor-2 queda en
+      entrenamiento. Con el RF entregado: GroupKFold(5) del equipo → acc 0,617 / macro-F1 0,591
+      (reproduce la Tabla 10); mismos grupos con 5 particiones aleatorias → 0,565 / 0,581;
+      agrupando por fallo físico (motor, fallo) → 0,548 / 0,548. La métrica OOF entregada es
+      optimista en unos 4 puntos de macro-F1, y el split entregado es de los favorables.
+  - id: KI-18
+    tipo: componente_fisico
+    detalle: >
+      [V] outputs/a38/evidence/raw_dataset/physics_term.py. La pérdida empuja P(significativo) al
+      menos hasta la banda baja normalizada. Esa relación solo se cumple en alignment (Spearman
+      severidad-banda baja +0,50); en cavitation (−0,46) y electrical (−0,56) va al revés y en el
+      resto no hay relación. Reentrenando las MLP de severidad con λ = 0 frente al λ = 0,3
+      entregado (3 semillas), las diferencias de macro-F1 de CV son de 0,006 como mucho, menos que el ruido
+      entre semillas: el término físico ("DNLS") no tiene un efecto medible. El 0,0 de severidad
+      de electrical tampoco se debe a él (también 0,01 con λ = 0): cada grupo tiene un único
+      nivel de severidad y en esa familia el efecto de la velocidad domina.

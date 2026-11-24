@@ -1,0 +1,26 @@
+Ventanas del fichero == ventanas usadas: True | longitudes vib [240000] ele [300000]
+Port del plugin vs código original: max |dif| = 0.0
+Original desde raw vs parquet entregado: max dif relativa = 1.1401694296102898e-12
+ele_skewness    1.140169e-12
+vib_kurtosis    1.051154e-12
+vib_skewness    1.764116e-13
+
+Modo raw de punta a punta vs predictions.csv:
+  familia 877 / 877
+  severidad 484 / 484
+  max |dif confianza| 4.470348358154297e-07
+
+Señal recortada (KI-05) — acierto de familia (in-sample) y concordancia con la ventana completa:
+  completa 240000/300000: acierto 1.000
+  L=  4096 (0.20 s): acierto 0.659 concordancia 0.659 distribución {'healthy': 0.59, 'bearing': 0.14, 'mechanical_other': 0.12, 'electrical': 0.08, 'alignment': 0.04, 'cavitation': 0.02, 'unbalance': 0.01}
+  L= 20000 (1.00 s): acierto 0.847 concordancia 0.847 distribución {'healthy': 0.55, 'bearing': 0.18, 'mechanical_other': 0.1, 'alignment': 0.06, 'cavitation': 0.04, 'unbalance': 0.03, 'electrical': 0.03}
+  L= 60000 (3.00 s): acierto 0.916 concordancia 0.916 distribución {'healthy': 0.48, 'bearing': 0.2, 'mechanical_other': 0.12, 'alignment': 0.06, 'unbalance': 0.06, 'cavitation': 0.04, 'electrical': 0.03}
+  L=120000 (6.00 s): acierto 0.965 concordancia 0.965 distribución {'healthy': 0.45, 'bearing': 0.21, 'mechanical_other': 0.13, 'alignment': 0.07, 'unbalance': 0.06, 'cavitation': 0.04, 'electrical': 0.03}
+
+1X (KI-07): pico medido en ±15 % − frecuencia de giro del código (Hz); la tolerancia del código es ±2 Hz
+              mean    min    max
+cfg                             
+Motor-2@100  0.469 -1.167  3.667
+Motor-2@50   0.271 -1.667  1.333
+Motor-2@75   0.077 -2.375  2.542
+Motor-4@70   0.122  0.083  0.333

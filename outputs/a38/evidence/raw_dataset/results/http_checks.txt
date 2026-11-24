@@ -1,0 +1,8 @@
+# /predict contra el servidor local (uvicorn, MODEL=ml38-wine-machinery-fault-detection, backend torch), 2026-11-24
+# Ficheros raw del dataset NLN-EMP (copia local fuera del repo) y ejemplo de la entrega.
+- raw ch1 completo (align angular 3, ventana 0): HTTP 200 → {"family": "alignment", "severity": 1, "severity_label": "significativo", "severity_confidence": 0.7554150819778442, "input_warnings": []}
+- raw vibración ch4: HTTP 422 → "Canal no admitido en Vibration_Motor-4_70_time-align angular 3-ch4.csv (ch4): el modelo se entrenó solo con la señal de vibración (canal 1: rodamiento lado no accionado del motor, horizontal). Con otros canales de los mismos ensayos la predicción no es válida."
+- raw tensión ch5: HTTP 422 → "Canal no admitido en Electric_Motor-4_70_time-align angular 3-ch5.csv (ch5): el modelo se entrenó solo con la señal de corriente (canal 1: corriente de fase 1, en A). Con otros canales de los mismos ensayos la predicción no es válida."
+- raw ejemplo recortado de la entrega (4096 filas): HTTP 422 → "Longitud de señal no admitida: la señal de vibración tiene 4096 muestras y el modelo se entrenó con ventanas de exactamente 240000 (12 s a 20000 Hz); la señal de corriente tiene 4096 muestras y el modelo se entrenó con ventanas de exactamente 300000 (15 s a 20000 Hz). La energía espectral, el centroide y las amplitudes 1X/2X de
+- raw /etc/passwd: HTTP 422 → "No se puede leer la señal raw /etc/passwd: se espera un CSV numérico con una columna time y una o más columnas de señal."
+- inline + model_key=raw (golden caso_001): HTTP 200 → {"family": "alignment", "severity": 1, "severity_label": "significativo", "severity_confidence": 0.719050943851471, "input_warnings": []}

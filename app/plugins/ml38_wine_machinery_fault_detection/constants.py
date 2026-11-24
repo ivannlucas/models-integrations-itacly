@@ -83,11 +83,17 @@ OPERATING_CONFIGURATIONS: dict[str, tuple[int, ...]] = {
     "Motor-2": (50, 75, 100),
     "Motor-4": (70,),
 }
-# Window length of the training samples (estimated by Parseval from the parquet, see manifest
-# data.window_length_samples): 12 s of vibration and 15 s of current at 20 kHz. Energy, centroid
-# (in FFT bins) and 1X/2X amplitudes scale with the length, so other lengths are off-scale.
+# Window length of the training samples (confirmed on the raw NLN-EMP files: every one of the 877
+# windows has exactly these lengths): 12 s of vibration and 15 s of current at 20 kHz. Energy,
+# centroid (in FFT bins) and 1X/2X amplitudes scale with the length, so raw inference rejects any
+# other length (manifest KI-05: truncating to 1 s drops the agreement with the full window to 85 %).
 TRAIN_VIB_WINDOW_SAMPLES = 240000
 TRAIN_ELE_WINDOW_SAMPLES = 300000
+# Measurement channel of the training data: vibration ch1 (motor non-driven end bearing,
+# horizontal) and electric ch1 (phase-1 current). With other channels of the same tests the family
+# accuracy falls to 0.36-0.45 (vibration ch2-5), so raw files named with another chN are rejected
+# (manifest KI-06).
+TRAIN_SIGNAL_CHANNEL = 1
 
 # ── Training (config/config.yaml, consumed by src/training/*.py; = memoria §6.2) ────────────
 TRAIN_RANDOM_STATE = 42

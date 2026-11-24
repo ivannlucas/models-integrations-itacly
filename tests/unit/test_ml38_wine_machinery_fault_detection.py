@@ -183,11 +183,102 @@ def test_feature_vector_layout_and_values():
     assert feats["ele_rms"] == pytest.approx(10 / math.sqrt(2), rel=1e-3)
 
 
-def test_signal_length_warnings():
-    """Only signals with a length other than the training window produce warnings."""
-    assert not preprocessing.signal_length_warnings(TRAIN_VIB_WINDOW_SAMPLES,
-                                                    TRAIN_ELE_WINDOW_SAMPLES)
-    assert len(preprocessing.signal_length_warnings(4096, 4096)) == 2
+def test_signal_lengths_must_match_training_windows():
+    """Exactly 240000/300000 samples pass; any other length is a contract error (KI-05)."""
+    preprocessing.check_signal_lengths(TRAIN_VIB_WINDOW_SAMPLES, TRAIN_ELE_WINDOW_SAMPLES)
+    for n_vib, n_ele in ((4096, 4096), (TRAIN_VIB_WINDOW_SAMPLES, 4096),
+                         (TRAIN_VIB_WINDOW_SAMPLES + 1, TRAIN_ELE_WINDOW_SAMPLES)):
+        with pytest.raises(FeatureContractError, match="Longitud de señal no admitida"):
+            preprocessing.check_signal_lengths(n_vib, n_ele)
+
+
+@pytest.mark.parametrize("path", [
+    "s3://bucket/raw/Vibration_Motor-4_70_time-align angular 3-ch1.csv",
+    "/data/Electric_Motor-2_100_time-healthy 1-CH1.csv",
+])
+def test_channel_one_is_accepted(path):
+    """An NLN-EMP file name with ch1 passes without warnings."""
+    assert preprocessing.channel_warning(path, "vib") is None
+
+
+@pytest.mark.parametrize("path,kind", [
+    ("/data/Vibration_Motor-4_70_time-align angular 3-ch4.csv", "vib"),
+    ("s3://bucket/Electric_Motor-2_100_time-healthy 1-ch5.csv", "ele"),   # a voltage channel
+])
+def test_other_channels_are_rejected(path, kind):
+    """A file named with a channel other than ch1 is a contract error (KI-06)."""
+    with pytest.raises(FeatureContractError, match="Canal no admitido"):
+        preprocessing.channel_warning(path, kind)
+
+
+def test_unknown_channel_gives_a_warning():
+    """Without a -chN.csv suffix the channel cannot be checked: warning, not error."""
+    assert "canal 1" in preprocessing.channel_warning("/tmp/vibration_example.csv", "vib")
+
+
+def test_unreadable_file_error_does_not_echo_its_content(tmp_path):
+    """The 422 message must not quote the file (the parser error does): it would leak data."""
+    content = "root:x:0:0:root:/root:/bin/bash\ndaemon:x:1:1:secreto\n"
+    secret_csv = tmp_path / "passwd"
+    secret_pq = tmp_path / "passwd.parquet"   # not a parquet: forces a read error in read_table
+    secret_csv.write_text(content, encoding="utf-8")
+    secret_pq.write_text(content, encoding="utf-8")
+    for read, path in ((lambda p: preprocessing.read_signal(p, 0), secret_csv),
+                       (preprocessing.read_table, secret_pq)):
+        with pytest.raises(FeatureContractError) as exc_info:
+            read(str(path))
+        assert "secreto" not in str(exc_info.value)
+        assert "root:x" not in str(exc_info.value)
+
+
+def _stub_plugin(monkeypatch):
+    """Real plugin with a stubbed model: checks the request routing, not the predictions."""
+    from app.plugins.ml38_wine_machinery_fault_detection import (  # pylint: disable=import-outside-toplevel
+        plugin as plugin_module,
+    )
+
+    def fake_predict(_bundle, features):
+        assert features.shape == (1, len(FEATURE_NAMES))
+        return [{"family": "healthy", "severity": None, "severity_label": "sin fallo",
+                 "severity_confidence": None, "family_probabilities": {"healthy": 1.0}}]
+
+    monkeypatch.setattr(plugin_module, "predict_matrix", fake_predict)
+    instance = plugin_module.Ml38WineMachineryFaultDetectionPlugin()
+    instance._bundle = object()  # pylint: disable=protected-access
+    return instance
+
+
+def test_inline_request_with_model_key_raw_is_inline(monkeypatch):
+    """mode=inline + model_key="raw" uses the 24 features (it used to raise KeyError → 500)."""
+    resp = _stub_plugin(monkeypatch).predict_inline(features=dict(INLINE_FEATURES),
+                                                    model_key="raw")
+    assert resp.family == "healthy"
+    assert not resp.input_warnings
+
+
+def _write_signal_csv(path, n_rows, n_cols=1):
+    t = np.arange(1, n_rows + 1) / 20000.0
+    data = {"time": t, **{str(c): np.sin(2 * np.pi * 24.5 * t + c) for c in range(n_cols)}}
+    pd.DataFrame(data).to_csv(path, index=False)
+
+
+def test_raw_request_with_training_shaped_files(monkeypatch, tmp_path):
+    """ch1 files of exactly one training window are predicted; a cut signal is rejected."""
+    vib = tmp_path / "Vibration_Motor-2_100_time-healthy 1-ch1.csv"
+    ele = tmp_path / "Electric_Motor-2_100_time-healthy 1-ch1.csv"
+    _write_signal_csv(vib, TRAIN_VIB_WINDOW_SAMPLES)
+    _write_signal_csv(ele, TRAIN_ELE_WINDOW_SAMPLES)
+    instance = _stub_plugin(monkeypatch)
+    raw = {"vibration_csv": str(vib), "current_csv": str(ele), "motor": "Motor-2", "speed": 100,
+           "window_index": 0}
+    resp = instance.predict_inline(features=raw, model_key="raw")
+    assert resp.family == "healthy"
+    assert not resp.input_warnings
+
+    short = tmp_path / "Vibration_Motor-2_100_time-healthy 1-ch1-short.csv"
+    _write_signal_csv(short, 4096)
+    with pytest.raises(FeatureContractError, match="Longitud de señal no admitida"):
+        instance.predict_inline(features={**raw, "vibration_csv": str(short)}, model_key="raw")
 
 
 def test_read_signal_window_index(tmp_path):

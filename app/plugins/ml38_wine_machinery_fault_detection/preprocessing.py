@@ -8,6 +8,9 @@ was trained with.
 """
 from __future__ import annotations
 
+import logging
+import re
+
 import numpy as np
 import pandas as pd
 from scipy.fft import rfft, rfftfreq
@@ -25,12 +28,19 @@ from app.plugins.ml38_wine_machinery_fault_detection.constants import (
     RPM_BASE_MOTOR_2,
     RPM_BASE_OTHER,
     TRAIN_ELE_WINDOW_SAMPLES,
+    TRAIN_SIGNAL_CHANNEL,
     TRAIN_VIB_WINDOW_SAMPLES,
 )
 from app.plugins.ml38_wine_machinery_fault_detection.exceptions import (
     FeatureContractError,
     UnsupportedOperatingConfigurationError,
 )
+
+logger = logging.getLogger(__name__)
+
+# NLN-EMP raw file names end in "-chN.csv"
+# (e.g. "Vibration_Motor-4_70_time-align angular 3-ch1.csv").
+_CHANNEL_RE = re.compile(r"-ch(\d+)\.csv$", re.IGNORECASE)
 
 
 def check_operating_configuration(motor: str, speed: int) -> None:
@@ -132,9 +142,11 @@ def read_signal(path: str, window_index: int) -> np.ndarray:
     try:
         df = pd.read_csv(path, dtype=float)
     except (ValueError, OSError, pd.errors.ParserError) as exc:
+        # The parser message can quote the file's content: it goes to the log, never to the client.
+        logger.warning("ml38: no se pudo leer la señal raw %s: %s", path, exc)
         raise FeatureContractError(
             f"No se puede leer la señal raw {path}: se espera un CSV numérico con una columna "
-            f"time y una o más columnas de señal ({exc})"
+            f"time y una o más columnas de señal."
         ) from exc
     if window_index < 0:
         raise FeatureContractError(f"window_index debe ser >= 0 (recibido {window_index}).")
@@ -152,21 +164,54 @@ def read_signal(path: str, window_index: int) -> np.ndarray:
     return signal
 
 
-def signal_length_warnings(n_vib: int, n_ele: int) -> list[str]:
-    """Warnings when a raw signal does not have the training window length (KI-05)."""
-    warnings = []
-    for name, got, expected, secs in (
-        ("vibración", n_vib, TRAIN_VIB_WINDOW_SAMPLES, 12),
-        ("corriente", n_ele, TRAIN_ELE_WINDOW_SAMPLES, 15),
-    ):
-        if got != expected:
-            warnings.append(
-                f"La señal de {name} tiene {got} muestras y el modelo se entrenó con ventanas de "
-                f"{expected} ({secs} s a {FS_HZ} Hz). La energía espectral, el centroide y las "
-                f"amplitudes 1X/2X dependen de la longitud: la predicción queda fuera del dominio "
-                f"de entrenamiento y no debe usarse para decidir."
-            )
-    return warnings
+def check_signal_lengths(n_vib: int, n_ele: int) -> None:
+    """Reject raw signals whose length differs from the training windows (KI-05).
+
+    Spectral energy, centroid (in FFT bins) and the 1X/2X amplitudes scale with the length; on
+    the raw NLN-EMP files, cutting the training windows to 1 s already changes 15 % of the
+    predicted families (to 0.2 s, 34 %), mostly towards "healthy".
+    """
+    problems = [
+        f"la señal de {name} tiene {got} muestras y el modelo se entrenó con ventanas de "
+        f"exactamente {expected} ({secs} s a {FS_HZ} Hz)"
+        for name, got, expected, secs in (
+            ("vibración", n_vib, TRAIN_VIB_WINDOW_SAMPLES, 12),
+            ("corriente", n_ele, TRAIN_ELE_WINDOW_SAMPLES, 15),
+        )
+        if got != expected
+    ]
+    if problems:
+        raise FeatureContractError(
+            "Longitud de señal no admitida: " + "; ".join(problems) + ". La energía espectral, "
+            "el centroide y las amplitudes 1X/2X dependen de la longitud, así que la predicción "
+            "no sería válida."
+        )
+
+
+def channel_warning(path: str, kind: str) -> str | None:
+    """Reject a raw file whose NLN-EMP name shows a channel other than ch1 (KI-06).
+
+    Returns a warning when the name has no ``-chN.csv`` suffix (the channel cannot be checked)
+    and None when it is ch1. ``path`` is the path the client sent (an s3:// URI keeps its name;
+    the local temp copy does not).
+    """
+    name = str(path).rsplit("/", maxsplit=1)[-1]
+    expected = ("vibración (canal 1: rodamiento lado no accionado del motor, horizontal)"
+                if kind == "vib" else "corriente (canal 1: corriente de fase 1, en A)")
+    match = _CHANNEL_RE.search(name)
+    if match is None:
+        return (
+            f"No se puede comprobar el canal de {name}: el modelo solo es válido con la señal de "
+            f"{expected}. Con otros canales de los mismos ensayos el acierto de familia cae "
+            f"(0,36-0,45 con otros acelerómetros)."
+        )
+    if int(match.group(1)) != TRAIN_SIGNAL_CHANNEL:
+        raise FeatureContractError(
+            f"Canal no admitido en {name} (ch{match.group(1)}): el modelo se entrenó solo con la "
+            f"señal de {expected}. Con otros canales de los mismos ensayos la predicción no es "
+            f"válida."
+        )
+    return None
 
 
 def feature_frame_from_table(df: pd.DataFrame) -> pd.DataFrame:
@@ -187,4 +232,9 @@ def read_table(path: str) -> pd.DataFrame:
             return pd.read_parquet(path)
         return pd.read_csv(path)
     except (ValueError, OSError, pd.errors.ParserError, ImportError) as exc:
-        raise FeatureContractError(f"No se puede leer el fichero {path}: {exc}") from exc
+        # The parser message can quote the file's content: it goes to the log, never to the client.
+        logger.warning("ml38: no se pudo leer la tabla %s: %s", path, exc)
+        raise FeatureContractError(
+            f"No se puede leer el fichero {path}: se espera un CSV o parquet con las columnas de "
+            f"características."
+        ) from exc

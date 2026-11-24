@@ -1,0 +1,3 @@
+GroupKFold(5) entregado: acc 0.6169  macro-F1 0.5908
+original (motor, velocidad, fallo), 5 particiones aleatorias: acc 0.5647±0.0345  macro-F1 0.5811±0.0246
+fallo físico (motor, fallo), 5 particiones aleatorias: acc 0.5475±0.0328  macro-F1 0.5483±0.0236
