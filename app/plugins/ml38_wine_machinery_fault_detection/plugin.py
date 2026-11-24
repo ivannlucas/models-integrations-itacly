@@ -60,11 +60,12 @@ from app.plugins.ml38_wine_machinery_fault_detection.predict_dto import (
 )
 from app.plugins.ml38_wine_machinery_fault_detection.preprocessing import (
     build_feature_vector,
+    channel_warning,
     check_operating_configuration,
+    check_signal_lengths,
     feature_frame_from_table,
     read_signal,
     read_table,
-    signal_length_warnings,
 )
 from app.plugins.ml38_wine_machinery_fault_detection.train_dto import (
     SeverityCvMetrics,
@@ -90,16 +91,23 @@ def _inline_feature_vector(features: dict) -> np.ndarray:
 
 
 def _raw_feature_vector(features: dict) -> tuple[np.ndarray, list[str]]:
-    """Compute the 24 features from the raw CSV pair (scripts/predict_raw.py) + domain warnings."""
+    """Compute the 24 features from the raw CSV pair (scripts/predict_raw.py) + domain warnings.
+
+    Stricter than the original script, which accepts any channel and length: a file named with a
+    channel other than ch1, or a signal that is not exactly one training window long, is rejected
+    (FeatureContractError → 422; manifest KI-05/KI-06, checked on the raw NLN-EMP data).
+    """
     motor, speed = str(features["motor"]), int(features["speed"])
     check_operating_configuration(motor, speed)
+    vib_csv, ele_csv = str(features["vibration_csv"]), str(features["current_csv"])
+    warnings = [w for w in (channel_warning(vib_csv, "vib"), channel_warning(ele_csv, "ele")) if w]
     window_index = int(features.get("window_index") or 0)
-    with local_file_path(str(features["vibration_csv"])) as vib_path:
+    with local_file_path(vib_csv) as vib_path:
         vib_signal = read_signal(vib_path, window_index)
-    with local_file_path(str(features["current_csv"])) as ele_path:
+    with local_file_path(ele_csv) as ele_path:
         ele_signal = read_signal(ele_path, window_index)
-    vector = build_feature_vector(vib_signal, ele_signal, motor, speed)
-    return vector, signal_length_warnings(len(vib_signal), len(ele_signal))
+    check_signal_lengths(len(vib_signal), len(ele_signal))
+    return build_feature_vector(vib_signal, ele_signal, motor, speed), warnings
 
 
 class Ml38WineMachineryFaultDetectionPlugin(PluginRuntimeMixin, ModelPluginPort):
@@ -132,10 +140,12 @@ class Ml38WineMachineryFaultDetectionPlugin(PluginRuntimeMixin, ModelPluginPort)
         threshold: float | None = None,
         mlflow_run_id: str = "",
     ) -> PredictInlineResponse:
-        """Predict one window, from its 24 features or (model_key="raw") from raw signals."""
+        """Predict one window, from its 24 features or (raw request) from raw signals."""
         _ = threshold  # no decision threshold in this model (contract compatibility)
-        is_raw = model_key == "raw" or "vibration_csv" in features
-        if is_raw:
+        # The request's own fields decide the mode, not model_key: an inline request can carry
+        # model_key="raw" and has no signal paths (it used to fail with KeyError → 500).
+        _ = model_key
+        if "vibration_csv" in features:
             vector, warnings = _raw_feature_vector(features)
         else:
             vector, warnings = _inline_feature_vector(features), []
@@ -251,11 +261,13 @@ class Ml38WineMachineryFaultDetectionPlugin(PluginRuntimeMixin, ModelPluginPort)
             for name in FEATURE_NAMES
         ] + [
             InputField(name="vibration_csv", type="str",
-                       description="[Modo raw] CSV de vibración (time + señal, g). Entrenado con "
-                                   "el canal 1 y ventanas de 240000 muestras a 20 kHz"),
+                       description="[Modo raw] CSV de vibración (time + señal, g). Solo canal 1 "
+                                   "y ventanas de exactamente 240000 muestras (12 s a 20 kHz); "
+                                   "otro canal (-chN.csv) u otra longitud → 422"),
             InputField(name="current_csv", type="str",
-                       description="[Modo raw] CSV eléctrico del mismo ensayo (corriente fase 1, "
-                                   "ventanas de 300000 muestras)"),
+                       description="[Modo raw] CSV eléctrico del mismo ensayo. Solo corriente de "
+                                   "fase 1 (ch1) y ventanas de exactamente 300000 muestras (15 s); "
+                                   "otro canal u otra longitud → 422"),
             InputField(name="motor", type="str", format=["Motor-2", "Motor-4"],
                        description="[Modo raw] Configuración operativa NLN-EMP"),
             InputField(name="speed", type="int", format=["50", "75", "100", "70"],
@@ -290,7 +302,8 @@ class Ml38WineMachineryFaultDetectionPlugin(PluginRuntimeMixin, ModelPluginPort)
                 OutputField(name="family_probabilities", type="dict",
                             description="Probabilidad del Random Forest por familia"),
                 OutputField(name="input_warnings", type="list",
-                            description="Avisos de dominio de la entrada (modo raw)"),
+                            description="Avisos de dominio de la entrada (modo raw: canal no "
+                                        "comprobable por el nombre del fichero)"),
             ],
             metrics=dict(REPORTED_METRICS),
             runtime_stats=self._runtime_stats(),

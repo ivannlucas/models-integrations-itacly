@@ -14,4 +14,5 @@ class UnsupportedOperatingConfigurationError(ValueError):
 
 class FeatureContractError(ValueError):
     """Raised when a batch file or raw signal file breaks the input contract: missing feature
-    columns, unreadable file, or a window_index that the CSV does not have."""
+    columns, unreadable file, a window_index that the CSV does not have, a raw signal that is not
+    exactly one training window long, or a raw file named with a channel other than ch1."""

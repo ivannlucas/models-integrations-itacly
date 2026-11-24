@@ -87,7 +87,7 @@ class PredictRawRequest(PluginDTO):
     """Raw inference from a vibration/current CSV pair — scripts/predict_raw.py."""
 
     mode: Literal["raw"] = "raw"
-    # model_key="raw" tells predict_inline to compute the features from the signals first.
+    # Informative only: predict_inline recognises a raw request by its vibration_csv field.
     model_key: str = "raw"
     threshold: UnusedThreshold = None
     mlflow_run_id: UserModelRunIdEs = ""
@@ -96,15 +96,17 @@ class PredictRawRequest(PluginDTO):
         ...,
         description=(
             "Ruta (local o s3://) al CSV raw de vibración: columna time + columnas de señal (g). "
-            "El modelo se entrenó con el canal 1 (rodamiento lado no accionado del motor, "
-            "horizontal) y ventanas de 240000 muestras (12 s a 20 kHz)."
+            "Solo se admite el canal 1 (rodamiento lado no accionado del motor, horizontal) y "
+            "ventanas de exactamente 240000 muestras (12 s a 20 kHz), como en el entrenamiento: "
+            "un fichero NLN-EMP de otro canal (-chN.csv) u otra longitud da 422."
         ),
     )
     current_csv: str = Field(
         ...,
         description=(
             "Ruta (local o s3://) al CSV raw eléctrico del mismo ensayo: columna time + columnas "
-            "de señal. Entrenado con corriente de fase 1 (A) y ventanas de 300000 muestras."
+            "de señal. Solo corriente de fase 1 (ch1, en A) y ventanas de exactamente 300000 "
+            "muestras (15 s); otro canal (incluidos los de tensión) u otra longitud da 422."
         ),
     )
     motor: Literal["Motor-2", "Motor-4"] = Field(
@@ -154,8 +156,8 @@ class PredictInlineResponse(PluginDTO):
     input_warnings: list[str] = Field(
         default_factory=list,
         description=(
-            "Avisos de dominio de la entrada (p. ej., señal raw de longitud distinta a la de "
-            "entrenamiento)"
+            "Avisos de dominio de la entrada (p. ej., fichero raw sin sufijo -chN.csv, cuyo canal "
+            "no se puede comprobar)"
         ),
     )
     xai_feature_values: XaiFeatureValues = None
