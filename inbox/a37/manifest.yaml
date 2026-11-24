@@ -1,3 +1,12 @@
+# [FUSIÓN a39 — 2026-11-24] Este plugin absorbe el entregable a39 ("Implementación del modelo
+# XAI para la visualización de los ciclos de reparación o mantenimiento de la maquinaria"). a39
+# no es otro modelo: explica ESTE LSTM (best_model.keras MD5-idéntico, mismo run_id
+# no_virtual_v1__rand_scool, mismo dataset y split). El plugin separado
+# ml39-wine-predictive-maintenance-xai se ha eliminado; su parte en vivo (Integrated Gradients y
+# SHAP por ciclo) vive ahora en app/plugins/ml37_wine_press_predictive_maintenance/xai.py y se
+# pide con include_xai / include_shap en /predict de ml37. Detalle en la sección `xai_a39` y en
+# los known_issues marcados [FUSIÓN a39] al final. El texto histórico de debajo no se reescribe.
+
 model_id: ml37-wine-press-predictive-maintenance
 sector: vitivinicola
 nombre: "Modelo predictivo para anticipar fallos en prensas y equipos de embotellado"
@@ -231,3 +240,45 @@ known_issues:
      reutiliza su especificación y dataset, y hay que comprobar que las explicaciones se
      muestran junto a la predicción de a37 en el front. No empezar a39 hasta que este plugin
      esté verificado."
+  - "[FUSIÓN a39 — RESUELTO EL ACOPLAMIENTO DE PRODUCTO] Con dos plugins, el front tenía que
+     llamar a ml37 y a ml39 con el mismo payload para mostrar la explicación junto a la
+     predicción, y nada garantizaba que fueran el mismo ciclo ni el mismo modelo (ml39 ignoraba
+     mlflow_run_id: con un modelo reentrenado explicaba siempre la base). Ahora una sola
+     llamada devuelve predicción + explicación calculadas con el MISMO bundle (base o MLflow)."
+  - "[FUSIÓN a39 — SHAP ROTO EN EL PLUGIN ml39, ARREGLADO] main.py importa app.registry entero
+     antes de aplicar el filtro MODEL, y los model_loader de ml1/ml37 fijan KERAS_BACKEND=torch al
+     importarse: en el pod el backend de Keras es SIEMPRE torch (verificado con
+     MODEL=ml39-... el 2026-11-24). El SHAP de ml39 solo admitía TensorFlow, así que
+     include_shap=true devolvía 500 siempre en producción (su verification_report lo daba por
+     'esperado'). xai.py usa shap.GradientExplainer sobre el modelo Keras-torch (es un
+     torch.nn.Module; shap usa su ruta PyTorch, que consume np.random con la misma secuencia que
+     la de TF). Integrated Gradients calcula el gradiente con torch.autograd o tf.GradientTape
+     según el backend activo; el resto de la fórmula es común."
+  - "[FUSIÓN a39 — FONDO SHAP SIN ESCALAR] shap_background.npy guarda (80, 600, 14) sin escalar
+     y se escala al cargar con el scaler del bundle. Así vale para la base y para un reentreno
+     (train() genera el suyo desde su split de train y lo sube al run de MLflow). Un fichero
+     escalado (n, 600, 40), como el que preveía ml39, se rechaza al cargar."
+  - "[FUSIÓN a39 — COSTE, MEDIDO EN CPU EN UN CGROUP (CUDA_VISIBLE_DEVICES=, como los pods)]
+     Ciclo 33: sin XAI 0,5 s; con IG 2,2-2,8 s (un forward compartido por las 4 cabezas: mismas
+     atribuciones que una pasada por cabeza, a mitad de coste); con SHAP ≈65 s (nsamples=200, el
+     valor del original). Memoria del proceso: 0,61 GiB cargado, 0,80 GiB tras IG, pico 1,41 GiB
+     con SHAP: cabe en el límite de 2 GiB del pod, pero dos peticiones SHAP simultáneas
+     probablemente no. include_xai=true por defecto en inline y en batch (decisión del
+     usuario, 2026-11-24: la explicación se muestra también en los resultados de batch; en
+     batch suma ≈3 s por ciclo, p. ej. ≈15 min para los 331 ciclos de test, así que el front
+     debe llamar al batch con /predict?wait=false). SHAP es opt-in y en batch se limita a los
+     primeros n_samples ciclos (5)."
+
+xai_a39:
+  origen: "inbox/a39/codigo/src/xai/xai_analysis.py (perfil 'full' de config.yaml: ig_steps=50, shap_n_bg=80, seed=42). El resto del código de a39 es el de a37 con cambios solo de formato de rutas (diff verificado: trainer/predictor/neurosymbolic/build_schema sin cambios de comportamiento)."
+  en_vivo:
+    integrated_gradients: "por ciclo y por head, baseline 0, steps=50, target_class_idx=None (máximo sobre clases reevaluado en cada paso), |IG| medio sobre los 600 pasos por sensor físico"
+    shap: "shap.GradientExplainer por head, fondo de 80 ciclos de train, nsamples=200, rseed=42 por petición (misma entrada -> misma explicación)"
+  offline: "t-SNE/silhouette, calibración (Brier), concordancia IG-SHAP sobre todo el test y concordancia neurosimbólica agregada: análisis de auditoría del original (python src/main.py xai), no explicaciones de un ciclo. Sus cifras publicadas están en constants.METRICS_REPORTED['xai']."
+  inputs: {include_xai: "bool, true por defecto (inline y batch)", include_shap: "bool, requiere include_xai", n_samples: "solo batch, ciclos máximos con SHAP (5)"}
+  outputs: {ig_importance: "head -> sensor -> float", shap_importance: "head -> sensor -> float | null", xai_error: "str | null (la predicción sigue siendo válida)"}
+  artefacto_nuevo:
+    shap_background.npy: "(80, 600, 14) float32 SIN escalar. Ciclos train_idx[pos] de data/splits/no_virtual_v1__rand_scool/splits.json, con pos = la secuencia de np.random.default_rng(42) del original (primero rng.choice(331, 150) para la muestra de IG, luego rng.choice(1543, 80)) -> es EXACTAMENTE el fondo del perfil full. Generar con xai.build_shap_background (receta en su docstring). md5 local 89f4838a69e2f940b0beef18a20f1a2f. Hay que subirlo a s3://<STORAGE_BUCKET>/artifacts/fixed/ml37_wine_press_predictive_maintenance/ junto al resto (acción del responsable)."
+  golden_cases: "los 20 de inbox/a39/manifest.yaml (top-3 |IG| por head, tolerancia relativa 1%)"
+  verificacion_shap: "Reproducido el barrido full del original con xai.py (150 ciclos IG, fondo 80, 30 ciclos SHAP, np.random.seed(42)): r Spearman IG-SHAP cooler 0.9165, valve 0.6484, pump 0.6044, accumulator 0.7978 = xai_metrics.csv a 4 decimales (2026-11-24, ver outputs/a37/verification_report.md)."
+

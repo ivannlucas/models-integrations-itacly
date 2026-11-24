@@ -1,3 +1,22 @@
+# [FUSIONADO EN ml37 — 2026-11-24] El plugin ml39-wine-predictive-maintenance-xai se ha
+# eliminado: a39 es la capa XAI del modelo de a37 (mismo best_model.keras, MD5-idéntico) y se
+# sirve ahora desde ml37-wine-press-predictive-maintenance (/predict con include_xai /
+# include_shap; código en app/plugins/ml37_wine_press_predictive_maintenance/xai.py). Ver la
+# nota [FUSIÓN a39] de inbox/a37/manifest.yaml. Lo que queda SUPERADO de este manifest:
+#   - model_id, ARTIFACT_FOLDER_NAME propio y "seguir el patrón ml47/ml48 de plugin separado".
+#   - "mlflow_run_id no aplica": ahora la explicación usa el mismo bundle que la predicción, así
+#     que con mlflow_run_id explica el modelo reentrenado del usuario.
+#   - shap_background.npy escalado (n, 600, 40): ahora es (80, 600, 14) SIN escalar, y el fondo
+#     replica EXACTAMENTE la secuencia de rng del original (solo hay una llamada previa,
+#     rng.choice(331, 150) para la muestra de IG), no una muestra "independiente".
+#   - "SHAP falla con 500 con backend torch, esperado" y "en producción no hay contaminación
+#     porque cada pod sirve un modelo": FALSO. main.py importa app.registry entero antes del
+#     filtro MODEL, así que en el pod el backend es siempre torch y el SHAP de ml39 nunca
+#     funcionaba. SHAP funciona ahora sobre el modelo Keras-torch (shap, ruta PyTorch).
+#   - a39_vs_a37_wiring_note: ya no hay que llamar a dos plugins con el mismo payload.
+# El resto (alcance en vivo vs offline, perfil full vs audit, golden_cases de IG) sigue vigente.
+# El texto histórico de debajo no se reescribe.
+
 model_id: ml39-wine-predictive-maintenance-xai
 sector: vitivinicola
 nombre: "Implementación del modelo XAI para la visualización de los ciclos de reparación o mantenimiento de la maquinaria"

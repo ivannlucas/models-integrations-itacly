@@ -1,5 +1,77 @@
 # Verificación — ml37-wine-press-predictive-maintenance
 
+## [FUSIÓN a39 — 2026-11-24] Reverificación con la capa XAI integrada
+
+ml37 sirve ahora también el entregable a39 (Integrated Gradients + SHAP por ciclo,
+`app/plugins/ml37_wine_press_predictive_maintenance/xai.py`); el plugin
+`ml39-wine-predictive-maintenance-xai` se ha eliminado. Ver la nota [FUSIÓN a39] de
+`inbox/a37/manifest.yaml`. Versión 1.0.0 → 1.1.0.
+
+### Checklist técnico
+
+- [x] **flake8** (plugin, tests de ml37, `conftest.py`, `registry.py`): 0 errores.
+- [x] **pylint** (plugin + tests de ml37): **10.00/10**.
+- [x] **pytest, suite completa**: **1693 passed, 0 failed** (los dos fallos previos ajenos
+  de ml10/numba_cache que citaba el informe de ml39 ya no aparecen en este entorno).
+  - `test_ml37_xai.py` (17 tests, código real): IG frente a una referencia por diferencias
+    finitas, lote = ciclo a ciclo, agregación por sensor, secuencia de `rng` del fondo SHAP,
+    carga/escalado/rechazo del fondo, `xai_error`, tope `n_samples` de SHAP en batch,
+    reentreno real de 1 época que genera su fondo, `train()` sube `shap_background.npy`, y
+    2 golden cases de a39 con el plugin y el artefacto reales.
+  - Pasan con Keras en backend **torch y tensorflow** (50/50 tests de ml37 en ambos).
+- [x] **`from app.registry import REGISTRY`**: 38 entradas, sin ml39.
+- [x] **Arranque real** (`MODEL=ml37-wine-press-predictive-maintenance`): 1/1 modelo listo;
+  `/health` → `version 1.1.0, loaded: true`; `/stats` con `include_xai`/`include_shap` y las
+  métricas XAI publicadas; `/models/ml39-…/health` → 404.
+- [x] **`/predict` inline sin XAI, 20 golden cases de a37**: `predicho` 20/20, `risk` 20/20
+  (±1e-4), `alertas` 20/20 — la parte predictiva no cambia.
+- [x] **`/predict` inline por defecto (IG), 20 golden cases de a39**: ranking top-3 **80/80**
+  cabezas; valor dentro del 1 % en 74/80. Las 6 restantes (ciclos 1126, 1175, 1275, de
+  magnitud ~1e-5–1e-6) son el redondeo a 6 decimales del valor de referencia del manifest
+  (p. ej. 7,73e-6 frente a "0.000008"): el mismo resultado que el informe de ml39.
+- [x] **`include_shap=true`**: 200, `xai_error` null, y dos llamadas iguales dan la misma
+  explicación (`rseed=42`). En el plugin ml39 esto devolvía 500 en todos los casos.
+- [x] **`include_shap` sin `include_xai`** → 422. **`/train` sin `mlflow_run_id`** → 422.
+- [x] **`include_xai=true` por defecto también en batch** (decisión del usuario, 2026-11-24; en batch suma ≈3 s por ciclo, usar `wait=false` para lotes grandes).
+- [x] **Batch** con 2 ciclos (uno con PS1 = NaN) e `include_xai=true`: `n_rows=2`,
+  `n_predictions=1`, el ciclo bueno con IG y el roto con su `error`.
+- [x] **Coste en CPU en un cgroup** (`CUDA_VISIBLE_DEVICES=`, como los pods): sin XAI 0,5 s,
+  IG 2,2–2,8 s, SHAP ≈65 s; memoria 0,61 GiB cargado, pico 1,41 GiB con SHAP (límite del pod
+  2 GiB: dos SHAP simultáneos probablemente no caben).
+
+### SHAP frente al entregable (perfil `full`)
+
+Reproducción completa del barrido del perfil `full` de `xai_analysis.py` con las funciones del
+plugin (`xai.integrated_gradients`, `xai.shap_attributions(rseed=None)`): misma muestra de 150
+ciclos de test para IG, el mismo fondo de 80 ciclos de train (el `shap_background.npy`
+publicado; comprobado que es exactamente `train_idx[rng…]` del original) y los mismos 30 ciclos
+explicados, con `np.random.seed(42)` como hace `set_random_seed(42)`. Gradientes con torch, no
+con TensorFlow.
+
+| Cabeza | r Spearman IG-SHAP (plugin) | r del entregable (`xai_metrics.csv`) | p (plugin) |
+|---|---|---|---|
+| cooler | 0.9165 | 0.9165 | 4.084e-06 |
+| valve | 0.6484 | 0.6484 | 0.01214 |
+| pump | 0.6044 | 0.6044 | 0.02206 |
+| accumulator | 0.7978 | 0.7978 | 0.0006283 |
+
+Coinciden a 4 decimales, y los p-valores también. Es la primera verificación numérica de SHAP
+frente al entregable: el informe de ml39 la había dejado pendiente.
+
+### Pendiente fuera del repo
+
+- Subir a `s3://<STORAGE_BUCKET>/artifacts/fixed/ml37_wine_press_predictive_maintenance/`
+  `best_model.keras`, `scaler.json`, `class_mappings.json`, `train_config.json` (los del
+  entregable, md5 en el manifest) y `shap_background.npy` (md5
+  89f4838a69e2f940b0beef18a20f1a2f). Hoy no existe en S3 ni la carpeta de ml37 ni la de ml39.
+- Fichas: `outputs/a39/datos_a39.json` sigue apuntando a `ml39-wine-predictive-maintenance-xai`
+  y la ficha de a37 no menciona la explicabilidad; regenerar con `docs-generation`.
+
+---
+
+*Informe original (2026-11-18), sin reescribir:*
+
+
 Fecha: 2026-11-18
 
 ## Checklist técnico
