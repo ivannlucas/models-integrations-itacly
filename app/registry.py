@@ -308,12 +308,31 @@ from app.plugins.ml40_meat_refrigeration_aeration_fault_diagnosis.train_dto impo
     TrainRequest as Ml40Meat_TrainReq,
     TrainResponse as Ml40Meat_TrainResp,
 )
+from app.plugins.ml37_wine_press_predictive_maintenance.plugin import (
+    Ml37WinePressPredictiveMaintenancePlugin,
+)
+from app.plugins.ml37_wine_press_predictive_maintenance.predict_dto import (
+    PredictRequest as Ml37Wine_Request,
+    PredictResponse as Ml37Wine_Response,
+)
+from app.plugins.ml37_wine_press_predictive_maintenance.train_dto import (
+    TrainRequest as Ml37Wine_TrainReq,
+    TrainResponse as Ml37Wine_TrainResp,
+)
+
 from app.plugins.ml28_meat_neuroevolutionary_raw_materials_prediction.plugin import (
     Ml28MeatNeuroevolutionaryRawMaterialsPredictionPlugin,
 )
 from app.plugins.ml28_meat_neuroevolutionary_raw_materials_prediction.predict_dto import (
     PredictRequest as Ml28Meat_Request,
     PredictResponse as Ml28Meat_Response,
+)
+from app.plugins.ml39_wine_predictive_maintenance_xai.plugin import (
+    Ml39WinePredictiveMaintenanceXaiPlugin,
+)
+from app.plugins.ml39_wine_predictive_maintenance_xai.predict_dto import (
+    PredictRequest as Ml39Wine_Request,
+    PredictResponse as Ml39Wine_Response,
 )
 from app.plugins.ml43_cereals_dnsl_anomaly_fault_detection.plugin import (
     Ml43CerealsDnslAnomalyFaultDetectionPlugin,
@@ -699,6 +718,17 @@ REGISTRY: list[ModelEntry] = [
         train_response_type=Ml45_TrainResp,
     ),
     ModelEntry(
+        model_id="ml37-wine-press-predictive-maintenance",
+        prefix="/models/ml37-wine-press-predictive-maintenance",
+        version="1.0.0",
+        plugin_class=Ml37WinePressPredictiveMaintenancePlugin,
+        predict_request_type=Ml37Wine_Request,
+        predict_response_type=Ml37Wine_Response,
+        extra_predict_exceptions=(DataContractError,),
+        train_request_type=Ml37Wine_TrainReq,
+        train_response_type=Ml37Wine_TrainResp,
+    ),
+    ModelEntry(
         model_id="ml40-meat-refrigeration-aeration-fault-diagnosis",
         prefix="/models/ml40-meat-refrigeration-aeration-fault-diagnosis",
         version="1.0.0",
@@ -717,6 +747,15 @@ REGISTRY: list[ModelEntry] = [
         predict_request_type=Ml28Meat_Request,
         predict_response_type=Ml28Meat_Response,
         extra_predict_exceptions=(),
+    ),
+    ModelEntry(
+        model_id="ml39-wine-predictive-maintenance-xai",
+        prefix="/models/ml39-wine-predictive-maintenance-xai",
+        version="1.0.0",
+        plugin_class=Ml39WinePredictiveMaintenanceXaiPlugin,
+        predict_request_type=Ml39Wine_Request,
+        predict_response_type=Ml39Wine_Response,
+        extra_predict_exceptions=(DataContractError,),
     ),
     ModelEntry(
         model_id="ml43-cereals-dnsl-anomaly-fault-detection",

@@ -1,0 +1,148 @@
+{
+  "model_id": "a39",
+  "model_slug": "wine-predictive-maintenance-xai",
+  "fecha": "Noviembre 2026",
+  "model_key": "ml39-wine-predictive-maintenance-xai",
+  "version": "1.5 (entrega IA) · plugin 1.0.0",
+  "descripcion": "Capa de explicabilidad (XAI) del modelo de mantenimiento predictivo a37: para cada ciclo que a37 diagnostica, calcula qué sensores pesaron más en esa predicción mediante Integrated Gradients (siempre) y, opcionalmente, SHAP. No es un modelo de predicción nuevo: opera sobre el mismo modelo LSTM, el mismo dataset y la misma configuración que a37.",
+  "task_type": "Capa de explicabilidad (Integrated Gradients + SHAP) sobre un clasificador multitarea de secuencias ya entrenado",
+  "framework": "TensorFlow (tf.GradientTape) + SHAP (GradientExplainer) + pandas / numpy",
+  "artefacto": "best_model.keras + scaler.json + class_mappings.json + train_config.json (copia idéntica de a37) + shap_background.npy (nuevo, 80 ciclos de train, semilla fija)",
+  "objetivo": "Hacer transparente el diagnóstico de a37: mostrar, para cada componente y cada ciclo, qué sensores explican la predicción, de modo que el técnico pueda contrastar la salida del modelo con su propio conocimiento físico de la máquina antes de actuar.",
+  "caso_uso": "Modo inline: se envía el mismo ciclo de 60 s (14 sensores) que se envía a a37 y se obtiene, por componente, la importancia de cada sensor para la clase predicha (Integrated Gradients siempre; SHAP si se activa include_shap, más costoso en CPU). Modo batch: igual, para varios ciclos de un CSV/parquet, con Integrated Gradients únicamente (SHAP queda fuera del batch por coste).",
+  "inputs": [
+    {
+      "nombre": "readings",
+      "tipo": "list[dict[str, float]]",
+      "descripcion": "Serie temporal de un ciclo: lista de lecturas {t, PS1...VS1} — idéntico contrato que a37, remuestreado internamente a 600 pasos",
+      "obligatorio": "Sí (modo inline)",
+      "valor_defecto": "-"
+    },
+    {
+      "nombre": "data_path",
+      "tipo": "string",
+      "descripcion": "Ruta local o s3:// a un CSV/parquet en formato long (cycle_id, t, 14 sensores) — igual contrato que a37",
+      "obligatorio": "Sí (modo batch)",
+      "valor_defecto": "-"
+    },
+    {
+      "nombre": "include_shap",
+      "tipo": "bool",
+      "descripcion": "Añade importancia SHAP por sensor y por head, además de Integrated Gradients. Coste alto en CPU (varios segundos por ciclo); solo disponible en modo inline",
+      "obligatorio": "No",
+      "valor_defecto": "false"
+    }
+  ],
+  "outputs": [
+    {
+      "nombre": "predicted_class",
+      "tipo": "dict[str, int]",
+      "descripcion": "Código real UCI que a37 predeciría para este mismo ciclo (cooler/valve/pump/accumulator) — la clase que se está explicando",
+      "rango": "mismos códigos que a37",
+      "interpretacion": "permite mostrar la explicación sin tener que repetir la llamada a a37"
+    },
+    {
+      "nombre": "ig_importance",
+      "tipo": "dict[str, dict[str, float]]",
+      "descripcion": "Por componente, importancia media (|Integrated Gradients|) de cada uno de los 14 sensores físicos para la clase predicha",
+      "rango": "valores positivos, sin límite superior fijo — se comparan entre sí, no en escala absoluta",
+      "interpretacion": "el sensor con mayor valor es el que más pesó en la predicción de ese componente"
+    },
+    {
+      "nombre": "shap_importance",
+      "tipo": "dict[str, dict[str, float]] | null",
+      "descripcion": "Igual que ig_importance pero calculado con SHAP; null si include_shap=false",
+      "rango": "valores positivos",
+      "interpretacion": "una segunda fuente de explicación independiente de Integrated Gradients, para contrastar si ambas coinciden en el sensor dominante"
+    }
+  ],
+  "metricas": [
+    {
+      "nombre": "Verificación tras integración: ranking top-3 de sensores",
+      "valor": "80/80 (20 ciclos × 4 componentes)",
+      "descripcion": "Contra el servidor real, comparado con el ranking real calculado en la extracción del manifest ejecutando el código del equipo de IA",
+      "interpretacion": "el plugin identifica siempre los mismos sensores dominantes que el entregable original, en el mismo orden"
+    },
+    {
+      "nombre": "Verificación tras integración: valor exacto (tolerancia 1%)",
+      "valor": "74/80 cabezas",
+      "descripcion": "Las 6 discrepancias son de precisión del valor de referencia en ciclos de magnitud casi nula (redondeo a 6 decimales en el golden case), no del cálculo del plugin — diferencia absoluta máxima observada ≈2,7e-7",
+      "interpretacion": "no afecta al ranking ni a la utilidad práctica de la explicación"
+    },
+    {
+      "nombre": "Separabilidad latente (Silhouette)",
+      "valor": "cooler 0,5196 · valve −0,0448 · pump 0,0232 · accumulator 0,0011",
+      "descripcion": "Declarada por el equipo de IA (memoria); mide cuánto se agrupan las clases en el espacio interno del modelo, por componente",
+      "interpretacion": "el modelo separa bien los estados del refrigerador internamente; apenas separa los de válvula, bomba y acumulador — coherente con sus métricas de clasificación más débiles"
+    },
+    {
+      "nombre": "Concordancia Integrated Gradients–SHAP (Spearman r, perfil completo)",
+      "valor": "cooler 0,9165 · valve 0,6484 · pump 0,6044 · accumulator 0,7978",
+      "descripcion": "Declarada por el equipo de IA; frente al umbral interno de la memoria (r>0,70), cooler y accumulator lo superan, valve y pump no",
+      "interpretacion": "para válvula y bomba, las dos técnicas de explicación no siempre coinciden en qué sensor es más importante — motivo de cautela adicional en esos dos componentes"
+    }
+  ],
+  "limitaciones": [
+    {
+      "tipo": "No es un modelo nuevo, es la capa explicativa de a37",
+      "descripcion": "Usa el mismo modelo, mismo dataset (proxy técnico UCI, no telemetría real de bodega) y mismo run_id que a37. Cualquier limitación de a37 (rendimiento desigual por componente, dataset de laboratorio) se hereda aquí."
+    },
+    {
+      "tipo": "Alcance en vivo limitado respecto al entregable completo",
+      "descripcion": "El entregable incluye 4 técnicas XAI (Integrated Gradients, SHAP, t-SNE, calibración) más concordancia neurosimbólica. Solo Integrated Gradients (siempre) y SHAP (opcional) se sirven por ciclo en el plugin; t-SNE, calibración y las concordancias agregadas sobre todo el conjunto de test siguen siendo análisis de auditoría offline, no están disponibles como respuesta de la API."
+    },
+    {
+      "tipo": "SHAP puede no estar disponible según el orden de carga del servidor",
+      "descripcion": "Si otro modelo del mismo servidor (p. ej. a37) ya fijó el motor de cálculo interno a una variante incompatible con SHAP, la petición con include_shap=true devuelve un error claro en vez de un resultado. Integrated Gradients no se ve afectado por este problema: siempre funciona."
+    },
+    {
+      "tipo": "Explicación post-hoc, no causal",
+      "descripcion": "Integrated Gradients y SHAP explican en qué se fijó el modelo para predecir, no demuestran la causa física real de una avería. Si el modelo se equivoca, la explicación justifica una predicción incorrecta igual que una correcta."
+    },
+    {
+      "tipo": "Para válvula y bomba, IG y SHAP no siempre coinciden",
+      "descripcion": "La concordancia entre las dos técnicas de explicación es alta para el refrigerador y el acumulador, pero más débil para la válvula y la bomba — ver métricas arriba. Interpretar con más cautela la explicación de estos dos componentes."
+    },
+    {
+      "tipo": "SHAP es opcional por coste",
+      "descripcion": "SHAP tarda varios segundos por ciclo en CPU; por eso es opt-in (include_shap) y no está disponible en modo batch."
+    }
+  ],
+  "fichero_nombre": "20 ciclos reales de data/processed/tensors/X.npy (los mismos cycle_id del golden dataset de a37)",
+  "fichero_registros": "20 ciclos × 600 pasos temporales (14 sensores)",
+  "fichero_resultado": "predict_inline reproduce el ranking top-3 de sensores más importantes por componente en los 20/20 ciclos, y el valor exacto (tolerancia 1%) en 74/80 combinaciones ciclo-componente",
+  "observaciones_tecnicas": "Requiere TensorFlow real (tf.GradientTape), a diferencia de a37 que pudo evitarlo con Keras 3 standalone — SHAP tampoco tiene alternativa sin TensorFlow real. En este entorno de desarrollo solo hay disponible un release candidate de TensorFlow (2.22.0-rc1) en vez de la versión exacta del entregable (2.19.0); funciona correctamente pero es un riesgo a vigilar en el entorno de producción. Integrated Gradients incluye una vía alternativa con PyTorch que da resultados idénticos cuando el proceso del servidor comparte backend con otro modelo que fuerza esa variante (ver limitaciones) — SHAP no tiene esa alternativa. CPU suficiente, sin GPU.",
+  "que_no_responde": "No te dice por qué se estropeó un componente, solo qué sensores pesaron más en la predicción de a37 para ese ciclo. No sustituye la inspección técnica ni añade información que a37 no pueda predecir.",
+  "entradas_contexto": "Los mismos datos de sensores que se envían a a37 para ese ciclo: presión, caudal, temperatura y vibración de la máquina.",
+  "ejemplo_interpretacion": "Si a37 predice que el refrigerador está en el peor estado posible y la explicación de a39 señala la presión (PS6) como el sensor más determinante en vez de la temperatura, eso es información útil para el técnico: indica que conviene revisar también el circuito de presión, no solo el sistema térmico, antes de intervenir.",
+  "margen_error": "El ranking de sensores más importantes coincide siempre con el que calculó el equipo de IA en sus pruebas; los valores numéricos exactos pueden variar en una fracción mínima en los ciclos donde la importancia de todos los sensores es casi nula, sin que eso cambie cuál es el sensor más relevante.",
+  "revisar_manualmente": [
+    "Cuando la explicación sea sobre válvula o bomba: las dos técnicas de explicación (Integrated Gradients y SHAP) coinciden menos en estos dos componentes — trata el sensor señalado como una pista, no como una certeza.",
+    "Cuando pidas la explicación con SHAP (include_shap) y el sistema devuelva un error: puede deberse a cómo está arrancado el servidor ese día, no a un problema con tus datos — vuelve a intentarlo con Integrated Gradients, que siempre está disponible.",
+    "Cuando el sensor señalado como más importante no tenga sentido físico para ti dado lo que sabes de la máquina: trátalo como una pista a investigar, no como la causa demostrada del problema."
+  ],
+  "que_no_hace": [
+    "No sustituye el criterio del técnico ni demuestra la causa física de una avería.",
+    "No añade ninguna predicción nueva: solo explica la que ya da a37 para el mismo ciclo.",
+    "No está validado con telemetría real de ninguna bodega: hereda exactamente las mismas limitaciones de dataset que a37.",
+    "No ofrece la explicación completa del entregable (análisis de conjunto completo, comparación histórica): esas partes siguen siendo un informe aparte, no una respuesta inmediata del sistema."
+  ],
+  "puede_equivocarse": "La explicación en sí es un cálculo determinista (siempre el mismo resultado para el mismo ciclo), pero lo que explica es la predicción de a37, que sí puede equivocarse —sobre todo en válvula, bomba y acumulador, donde el modelo es menos fiable—. Es una ayuda para entender e interpretar la predicción de a37, no una segunda opinión independiente.",
+  "kpis": [
+    {
+      "kpi": "Fidelidad de la explicación tras la integración",
+      "valor_umbral": "80/80 rankings top-3 exactos",
+      "descripcion": "Confirma que el plugin reproduce fielmente qué sensores destacó el equipo de IA, para los 20 ciclos y los 4 componentes"
+    },
+    {
+      "kpi": "Concordancia entre las dos técnicas de explicación",
+      "valor_umbral": "alta en refrigerador y acumulador, más débil en válvula y bomba",
+      "descripcion": "Cuando Integrated Gradients y SHAP coinciden, la explicación es más fiable; cuando no, conviene revisar manualmente"
+    },
+    {
+      "kpi": "Disponibilidad de Integrated Gradients",
+      "valor_umbral": "100% de las peticiones",
+      "descripcion": "A diferencia de SHAP (opcional y sensible al estado del servidor), Integrated Gradients siempre responde"
+    }
+  ]
+}
