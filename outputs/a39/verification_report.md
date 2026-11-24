@@ -1,5 +1,13 @@
 # Verificación — ml39-wine-predictive-maintenance-xai
 
+> **[FUSIONADO EN ml37 — 2026-11-24]** Este plugin se ha eliminado: la capa XAI de a39 se sirve
+> desde `ml37-wine-press-predictive-maintenance` (`include_xai` / `include_shap`). La
+> reverificación está en `outputs/a37/verification_report.md`. Corrección a este informe: el
+> 500 de `include_shap=true` **no** era un comportamiento aceptable limitado al servidor de
+> desarrollo. `main.py` importa `app.registry` entero antes del filtro `MODEL`, así que también
+> en el pod el backend de Keras es siempre torch y SHAP fallaba en el 100 % de las llamadas.
+> El texto de debajo es el histórico, sin reescribir.
+
 Fecha: 2026-11-19
 
 ## Checklist técnico

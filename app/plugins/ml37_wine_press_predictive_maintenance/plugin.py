@@ -6,6 +6,11 @@ readings; the model classifies 4 components (cooler/valve/pump/accumulator) inde
 neurosymbolic rule layer fuses the model's predictions with 9 physical threshold rules into
 per-component alerts (see inbox/a37/manifest.yaml).
 
+It also serves deliverable a39, the explainability layer of this same model (see xai.py):
+Integrated Gradients per cycle and head (``include_xai``, on by default inline) and SHAP
+(``include_shap``, opt-in, costly). The explanation always uses the same bundle as the
+prediction, so with ``mlflow_run_id`` it explains the user's retrained model.
+
 IMPORTANT (see manifest known_issues): the underlying dataset is NOT a real vineyard — it is the
 public UCI "Condition Monitoring of Hydraulic Systems" dataset, used as a technical proxy for
 press/pumping/filtration/bottling equipment.
@@ -16,6 +21,7 @@ import json
 import logging
 import os
 
+import numpy as np
 import pandas as pd
 
 from app.application.dto.stats_dto import InputField, OutputField, StatsResponse
@@ -35,6 +41,7 @@ from app.plugins.ml37_wine_press_predictive_maintenance import (
     preprocessing,
     rules,
     training,
+    xai,
 )
 from app.plugins.ml37_wine_press_predictive_maintenance.constants import (
     ARTIFACT_FOLDER_NAME,
@@ -45,6 +52,8 @@ from app.plugins.ml37_wine_press_predictive_maintenance.constants import (
     MODEL_ID,
     PHYSICAL_SENSORS,
     SCALER_FILENAME,
+    SHAP_BACKGROUND_FILENAME,
+    SHAP_BATCH_MAX_CYCLES_DEFAULT,
     TARGET_NAMES,
     VERSION,
 )
@@ -65,7 +74,7 @@ REQUIRED_BATCH_COLUMNS = ("cycle_id", "t", *PHYSICAL_SENSORS)
 
 
 class Ml37WinePressPredictiveMaintenancePlugin(PluginRuntimeMixin, ModelPluginPort):
-    """LSTM multitask classifier (4 heads) + neurosymbolic rule fusion."""
+    """LSTM multitask classifier (4 heads) + neurosymbolic rule fusion + IG/SHAP explanations."""
 
     def __init__(self) -> None:
         """Initialize an unloaded plugin (runtime counters start at the mixin defaults)."""
@@ -105,33 +114,46 @@ class Ml37WinePressPredictiveMaintenancePlugin(PluginRuntimeMixin, ModelPluginPo
         threshold: float | None = None,
         mlflow_run_id: str = "",
     ) -> PredictInlineResponse:
-        """Diagnose one cycle's physical-sensor time series."""
+        """Diagnose one cycle's physical-sensor time series (+ its explanation by default)."""
         _ = model_key, threshold
+        include_xai = bool(features.get("include_xai", True))
+        include_shap = include_xai and bool(features.get("include_shap", False))
         bundle, user_tmp = self._resolve_bundle(mlflow_run_id)
         with removing_dir(user_tmp):
             readings = features.get("readings") or []
-            result = _predict_cycle(bundle, readings)
+            result, x_scaled = _predict_cycle(bundle, readings)
+            if include_xai:
+                result.update(_explain_cycle(bundle, x_scaled, include_shap))
             self._record()
             logger.info(
-                "predict_inline done — count=%d mlflow=%s", self.predict_count, bool(mlflow_run_id)
+                "predict_inline done — count=%d mlflow=%s xai=%s shap=%s", self.predict_count,
+                bool(mlflow_run_id), include_xai, include_shap,
             )
             return PredictInlineResponse(model_id=MODEL_ID, **result)
 
     # ── predict_batch ─────────────────────────────────────────────────────────
 
-    def predict_batch(self, *, data_path: str, mlflow_run_id: str = "") -> PredictBatchResponse:
+    def predict_batch(  # pylint: disable=too-many-arguments
+        self,
+        *,
+        data_path: str,
+        mlflow_run_id: str = "",
+        include_xai: bool = True,
+        include_shap: bool = False,
+        n_samples: int = SHAP_BATCH_MAX_CYCLES_DEFAULT,
+    ) -> PredictBatchResponse:
         """Diagnose every cycle of a long-format CSV/parquet (cycle_id, t, 14 sensores).
 
         A cycle with a contract error (missing sensor, non-finite value, duplicate timestamps)
         falls to that cycle's `error` field alone — one bad cycle must never abort the batch.
+        With ``include_xai`` (default) every cycle also gets Integrated Gradients (≈3 s each),
+        and with ``include_shap`` the first ``n_samples`` cycles also get SHAP (≈70 s each).
         """
         bundle, user_tmp = self._resolve_bundle(mlflow_run_id)
         with removing_dir(user_tmp):
             df = _read_batch_table(data_path)
-            predictions = []
-            for cycle_id, group in df.groupby("cycle_id", sort=False):
-                predictions.append(_predict_batch_cycle(bundle, str(cycle_id), group))
-
+            shap_budget = max(int(n_samples), 0) if include_xai and include_shap else 0
+            predictions = _predict_batch_cycles(bundle, df, include_xai, shap_budget)
             n_predictions = sum(1 for p in predictions if p.error is None)
             self._record()
             logger.info(
@@ -161,6 +183,7 @@ class Ml37WinePressPredictiveMaintenancePlugin(PluginRuntimeMixin, ModelPluginPo
 
         def _write(model_dir: str) -> None:
             result.model.save(os.path.join(model_dir, MODEL_FILENAME))
+            np.save(os.path.join(model_dir, SHAP_BACKGROUND_FILENAME), result.shap_background)
             with open(os.path.join(model_dir, SCALER_FILENAME), "w", encoding="utf-8") as fh:
                 json.dump(result.scaler, fh)
             mappings_path = os.path.join(model_dir, CLASS_MAPPINGS_FILENAME)
@@ -199,6 +222,12 @@ class Ml37WinePressPredictiveMaintenancePlugin(PluginRuntimeMixin, ModelPluginPo
             InputField(name="readings", type="list[dict[str, float]]",
                        description=f"Serie temporal de un ciclo (t + {len(PHYSICAL_SENSORS)} "
                        "sensores físicos), remuestreada internamente a 600 pasos."),
+            InputField(name="include_xai", type="bool",
+                       description="Integrated Gradients por sensor y head (entregable a39). "
+                       "true por defecto (inline y batch); ≈3 s por ciclo."),
+            InputField(name="include_shap", type="bool",
+                       description="Con include_xai, añade SHAP por sensor y head; ≈70 s por "
+                       "ciclo. false por defecto."),
         ]
         outputs = [
             OutputField(name="predictions", type="dict[str, int]",
@@ -210,6 +239,13 @@ class Ml37WinePressPredictiveMaintenancePlugin(PluginRuntimeMixin, ModelPluginPo
             OutputField(name="alerts", type="list[dict]",
                         description="Alertas fusionadas reglas+modelo por componente "
                         "(INFO/WARNING/CRITICAL/EMERGENCY)."),
+            OutputField(name="ig_importance", type="dict[str, dict[str, float]] | null",
+                        description="head -> sensor -> |IG| medio (perfil full, steps=50)."),
+            OutputField(name="shap_importance", type="dict[str, dict[str, float]] | null",
+                        description="head -> sensor -> |SHAP| medio, solo con include_shap."),
+            OutputField(name="xai_error", type="str | null",
+                        description="Motivo si la explicación del ciclo falló; la predicción "
+                        "sigue siendo válida."),
         ]
         return StatsResponse(
             model_name=MODEL_ID,
@@ -219,10 +255,15 @@ class Ml37WinePressPredictiveMaintenancePlugin(PluginRuntimeMixin, ModelPluginPo
                 "LSTM multitarea clasifica la condición de 4 componentes (cooler/valve/pump/"
                 "accumulator) a partir de un ciclo de 14 sensores físicos, y una capa "
                 "neurosimbólica fusiona esas predicciones con 9 reglas físicas en alertas de "
-                "severidad. Ver inbox/a37/manifest.yaml: el dataset es un proxy técnico (UCI "
-                "Hydraulic Systems), no telemetría real de bodega."
+                "severidad. Incluye la explicabilidad del entregable a39 sobre el mismo modelo: "
+                "Integrated Gradients y, opcionalmente, SHAP por sensor y componente. Ver "
+                "inbox/a37/manifest.yaml: el dataset es un proxy técnico (UCI Hydraulic Systems), "
+                "no telemetría real de bodega."
             ),
-            task_type="classification_multitask_sequence + neurosymbolic_rule_fusion",
+            task_type=(
+                "classification_multitask_sequence + neurosymbolic_rule_fusion + "
+                "explainability (Integrated Gradients, SHAP)"
+            ),
             framework=FRAMEWORK,
             inputs=inputs,
             outputs=outputs,
@@ -231,9 +272,10 @@ class Ml37WinePressPredictiveMaintenancePlugin(PluginRuntimeMixin, ModelPluginPo
         )
 
 
-def _predict_cycle(bundle: dict, readings: list[dict]) -> dict:
+def _predict_cycle(bundle: dict, readings: list[dict]) -> tuple[dict, np.ndarray]:
     """Run the full pipeline (resample -> schema tensor -> scale -> model -> rules) for one
-    cycle's readings — shared by predict_inline and predict_batch's per-cycle loop."""
+    cycle's readings — shared by predict_inline and predict_batch's per-cycle loop. Returns the
+    response fields and the scaled (1, 600, 40) tensor, which _explain_cycle reuses."""
     schema_tensor, stats = preprocessing.cycle_from_readings(readings)
     x_scaled = preprocessing.apply_scaler(schema_tensor[None, ...], bundle["scaler"])
     row = inference.run_inference(bundle, x_scaled)[0]
@@ -251,7 +293,31 @@ def _predict_cycle(bundle: dict, readings: list[dict]) -> dict:
         },
         "alerts": alert_result["alerts"],
         "rule_evidence": alert_result["rule_evidence"],
-    }
+    }, x_scaled
+
+
+def _explain_cycle(bundle: dict, x_scaled: np.ndarray, include_shap: bool) -> dict:
+    """IG (+ SHAP) for one cycle with the bundle that made the prediction. A failure goes to
+    ``xai_error`` instead of discarding the prediction (same contract as ml48)."""
+    explanation: dict = {"ig_importance": None, "shap_importance": None, "xai_error": None}
+    model = bundle["model"]
+    try:
+        explanation["ig_importance"] = xai.compute_ig_importance(model, x_scaled)
+        if include_shap:
+            background = bundle.get("shap_background")
+            if background is None:
+                explanation["xai_error"] = (
+                    f"SHAP no disponible: el modelo no tiene {SHAP_BACKGROUND_FILENAME} "
+                    "publicado. Integrated Gradients sí se ha calculado."
+                )
+            else:
+                explanation["shap_importance"] = xai.compute_shap_importance(
+                    model, x_scaled, background,
+                )
+    except Exception as exc:  # pylint: disable=broad-exception-caught  # the prediction stays valid
+        logger.exception("ml37 XAI failed for one cycle")
+        explanation["xai_error"] = f"La explicabilidad del ciclo falló: {exc}"
+    return explanation
 
 
 def _read_table(path: str) -> pd.DataFrame:
@@ -269,11 +335,31 @@ def _read_batch_table(data_path: str) -> pd.DataFrame:
     return df
 
 
-def _predict_batch_cycle(bundle: dict, cycle_id: str, group: pd.DataFrame) -> BatchCyclePrediction:
+def _predict_batch_cycles(
+    bundle: dict, df: pd.DataFrame, include_xai: bool, shap_budget: int,
+) -> list[BatchCyclePrediction]:
+    """One row per cycle_id; SHAP only for the first ``shap_budget`` cycles predicted OK."""
+    predictions = []
+    for cycle_id, group in df.groupby("cycle_id", sort=False):
+        with_shap = shap_budget > 0
+        row = _predict_batch_cycle(
+            bundle, str(cycle_id), group, include_xai=include_xai, include_shap=with_shap,
+        )
+        if with_shap and row.error is None:
+            shap_budget -= 1
+        predictions.append(row)
+    return predictions
+
+
+def _predict_batch_cycle(
+    bundle: dict, cycle_id: str, group: pd.DataFrame, *, include_xai: bool, include_shap: bool,
+) -> BatchCyclePrediction:
     """Diagnose one cycle's group of rows; a contract error becomes that cycle's ``error``."""
     try:
         readings = group.sort_values("t").to_dict("records")
-        result = _predict_cycle(bundle, readings)
-        return BatchCyclePrediction(cycle_id=cycle_id, **result)
+        result, x_scaled = _predict_cycle(bundle, readings)
     except DataContractError as exc:
         return BatchCyclePrediction(cycle_id=cycle_id, error=str(exc))
+    if include_xai:
+        result.update(_explain_cycle(bundle, x_scaled, include_shap))
+    return BatchCyclePrediction(cycle_id=cycle_id, **result)

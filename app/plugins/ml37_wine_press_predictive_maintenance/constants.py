@@ -9,12 +9,19 @@ vineyard — it is the public UCI "Condition Monitoring of Hydraulic Systems" da
 hydraulic/electromechanical components (pump, valve, accumulator, cooling) functionally
 comparable to presses, pumping, filtration and bottling equipment. Served variant: run_id
 no_virtual_v1__rand_scool (the AI team's chosen reference configuration).
+
+This plugin also serves the explainability layer of deliverable a39 (Integrated Gradients +
+SHAP, inbox/a39/codigo/src/xai/xai_analysis.py): a39 explains this exact model (MD5-identical
+best_model.keras, same run_id), so it lives here instead of in a separate plugin — see xai.py.
 """
 
 MODEL_ID = "ml37-wine-press-predictive-maintenance"
 ARTIFACT_FOLDER_NAME = "ml37_wine_press_predictive_maintenance"
-VERSION = "1.0.0"
-FRAMEWORK = "keras3(backend=torch) + scikit-learn (StandardScaler) + numpy/pandas"
+VERSION = "1.1.0"
+FRAMEWORK = (
+    "keras3(backend=torch) + scikit-learn (StandardScaler) + numpy/pandas; XAI: Integrated "
+    "Gradients (torch autograd) + shap (GradientExplainer)"
+)
 
 # --- Artefactos (artifacts/ml37_wine_press_predictive_maintenance/, variante
 # no_virtual_v1__rand_scool) ---
@@ -22,6 +29,11 @@ MODEL_FILENAME = "best_model.keras"
 SCALER_FILENAME = "scaler.json"
 CLASS_MAPPINGS_FILENAME = "class_mappings.json"
 TRAIN_CONFIG_FILENAME = "train_config.json"
+# Fondo de SHAP (opcional: sin él, include_shap da xai_error y el resto funciona). Son ciclos
+# de train SIN escalar, solo los 14 sensores físicos: (n, 600, 14) float32. Se escalan al cargar
+# con el scaler del bundle activo, así el mismo fichero vale para la base y para un reentreno.
+# Lo genera xai.build_shap_background (ver su docstring).
+SHAP_BACKGROUND_FILENAME = "shap_background.npy"
 
 # --- Contrato schema_v1 (build_schema_v1_tensor.py) ---
 TIMESTEPS = 600
@@ -113,4 +125,31 @@ METRICS_REPORTED = {
         "con este dataset (declarado explícitamente en la memoria como objetivo pendiente de "
         "validación con datos reales de planta)."
     ),
+    # Métricas propias de la capa XAI (entregable a39, perfil "full": reports/XAI_full/
+    # no_virtual_v1__rand_scool/xai_metrics.csv y models/metrics/.../xai_manifest.json).
+    # t-SNE/silhouette y Brier son análisis offline sobre todo el test; no se recalculan en vivo.
+    "xai": {
+        "separabilidad_latente_silhouette": {
+            "cooler": 0.5196, "valve": -0.0448, "pump": 0.0232, "accumulator": 0.0011,
+        },
+        "brier_score": {"cooler": 0.0177, "valve": 0.1512, "pump": 0.1427, "accumulator": 0.1377},
+        "concordancia_ig_shap_spearman_r_perfil_full": {
+            "cooler": 0.9165, "valve": 0.6484, "pump": 0.6044, "accumulator": 0.7978,
+        },
+        "umbral_robustez_explicativa": "r de Spearman IG-SHAP > 0.70 por head (memoria a39)",
+    },
 }
+
+# --- Capa XAI (entregable a39, src/xai/xai_analysis.py, perfil "full" de config.yaml) ---
+# steps=50 es el perfil "full", el que generó las cifras de la memoria y los golden cases. NUNCA
+# el perfil "audit" (steps=24): los valores no coincidirían.
+IG_STEPS = 50
+SHAP_N_BACKGROUND = 80
+# Tamaño de la muestra de IG del barrido original. Solo se usa para replicar la secuencia de
+# np.random.default_rng(42) del original al muestrear el fondo de SHAP (xai.background_positions).
+XAI_IG_N_SAMPLES = 150
+XAI_SEED = 42
+# shap.GradientExplainer.shap_values(nsamples=200) es el valor por defecto que usa el original.
+SHAP_NSAMPLES = 200
+# Ciclos con SHAP como máximo en un /predict batch (≈70 s por ciclo en CPU, 4 heads).
+SHAP_BATCH_MAX_CYCLES_DEFAULT = 5

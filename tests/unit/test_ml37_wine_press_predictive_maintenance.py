@@ -3,7 +3,8 @@
 Correctness against the real artifact (LSTM multitask + neurosymbolic rule fusion, 20 golden
 cases from the real UCI hydraulic-proxy test split) is validated by the `verification` skill,
 not here — these tests use FakePlugin and only check wiring: request/response schemas and the
-DataContractError -> 422 mapping.
+DataContractError -> 422 mapping. The real explainability code (deliverable a39, absorbed into
+this plugin) is tested in test_ml37_xai.py.
 """
 from app.domain.services.exceptions import DataContractError
 
@@ -53,6 +54,55 @@ def test_predict_inline(client):
         assert body["confidence_level"][target] in ("green", "yellow", "red")
     assert isinstance(body["alerts"], list)
     assert isinstance(body["rule_evidence"], list)
+
+
+def test_predict_inline_includes_ig_explanation_by_default(client):
+    """include_xai defaults to true inline: the a39 IG explanation comes with the prediction."""
+    body = client.post(f"{PREFIX}/predict", json=INLINE_PAYLOAD).json()
+    for target in ("cooler", "valve", "pump", "accumulator"):
+        assert set(body["ig_importance"][target]) <= set(_PHYSICAL_SENSORS)
+    assert body["shap_importance"] is None
+    assert body["xai_error"] is None
+
+
+def test_predict_inline_without_xai_has_no_explanation(client):
+    """include_xai=false returns the bare prediction (no IG cost)."""
+    body = client.post(f"{PREFIX}/predict", json={**INLINE_PAYLOAD, "include_xai": False}).json()
+    assert body["ig_importance"] is None
+    assert body["predictions"]["cooler"] == 3
+
+
+def test_predict_inline_with_shap(client):
+    """include_shap=true adds the SHAP importance on top of IG."""
+    body = client.post(f"{PREFIX}/predict", json={**INLINE_PAYLOAD, "include_shap": True}).json()
+    assert body["shap_importance"] is not None
+    assert body["ig_importance"] is not None
+
+
+def test_xai_defaults_on_in_inline_and_batch_requests():
+    """include_xai defaults to true in both request modes; SHAP stays opt-in."""
+    # pylint: disable-next=import-outside-toplevel
+    from app.plugins.ml37_wine_press_predictive_maintenance.predict_dto import (
+        PredictBatchRequest,
+        PredictInlineRequest,
+    )
+    batch = PredictBatchRequest(data_path="/tmp/a37_batch.csv")
+    inline = PredictInlineRequest(readings=[])
+    assert batch.include_xai is True and inline.include_xai is True
+    assert batch.include_shap is False and inline.include_shap is False
+
+
+def test_predict_shap_without_xai_returns_422(client):
+    """include_shap requires include_xai, inline and batch (same rule as ml48)."""
+    inline = client.post(
+        f"{PREFIX}/predict", json={**INLINE_PAYLOAD, "include_xai": False, "include_shap": True},
+    )
+    batch = client.post(f"{PREFIX}/predict", json={
+        "mode": "batch", "data_path": "/tmp/a37_batch.csv", "include_xai": False,
+        "include_shap": True,
+    })
+    assert inline.status_code == 422
+    assert batch.status_code == 422
 
 
 def test_predict_inline_missing_readings_field_returns_422(client):
