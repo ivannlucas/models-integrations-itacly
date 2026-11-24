@@ -308,6 +308,18 @@ from app.plugins.ml40_meat_refrigeration_aeration_fault_diagnosis.train_dto impo
     TrainRequest as Ml40Meat_TrainReq,
     TrainResponse as Ml40Meat_TrainResp,
 )
+from app.plugins.ml37_wine_press_predictive_maintenance.plugin import (
+    Ml37WinePressPredictiveMaintenancePlugin,
+)
+from app.plugins.ml37_wine_press_predictive_maintenance.predict_dto import (
+    PredictRequest as Ml37Wine_Request,
+    PredictResponse as Ml37Wine_Response,
+)
+from app.plugins.ml37_wine_press_predictive_maintenance.train_dto import (
+    TrainRequest as Ml37Wine_TrainReq,
+    TrainResponse as Ml37Wine_TrainResp,
+)
+
 from app.plugins.ml28_meat_neuroevolutionary_raw_materials_prediction.plugin import (
     Ml28MeatNeuroevolutionaryRawMaterialsPredictionPlugin,
 )
@@ -697,6 +709,17 @@ REGISTRY: list[ModelEntry] = [
         extra_predict_exceptions=(InsufficientWindowHistoryError,),
         train_request_type=Ml45_TrainReq,
         train_response_type=Ml45_TrainResp,
+    ),
+    ModelEntry(
+        model_id="ml37-wine-press-predictive-maintenance",
+        prefix="/models/ml37-wine-press-predictive-maintenance",
+        version="1.0.0",
+        plugin_class=Ml37WinePressPredictiveMaintenancePlugin,
+        predict_request_type=Ml37Wine_Request,
+        predict_response_type=Ml37Wine_Response,
+        extra_predict_exceptions=(DataContractError,),
+        train_request_type=Ml37Wine_TrainReq,
+        train_response_type=Ml37Wine_TrainResp,
     ),
     ModelEntry(
         model_id="ml40-meat-refrigeration-aeration-fault-diagnosis",

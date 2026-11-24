@@ -243,6 +243,16 @@ from app.plugins.ml34_dairy_pasteurization_energy_ga.train_dto import (
     TrainRequest as Ml34Dairy_TrainReq,
     TrainResponse as Ml34DairyTrainResp,
 )
+from app.plugins.ml37_wine_press_predictive_maintenance.predict_dto import (
+    PredictBatchResponse as Ml37WineBatchResp,
+    PredictInlineResponse as Ml37WineInlineResp,
+    PredictRequest as Ml37Wine_Request,
+    PredictResponse as Ml37Wine_Response,
+)
+from app.plugins.ml37_wine_press_predictive_maintenance.train_dto import (
+    TrainRequest as Ml37Wine_TrainReq,
+    TrainResponse as Ml37WineTrainResp,
+)
 from app.plugins.ml36_dairy_dnl_co2_emissions_optimizer.predict_dto import (
     PredictBatchResponse as Ml36DairyBatchResp,
     PredictInlineResponse as Ml36DairyInlineResp,
@@ -1551,6 +1561,49 @@ _ML36_OPTIMIZE = {
 }
 
 
+_ML37_PREDICTIONS = {"cooler": 3, "valve": 100, "pump": 0, "accumulator": 130}
+_ML37_RISK = {"cooler": 0.0451, "valve": 0.2614, "pump": 0.1367, "accumulator": 0.1592}
+_ML37_SEM = {"cooler": "green", "valve": "red", "pump": "yellow", "accumulator": "yellow"}
+_ML37_PROBS = {
+    "cooler": {3: 0.95, 20: 0.04, 100: 0.01}, "valve": {73: 0.1, 80: 0.1, 90: 0.2, 100: 0.6},
+    "pump": {0: 0.8, 1: 0.15, 2: 0.05}, "accumulator": {90: 0.1, 100: 0.1, 115: 0.1, 130: 0.7},
+}
+_ML37_ALERTS = [{"component": "pump", "source": "rule", "severity": "CRITICAL",
+                 "message": "Eficiencia bomba=0.00280 (fuga severa)"}]
+
+
+def _ml37_wine_inline(plugin: FakePlugin, *, features: dict, model_key, threshold):
+    """Fake inline response for the ml37 predictive-maintenance plugin (golden case cycle_id 33)."""
+    return Ml37WineInlineResp(
+        model_id="ml37-wine-press-predictive-maintenance",
+        predictions=_ML37_PREDICTIONS, risk=_ML37_RISK, confidence_level=_ML37_SEM,
+        probabilities=_ML37_PROBS, alerts=_ML37_ALERTS, rule_evidence=_ML37_ALERTS,
+    )
+
+
+def _ml37_wine_batch(plugin: FakePlugin, *, data_path: str) -> Ml37WineBatchResp:
+    """Fake batch response for the ml37 predictive-maintenance plugin."""
+    return Ml37WineBatchResp(
+        model_id="ml37-wine-press-predictive-maintenance",
+        predictions=[{
+            "cycle_id": "33", "predictions": _ML37_PREDICTIONS, "risk": _ML37_RISK,
+            "confidence_level": _ML37_SEM, "alerts": _ML37_ALERTS, "error": None,
+        }],
+        n_rows=1, n_predictions=1, output_path=None,
+    )
+
+
+def _ml37_wine_train(plugin: FakePlugin, *, data_path: str) -> Ml37WineTrainResp:
+    """Fake training response for the ml37 predictive-maintenance plugin."""
+    return Ml37WineTrainResp(
+        detail="Modelo LSTM multitarea reentrenado",
+        accuracy={"cooler": 0.97, "valve": 0.47, "pump": 0.65, "accumulator": 0.55},
+        balanced_accuracy={"cooler": 0.97, "valve": 0.28, "pump": 0.57, "accumulator": 0.55},
+        f1_macro={"cooler": 0.97, "valve": 0.25, "pump": 0.56, "accumulator": 0.53},
+        n_train=42, n_val=9, n_test=9, epochs_run=23, upload_warning=None,
+    )
+
+
 def _ml36_dairy_inline(plugin: FakePlugin, *, features: dict, model_key, threshold):
     """Fake inline/optimize prediction response for the ml36 DNL CO2 optimizer plugin."""
     _ = plugin, features, threshold
@@ -2716,6 +2769,7 @@ FAKE_FACTORIES: dict[str, tuple[Callable, Callable]] = {
     "ml40-meat-refrigeration-aeration-fault-diagnosis": (_ml40_meat_inline, _ml40_meat_batch),
     "ml35-dairy-ann-cleaning-cost": (_ml35_dairy_inline, _ml35_dairy_batch),
     "ml34-dairy-pasteurization-energy-ga": (_ml34_dairy_inline, _ml34_dairy_batch),
+    "ml37-wine-press-predictive-maintenance": (_ml37_wine_inline, _ml37_wine_batch),
     "ml36-dairy-dnl-co2-emissions-optimizer": (_ml36_dairy_inline, _ml36_dairy_batch),
     "ml17-meat-market-price-analysis": (_ml17_inline, _ml17_batch),
     "ml23-lactic-market-price-forecast": (_ml23_inline, _ml23_batch),
@@ -2884,6 +2938,7 @@ TRAIN_FACTORIES: dict[str, Callable] = {
     "ml34-dairy-pasteurization-energy-ga": _ml34_dairy_train,
     "ml10-dairy-disease-vector-detection": _ml10_dairy_train,
     "ml47-dairy-dnsl-pasteurization-fault-detection": _ml47_dairy_train,
+    "ml37-wine-press-predictive-maintenance": _ml37_wine_train,
     "ml36-dairy-dnl-co2-emissions-optimizer": _ml36_dairy_train,
     "ml8-cereals-img-anomaly-detector": _ml8_cereals_train,
     "ml30-meat-traceability-detection": _ml30_trace_train,
@@ -3119,6 +3174,17 @@ TEST_REGISTRY: list[ModelEntry] = [
         extra_predict_exceptions=(),
         train_request_type=Ml36Dairy_TrainReq,
         train_response_type=Ml36DairyTrainResp,
+    ),
+    ModelEntry(
+        model_id="ml37-wine-press-predictive-maintenance",
+        prefix="/models/ml37-wine-press-predictive-maintenance",
+        version="1.0.0",
+        plugin_class=FakePlugin,
+        predict_request_type=Ml37Wine_Request,
+        predict_response_type=Ml37Wine_Response,
+        extra_predict_exceptions=(DataContractError,),
+        train_request_type=Ml37Wine_TrainReq,
+        train_response_type=Ml37WineTrainResp,
     ),
     ModelEntry(
         model_id="ml46-dairy-fouling-clog-detection",

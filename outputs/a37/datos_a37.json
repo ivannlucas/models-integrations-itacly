@@ -1,0 +1,181 @@
+{
+  "model_id": "a37",
+  "model_slug": "wine-press-predictive-maintenance",
+  "fecha": "Noviembre 2026",
+  "model_key": "ml37-wine-press-predictive-maintenance",
+  "version": "1.6 (entrega IA) · plugin 1.0.0",
+  "descripcion": "Modelo de mantenimiento predictivo para prensas y equipos de embotellado: una red LSTM multitarea clasifica el estado de cuatro componentes (refrigerador, válvula, bomba y acumulador) a partir de un ciclo de 60 s de 14 sensores físicos, y una capa neurosimbólica combina esa predicción con 9 reglas físicas en alertas de severidad por componente.",
+  "task_type": "Clasificación multitarea de secuencias (4 cabezas independientes) + fusión neurosimbólica de reglas",
+  "framework": "Keras 3 (backend=torch) + scikit-learn (StandardScaler) + pandas / numpy",
+  "artefacto": "best_model.keras + scaler.json + class_mappings.json + train_config.json. Configuración no_virtual_v1__rand_scool",
+  "objetivo": "Anticipar fallos en prensas y equipos de embotellado mediante el diagnóstico periódico de cuatro componentes críticos (refrigeración, válvula, bomba, acumulador), combinando una red neuronal entrenada con reglas físicas expertas para que la alerta final no dependa de una sola fuente de evidencia.",
+  "caso_uso": "Modo inline: se envía un ciclo de 60 s (14 sensores, remuestreados internamente a 600 pasos) y se obtiene el estado de los cuatro componentes, su incertidumbre, el semáforo correspondiente y las alertas fusionadas reglas+modelo. Modo batch: se envía un CSV/parquet en formato long con varios ciclos (cycle_id) y cada ciclo devuelve su propio diagnóstico o su error si el ciclo está mal formado.",
+  "inputs": [
+    {
+      "nombre": "readings",
+      "tipo": "list[dict[str, float]]",
+      "descripcion": "Serie temporal de un ciclo: lista de lecturas {t, PS1, PS2, PS3, PS4, PS5, PS6, EPS1, FS1, FS2, TS1, TS2, TS3, TS4, VS1}, mínimo 1 lectura, se remuestrea internamente a 600 pasos equiespaciados",
+      "obligatorio": "Sí (modo inline)",
+      "valor_defecto": "-"
+    },
+    {
+      "nombre": "data_path",
+      "tipo": "string",
+      "descripcion": "Ruta local o s3:// a un CSV/parquet en formato long (una fila por lectura temporal de un ciclo): cycle_id, t, y los 14 sensores físicos",
+      "obligatorio": "Sí (modo batch)",
+      "valor_defecto": "-"
+    },
+    {
+      "nombre": "mlflow_run_id",
+      "tipo": "string",
+      "descripcion": "Run de MLflow con el modelo reentrenado por el usuario",
+      "obligatorio": "No",
+      "valor_defecto": "modelo base"
+    }
+  ],
+  "outputs": [
+    {
+      "nombre": "predictions",
+      "tipo": "dict[str, int]",
+      "descripcion": "Código real UCI predicho por cada componente (cooler, valve, pump, accumulator)",
+      "rango": "cooler: 3/20/100 · valve: 73/80/90/100 · pump: 0/1/2 · accumulator: 90/100/115/130",
+      "interpretacion": "el valor más alto de cada escala es el estado nominal/OK; los demás son grados de degradación"
+    },
+    {
+      "nombre": "risk",
+      "tipo": "dict[str, float]",
+      "descripcion": "Incertidumbre predictiva por componente = 1 − máxima probabilidad softmax",
+      "rango": "0–1",
+      "interpretacion": "NO es un indicador de salud física del componente: valores altos indican que el modelo está poco seguro de su propia predicción, no que el componente esté peor"
+    },
+    {
+      "nombre": "confidence_level",
+      "tipo": "dict[str, str]",
+      "descripcion": "Semáforo de la incertidumbre anterior",
+      "rango": "green (≤0,10) · yellow (0,10–0,25] · red (>0,25)",
+      "interpretacion": "red indica baja confianza del modelo en ese componente, no necesariamente un fallo"
+    },
+    {
+      "nombre": "probabilities",
+      "tipo": "dict[str, dict[int, float]]",
+      "descripcion": "Probabilidad softmax de cada clase real por componente",
+      "rango": "0–1, suman 1 por componente",
+      "interpretacion": "permite ver si la predicción fue clara o si hubo clases casi empatadas"
+    },
+    {
+      "nombre": "alerts",
+      "tipo": "list[dict]",
+      "descripcion": "Vista fusionada de alertas (reglas + modelo) por componente: component, source (rule/model/combined), severity, message",
+      "rango": "INFO · WARNING · CRITICAL · EMERGENCY",
+      "interpretacion": "cuando regla y modelo coinciden en un componente (combined), la severidad sube un nivel por encima de la más grave de las dos, nunca es un simple máximo"
+    },
+    {
+      "nombre": "rule_evidence",
+      "tipo": "list[dict]",
+      "descripcion": "Todas las reglas físicas que se dispararon para el ciclo, sin colapsar por componente",
+      "rango": "una entrada por regla disparada",
+      "interpretacion": "en accumulator pueden dispararse dos reglas a la vez (presión media baja y presión inestable); la vista 'alerts' solo conserva una de las dos (ver limitaciones) y esta lista expone ambas"
+    }
+  ],
+  "metricas": [
+    {
+      "nombre": "Cooler — balanced_accuracy / f1_macro",
+      "valor": "0,9667 / 0,9666",
+      "descripcion": "331 ciclos de test, models/metrics/no_virtual_v1__rand_scool/metrics_test.json, reproducida de forma independiente tras la integración",
+      "interpretacion": "el diagnóstico del refrigerador es el más fiable de los cuatro, con margen amplio sobre un clasificador trivial"
+    },
+    {
+      "nombre": "Valve — balanced_accuracy / f1_macro",
+      "valor": "0,2804 / 0,2499",
+      "descripcion": "331 ciclos de test",
+      "interpretacion": "rendimiento débil: el modelo apenas supera a un clasificador de clase mayoritaria en este componente"
+    },
+    {
+      "nombre": "Pump — balanced_accuracy / f1_macro",
+      "valor": "0,5677 / 0,5624",
+      "descripcion": "331 ciclos de test",
+      "interpretacion": "rendimiento intermedio, muy por debajo de cooler"
+    },
+    {
+      "nombre": "Accumulator — balanced_accuracy / f1_macro",
+      "valor": "0,5452 / 0,5299",
+      "descripcion": "331 ciclos de test",
+      "interpretacion": "rendimiento intermedio, muy por debajo de cooler"
+    },
+    {
+      "nombre": "Verificación tras integración: golden dataset",
+      "valor": "20/20 ciclos, 80/80 clases individuales exactas",
+      "descripcion": "20 ciclos reales del split de test (predictions_test.parquet + y.npy + alerts_all.parquet), plugin con los artefactos reales entregados",
+      "interpretacion": "el plugin reproduce exactamente la predicción, el riesgo y las alertas del modelo entregado — el cableado y el preprocesado son correctos; no mejora ni empeora las métricas de test de arriba"
+    }
+  ],
+  "limitaciones": [
+    {
+      "tipo": "Dataset de laboratorio, no de bodega real",
+      "descripcion": "Entrenado y evaluado con el banco de pruebas público UCI \"Condition Monitoring of Hydraulic Systems\" (componentes hidráulicos/electromecánicos), usado como proxy técnico de prensas/bombeo/filtración/embotellado. No hay telemetría real de ninguna bodega en este modelo; las métricas pueden no transferirse directamente a equipos reales sin validación adicional."
+    },
+    {
+      "tipo": "Rendimiento muy desigual entre componentes",
+      "descripcion": "Cooler es excelente (balanced_accuracy 0,967); valve (0,280), accumulator (0,545) y pump (0,568) son sustancialmente más débiles. No debe presentarse una cifra agregada única sin desglosar por componente."
+    },
+    {
+      "tipo": "La capa neurosimbólica no aporta señal verificable del modelo en 3 de 4 componentes",
+      "descripcion": "Con la política de fusión vigente, la salida 'combined' coincide con 'solo reglas' en valve, pump y accumulator; solo en cooler el modelo aporta algo comprobable sobre las reglas físicas solas, porque en los demás componentes MODEL_TRUST y el filtro de probabilidad mínima degradan o suprimen la señal del modelo antes de llegar a la salida. Es un hallazgo documentado por el propio equipo de IA, no un defecto de la integración."
+    },
+    {
+      "tipo": "Posible pérdida silenciosa de una alerta en accumulator",
+      "descripcion": "accumulator puede disparar dos reglas físicas independientes a la vez (presión media baja y presión inestable). La vista principal de alertas conserva solo la última regla evaluada por diseño del código original entregado, pudiendo perder la más grave de las dos; el campo rule_evidence siempre expone ambas para quien necesite verlas."
+    },
+    {
+      "tipo": "KPI de negocio no medido",
+      "descripcion": "El objetivo de reducción del 20% del tiempo de inactividad no planificado es una meta declarada por el equipo de IA, no demostrada: el dataset UCI no contiene registros reales de paradas o intervenciones de mantenimiento."
+    },
+    {
+      "tipo": "Riesgo ≠ severidad física",
+      "descripcion": "El campo de riesgo es la incertidumbre del modelo sobre su propia predicción (1 − probabilidad máxima), no una medida de salud física del componente. La severidad real del problema la da el campo de alertas, no el riesgo."
+    }
+  ],
+  "fichero_nombre": "20 ciclos reales de data/predictions/no_virtual_v1__rand_scool/predictions_test.parquet",
+  "fichero_registros": "20 ciclos × 600 pasos temporales (14 sensores), seleccionados de los 331 ciclos del split de test real",
+  "fichero_resultado": "predict_inline reproduce exactamente las 4 clases predichas, el riesgo (4 decimales) y el conjunto de alertas de los 20 ciclos del golden dataset (20/20 ciclos, 80/80 clases individuales)",
+  "observaciones_tecnicas": "Keras 3 (backend=torch), sin dependencia de TensorFlow en tiempo de ejecución pese a que el entregable original usa tensorflow==2.19.0; verificado que best_model.keras carga con fidelidad total con Keras 3 standalone. CPU suficiente (sin GPU, igual que el entorno del propio equipo de IA). Artefactos ligeros (best_model.keras ≈ 425 KB). Entrenamiento síncrono: un smoke test real de 60 ciclos tomó ≈305-349 s en CPU; escalar al split de referencia completo (1543 ciclos) tomará considerablemente más, por lo que se recomienda usar /train?wait=false en vez de la llamada síncrona por defecto. Reentrenamiento siempre desde cero (sin fine-tuning), igual que el procedimiento original.",
+  "que_no_responde": "No dice cuánto tiempo falta exactamente para que falle un componente ni sustituye la inspección del técnico: indica el estado actual de cada componente y una alerta de severidad combinando el modelo con reglas físicas expertas.",
+  "entradas_contexto": "Los datos son las lecturas de los sensores de presión, caudal, temperatura y vibración de un ciclo completo de la máquina (prensa o línea de embotellado), ya sea en tiempo real o desde un fichero con varios ciclos.",
+  "ejemplo_interpretacion": "Si para un ciclo el refrigerador sale con código 3 (el peor estado posible) y una alerta EMERGENCY combinada, significa que tanto la regla física de temperatura como el modelo coinciden en que hay un problema grave en el refrigerador — hay que revisarlo cuanto antes. Si válvula sale con código 100 (estado nominal) sin alertas, no requiere atención.",
+  "margen_error": "En las pruebas con ciclos que el modelo no había visto, acertó muy bien el estado del refrigerador (cerca del 97% de los casos), pero fue bastante menos fiable con la válvula, la bomba y el acumulador. Por eso, para estos tres componentes, conviene apoyarse más en las alertas de reglas físicas que en la predicción del modelo en solitario.",
+  "revisar_manualmente": [
+    "Cuando la alerta sea sobre válvula, bomba o acumulador: el modelo por sí solo es poco fiable en estos tres componentes — confirma con una inspección antes de actuar.",
+    "Cuando la confianza del modelo salga en rojo (incertidumbre alta): trata esa predicción como orientativa, no como un diagnóstico cerrado.",
+    "Cuando el ciclo tenga menos de 60 s de datos o lecturas con huecos: el diagnóstico de ese ciclo no es fiable.",
+    "Cuando se vaya a usar este modelo sobre una bodega real por primera vez: ten en cuenta que fue entrenado con un banco de pruebas de laboratorio, no con datos de bodega — valida antes con casos conocidos."
+  ],
+  "que_no_hace": [
+    "No sustituye el criterio del técnico de mantenimiento ni garantiza que un componente no vaya a fallar.",
+    "No demuestra que vaya a reducir el tiempo de parada no planificado en un porcentaje concreto: ese objetivo de negocio no se ha medido todavía con datos reales.",
+    "No está validado con telemetría real de ninguna bodega: se ha entrenado y probado con un banco de pruebas de laboratorio usado como sustituto técnico.",
+    "No decide ni ejecuta ninguna acción de mantenimiento por sí solo: solo genera un diagnóstico y una alerta de apoyo a la decisión."
+  ],
+  "puede_equivocarse": "Sí, y de forma muy distinta según el componente: es muy fiable con el refrigerador, pero bastante menos con la válvula, la bomba y el acumulador, donde conviene apoyarse más en las alertas de reglas físicas que en el modelo. En una bodega real el rendimiento puede diferir del medido en laboratorio hasta validarlo con datos propios. Es una ayuda a la decisión, no una garantía.",
+  "kpis": [
+    {
+      "kpi": "Fiabilidad del diagnóstico del refrigerador",
+      "valor_umbral": "balanced_accuracy 96,67% en test",
+      "descripcion": "El componente mejor diagnosticado de los cuatro, con margen amplio sobre un clasificador trivial"
+    },
+    {
+      "kpi": "Fiabilidad del diagnóstico de válvula/bomba/acumulador",
+      "valor_umbral": "balanced_accuracy 28–57% en test",
+      "descripcion": "Rendimiento notablemente más débil; el valor añadido real en estos componentes lo aportan mayormente las reglas físicas, no el modelo"
+    },
+    {
+      "kpi": "Reducción de tiempo de inactividad no planificado",
+      "valor_umbral": "20% (objetivo declarado, no medido)",
+      "descripcion": "Meta de negocio del equipo de IA; pendiente de validación operacional porque el dataset de laboratorio no registra paradas reales"
+    },
+    {
+      "kpi": "Reproducción del golden dataset tras la integración",
+      "valor_umbral": "20/20 ciclos exactos",
+      "descripcion": "Confirma que el cableado del plugin (preprocesado, modelo, reglas) reproduce fielmente el comportamiento entregado por el equipo de IA"
+    }
+  ]
+}

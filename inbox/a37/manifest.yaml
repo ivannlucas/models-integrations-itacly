@@ -1,0 +1,233 @@
+model_id: ml37-wine-press-predictive-maintenance
+sector: vitivinicola
+nombre: "Modelo predictivo para anticipar fallos en prensas y equipos de embotellado"
+task_type: classification_multitask_sequence + neurosymbolic_rule_fusion
+framework: [tensorflow==2.19.0 (Keras 3 bundled), scikit-learn (StandardScaler, train_test_split, métricas), numpy, pandas, pyarrow]
+
+# ── Procedencia real del dataset (NUNCA inventado, ver known_issues) ──────────────────────────
+# El dataset NO es de una bodega real: es el dataset público "Condition Monitoring of Hydraulic
+# Systems" del UCI Machine Learning Repository (Helwig et al., 2015; DOI 10.24432/C5CW21),
+# https://archive.ics.uci.edu/dataset/447/condition+monitoring+of+hydraulic+systems. La memoria
+# (sección "Datos de partida") lo declara explícitamente como proxy técnico: componentes
+# hidráulicos/electromecánicos (bomba, válvula, acumulador, refrigeración) funcionalmente
+# comparables a prensas/bombeo/filtración/embotellado vitivinícola, pero NO equivalencia
+# sectorial completa. 2205 ciclos de banco de pruebas de laboratorio, con estados de condición
+# configurados por los experimentadores (etiquetado controlado, no fallos emergentes reales).
+
+artifacts:
+  folder: models/artifacts/no_virtual_v1__rand_scool/
+  # Configuración de referencia elegida por el equipo de IA (memoria sección "Selección de la
+  # configuración de referencia"): run_tag=no_virtual (CE/CP/SE forzadas a cero, 14 sensores
+  # físicos activos de 40 slots), split_policy=random_stratified_cooler.
+  files:
+    - best_model.keras      # 434943 bytes, Keras 3 (.keras format), LSTM multitarea
+    - scaler.json            # StandardScaler, mean/scale de longitud 40 (incluye slots RESERVED_*)
+    - class_mappings.json    # feature_order_final (40 slots), class_order_by_target, mappings idx<->valor real UCI
+    - train_config.json      # seed=42, epochs_max=50, batch_size=256, early_patience=10, lr=0.001, split_policy, run_tag
+
+inputs:
+  fixed:
+    # Un "ciclo" = ventana temporal de 600 pasos (resampleados a 10Hz, ~60s) x 14 sensores
+    # físicos. Orden vinculante (constants.py debe fijarlo igual): PS1,PS2,PS3,PS4,PS5,PS6,
+    # EPS1,FS1,FS2,TS1,TS2,TS3,TS4,VS1. Unidades: PS*=bar, EPS1=W, FS*=l/min, TS*=°C, VS1=mm/s.
+    - {nombre: sensores_ciclo, tipo: "array (600, 14) float", descripcion: "Serie temporal de los 14 sensores físicos de un ciclo completo, en el orden fijo PS1..VS1"}
+    - {nombre: mlflow_run_id, tipo: string, descripcion: "Run de MLflow con el modelo reentrenado por el usuario (opcional)"}
+  derived_if_missing:
+    CE_CP_SE: "forzadas a 0.0 (modo no_virtual, producción) — nunca se piden al cliente"
+    slots_RESERVED_01_a_23: "siempre 0.0, relleno técnico del contrato schema_v1 (40 slots), nunca datos reales"
+
+outputs:
+  predict_inline:
+    - {nombre: "pred_<target>", descripcion: "Código de condición real UCI predicho por cada head (cooler: 3/20/100; valve: 73/80/90/100; pump: 0/1/2; accumulator: 90/100/115/130)"}
+    - {nombre: "risk_<target>", descripcion: "Incertidumbre predictiva = 1 - max(prob_softmax). NO es riesgo físico del componente — ver known_issues, el propio código lo advierte en el docstring"}
+    - {nombre: "sem_<target>", descripcion: "Semáforo de incertidumbre: green (riesgo<=0.10), yellow (0.10-0.25], red (>0.25) — tampoco es severidad física"}
+    - {nombre: "p_<target>_<clase>", descripcion: "Probabilidad softmax de cada clase real del head"}
+  neurosymbolic_alerts:
+    # Capa de fusión reglas físicas + modelo (opcional, requiere stats agregadas del ciclo:
+    # TS1_mean, PS1_mean, PS1_std, PS3_mean, PS4_mean, FS1_mean, EPS1_mean — todas calculables
+    # directamente de la serie temporal de entrada, sin fichero auxiliar).
+    - {nombre: component, descripcion: "cooler | valve | pump | accumulator"}
+    - {nombre: source, descripcion: "rule (solo regla física) | model (solo modelo, filtrado por MODEL_TRUST) | combined (ambos coinciden)"}
+    - {nombre: severity, descripcion: "INFO | WARNING | CRITICAL | EMERGENCY"}
+    - {nombre: message, descripcion: "Texto descriptivo de la regla y/o predicción que disparó la alerta"}
+
+constraints:
+  model_trust_por_componente: "cooler=0.97, valve=0.27, pump=0.64, accumulator=0.59 — umbral de confianza TRUST_THRESHOLD=0.70. Por debajo del umbral, las alertas del modelo se degradan un nivel de severidad y se suprimen por completo si la probabilidad de la clase predicha < 0.50. Solo cooler supera el umbral sin degradación."
+  fusion_combined: "Cuando regla Y modelo disparan para el mismo componente, la severidad combinada NO es el máximo simple: es min(max(rank_regla, rank_modelo) + 1, EMERGENCY) — el acuerdo entre ambas fuentes escala la severidad un nivel por encima de la más grave de las dos."
+
+metrics_reported:
+  # TODAS las cifras de esta sección son de models/metrics/no_virtual_v1__rand_scool/metrics_test.json
+  # (test oficial, 331 ciclos) Y han sido REPRODUCIDAS de forma independiente en esta extracción
+  # ejecutando directamente models/artifacts/.../predictions_test.parquet + data/processed/tensors/y.npy
+  # con sklearn.metrics (ver golden_cases.verificacion_metricas_agregadas) -- coinciden EXACTAS.
+  cooler: {accuracy: 0.9668, balanced_accuracy: 0.9667, f1_macro: 0.9666, support: 331}
+  valve: {accuracy: 0.4683, balanced_accuracy: 0.2804, f1_macro: 0.2499, support: 331}
+  pump: {accuracy: 0.6495, balanced_accuracy: 0.5677, f1_macro: 0.5624, support: 331}
+  accumulator: {accuracy: 0.5498, balanced_accuracy: 0.5452, f1_macro: 0.5299, support: 331}
+  criterio_exito_memoria: >
+    balanced_accuracy Y f1_macro deben superar SIMULTÁNEAMENTE a un clasificador trivial de
+    clase mayoritaria, por cada head, de forma independiente (un head bueno no compensa a otro
+    malo). Cooler lo cumple con holgura; valve/pump/accumulator lo cumplen con margen mucho más
+    estrecho (ver known_issues) -- la propia memoria lo documenta como criterio formalizado
+    retrospectivamente, no un umbral preregistrado.
+  kpi_negocio: >
+    Reducción del 20% del tiempo de inactividad no planificado. La propia memoria declara
+    explícitamente que este KPI NO está medido ni demostrado con este dataset (el UCI no trae
+    registros de downtime/intervenciones reales) -- "permanece como objetivo pendiente de
+    validación operacional".
+
+training:
+  supported: true
+  source: codigo_entrenamiento  # src/training/trainer.py::train_model + build_multitask_lstm
+  target_column: "cooler, valve, pump, accumulator (códigos reales UCI); stable (0/1) se usa solo como sample_weight, no es un head del modelo"
+  required_columns: "Formato long (una fila por timestep): cycle_id, t, PS1, PS2, PS3, PS4, PS5, PS6, EPS1, FS1, FS2, TS1, TS2, TS3, TS4, VS1, y_cooler, y_valve, y_pump, y_accumulator[, y_stable opcional] -- mismo contrato que src/data_processing/adapt_external_tabular.py del entregable, reutilizable casi literal"
+  hyperparams:
+    arquitectura: "Masking(mask_value=0.0) -> LSTM(64, dropout=0.2) -> Dense(64, relu) -> 4 heads independientes Dense(n_clases, softmax), uno por target, todos colgando directamente del mismo Dense(64) compartido"
+    optimizer: "Adam(learning_rate=0.001)"
+    loss: "CategoricalCrossentropy (from_logits=False) por cada head, pesos de loss iguales (sin loss_weights explícito)"
+    batch_size: 256
+    epochs_max: 50
+    early_stopping: "custom MultiMetricEarlyStopping: monitoriza val_valve_loss+val_pump_loss+val_accumulator_loss (pesos 1.0 cada uno, cooler EXCLUIDO del monitor), patience=10, min_delta=1e-3, restore_best_weights=true"
+    lr_scheduler: "ReduceLROnPlateau sobre el mismo monitor compuesto, factor=0.5, patience=3, min_delta=1e-3, min_lr=1e-5"
+    sample_weight: "0.5 si stable==1 (condiciones estacionarias alcanzadas), 1.0 si stable==0 o no hay columna stable -- mismo vector de pesos para los 4 heads, nunca class_weight"
+    seed: 42
+    split_policy_referencia: "random_stratified_cooler: 70/15/15, train_test_split(test_size=0.30, stratify=y_cooler, random_state=42) y luego 50/50 del remanente (stratify=y_cooler del remanente) -- estratifica SOLO en cooler, no en los otros 3 targets"
+    split_policy_stress_test: "temporal_ordered_70_15_15: slicing puro por orden de fila (sin shuffle ni stratify) -- la propia memoria documenta que degrada severamente el rendimiento de cooler, se usa solo como stress test, nunca como configuración de referencia"
+  metrics_returned: [accuracy, balanced_accuracy, f1_macro, n_train, n_val, n_test]
+  source_note: >
+    El procedimiento completo (incl. el tensor schema_v1 de 600x40, el escalado StandardScaler
+    sobre las 40 columnas, y el guardrail de clases ausentes por split) está íntegro en
+    src/training/trainer.py (935 líneas) -- portar esto fielmente es el grueso del trabajo de
+    plugin-integration.
+  duracion_estimada: >
+    [VERIFICADO CON EJECUCIÓN REAL en plugin-integration] 60 ciclos reales (20 por clase cooler,
+    36.000 filas de sensor) -> 305s de principio a fin (build + fit con early stopping + eval +
+    guardado), CPU vía Keras 3 backend=torch, sin GPU -- igual que el entorno del propio equipo
+    de IA (memoria: CPU, sin GPU, Intel Core i7-13620H). NO es tan ligero como se estimó
+    inicialmente (se esperaban "minutos, no horas" sin verificar): escalar a los 1543 ciclos
+    reales del split de referencia completo tomaría considerablemente más (el early stopping
+    con un dataset de 60 ciclos converge mucho antes que con 1543, así que la extrapolación
+    lineal del tiempo por ciclo subestima el total). Se recomienda exponer /train únicamente vía
+    /train?wait=false (infraestructura genérica ya disponible en el repo desde la PR de
+    entrenamiento asíncrono) para el dataset completo, no como llamada síncrona por defecto.
+
+golden_cases:
+  source_note: >
+    Los 20 casos de abajo NO son inventados: son filas reales de
+    data/predictions/no_virtual_v1__rand_scool/predictions_test.parquet (predicciones reales del
+    modelo entregado, generadas por el equipo de IA con su propio código) cruzadas con el ground
+    truth real de data/processed/tensors/y.npy (índice cycle_id-1, confirmado contra
+    data/splits/no_virtual_v1__rand_scool/splits.json::test_idx) y con las alertas reales de
+    data/predictions/no_virtual_v1__rand_scool/alerts_all.parquet. Selección deliberadamente
+    diversa: 5 casos con los 4 heads correctos, 5 con 3 correctos, 5 con 2 correctos y 5 con 1
+    correcto (no existen casos con 0/4 correctos en los 331 de test).
+  verificacion_metricas_agregadas: >
+    accuracy/balanced_accuracy/f1_macro por head, recalculadas de forma independiente con
+    sklearn.metrics sobre las 331 filas completas de test (no solo los 20 casos de muestra),
+    reproducen EXACTAS las 4 decimales de models/metrics/no_virtual_v1__rand_scool/metrics_test.json
+    citadas en metrics_reported arriba. Confirma que predictions_test.parquet y metrics_test.json
+    son consistentes entre sí -- no hay discrepancia de versión entre ambos artefactos.
+  tolerancia: "coincidencia exacta de clase por head (son códigos discretos, no hay tolerancia numérica aplicable); risk_* se compara con tolerancia absoluta 0.01 (debe reproducirse bit a bit, es determinista: 1-max(softmax))"
+  cases:
+    - {cycle_id: 33, esperado: {cooler: 3, valve: 100, pump: 0, accumulator: 130}, predicho: {cooler: 3, valve: 100, pump: 0, accumulator: 130}, risk: {cooler: 0.0451, valve: 0.2614, pump: 0.1367, accumulator: 0.1592}, alertas: [{component: cooler, source: combined, severity: EMERGENCY}, {component: pump, source: rule, severity: CRITICAL}, {component: accumulator, source: rule, severity: WARNING}]}
+    - {cycle_id: 220, esperado: {cooler: 3, valve: 73, pump: 2, accumulator: 130}, predicho: {cooler: 3, valve: 100, pump: 1, accumulator: 130}, risk: {cooler: 0.0077, valve: 0.5618, pump: 0.6288, accumulator: 0.4602}, alertas: [{component: cooler, source: combined, severity: EMERGENCY}, {component: pump, source: rule, severity: CRITICAL}, {component: accumulator, source: rule, severity: WARNING}]}
+    - {cycle_id: 340, esperado: {cooler: 3, valve: 100, pump: 0, accumulator: 115}, predicho: {cooler: 3, valve: 100, pump: 0, accumulator: 130}, risk: {cooler: 0.0109, valve: 0.3922, pump: 0.1247, accumulator: 0.2035}, alertas: [{component: cooler, source: combined, severity: EMERGENCY}, {component: pump, source: rule, severity: CRITICAL}, {component: accumulator, source: rule, severity: WARNING}]}
+    - {cycle_id: 556, esperado: {cooler: 3, valve: 100, pump: 1, accumulator: 100}, predicho: {cooler: 3, valve: 100, pump: 1, accumulator: 100}, risk: {cooler: 0.0009, valve: 0.6643, pump: 0.4565, accumulator: 0.5052}, alertas: [{component: cooler, source: combined, severity: EMERGENCY}, {component: pump, source: combined, severity: EMERGENCY}, {component: valve, source: rule, severity: WARNING}, {component: accumulator, source: rule, severity: WARNING}]}
+    - {cycle_id: 593, esperado: {cooler: 3, valve: 100, pump: 0, accumulator: 100}, predicho: {cooler: 3, valve: 100, pump: 0, accumulator: 130}, risk: {cooler: 0.0036, valve: 0.5357, pump: 0.0904, accumulator: 0.3749}, alertas: [{component: cooler, source: combined, severity: EMERGENCY}, {component: pump, source: rule, severity: CRITICAL}, {component: accumulator, source: rule, severity: WARNING}]}
+    - {cycle_id: 688, esperado: {cooler: 3, valve: 100, pump: 1, accumulator: 90}, predicho: {cooler: 3, valve: 100, pump: 1, accumulator: 100}, risk: {cooler: 0.0015, valve: 0.6358, pump: 0.4757, accumulator: 0.5595}, alertas: [{component: cooler, source: combined, severity: EMERGENCY}, {component: pump, source: combined, severity: EMERGENCY}, {component: valve, source: rule, severity: WARNING}, {component: accumulator, source: rule, severity: WARNING}]}
+    - {cycle_id: 858, esperado: {cooler: 20, valve: 100, pump: 0, accumulator: 90}, predicho: {cooler: 20, valve: 100, pump: 0, accumulator: 90}, risk: {cooler: 0.0872, valve: 0.1093, pump: 0.067, accumulator: 0.3166}, alertas: [{component: cooler, source: combined, severity: EMERGENCY}, {component: pump, source: rule, severity: CRITICAL}, {component: accumulator, source: combined, severity: CRITICAL}]}
+    - {cycle_id: 1126, esperado: {cooler: 20, valve: 73, pump: 1, accumulator: 115}, predicho: {cooler: 20, valve: 73, pump: 1, accumulator: 115}, risk: {cooler: 0.0027, valve: 0.6307, pump: 0.3745, accumulator: 0.2865}, alertas: [{component: cooler, source: combined, severity: EMERGENCY}, {component: pump, source: combined, severity: EMERGENCY}, {component: accumulator, source: combined, severity: CRITICAL}]}
+    - {cycle_id: 1175, esperado: {cooler: 20, valve: 80, pump: 0, accumulator: 115}, predicho: {cooler: 20, valve: 73, pump: 1, accumulator: 115}, risk: {cooler: 0.0027, valve: 0.6534, pump: 0.3825, accumulator: 0.334}, alertas: [{component: cooler, source: combined, severity: EMERGENCY}, {component: pump, source: combined, severity: EMERGENCY}, {component: accumulator, source: combined, severity: CRITICAL}]}
+    - {cycle_id: 1206, esperado: {cooler: 20, valve: 100, pump: 0, accumulator: 100}, predicho: {cooler: 20, valve: 100, pump: 2, accumulator: 100}, risk: {cooler: 0.0137, valve: 0.7024, pump: 0.6185, accumulator: 0.553}, alertas: [{component: cooler, source: combined, severity: EMERGENCY}, {component: pump, source: rule, severity: CRITICAL}, {component: accumulator, source: rule, severity: WARNING}]}
+    - {cycle_id: 1275, esperado: {cooler: 20, valve: 90, pump: 1, accumulator: 100}, predicho: {cooler: 20, valve: 80, pump: 2, accumulator: 100}, risk: {cooler: 0.0233, valve: 0.7131, pump: 0.5949, accumulator: 0.5367}, alertas: [{component: cooler, source: combined, severity: EMERGENCY}, {component: pump, source: rule, severity: CRITICAL}, {component: accumulator, source: rule, severity: WARNING}]}
+    - {cycle_id: 1471, esperado: {cooler: 100, valve: 100, pump: 0, accumulator: 90}, predicho: {cooler: 100, valve: 100, pump: 0, accumulator: 90}, risk: {cooler: 0.017, valve: 0.3911, pump: 0.2758, accumulator: 0.3733}, alertas: [{component: cooler, source: rule, severity: WARNING}, {component: pump, source: rule, severity: CRITICAL}, {component: valve, source: rule, severity: WARNING}, {component: accumulator, source: combined, severity: CRITICAL}]}
+    - {cycle_id: 1722, esperado: {cooler: 100, valve: 73, pump: 1, accumulator: 130}, predicho: {cooler: 100, valve: 100, pump: 1, accumulator: 100}, risk: {cooler: 0.0038, valve: 0.6922, pump: 0.6167, accumulator: 0.6961}, alertas: [{component: pump, source: rule, severity: CRITICAL}, {component: valve, source: rule, severity: CRITICAL}, {component: accumulator, source: rule, severity: WARNING}]}
+    - {cycle_id: 1742, esperado: {cooler: 100, valve: 90, pump: 1, accumulator: 130}, predicho: {cooler: 100, valve: 100, pump: 1, accumulator: 100}, risk: {cooler: 0.0039, valve: 0.6941, pump: 0.6148, accumulator: 0.6948}, alertas: [{component: pump, source: rule, severity: CRITICAL}, {component: valve, source: rule, severity: CRITICAL}, {component: accumulator, source: rule, severity: WARNING}]}
+    - {cycle_id: 1792, esperado: {cooler: 100, valve: 100, pump: 0, accumulator: 130}, predicho: {cooler: 100, valve: 90, pump: 1, accumulator: 100}, risk: {cooler: 0.0038, valve: 0.6913, pump: 0.6095, accumulator: 0.6836}, alertas: [{component: pump, source: rule, severity: CRITICAL}, {component: valve, source: rule, severity: CRITICAL}, {component: accumulator, source: rule, severity: WARNING}]}
+    - {cycle_id: 1821, esperado: {cooler: 100, valve: 80, pump: 2, accumulator: 115}, predicho: {cooler: 100, valve: 100, pump: 1, accumulator: 100}, risk: {cooler: 0.0039, valve: 0.6937, pump: 0.6129, accumulator: 0.6891}, alertas: [{component: pump, source: rule, severity: CRITICAL}, {component: valve, source: rule, severity: CRITICAL}, {component: accumulator, source: rule, severity: WARNING}]}
+    - {cycle_id: 1842, esperado: {cooler: 100, valve: 100, pump: 2, accumulator: 115}, predicho: {cooler: 100, valve: 90, pump: 1, accumulator: 100}, risk: {cooler: 0.004, valve: 0.6953, pump: 0.614, accumulator: 0.6935}, alertas: [{component: pump, source: rule, severity: CRITICAL}, {component: valve, source: rule, severity: CRITICAL}, {component: accumulator, source: rule, severity: WARNING}]}
+    - {cycle_id: 1876, esperado: {cooler: 100, valve: 90, pump: 1, accumulator: 115}, predicho: {cooler: 100, valve: 90, pump: 1, accumulator: 100}, risk: {cooler: 0.0037, valve: 0.689, pump: 0.6068, accumulator: 0.6799}, alertas: [{component: pump, source: rule, severity: CRITICAL}, {component: valve, source: rule, severity: CRITICAL}, {component: accumulator, source: rule, severity: WARNING}]}
+    - {cycle_id: 1919, esperado: {cooler: 100, valve: 90, pump: 0, accumulator: 115}, predicho: {cooler: 100, valve: 100, pump: 1, accumulator: 100}, risk: {cooler: 0.0037, valve: 0.6772, pump: 0.6351, accumulator: 0.7033}, alertas: [{component: pump, source: rule, severity: CRITICAL}, {component: valve, source: rule, severity: CRITICAL}, {component: accumulator, source: rule, severity: WARNING}]}
+    - {cycle_id: 2169, esperado: {cooler: 100, valve: 80, pump: 0, accumulator: 90}, predicho: {cooler: 100, valve: 100, pump: 1, accumulator: 100}, risk: {cooler: 0.0037, valve: 0.6893, pump: 0.6191, accumulator: 0.6986}, alertas: [{component: pump, source: rule, severity: CRITICAL}, {component: valve, source: rule, severity: CRITICAL}, {component: accumulator, source: rule, severity: WARNING}]}
+
+known_issues:
+  - "[ORIGEN DEL DATASET] NO es un dataset vitivinícola real: es el UCI \"Condition Monitoring
+     of Hydraulic Systems\" (Helwig et al. 2015, DOI 10.24432/C5CW21), banco de pruebas de
+     laboratorio con estados de condición configurados por los experimentadores. La memoria lo
+     declara explícitamente como proxy técnico (componentes hidráulicos/electromecánicos
+     comparables a prensas/bombeo/filtración/embotellado), nunca como datos reales de bodega.
+     Debe quedar igual de explícito en la ficha funcional/técnica -- no reformular como si fuera
+     telemetría real de una instalación vitivinícola."
+  - "[RIESGO != RIESGO FÍSICO] risk_<target> es incertidumbre predictiva (1 - max(softmax)), NO
+     un indicador de salud física del componente -- lo dice el propio docstring del código
+     original. No confundir con la severidad de las alertas neurosimbólicas (INFO/WARNING/
+     CRITICAL/EMERGENCY), que es un concepto distinto y no derivado linealmente de risk_*."
+  - "[RENDIMIENTO MUY DESIGUAL POR HEAD] cooler es excelente (balanced_accuracy 0.967), pero
+     valve (0.280), accumulator (0.545) y pump (0.568) son sustancialmente más débiles --
+     confirmado tanto en la memoria como en la reproducción independiente de esta extracción
+     sobre las 331 filas reales de test. No presentar una cifra agregada única sin desglosar
+     por head."
+  - "[LA CAPA NEUROSIMBÓLICA NO DEMUESTRA APORTACIÓN DEL MODELO EN 3 DE 4 COMPONENTES] Según la
+     propia memoria y el README: con la política de fusión vigente, la salida 'combined'
+     coincide con 'rules_only' en valve, pump y accumulator -- solo cooler es la excepción
+     donde el modelo aporta algo verificable sobre las reglas físicas solas. El bloque ML tiene
+     señal aprendida independiente (MODEL_RAW), pero MODEL_TRUST + el filtro de probabilidad
+     0.50 la suprimen o degradan antes de llegar a la salida desplegada en la mayoría de los
+     casos. Esto es un hallazgo documentado por el propio equipo de IA, no un fallo de
+     integración -- no silenciarlo ni maquillarlo en las fichas."
+  - "[KPI DE NEGOCIO NO MEDIDO] El 20% de reducción de downtime es un objetivo declarado, NO
+     demostrado: el dataset UCI no contiene registros de downtime/intervenciones/paradas reales.
+     La ficha funcional debe dejarlo como objetivo pendiente de validación en planta, nunca como
+     resultado ya alcanzado."
+  - "[CONTRATO schema_v1: 40 slots, solo 14 activos en producción] El tensor de entrada tiene
+     forma (600,40) pero en la configuración de referencia (no_virtual) solo 14 slots llevan
+     datos reales (los sensores físicos); CE/CP/SE (slots 14-16) se fuerzan a 0 y los 23 slots
+     RESERVED_* (17-39) siempre son 0. scaler.json y class_mappings.json tienen longitud 40, no
+     14 -- el preprocesado del plugin debe construir el tensor completo de 40, nunca pasar
+     directamente un array de 14 columnas al scaler/modelo."
+  - "[SOLO LA VARIANTE no_virtual + rand_scool TIENE ARTEFACTOS COMO CONFIGURACIÓN DE
+     REFERENCIA] Existen 4 combinaciones entrenadas (with_virtual/no_virtual x
+     rand_scool/temp701515) pero el equipo de IA elige no_virtual_v1__rand_scool como la única
+     configuración de producción recomendada (memoria, sección 'Selección de la configuración
+     de referencia'). Este plugin sirve exclusivamente esa combinación; las otras 3 quedan fuera
+     de alcance salvo que se pida explícitamente lo contrario."
+  - "[RESUELTO -- VERIFICADO CONTRA EL ARTEFACTO REAL] Python 3.14 de este sandbox no tiene
+     wheel de tensorflow==2.19.0 (solo 2.22.0rc0), mismo bloqueo que tuvo a1. Resuelto igual que
+     a1: best_model.keras carga sin ningún error con Keras 3 standalone + backend=torch, sin
+     TensorFlow en absoluto (el formato .keras de Keras 3 es el mismo que usa tf.keras desde
+     TF 2.16+). Arquitectura cargada verificada: Masking(0.0) -> LSTM(64) -> Dense(64,relu) -> 4
+     heads softmax (cooler=3, valve=4, pump=3, accumulator=4 clases), 31.950 parámetros, igual
+     que trainer.py::build_multitask_lstm. Se ejecutó predict() real sobre los 20 golden_cases
+     (tensor real X_schema_v1.npy + scaler.json + class_mappings.json reales) y los 20/20
+     reproducen EXACTAS las clases predichas y el riesgo a 4 decimales ya registrados arriba --
+     el plugin puede construirse sobre Keras 3 standalone sin depender de TensorFlow."
+  - "[requirements.txt SOLO FIJA tensorflow EXACTO] numpy/pandas/scikit-learn/pyarrow son rangos
+     (>=X,<Y), no versiones exactas -- a diferencia de a19 (scikit-learn), aquí no hay pin
+     exacto de sklearn que pueda romper por versión al cargar nada (StandardScaler se
+     reconstruye desde JSON plano, no se deserializa un objeto sklearn con pickle/joblib, así
+     que el riesgo de incompatibilidad binaria entre versiones de sklearn es mucho menor que en
+     otros modelos de este repo)."
+  - "[splits.json EN DISCO LE FALTA UNA CLAVE QUE EL CÓDIGO ACTUAL SÍ ESCRIBE] El fichero
+     data/splits/no_virtual_v1__rand_scool/splits.json entregado no tiene la clave
+     missing_classes_by_target que trainer.py (línea ~609) sí construye -- posible artefacto de
+     una versión anterior del código. No afecta a la verificación (los índices train/val/test y
+     las distribuciones sí están completos y consistentes), pero se documenta como discrepancia
+     de procedencia sin resolver silenciosamente."
+  - "[QUIRK REAL DEL MOTOR DE REGLAS: accumulator PUEDE PERDER UNA ALERTA MÁS GRAVE EN LA VISTA
+     LEGACY] symbolic_engine.py::check_rule_evidence evalúa accumulator con DOS bloques `if`
+     independientes (no elif): PS1_mean bajo (WARNING/CRITICAL) y PS1_std alto (WARNING) pueden
+     dispararse ambos en el mismo ciclo. check_rules()/la vista 'legacy' que alimenta
+     alerts_all.parquet colapsa por componente con un dict comprehension
+     ({a['component']: a for a in rule_alerts}) que se queda con la ÚLTIMA entrada en orden de
+     evaluación (ps1_std, evaluado después) -- si PS1_mean disparó CRITICAL y PS1_std solo
+     WARNING, la vista legacy pierde silenciosamente el CRITICAL y deja un WARNING. El propio
+     equipo de IA es consciente de esto: build_rule_evidence_detail calcula explícitamente un
+     campo would_be_overwritten_in_legacy para auditarlo en la salida auxiliar
+     alerts_rule_evidence_detail.parquet. Esto NO se corrige en el plugin -- se replica
+     fielmente (es el comportamiento real desplegado), documentado aquí y en known_issues de la
+     ficha técnica, y se expone también el detalle completo (todas las reglas, no solo la
+     'legacy') para que quien consuma la API pueda ver la alerta perdida si la necesita."
+  - "[a39 DEPENDE DE ESTE MODELO] El ticket DATAPLAT-525 (a39, capa XAI) está ligado a a37:
+     reutiliza su especificación y dataset, y hay que comprobar que las explicaciones se
+     muestran junto a la predicción de a37 en el front. No empezar a39 hasta que este plugin
+     esté verificado."
