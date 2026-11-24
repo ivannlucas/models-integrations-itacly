@@ -1,9 +1,73 @@
 # Verificación — ml38-wine-machinery-fault-detection (a38, DNLS-VINO)
 
 - **Plugin**: `app/plugins/ml38_wine_machinery_fault_detection/` · `MODEL_ID` `ml38-wine-machinery-fault-detection`
-- **Manifest**: `inbox/a38/manifest.yaml` (21 golden cases, 15 known issues)
-- **Rama**: `feature/model-a38-integration` (sin commitear, pendiente de revisión humana)
-- **Fecha**: 2026-11-17
+- **Manifest**: `inbox/a38/manifest.yaml` (21 golden cases, 18 known issues)
+- **Rama**: `feature/model-a38-integration` (integración, ya en `main`); revisión en
+  `fix/ml38-raw-validacion`
+- **Fecha**: 2026-11-17 · **revisión con el dataset raw**: 2026-11-24 (ver la sección siguiente)
+
+## Revisión del 2026-11-24 (dataset raw NLN-EMP)
+
+Revisión del plugin contra el código original, la memoria v1.6 y el dataset raw completo de NLN-EMP
+(84 GB, copia local fuera del repo). Los scripts y sus salidas están en
+`evidence/raw_dataset/` (`README.md` explica cómo relanzarlos).
+
+**Lo que confirma el raw**
+
+- El ETL es reproducible: recalculadas desde los ficheros raw con el `preprocess.py` original, las
+  24 features reproducen el parquet entregado (diferencia relativa máx. 1,1e-12). El port del
+  plugin da exactamente lo mismo que el original (diferencia 0,0).
+- El modo raw coincide con el original de punta a punta: con los CSV completos de las 877
+  ventanas, 877/877 familias y 484/484 severidades iguales a `predictions.csv`
+  (|Δ confianza| máx. 4,5e-7, backend torch). Antes solo se había probado con el ejemplo recortado.
+- Las 4 condiciones del dataset que el modelo no usa son justo las que tienen corrupto el fichero
+  de vibración o de corriente según `measurement overview.xlsx`.
+- KI-07 (rpm fijas del código) no tiene efecto práctico: las rpm reales del xlsx quedan a
+  ≤ 0,33 Hz de la frecuencia del código, dentro de la ventana de ±2 Hz de los picos 1X/2X.
+
+**Cambios en el plugin** (35 tests de ml38 en verde con backend torch y tensorflow, más el golden
+contra los artefactos locales; flake8 limpio; pylint 10/10)
+
+1. **Longitud de señal (KI-05, decisión tomada)**: el modo raw rechaza con 422 cualquier señal
+   que no tenga exactamente 240000 (vibración) / 300000 (corriente) muestras. Medido en el raw:
+   recortar las ventanas de entrenamiento a 1 s cambia el 15 % de las familias predichas, y a
+   0,2 s el 34 %, casi siempre hacia healthy.
+2. **Canal (KI-06, decisión tomada)**: rechaza con 422 un fichero cuyo nombre NLN-EMP (`-chN.csv`)
+   indique un canal distinto de ch1, y avisa en `input_warnings` si el nombre no permite
+   comprobarlo. Medido en el raw: con otro acelerómetro de los mismos ensayos el acierto de
+   familia cae a 0,36-0,45.
+3. **Mensajes de error sin contenido del fichero**: `read_signal` y `read_table` ya no copian el
+   error de pandas en el mensaje (llegaba al cliente en el 422 y citaba líneas del fichero, p. ej.
+   de `/etc/passwd`). El detalle queda solo en el log del servidor. Que el servicio acepte rutas
+   locales arbitrarias es común a todo el repo y queda fuera de este cambio.
+4. **`mode: "inline"` con `model_key: "raw"`** daba 500 (`KeyError('motor')`). Ahora el modo raw
+   se reconoce por el campo `vibration_csv`, no por `model_key`.
+
+Comprobado contra el servidor local (`evidence/raw_dataset/results/http_checks.txt`):
+
+| Petición | Esperado | Obtenido |
+|---|---|---|
+| raw, ch1 completo (align angular 3, ventana 0) | 200, igual que `predictions.csv` | 200 alignment / significativo / 0,755415 ✅ (y es su familia real) |
+| raw, vibración ch4 | 422 canal | 422 ✅ |
+| raw, tensión ch5 | 422 canal | 422 ✅ |
+| raw, ejemplo recortado de la entrega (4096 filas) | 422 longitud | 422 ✅ |
+| raw, `/etc/passwd` | 422 sin contenido del fichero | 422, mensaje genérico ✅ |
+| inline + `model_key: "raw"` (golden caso_001) | 200 | 200 alignment / 0,719051 ✅ |
+
+**Hallazgos del modelo y del dataset** (no son de la integración; añadidos al manifest)
+
+- **KI-16 — familias ligadas al montaje**: alignment, cavitation y unbalance solo existen en
+  Motor-4, y bearing y electrical solo en Motor-2. Parte de lo que separa el clasificador es el
+  banco de ensayo. "impeller" (desequilibrio del rodete) está etiquetado como mechanical_other.
+- **KI-17 — OOF optimista**: los grupos son (motor, velocidad, fallo), así que el mismo fallo a
+  otra velocidad queda en entrenamiento. GroupKFold del equipo: macro-F1 0,591 (reproducido);
+  mismos grupos con particiones aleatorias: 0,581; agrupando por fallo físico: 0,548.
+- **KI-18 — término físico sin efecto medible**: con λ = 0 frente a λ = 0,3 la CV de severidad
+  cambia como mucho 0,006 de macro-F1 (menos que el ruido entre semillas). La regla física solo se cumple en
+  alignment. El 0,0 de severidad de electrical no se debe a ella.
+
+Las fichas técnica y funcional se han regenerado con la plantilla (`datos_a38.json`,
+`datos_a38_funcional.json`) para reflejar los rechazos y estas tres limitaciones.
 - **Entorno**: WSL Ubuntu, Python 3.12.3, venv `itacyl-a38` alineado con `requirements.txt` del repo
   (scikit-learn 1.5.2, keras 3.15.1, tensorflow 2.21.0, torch 2.13.0+cpu, mlflow 3.16.1; `pip check` limpio).
   El servidor corre Keras con **backend torch** (lo fija ml1 al importarse desde `registry.py`).
@@ -115,8 +179,10 @@ derivable de `metrics_reported`). Diferencia máxima observada: **6,0e-8**.
 - **Independencia del backend**: con los `.pkl` cargados fuera del servidor
   (`evidence/artifact_backend_parity.py`), torch y tensorflow dan el mismo resultado (877/877).
 - **Modo raw — comprobación de referencia** (`reference_checks.raw_example_entrega`, no es un golden
-  case): el ejemplo de la entrega (Motor-4, 70 %) reproduce **exactamente** el JSON del equipo
-  (`mechanical_other`, severidad 0, confianza 0,015418630093336105, Δ = 0).
+  case): el ejemplo de la entrega (Motor-4, 70 %) reproduce el JSON del equipo
+  (`mechanical_other`, severidad 0, confianza 0,0154186; |Δ| < 1e-8).
+  **Desde el 2026-11-24 el plugin rechaza este ejemplo (422, longitud no admitida)**; la paridad
+  del modo raw se comprueba ahora con las 877 ventanas completas del dataset (sección anterior).
   - La respuesta lleva además 2 avisos en `input_warnings`: las señales tienen 4096 muestras y el
     modelo se entrenó con ventanas de 240000 y 300000 (KI-05).
   - La condición real del ejemplo es *align angular 3* (familia alignment). El modelo falla aquí
@@ -134,11 +200,11 @@ derivable de `metrics_reported`). Diferencia máxima observada: **6,0e-8**.
 
 ## Hallazgos que requieren decisión o seguimiento (no bloquean la integración)
 
-1. **Modo raw con señales de longitud distinta a la de entrenamiento (KI-05)**. Hoy el plugin
-   predice y avisa en `input_warnings`, no rechaza. Decidir si debe dar 422.
+1. **Modo raw con señales de longitud distinta a la de entrenamiento (KI-05)**. ~~Hoy el plugin
+   predice y avisa en `input_warnings`.~~ **Resuelto el 2026-11-24**: 422.
 2. **Canal de la señal (KI-06)**. El modelo solo ha visto el canal 1 de vibración y la corriente
-   de fase 1. La memoria sugiere que vale cualquier `chN`, incluidos los de tensión. El plugin no
-   puede validarlo a partir de un CSV; está documentado en `/stats` y en el DTO.
+   de fase 1. ~~El plugin no puede validarlo.~~ **Resuelto el 2026-11-24**: 422 si el nombre
+   `-chN.csv` indica otro canal; aviso si no se puede comprobar.
 3. **Pin de scikit-learn (KI-03, KI-14)**. Los `.pkl` son de la 1.7.2 y el repo fija la 1.5.2 por
    el servicio de explicabilidad. Hoy la inferencia es idéntica, pero los reentrenos difieren
    ligeramente y la compatibilidad de pickles entre versiones no está garantizada.
@@ -157,3 +223,8 @@ derivable de `metrics_reported`). Diferencia máxima observada: **6,0e-8**.
 **LISTO PARA PR** en lo técnico: checklist en verde, 21/21 golden dentro de tolerancia y paridad
 877/877. **Requiere revisión humana** de los puntos 1-3 de arriba antes de abrir el PR, y de los
 puntos 4-5 antes de cualquier uso operativo. No se ha abierto PR ni hecho merge.
+
+**Actualización 2026-11-24**: los puntos 1 y 2 quedan resueltos en `fix/ml38-raw-validacion`,
+con paridad del modo raw comprobada sobre el dataset completo. Antes de cualquier uso operativo
+hay que leer también KI-16, KI-17 y KI-18, que rebajan lo que se puede esperar del modelo fuera
+del banco de ensayo.
