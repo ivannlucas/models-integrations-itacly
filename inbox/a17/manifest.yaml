@@ -16,7 +16,7 @@ task_type_note: >
   integrado en app/plugins/ml17_meat_market_price_analysis/ ANTES de que existiera este
   manifest -- viola el orden de trabajo estándar del repo (manifest-extraction siempre antes
   de plugin-integration). Este manifest se generó ahora, a partir del código original
-  reordenado en inbox/a17/codigo/a17-retech-lote2-market-price-analysis-carnico/, para poder
+  entregado (hoy directamente en inbox/a17/codigo/), para poder
   auditar y, si procede, corregir el plugin ya existente contra el código y la memoria reales
   -- ver known_issues para el resultado de esa auditoría.
 
@@ -29,9 +29,16 @@ task_type_note: >
   official_v1_4.
 
 framework:
-  - scikit-learn==1.8.0
+  # Runtime del ARTEFACTO ridge_official_v1_4.pkl (sidecar .meta.json, library_versions): el
+  # equipo de IA lo regeneró el 2026-10-01 con scikit-learn 1.5.2 + numpy 1.26.4 para que lo
+  # cargue el servicio XAI (docs/LUCE_extraccion_preprocesamiento_inferencia.md). El pickle NO
+  # carga con scikit-learn 1.8.0 (AttributeError: _RemainderColsList). requirements.txt del
+  # código entregado sigue fijando scikit-learn 1.8.0 / numpy 2.4.4 para el resto de su repo
+  # (línea long_history_v2, benchmark), que no se integra aquí. El repo inference-pan-model
+  # ya fija scikit-learn==1.5.2, compatible con este artefacto.
+  - scikit-learn==1.5.2
   - pandas==3.0.2
-  - numpy==2.4.4
+  - numpy==1.26.4   # serialización del .pkl; carga y predice igual con el numpy 2.x del repo
   - PyYAML==6.0.3
   - joblib  # usado por el plugin para (de)serializar el Pipeline; no listado explícitamente en
             # requirements.txt del código entregado pero es dependencia transitiva de sklearn
@@ -48,6 +55,10 @@ artifacts:
   # En el plugin ya integrado: artifacts/ml17_meat_market_price_analysis/ridge_official_v1_4.pkl
   # (ya presente localmente, formato idéntico -- verificado: sklearn.pipeline.Pipeline con
   # ColumnTransformer(SimpleImputer+StandardScaler) + Ridge(alpha=1.0) cargando vía joblib.load).
+  # Revisión 2026-11-17 (entrega actualizada del código, HEAD 4a25ad9): el .pkl del commit
+  # 1ae2d6e es idéntico byte a byte (md5 16735fcb3adae15f31674153bbfd3e7a) al de
+  # artifacts/ml17_meat_market_price_analysis/ y al de S3 artifacts/fixed/<carpeta>/ (versión
+  # base v0, la que apunta current.json). No hay que republicar artefacto.
 
 inputs:
   fixed:
@@ -318,3 +329,20 @@ known_issues:
     clúster con MLflow accesible. Se verificó la lógica de negocio de train() (validación de
     columnas, refit del pipeline, cálculo de métricas) de forma aislada evitando la llamada de
     red; ver outputs/a17/verification_report.md para el detalle.
+  - >
+    Revisión de la entrega actualizada del código (2026-11-17; inbox/a17/codigo/ con su .git en
+    HEAD 4a25ad9, dos commits nuevos del 2026-11-16 sobre 8baf59e). (1) 1ae2d6e: el .pkl de
+    official_v1_4 se re-serializa con scikit-learn 1.5.2 / numpy 1.26.4 (mismo modelo; ya era
+    el artefacto desplegado en local y en S3), el sidecar .meta.json pasa a rutas relativas y
+    se añade docs/LUCE_extraccion_preprocesamiento_inferencia.md, cuyo contrato de inferencia
+    (fila t de 8 features en el orden de FEATURE_COLUMNS, month_sin/cos derivados si faltan,
+    pipeline del .pkl sin reajuste) coincide con el plugin. (2) 4a25ad9: el descargador de
+    precios de cereales pasa al dominio nuevo de la API de la CE
+    (api.tech.ec.europa.eu/agrifood/api/cereal), con reintentos y el Excel semanal de DG AGRI
+    como respaldo; la agregación mensual (España, etapa salida de silo, media de cotizaciones
+    semanales por mes) no cambia y no se regeneran datasets procesados ni splits. Ningún
+    cambio afecta a predict/train del plugin, a los golden_cases ni a metrics_reported.
+    Comprobado de nuevo con el .pkl entregado: 16/18 golden dentro de tolerancia (los mismos
+    caso_006 y caso_018 de antes) y MAE=4.4605 / RMSE=6.4091 sobre los 31 orígenes del test,
+    idénticos a la Tabla 8; el ejemplo h1 del equipo (2025-12-01) da 142.3145, igual que su
+    data/predictions.

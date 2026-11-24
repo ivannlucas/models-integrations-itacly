@@ -40,6 +40,7 @@ from torch import nn, optim
 from torch.utils.data import DataLoader, Dataset, WeightedRandomSampler
 from torchvision import transforms
 
+from app.domain.services.activation_checkpointing import activation_checkpointing
 from app.plugins.ml5_meat_cow_behaviour.constants import (
     CROP_SIZE,
     FOCAL_LOSS_ALPHA,
@@ -362,10 +363,27 @@ def _evaluate(model, val_loader, criterion, device) -> tuple[float, int, int]:
     return val_loss, val_correct, val_total
 
 
+def _residual_blocks(model) -> list[nn.Module]:
+    """The SlowFast stems and every residual block of both pathways: what checkpointing recomputes.
+
+    On CPU a batch of 16 clips (8 + 32 frames at 224 px) stores ~10 GiB of activations for
+    backward, far over the pod; checkpointed block by block, ~2.5x less (4.8 -> 1.9 GiB at batch
+    4). Training is bit-identical: app/domain/services/activation_checkpointing.py.
+    """
+    blocks = model.model.blocks
+    out = list(blocks[0].multipathway_blocks)
+    for stage in blocks[1:5]:
+        for pathway in stage.multipathway_blocks:
+            out.extend(pathway.res_blocks)
+    return out
+
+
 def _run_epoch(model, loaders: tuple, criterion, opt: tuple, device) -> dict:
     """Train one epoch, validate, and return that epoch's metrics (same keys as MLflow's)."""
     train_loader, val_loader = loaders
-    tr_loss, tr_correct, tr_total = _train_epoch(model, train_loader, criterion, opt, device)
+    # Only on CPU, where the activations are the pod's RAM; on CUDA training runs as before.
+    with activation_checkpointing(_residual_blocks(model), enabled=str(device) == "cpu"):
+        tr_loss, tr_correct, tr_total = _train_epoch(model, train_loader, criterion, opt, device)
     val_loss, val_correct, val_total = _evaluate(model, val_loader, criterion, device)
     return {
         "train_loss": tr_loss / max(len(train_loader), 1),

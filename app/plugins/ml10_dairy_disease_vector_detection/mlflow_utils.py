@@ -12,6 +12,7 @@ import torch
 from torch import nn
 from torchvision import models
 
+from app.domain.services.feature_ood import load_reference
 from app.domain.services.mlflow_artifacts import download_run_artifacts
 from app.domain.services.mlflow_tracker import require_user_model
 from app.plugins.ml10_dairy_disease_vector_detection.constants import (
@@ -26,7 +27,8 @@ logger = logging.getLogger(__name__)
 def download_user_classifier_from_mlflow(run_id: str):
     """Download a user-trained MobileNetV3 classifier from MLflow.
 
-    Returns (model, class_names, temp_dir).
+    Returns (model, class_names, ood_reference, temp_dir); ood_reference is None for runs
+    trained before the «desconocido» gate (they serve as before).
     Caller MUST remove temp_dir after inference (``removing_dir``).
     """
     loaded = download_run_artifacts(
@@ -34,15 +36,18 @@ def download_user_classifier_from_mlflow(run_id: str):
     )
     if loaded is None:
         return None
-    (model, class_names), tmp = loaded
+    (model, class_names, reference), tmp = loaded
     logger.info(
         "Downloaded user classifier from MLflow run_id=%s, classes=%s", run_id, class_names
     )
-    return model, class_names, tmp
+    return model, class_names, reference, tmp
 
 
 def _load(local_path: str):
-    """Rebuild ``(classifier, class_names)`` from a downloaded ``classifier`` folder."""
+    """Rebuild ``(classifier, class_names, ood_reference)`` from a downloaded ``classifier`` folder.
+
+    The reference is computed by train() from that run's own data (ood.py).
+    """
     state_dict_path = os.path.join(local_path, CLASSIFIER_FILENAME)
     class_names_path = os.path.join(local_path, CLASS_NAMES_FILENAME)
 
@@ -55,4 +60,4 @@ def _load(local_path: str):
     state_dict = torch.load(state_dict_path, map_location="cpu", weights_only=False)
     model.load_state_dict(state_dict)
     model.eval()
-    return model, class_names
+    return model, class_names, load_reference(local_path, "ml10")

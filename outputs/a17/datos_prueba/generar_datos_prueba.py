@@ -9,7 +9,7 @@ import yaml
 ROOT = Path(sys.argv[1])
 OUT = ROOT / "outputs/a17/datos_prueba"
 OUT.mkdir(parents=True, exist_ok=True)
-CODE = ROOT / "inbox/a17/codigo/a17-retech-lote2-market-price-analysis-carnico"
+CODE = ROOT / "inbox/a17/codigo"
 TARGET = "target_price_pigmeat_class_e_es"
 RAW = ["date", TARGET, "eurostat_pigmeat_slaughter_tonnes_es", "eurostat_pigmeat_slaughter_tonnes_eu",
        "cereal_feed_barley_price_monthly", "cereal_feed_maize_price_monthly", "mapa_porcino_otras_razas_price_monthly"]

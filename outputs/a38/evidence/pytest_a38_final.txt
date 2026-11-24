@@ -1,0 +1,556 @@
+..........................................ssssssss...................... [  4%]
+........................................................................ [  9%]
+........................................................................ [ 13%]
+..............................................s......................... [ 18%]
+....................................................s...........sss..... [ 22%]
+................................s....................................... [ 27%]
+........................................................................ [ 31%]
+........................................................................ [ 36%]
+...ssssssssssssssssssss...........................................sss... [ 41%]
+...........................s............................................ [ 45%]
+........................................................................ [ 50%]
+........................................................................ [ 54%]
+..........sssss.s....................................................... [ 59%]
+........................................................................ [ 63%]
+........................................................................ [ 68%]
+........................................................................ [ 73%]
+........................................................................ [ 77%]
+........................................................................ [ 82%]
+........................................................................ [ 86%]
+........................................................................ [ 91%]
+........................................................................ [ 95%]
+..................................................................       [100%]
+=============================== warnings summary ===============================
+../../../../../../../../home/zaytuna/venvs/itacyl-a38/lib/python3.12/site-packages/pydantic/_internal/_fields.py:132
+  /home/zaytuna/venvs/itacyl-a38/lib/python3.12/site-packages/pydantic/_internal/_fields.py:132: UserWarning: Field "model_id" in TrainJobResponse has conflict with protected namespace "model_".
+  
+  You may be able to resolve this warning by setting `model_config['protected_namespaces'] = ()`.
+    warnings.warn(
+
+../../../../../../../../home/zaytuna/venvs/itacyl-a38/lib/python3.12/site-packages/pydantic/_internal/_fields.py:132
+  /home/zaytuna/venvs/itacyl-a38/lib/python3.12/site-packages/pydantic/_internal/_fields.py:132: UserWarning: Field "model_id" in PredictJobResponse has conflict with protected namespace "model_".
+  
+  You may be able to resolve this warning by setting `model_config['protected_namespaces'] = ()`.
+    warnings.warn(
+
+../../../../../../../../home/zaytuna/venvs/itacyl-a38/lib/python3.12/site-packages/pydantic/_internal/_fields.py:132
+  /home/zaytuna/venvs/itacyl-a38/lib/python3.12/site-packages/pydantic/_internal/_fields.py:132: UserWarning: Field "model_name" in RegResult has conflict with protected namespace "model_".
+  
+  You may be able to resolve this warning by setting `model_config['protected_namespaces'] = ()`.
+    warnings.warn(
+
+../../../../../../../../home/zaytuna/venvs/itacyl-a38/lib/python3.12/site-packages/pydantic/_internal/_fields.py:132
+  /home/zaytuna/venvs/itacyl-a38/lib/python3.12/site-packages/pydantic/_internal/_fields.py:132: UserWarning: Field "model_name" in ClfResult has conflict with protected namespace "model_".
+  
+  You may be able to resolve this warning by setting `model_config['protected_namespaces'] = ()`.
+    warnings.warn(
+
+../../../../../../../../home/zaytuna/venvs/itacyl-a38/lib/python3.12/site-packages/pydantic/_internal/_fields.py:132
+  /home/zaytuna/venvs/itacyl-a38/lib/python3.12/site-packages/pydantic/_internal/_fields.py:132: UserWarning: Field "model_name" in PromptModelConfig has conflict with protected namespace "model_".
+  
+  You may be able to resolve this warning by setting `model_config['protected_namespaces'] = ()`.
+    warnings.warn(
+
+tests/unit/test_base_reload_per_model.py: 12 warnings
+tests/unit/test_ml13_wine_price_fluctuation_prediction.py: 54 warnings
+tests/unit/test_ml19_base_promotion.py: 370 warnings
+tests/unit/test_ml21_base_promotion.py: 54 warnings
+tests/unit/test_ml8_ood.py: 2 warnings
+  /home/zaytuna/venvs/itacyl-a38/lib/python3.12/site-packages/sklearn/linear_model/_logistic.py:455: OptimizeWarning: Unknown solver options: iprint
+    opt_res = optimize.minimize(
+
+tests/unit/test_ml14_preprocessing.py::test_run_inference_rejects_float32_overflow_instead_of_returning_null
+  /home/zaytuna/venvs/itacyl-a38/lib/python3.12/site-packages/pandas/core/internals/managers.py:1944: RuntimeWarning: overflow encountered in cast
+    result[rl.indexer] = arr
+
+tests/unit/test_ml1_preprocessing.py::test_non_finite_sensor_raises_data_contract_error[1e+100]
+  /mnt/c/Users/User/Documents/claude/rama-a38/models-integrations-itacly/app/plugins/ml1_wine_pest_disease_detection/preprocessing.py:87: RuntimeWarning: overflow encountered in cast
+    aligned = np.array(
+
+tests/unit/test_ml25_wine_sulphites_train.py::test_retrained_model_round_trips_through_mlflow
+tests/unit/test_ml25_wine_sulphites_train.py::test_retrained_model_round_trips_through_mlflow
+  /home/zaytuna/venvs/itacyl-a38/lib/python3.12/site-packages/sklearn/base.py:493: UserWarning: X does not have valid feature names, but RandomForestRegressor was fitted with feature names
+    warnings.warn(
+
+tests/unit/test_ml35_optimize.py::test_optimize_uses_the_model_it_is_given
+  /mnt/c/Users/User/Documents/claude/rama-a38/models-integrations-itacly/app/plugins/ml35_dairy_ann_cleaning_cost/plugin.py:70: UserWarning: The given NumPy array is not writable, and PyTorch does not support non-writable tensors. This means writing to this tensor will result in undefined behavior. You may want to copy the array to protect its data or make it writable before converting it to a tensor. This type of warning will be suppressed for the rest of this program. (Triggered internally at /__w/pytorch/pytorch/torch/csrc/utils/tensor_numpy.cpp:213.)
+    pred_scaled = model(torch.FloatTensor(x_scaled)).numpy()
+
+tests/unit/test_ml48_dairy_dnsl_critical_point_detection.py: 19 warnings
+  /home/zaytuna/venvs/itacyl-a38/lib/python3.12/site-packages/sklearn/base.py:486: UserWarning: X has feature names, but StandardScaler was fitted without feature names
+    warnings.warn(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+================================ tests coverage ================================
+_______________ coverage: platform linux, python 3.12.3-final-0 ________________
+
+Name                                                                                           Stmts   Miss  Cover
+------------------------------------------------------------------------------------------------------------------
+app/__init__.py                                                                                    0      0   100%
+app/application/__init__.py                                                                        0      0   100%
+app/application/dto/__init__.py                                                                    0      0   100%
+app/application/dto/base_version_dto.py                                                           16      0   100%
+app/application/dto/plugin_dto.py                                                                 31      0   100%
+app/application/dto/predict_job_dto.py                                                             7      0   100%
+app/application/dto/stats_dto.py                                                                  32      0   100%
+app/application/dto/train_dto.py                                                                  11      0   100%
+app/application/dto/train_job_dto.py                                                              20      0   100%
+app/application/use_cases/__init__.py                                                              0      0   100%
+app/application/use_cases/get_stats_use_case.py                                                   17      0   100%
+app/application/use_cases/predict_job_use_cases.py                                                70      0   100%
+app/application/use_cases/predict_model_use_case.py                                               43      2    95%
+app/application/use_cases/train_job_use_cases.py                                                  79      0   100%
+app/application/use_cases/train_model_use_case.py                                                 18      0   100%
+app/artifacts/__init__.py                                                                          0      0   100%
+app/domain/__init__.py                                                                             0      0   100%
+app/domain/ports/__init__.py                                                                       0      0   100%
+app/domain/ports/model_plugin_port.py                                                             16      0   100%
+app/domain/ports/predict_executor_port.py                                                          8      0   100%
+app/domain/ports/predict_job_store_port.py                                                        11      0   100%
+app/domain/ports/train_executor_port.py                                                            7      0   100%
+app/domain/ports/train_job_store_port.py                                                           9      0   100%
+app/domain/services/__init__.py                                                                    0      0   100%
+app/domain/services/batch_rows.py                                                                 12      0   100%
+app/domain/services/exceptions.py                                                                 34      0   100%
+app/domain/services/image_cam.py                                                                  46      0   100%
+app/domain/services/mlflow_artifacts.py                                                           67      0   100%
+app/domain/services/mlflow_tracker.py                                                            108     13    88%
+app/domain/services/model_runtime_service.py                                                      14      0   100%
+app/domain/services/numba_cache.py                                                                15      0   100%
+app/domain/services/plugin_runtime.py                                                             31      0   100%
+app/domain/services/predict_job.py                                                                25      0   100%
+app/domain/services/torch_device.py                                                               13      1    92%
+app/domain/services/train_job.py                                                                  38      0   100%
+app/domain/services/ultralytics_settings.py                                                       15      0   100%
+app/domain/services/xai_values.py                                                                 16      0   100%
+app/infrastructure/__init__.py                                                                     0      0   100%
+app/infrastructure/archive.py                                                                     84      4    95%
+app/infrastructure/artifact_store.py                                                             254     14    94%
+app/infrastructure/base_model_publisher.py                                                        45      1    98%
+app/infrastructure/http/__init__.py                                                                0      0   100%
+app/infrastructure/http/dependencies/__init__.py                                                   0      0   100%
+app/infrastructure/http/dependencies/container.py                                                 95      0   100%
+app/infrastructure/http/router_factory.py                                                        186     10    95%
+app/infrastructure/http/routers/__init__.py                                                        0      0   100%
+app/infrastructure/predict_jobs/__init__.py                                                        0      0   100%
+app/infrastructure/predict_jobs/mlflow_job_store.py                                              144     14    90%
+app/infrastructure/predict_jobs/process_executor.py                                               87      9    90%
+app/infrastructure/process_exit.py                                                                14      3    79%
+app/infrastructure/train_jobs/__init__.py                                                          0      0   100%
+app/infrastructure/train_jobs/mlflow_job_store.py                                                 90      2    98%
+app/infrastructure/train_jobs/process_executor.py                                                133     20    85%
+app/plugins/__init__.py                                                                            0      0   100%
+app/plugins/ml1_wine_pest_disease_detection/__init__.py                                            0      0   100%
+app/plugins/ml1_wine_pest_disease_detection/constants.py                                          23      0   100%
+app/plugins/ml1_wine_pest_disease_detection/inference.py                                          32     21    34%
+app/plugins/ml1_wine_pest_disease_detection/mlflow_utils.py                                       25      7    72%
+app/plugins/ml1_wine_pest_disease_detection/model_loader.py                                       79      9    89%
+app/plugins/ml1_wine_pest_disease_detection/plugin.py                                            119     38    68%
+app/plugins/ml1_wine_pest_disease_detection/predict_dto.py                                        35      0   100%
+app/plugins/ml1_wine_pest_disease_detection/preprocessing.py                                      65     30    54%
+app/plugins/ml1_wine_pest_disease_detection/train_dto.py                                          15      0   100%
+app/plugins/ml1_wine_pest_disease_detection/training.py                                           41      3    93%
+app/plugins/ml2_fungal_cnn_disease_detection/__init__.py                                           0      0   100%
+app/plugins/ml2_fungal_cnn_disease_detection/constants.py                                         15      0   100%
+app/plugins/ml2_fungal_cnn_disease_detection/mlflow_utils.py                                      26      9    65%
+app/plugins/ml2_fungal_cnn_disease_detection/model_loader.py                                      45     30    33%
+app/plugins/ml2_fungal_cnn_disease_detection/plugin.py                                           235    128    46%
+app/plugins/ml2_fungal_cnn_disease_detection/postprocessing.py                                     8      3    62%
+app/plugins/ml2_fungal_cnn_disease_detection/predict_dto.py                                       19      0   100%
+app/plugins/ml2_fungal_cnn_disease_detection/preprocessing.py                                     32     15    53%
+app/plugins/ml2_fungal_cnn_disease_detection/train_dto.py                                         16      0   100%
+app/plugins/ml3_wine_disease_pest_forecast/__init__.py                                             2      0   100%
+app/plugins/ml3_wine_disease_pest_forecast/constants.py                                           29      0   100%
+app/plugins/ml3_wine_disease_pest_forecast/feature_engineering.py                                 60      8    87%
+app/plugins/ml3_wine_disease_pest_forecast/mlflow_utils.py                                        14      3    79%
+app/plugins/ml3_wine_disease_pest_forecast/model_loader.py                                        24     11    54%
+app/plugins/ml3_wine_disease_pest_forecast/plugin.py                                             130     71    45%
+app/plugins/ml3_wine_disease_pest_forecast/postprocessing.py                                      42     28    33%
+app/plugins/ml3_wine_disease_pest_forecast/predict_dto.py                                         27      0   100%
+app/plugins/ml3_wine_disease_pest_forecast/preprocessing.py                                       40     10    75%
+app/plugins/ml3_wine_disease_pest_forecast/train_dto.py                                           19      0   100%
+app/plugins/ml3_wine_disease_pest_forecast/training.py                                           202     90    55%
+app/plugins/ml4_lactic_cnn_thermal_early_disease_detection/__init__.py                             0      0   100%
+app/plugins/ml4_lactic_cnn_thermal_early_disease_detection/constants.py                           23      0   100%
+app/plugins/ml4_lactic_cnn_thermal_early_disease_detection/mlflow_utils.py                        31     11    65%
+app/plugins/ml4_lactic_cnn_thermal_early_disease_detection/model_loader.py                        39     25    36%
+app/plugins/ml4_lactic_cnn_thermal_early_disease_detection/plugin.py                             259    103    60%
+app/plugins/ml4_lactic_cnn_thermal_early_disease_detection/postprocessing.py                       7      0   100%
+app/plugins/ml4_lactic_cnn_thermal_early_disease_detection/predict_dto.py                         25      0   100%
+app/plugins/ml4_lactic_cnn_thermal_early_disease_detection/preprocessing.py                       25      6    76%
+app/plugins/ml4_lactic_cnn_thermal_early_disease_detection/train_dto.py                           18      0   100%
+app/plugins/ml5_meat_cow_behaviour/__init__.py                                                     0      0   100%
+app/plugins/ml5_meat_cow_behaviour/byte_tracker.py                                               139    114    18%
+app/plugins/ml5_meat_cow_behaviour/constants.py                                                   25      0   100%
+app/plugins/ml5_meat_cow_behaviour/mlflow_utils.py                                                20      3    85%
+app/plugins/ml5_meat_cow_behaviour/model_loader.py                                                56     40    29%
+app/plugins/ml5_meat_cow_behaviour/plugin.py                                                     180     92    49%
+app/plugins/ml5_meat_cow_behaviour/postprocessing.py                                               9      7    22%
+app/plugins/ml5_meat_cow_behaviour/predict_dto.py                                                 25      0   100%
+app/plugins/ml5_meat_cow_behaviour/preprocessing.py                                               48     35    27%
+app/plugins/ml5_meat_cow_behaviour/train_dto.py                                                    6      0   100%
+app/plugins/ml5_meat_cow_behaviour/training.py                                                   217    168    23%
+app/plugins/ml6_meat_poultry_disease_classification/__init__.py                                    0      0   100%
+app/plugins/ml6_meat_poultry_disease_classification/constants.py                                  29      0   100%
+app/plugins/ml6_meat_poultry_disease_classification/exceptions.py                                  1      0   100%
+app/plugins/ml6_meat_poultry_disease_classification/mlflow_utils.py                               41     22    46%
+app/plugins/ml6_meat_poultry_disease_classification/model_loader.py                               81     48    41%
+app/plugins/ml6_meat_poultry_disease_classification/plugin.py                                    201     39    81%
+app/plugins/ml6_meat_poultry_disease_classification/postprocessing.py                             25      7    72%
+app/plugins/ml6_meat_poultry_disease_classification/predict_dto.py                                38      0   100%
+app/plugins/ml6_meat_poultry_disease_classification/preprocessing.py                              35     19    46%
+app/plugins/ml6_meat_poultry_disease_classification/train_dto.py                                  23      0   100%
+app/plugins/ml6_meat_poultry_disease_classification/training.py                                  139     66    53%
+app/plugins/ml7_cereals_grain_pest_detection/__init__.py                                           0      0   100%
+app/plugins/ml7_cereals_grain_pest_detection/constants.py                                         16      0   100%
+app/plugins/ml7_cereals_grain_pest_detection/mlflow_utils.py                                      26      9    65%
+app/plugins/ml7_cereals_grain_pest_detection/model_loader.py                                      16      8    50%
+app/plugins/ml7_cereals_grain_pest_detection/plugin.py                                           204    102    50%
+app/plugins/ml7_cereals_grain_pest_detection/postprocessing.py                                    60     44    27%
+app/plugins/ml7_cereals_grain_pest_detection/predict_dto.py                                       25      0   100%
+app/plugins/ml7_cereals_grain_pest_detection/preprocessing.py                                     20     11    45%
+app/plugins/ml7_cereals_grain_pest_detection/train_dto.py                                         14      0   100%
+app/plugins/ml8_cereals_img_anomaly_detector/__init__.py                                           0      0   100%
+app/plugins/ml8_cereals_img_anomaly_detector/constants.py                                          7      0   100%
+app/plugins/ml8_cereals_img_anomaly_detector/mlflow_utils.py                                      20      0   100%
+app/plugins/ml8_cereals_img_anomaly_detector/model_loader.py                                      87     55    37%
+app/plugins/ml8_cereals_img_anomaly_detector/ood.py                                               89      2    98%
+app/plugins/ml8_cereals_img_anomaly_detector/plugin.py                                           340    182    46%
+app/plugins/ml8_cereals_img_anomaly_detector/postprocessing.py                                    24      2    92%
+app/plugins/ml8_cereals_img_anomaly_detector/predict_dto.py                                       28      0   100%
+app/plugins/ml8_cereals_img_anomaly_detector/preprocessing.py                                     28      9    68%
+app/plugins/ml8_cereals_img_anomaly_detector/train_dto.py                                         16      0   100%
+app/plugins/ml9_cereals_infestation_sequence_classifier/__init__.py                                0      0   100%
+app/plugins/ml9_cereals_infestation_sequence_classifier/_vendor/__init__.py                        0      0   100%
+app/plugins/ml9_cereals_infestation_sequence_classifier/_vendor/model_bundle.py                   34     28    18%
+app/plugins/ml9_cereals_infestation_sequence_classifier/_vendor/preprocess.py                    217    206     5%
+app/plugins/ml9_cereals_infestation_sequence_classifier/_vendor/sequential.py                    233    178    24%
+app/plugins/ml9_cereals_infestation_sequence_classifier/constants.py                              29      0   100%
+app/plugins/ml9_cereals_infestation_sequence_classifier/mlflow_utils.py                           35      8    77%
+app/plugins/ml9_cereals_infestation_sequence_classifier/model_loader.py                           22      8    64%
+app/plugins/ml9_cereals_infestation_sequence_classifier/plugin.py                                157     83    47%
+app/plugins/ml9_cereals_infestation_sequence_classifier/postprocessing.py                         58     16    72%
+app/plugins/ml9_cereals_infestation_sequence_classifier/predict_dto.py                            41      0   100%
+app/plugins/ml9_cereals_infestation_sequence_classifier/preprocessing.py                          27     15    44%
+app/plugins/ml9_cereals_infestation_sequence_classifier/train_dto.py                              25      0   100%
+app/plugins/ml10_dairy_disease_vector_detection/__init__.py                                        0      0   100%
+app/plugins/ml10_dairy_disease_vector_detection/constants.py                                       9      0   100%
+app/plugins/ml10_dairy_disease_vector_detection/mlflow_utils.py                                   31     11    65%
+app/plugins/ml10_dairy_disease_vector_detection/model_loader.py                                   39      0   100%
+app/plugins/ml10_dairy_disease_vector_detection/plugin.py                                        338     76    78%
+app/plugins/ml10_dairy_disease_vector_detection/postprocessing.py                                 65      3    95%
+app/plugins/ml10_dairy_disease_vector_detection/predict_dto.py                                    26      0   100%
+app/plugins/ml10_dairy_disease_vector_detection/preprocessing.py                                  36      0   100%
+app/plugins/ml10_dairy_disease_vector_detection/train_dto.py                                       4      0   100%
+app/plugins/ml13_wine_price_fluctuation_prediction/__init__.py                                     0      0   100%
+app/plugins/ml13_wine_price_fluctuation_prediction/constants.py                                   31      0   100%
+app/plugins/ml13_wine_price_fluctuation_prediction/mlflow_utils.py                                26      4    85%
+app/plugins/ml13_wine_price_fluctuation_prediction/model_loader.py                                25      2    92%
+app/plugins/ml13_wine_price_fluctuation_prediction/plugin.py                                     128     16    88%
+app/plugins/ml13_wine_price_fluctuation_prediction/predict_dto.py                                 49      0   100%
+app/plugins/ml13_wine_price_fluctuation_prediction/preprocessing.py                              122     12    90%
+app/plugins/ml13_wine_price_fluctuation_prediction/train_dto.py                                   26      0   100%
+app/plugins/ml13_wine_price_fluctuation_prediction/training.py                                   101      9    91%
+app/plugins/ml14_wine_phyto_price_forecast/__init__.py                                             0      0   100%
+app/plugins/ml14_wine_phyto_price_forecast/constants.py                                           40      0   100%
+app/plugins/ml14_wine_phyto_price_forecast/feature_engineering.py                                 81     21    74%
+app/plugins/ml14_wine_phyto_price_forecast/mlflow_utils.py                                        24      0   100%
+app/plugins/ml14_wine_phyto_price_forecast/model_loader.py                                        67     29    57%
+app/plugins/ml14_wine_phyto_price_forecast/plugin.py                                              72     12    83%
+app/plugins/ml14_wine_phyto_price_forecast/predict_dto.py                                         32      0   100%
+app/plugins/ml14_wine_phyto_price_forecast/preprocessing.py                                       44      2    95%
+app/plugins/ml14_wine_phyto_price_forecast/rnn_models.py                                          13      0   100%
+app/plugins/ml14_wine_phyto_price_forecast/train_dto.py                                           28      0   100%
+app/plugins/ml14_wine_phyto_price_forecast/training.py                                           178      6    97%
+app/plugins/ml15_wine_ipi_price_forecast/__init__.py                                               0      0   100%
+app/plugins/ml15_wine_ipi_price_forecast/constants.py                                             24      0   100%
+app/plugins/ml15_wine_ipi_price_forecast/history.py                                              138      7    95%
+app/plugins/ml15_wine_ipi_price_forecast/mlflow_utils.py                                          24      6    75%
+app/plugins/ml15_wine_ipi_price_forecast/model_loader.py                                          17      7    59%
+app/plugins/ml15_wine_ipi_price_forecast/plugin.py                                               200     69    66%
+app/plugins/ml15_wine_ipi_price_forecast/predict_dto.py                                           50      0   100%
+app/plugins/ml15_wine_ipi_price_forecast/preprocessing.py                                         82      9    89%
+app/plugins/ml15_wine_ipi_price_forecast/train_dto.py                                             27      0   100%
+app/plugins/ml15_wine_ipi_price_forecast/training.py                                              79      6    92%
+app/plugins/ml16_meat_raw_material_price_alert/__init__.py                                         0      0   100%
+app/plugins/ml16_meat_raw_material_price_alert/constants.py                                       22      0   100%
+app/plugins/ml16_meat_raw_material_price_alert/mlflow_utils.py                                    38     18    53%
+app/plugins/ml16_meat_raw_material_price_alert/model_loader.py                                    26     17    35%
+app/plugins/ml16_meat_raw_material_price_alert/plugin.py                                         123     52    58%
+app/plugins/ml16_meat_raw_material_price_alert/postprocessing.py                                  43     19    56%
+app/plugins/ml16_meat_raw_material_price_alert/predict_dto.py                                     36      0   100%
+app/plugins/ml16_meat_raw_material_price_alert/preprocessing.py                                   70     19    73%
+app/plugins/ml16_meat_raw_material_price_alert/train_dto.py                                       24      0   100%
+app/plugins/ml16_meat_raw_material_price_alert/training.py                                       159    113    29%
+app/plugins/ml17_meat_market_price_analysis/__init__.py                                            0      0   100%
+app/plugins/ml17_meat_market_price_analysis/constants.py                                           9      0   100%
+app/plugins/ml17_meat_market_price_analysis/mlflow_utils.py                                       20      2    90%
+app/plugins/ml17_meat_market_price_analysis/model_loader.py                                        7      1    86%
+app/plugins/ml17_meat_market_price_analysis/plugin.py                                            174     36    79%
+app/plugins/ml17_meat_market_price_analysis/predict_dto.py                                        32      0   100%
+app/plugins/ml17_meat_market_price_analysis/train_dto.py                                          15      0   100%
+app/plugins/ml18_meat_spatial_price_forecast/__init__.py                                           0      0   100%
+app/plugins/ml18_meat_spatial_price_forecast/constants.py                                         32      0   100%
+app/plugins/ml18_meat_spatial_price_forecast/inference.py                                         20      0   100%
+app/plugins/ml18_meat_spatial_price_forecast/mlflow_utils.py                                      26      0   100%
+app/plugins/ml18_meat_spatial_price_forecast/model_loader.py                                      28      1    96%
+app/plugins/ml18_meat_spatial_price_forecast/plugin.py                                            68     10    85%
+app/plugins/ml18_meat_spatial_price_forecast/predict_dto.py                                       23      0   100%
+app/plugins/ml18_meat_spatial_price_forecast/preprocessing.py                                    111      9    92%
+app/plugins/ml18_meat_spatial_price_forecast/train_dto.py                                         28      0   100%
+app/plugins/ml18_meat_spatial_price_forecast/training.py                                         139      5    96%
+app/plugins/ml19_cereals_cost_forecast/__init__.py                                                 0      0   100%
+app/plugins/ml19_cereals_cost_forecast/_vendor/__init__.py                                         0      0   100%
+app/plugins/ml19_cereals_cost_forecast/_vendor/training_core.py                                  204     32    84%
+app/plugins/ml19_cereals_cost_forecast/constants.py                                               15      0   100%
+app/plugins/ml19_cereals_cost_forecast/inference.py                                               60      6    90%
+app/plugins/ml19_cereals_cost_forecast/mlflow_utils.py                                            24      0   100%
+app/plugins/ml19_cereals_cost_forecast/model_loader.py                                            53      6    89%
+app/plugins/ml19_cereals_cost_forecast/plugin.py                                                 113     34    70%
+app/plugins/ml19_cereals_cost_forecast/predict_dto.py                                             51      0   100%
+app/plugins/ml19_cereals_cost_forecast/train_dto.py                                               37      0   100%
+app/plugins/ml19_cereals_cost_forecast/training.py                                               153      4    97%
+app/plugins/ml21_cereals_price_spatial/__init__.py                                                 0      0   100%
+app/plugins/ml21_cereals_price_spatial/constants.py                                               29      0   100%
+app/plugins/ml21_cereals_price_spatial/explain.py                                                 61     35    43%
+app/plugins/ml21_cereals_price_spatial/mlflow_utils.py                                            29     13    55%
+app/plugins/ml21_cereals_price_spatial/model_loader.py                                            26     15    42%
+app/plugins/ml21_cereals_price_spatial/plugin.py                                                 370    123    67%
+app/plugins/ml21_cereals_price_spatial/predict_dto.py                                             35      0   100%
+app/plugins/ml21_cereals_price_spatial/preprocessing.py                                          103     87    16%
+app/plugins/ml21_cereals_price_spatial/train_dto.py                                               24      0   100%
+app/plugins/ml23_lactic_market_price_forecast/__init__.py                                          0      0   100%
+app/plugins/ml23_lactic_market_price_forecast/constants.py                                        20      0   100%
+app/plugins/ml23_lactic_market_price_forecast/mlflow_utils.py                                     44     13    70%
+app/plugins/ml23_lactic_market_price_forecast/model_loader.py                                     21     12    43%
+app/plugins/ml23_lactic_market_price_forecast/plugin.py                                          173     86    50%
+app/plugins/ml23_lactic_market_price_forecast/predict_dto.py                                      53      0   100%
+app/plugins/ml23_lactic_market_price_forecast/rnn_models.py                                       13      0   100%
+app/plugins/ml23_lactic_market_price_forecast/train_dto.py                                        17      0   100%
+app/plugins/ml23_lactic_market_price_forecast/training.py                                        199     20    90%
+app/plugins/ml24_dairy_spatial_price_forecast/__init__.py                                          0      0   100%
+app/plugins/ml24_dairy_spatial_price_forecast/_vendor/__init__.py                                  0      0   100%
+app/plugins/ml24_dairy_spatial_price_forecast/_vendor/spatial_price_model.py                     421    381    10%
+app/plugins/ml24_dairy_spatial_price_forecast/_vendor/train.py                                    87     79     9%
+app/plugins/ml24_dairy_spatial_price_forecast/constants.py                                        36      0   100%
+app/plugins/ml24_dairy_spatial_price_forecast/exceptions.py                                        3      0   100%
+app/plugins/ml24_dairy_spatial_price_forecast/inference.py                                        92     76    17%
+app/plugins/ml24_dairy_spatial_price_forecast/mlflow_utils.py                                     24      1    96%
+app/plugins/ml24_dairy_spatial_price_forecast/model_loader.py                                     34     19    44%
+app/plugins/ml24_dairy_spatial_price_forecast/plugin.py                                          112     17    85%
+app/plugins/ml24_dairy_spatial_price_forecast/predict_dto.py                                      30      0   100%
+app/plugins/ml24_dairy_spatial_price_forecast/preprocessing.py                                   100     11    89%
+app/plugins/ml24_dairy_spatial_price_forecast/train_dto.py                                        36      0   100%
+app/plugins/ml24_dairy_spatial_price_forecast/training.py                                        161     94    42%
+app/plugins/ml25_wine_sulphites/__init__.py                                                        0      0   100%
+app/plugins/ml25_wine_sulphites/constants.py                                                      13      0   100%
+app/plugins/ml25_wine_sulphites/mlflow_utils.py                                                   23      0   100%
+app/plugins/ml25_wine_sulphites/model_loader.py                                                   23      0   100%
+app/plugins/ml25_wine_sulphites/plugin.py                                                        187      0   100%
+app/plugins/ml25_wine_sulphites/postprocessing.py                                                 25      0   100%
+app/plugins/ml25_wine_sulphites/predict_dto.py                                                    47      0   100%
+app/plugins/ml25_wine_sulphites/preprocessing.py                                                  56      0   100%
+app/plugins/ml25_wine_sulphites/train_dto.py                                                      13      0   100%
+app/plugins/ml26_wine_sulfite_gru_pso_forecast/__init__.py                                         0      0   100%
+app/plugins/ml26_wine_sulfite_gru_pso_forecast/_vendor/__init__.py                                 0      0   100%
+app/plugins/ml26_wine_sulfite_gru_pso_forecast/_vendor/enology.py                                 15      0   100%
+app/plugins/ml26_wine_sulfite_gru_pso_forecast/_vendor/feature_engineering.py                    143     13    91%
+app/plugins/ml26_wine_sulfite_gru_pso_forecast/_vendor/gru_model.py                               26      0   100%
+app/plugins/ml26_wine_sulfite_gru_pso_forecast/_vendor/sequence_bundle.py                         43      9    79%
+app/plugins/ml26_wine_sulfite_gru_pso_forecast/constants.py                                       28      0   100%
+app/plugins/ml26_wine_sulfite_gru_pso_forecast/exceptions.py                                       1      0   100%
+app/plugins/ml26_wine_sulfite_gru_pso_forecast/mlflow_utils.py                                    10      0   100%
+app/plugins/ml26_wine_sulfite_gru_pso_forecast/model_loader.py                                    66     15    77%
+app/plugins/ml26_wine_sulfite_gru_pso_forecast/plugin.py                                         117      0   100%
+app/plugins/ml26_wine_sulfite_gru_pso_forecast/postprocessing.py                                  31      1    97%
+app/plugins/ml26_wine_sulfite_gru_pso_forecast/predict_dto.py                                     67      1    99%
+app/plugins/ml26_wine_sulfite_gru_pso_forecast/preprocessing.py                                  105     12    89%
+app/plugins/ml26_wine_sulfite_gru_pso_forecast/train_dto.py                                       28      0   100%
+app/plugins/ml26_wine_sulfite_gru_pso_forecast/training.py                                       152      7    95%
+app/plugins/ml28_meat_neuroevolutionary_raw_materials_prediction/__init__.py                       0      0   100%
+app/plugins/ml28_meat_neuroevolutionary_raw_materials_prediction/_vendor/__init__.py               0      0   100%
+app/plugins/ml28_meat_neuroevolutionary_raw_materials_prediction/_vendor/features.py              20     14    30%
+app/plugins/ml28_meat_neuroevolutionary_raw_materials_prediction/_vendor/input_validation.py      46     40    13%
+app/plugins/ml28_meat_neuroevolutionary_raw_materials_prediction/_vendor/metrics.py               38     31    18%
+app/plugins/ml28_meat_neuroevolutionary_raw_materials_prediction/_vendor/optimizer.py             13      8    38%
+app/plugins/ml28_meat_neuroevolutionary_raw_materials_prediction/_vendor/output_writer.py         34     29    15%
+app/plugins/ml28_meat_neuroevolutionary_raw_materials_prediction/_vendor/simulation.py            23     17    26%
+app/plugins/ml28_meat_neuroevolutionary_raw_materials_prediction/_vendor/trigger.py               14      9    36%
+app/plugins/ml28_meat_neuroevolutionary_raw_materials_prediction/constants.py                     10      0   100%
+app/plugins/ml28_meat_neuroevolutionary_raw_materials_prediction/mlflow_utils.py                   5      1    80%
+app/plugins/ml28_meat_neuroevolutionary_raw_materials_prediction/model_loader.py                   4      1    75%
+app/plugins/ml28_meat_neuroevolutionary_raw_materials_prediction/pipeline.py                      22     12    45%
+app/plugins/ml28_meat_neuroevolutionary_raw_materials_prediction/plugin.py                        47     27    43%
+app/plugins/ml28_meat_neuroevolutionary_raw_materials_prediction/predict_dto.py                   56      0   100%
+app/plugins/ml30_meat_traceability_detection/__init__.py                                           0      0   100%
+app/plugins/ml30_meat_traceability_detection/constants.py                                         19      0   100%
+app/plugins/ml30_meat_traceability_detection/contract.py                                          55      7    87%
+app/plugins/ml30_meat_traceability_detection/mlflow_utils.py                                      24      7    71%
+app/plugins/ml30_meat_traceability_detection/model_loader.py                                      43     22    49%
+app/plugins/ml30_meat_traceability_detection/plugin.py                                           152     81    47%
+app/plugins/ml30_meat_traceability_detection/postprocessing.py                                     8      4    50%
+app/plugins/ml30_meat_traceability_detection/predict_dto.py                                       55      0   100%
+app/plugins/ml30_meat_traceability_detection/preprocessing.py                                     21     14    33%
+app/plugins/ml30_meat_traceability_detection/tabular_preprocessor.py                              60     22    63%
+app/plugins/ml30_meat_traceability_detection/train_dto.py                                         14      0   100%
+app/plugins/ml31_cereals_residue_optimizer/__init__.py                                             0      0   100%
+app/plugins/ml31_cereals_residue_optimizer/constants.py                                           12      0   100%
+app/plugins/ml31_cereals_residue_optimizer/lp_solver.py                                          134     94    30%
+app/plugins/ml31_cereals_residue_optimizer/mlflow_utils.py                                         6      2    67%
+app/plugins/ml31_cereals_residue_optimizer/model_loader.py                                        15      7    53%
+app/plugins/ml31_cereals_residue_optimizer/plugin.py                                             200    147    26%
+app/plugins/ml31_cereals_residue_optimizer/predict_dto.py                                         54      0   100%
+app/plugins/ml31_cereals_residue_optimizer/preprocessing.py                                      158    132    16%
+app/plugins/ml33_cereals_reuse_strategy_optimizer/__init__.py                                      0      0   100%
+app/plugins/ml33_cereals_reuse_strategy_optimizer/constants.py                                    15      0   100%
+app/plugins/ml33_cereals_reuse_strategy_optimizer/mlflow_utils.py                                  6      2    67%
+app/plugins/ml33_cereals_reuse_strategy_optimizer/model_loader.py                                  6      2    67%
+app/plugins/ml33_cereals_reuse_strategy_optimizer/optimizer.py                                   126    103    18%
+app/plugins/ml33_cereals_reuse_strategy_optimizer/plugin.py                                       69     42    39%
+app/plugins/ml33_cereals_reuse_strategy_optimizer/predict_dto.py                                  53      0   100%
+app/plugins/ml34_dairy_pasteurization_energy_ga/__init__.py                                        0      0   100%
+app/plugins/ml34_dairy_pasteurization_energy_ga/constants.py                                      24      0   100%
+app/plugins/ml34_dairy_pasteurization_energy_ga/ga_optimizer.py                                   74     61    18%
+app/plugins/ml34_dairy_pasteurization_energy_ga/mlflow_utils.py                                   25      9    64%
+app/plugins/ml34_dairy_pasteurization_energy_ga/model_loader.py                                   35     21    40%
+app/plugins/ml34_dairy_pasteurization_energy_ga/plugin.py                                        206    122    41%
+app/plugins/ml34_dairy_pasteurization_energy_ga/predict_dto.py                                    39      0   100%
+app/plugins/ml34_dairy_pasteurization_energy_ga/train_dto.py                                      15      0   100%
+app/plugins/ml35_dairy_ann_cleaning_cost/__init__.py                                               0      0   100%
+app/plugins/ml35_dairy_ann_cleaning_cost/constants.py                                             22      0   100%
+app/plugins/ml35_dairy_ann_cleaning_cost/mlflow_utils.py                                          22      6    73%
+app/plugins/ml35_dairy_ann_cleaning_cost/model_loader.py                                          22      7    68%
+app/plugins/ml35_dairy_ann_cleaning_cost/plugin.py                                               205      4    98%
+app/plugins/ml35_dairy_ann_cleaning_cost/predict_dto.py                                           41      0   100%
+app/plugins/ml35_dairy_ann_cleaning_cost/train_dto.py                                             10      0   100%
+app/plugins/ml36_dairy_dnl_co2_emissions_optimizer/__init__.py                                     0      0   100%
+app/plugins/ml36_dairy_dnl_co2_emissions_optimizer/constants.py                                   46      0   100%
+app/plugins/ml36_dairy_dnl_co2_emissions_optimizer/ga_optimizer.py                                77     57    26%
+app/plugins/ml36_dairy_dnl_co2_emissions_optimizer/mlflow_utils.py                                25      9    64%
+app/plugins/ml36_dairy_dnl_co2_emissions_optimizer/model_loader.py                                45     16    64%
+app/plugins/ml36_dairy_dnl_co2_emissions_optimizer/plugin.py                                     153     91    41%
+app/plugins/ml36_dairy_dnl_co2_emissions_optimizer/predict_dto.py                                 57      0   100%
+app/plugins/ml36_dairy_dnl_co2_emissions_optimizer/preprocessing.py                               17      3    82%
+app/plugins/ml36_dairy_dnl_co2_emissions_optimizer/train_dto.py                                   20      0   100%
+app/plugins/ml36_dairy_dnl_co2_emissions_optimizer/training.py                                   163     16    90%
+app/plugins/ml38_wine_machinery_fault_detection/__init__.py                                        0      0   100%
+app/plugins/ml38_wine_machinery_fault_detection/constants.py                                      46      0   100%
+app/plugins/ml38_wine_machinery_fault_detection/exceptions.py                                      2      0   100%
+app/plugins/ml38_wine_machinery_fault_detection/inference.py                                      32      0   100%
+app/plugins/ml38_wine_machinery_fault_detection/mlflow_utils.py                                   13      0   100%
+app/plugins/ml38_wine_machinery_fault_detection/model_loader.py                                   43      2    95%
+app/plugins/ml38_wine_machinery_fault_detection/plugin.py                                        111     25    77%
+app/plugins/ml38_wine_machinery_fault_detection/predict_dto.py                                    54      0   100%
+app/plugins/ml38_wine_machinery_fault_detection/preprocessing.py                                  77      8    90%
+app/plugins/ml38_wine_machinery_fault_detection/train_dto.py                                      25      0   100%
+app/plugins/ml38_wine_machinery_fault_detection/training.py                                      129      8    94%
+app/plugins/ml40_meat_refrigeration_aeration_fault_diagnosis/__init__.py                           0      0   100%
+app/plugins/ml40_meat_refrigeration_aeration_fault_diagnosis/constants.py                         22      0   100%
+app/plugins/ml40_meat_refrigeration_aeration_fault_diagnosis/mlflow_utils.py                      37     14    62%
+app/plugins/ml40_meat_refrigeration_aeration_fault_diagnosis/model_loader.py                      19      8    58%
+app/plugins/ml40_meat_refrigeration_aeration_fault_diagnosis/plugin.py                           139    106    24%
+app/plugins/ml40_meat_refrigeration_aeration_fault_diagnosis/postprocessing.py                   102     72    29%
+app/plugins/ml40_meat_refrigeration_aeration_fault_diagnosis/predict_dto.py                       36      0   100%
+app/plugins/ml40_meat_refrigeration_aeration_fault_diagnosis/preprocessing.py                    130    102    22%
+app/plugins/ml40_meat_refrigeration_aeration_fault_diagnosis/train_dto.py                         19      0   100%
+app/plugins/ml40_meat_refrigeration_aeration_fault_diagnosis/training.py                          68     51    25%
+app/plugins/ml41_meat_curing_machinery_acoustic_anomaly/__init__.py                                0      0   100%
+app/plugins/ml41_meat_curing_machinery_acoustic_anomaly/audio_mae.py                             133    115    14%
+app/plugins/ml41_meat_curing_machinery_acoustic_anomaly/constants.py                              25      0   100%
+app/plugins/ml41_meat_curing_machinery_acoustic_anomaly/inference.py                              52     33    37%
+app/plugins/ml41_meat_curing_machinery_acoustic_anomaly/mlflow_utils.py                           47      3    94%
+app/plugins/ml41_meat_curing_machinery_acoustic_anomaly/model_loader.py                           83     11    87%
+app/plugins/ml41_meat_curing_machinery_acoustic_anomaly/plugin.py                                250     19    92%
+app/plugins/ml41_meat_curing_machinery_acoustic_anomaly/postprocessing.py                          3      0   100%
+app/plugins/ml41_meat_curing_machinery_acoustic_anomaly/predict_dto.py                            26      0   100%
+app/plugins/ml41_meat_curing_machinery_acoustic_anomaly/preprocessing.py                          37     23    38%
+app/plugins/ml41_meat_curing_machinery_acoustic_anomaly/thresholds.py                              7      0   100%
+app/plugins/ml41_meat_curing_machinery_acoustic_anomaly/train_dto.py                              22      0   100%
+app/plugins/ml41_meat_curing_machinery_acoustic_anomaly/trainer.py                               116     78    33%
+app/plugins/ml43_cereals_dnsl_anomaly_fault_detection/__init__.py                                  0      0   100%
+app/plugins/ml43_cereals_dnsl_anomaly_fault_detection/_vendor/__init__.py                          0      0   100%
+app/plugins/ml43_cereals_dnsl_anomaly_fault_detection/_vendor/dnf_loss.py                         75      6    92%
+app/plugins/ml43_cereals_dnsl_anomaly_fault_detection/_vendor/model_arch.py                      102     15    85%
+app/plugins/ml43_cereals_dnsl_anomaly_fault_detection/_vendor/preprocess.py                      145     30    79%
+app/plugins/ml43_cereals_dnsl_anomaly_fault_detection/_vendor/train_metrics.py                    44      4    91%
+app/plugins/ml43_cereals_dnsl_anomaly_fault_detection/_vendor/xai/__init__.py                      2      0   100%
+app/plugins/ml43_cereals_dnsl_anomaly_fault_detection/_vendor/xai/corrective_actions.py          104     96     8%
+app/plugins/ml43_cereals_dnsl_anomaly_fault_detection/_vendor/xai/explainer.py                    61     21    66%
+app/plugins/ml43_cereals_dnsl_anomaly_fault_detection/_vendor/xai/fusion.py                       35     30    14%
+app/plugins/ml43_cereals_dnsl_anomaly_fault_detection/_vendor/xai/fuzzy_explainer.py             111    101     9%
+app/plugins/ml43_cereals_dnsl_anomaly_fault_detection/_vendor/xai/temporal_explainer.py          167    151    10%
+app/plugins/ml43_cereals_dnsl_anomaly_fault_detection/_vendor/xai/utils.py                        60     52    13%
+app/plugins/ml43_cereals_dnsl_anomaly_fault_detection/constants.py                                37      0   100%
+app/plugins/ml43_cereals_dnsl_anomaly_fault_detection/mlflow_utils.py                             56     29    48%
+app/plugins/ml43_cereals_dnsl_anomaly_fault_detection/model_loader.py                             35     18    49%
+app/plugins/ml43_cereals_dnsl_anomaly_fault_detection/plugin.py                                  273     41    85%
+app/plugins/ml43_cereals_dnsl_anomaly_fault_detection/postprocessing.py                           62     23    63%
+app/plugins/ml43_cereals_dnsl_anomaly_fault_detection/predict_dto.py                              10      0   100%
+app/plugins/ml43_cereals_dnsl_anomaly_fault_detection/preprocessing.py                            64     32    50%
+app/plugins/ml43_cereals_dnsl_anomaly_fault_detection/train_dto.py                                29      0   100%
+app/plugins/ml45_cereals_dnsl_critical_point_detection/__init__.py                                 0      0   100%
+app/plugins/ml45_cereals_dnsl_critical_point_detection/_vendor/__init__.py                         0      0   100%
+app/plugins/ml45_cereals_dnsl_critical_point_detection/_vendor/input_validation.py               189     76    60%
+app/plugins/ml45_cereals_dnsl_critical_point_detection/_vendor/loss.py                            76      6    92%
+app/plugins/ml45_cereals_dnsl_critical_point_detection/_vendor/model.py                          111     16    86%
+app/plugins/ml45_cereals_dnsl_critical_point_detection/_vendor/preprocess.py                     251    133    47%
+app/plugins/ml45_cereals_dnsl_critical_point_detection/_vendor/train_metrics.py                   44      5    89%
+app/plugins/ml45_cereals_dnsl_critical_point_detection/_vendor/xai/__init__.py                     2      0   100%
+app/plugins/ml45_cereals_dnsl_critical_point_detection/_vendor/xai/explainer.py                   41     30    27%
+app/plugins/ml45_cereals_dnsl_critical_point_detection/_vendor/xai/fusion.py                      46     37    20%
+app/plugins/ml45_cereals_dnsl_critical_point_detection/_vendor/xai/fuzzy_explainer.py            131    120     8%
+app/plugins/ml45_cereals_dnsl_critical_point_detection/_vendor/xai/pcc.py                        169    153     9%
+app/plugins/ml45_cereals_dnsl_critical_point_detection/_vendor/xai/temporal_explainer.py         172    155    10%
+app/plugins/ml45_cereals_dnsl_critical_point_detection/_vendor/xai/utils.py                       61     52    15%
+app/plugins/ml45_cereals_dnsl_critical_point_detection/constants.py                               41      0   100%
+app/plugins/ml45_cereals_dnsl_critical_point_detection/mlflow_utils.py                            47     27    43%
+app/plugins/ml45_cereals_dnsl_critical_point_detection/model_loader.py                            38     25    34%
+app/plugins/ml45_cereals_dnsl_critical_point_detection/plugin.py                                 277     52    81%
+app/plugins/ml45_cereals_dnsl_critical_point_detection/postprocessing.py                          31     12    61%
+app/plugins/ml45_cereals_dnsl_critical_point_detection/predict_dto.py                             50      2    96%
+app/plugins/ml45_cereals_dnsl_critical_point_detection/preprocessing.py                           54     31    43%
+app/plugins/ml45_cereals_dnsl_critical_point_detection/train_dto.py                               30      0   100%
+app/plugins/ml46_dairy_fouling_clog_detection/__init__.py                                          0      0   100%
+app/plugins/ml46_dairy_fouling_clog_detection/_vendor/__init__.py                                  0      0   100%
+app/plugins/ml46_dairy_fouling_clog_detection/_vendor/artifact_validation.py                      61     12    80%
+app/plugins/ml46_dairy_fouling_clog_detection/_vendor/common.py                                  123     42    66%
+app/plugins/ml46_dairy_fouling_clog_detection/_vendor/data.py                                    145    135     7%
+app/plugins/ml46_dairy_fouling_clog_detection/_vendor/datasets.py                                105     72    31%
+app/plugins/ml46_dairy_fouling_clog_detection/_vendor/evaluation.py                              191    144    25%
+app/plugins/ml46_dairy_fouling_clog_detection/_vendor/features.py                                249    238     4%
+app/plugins/ml46_dairy_fouling_clog_detection/_vendor/model_arch.py                               98     14    86%
+app/plugins/ml46_dairy_fouling_clog_detection/_vendor/training_loop.py                            49     39    20%
+app/plugins/ml46_dairy_fouling_clog_detection/_vendor/utils_common.py                            111     94    15%
+app/plugins/ml46_dairy_fouling_clog_detection/constants.py                                        17      0   100%
+app/plugins/ml46_dairy_fouling_clog_detection/mlflow_utils.py                                     30     14    53%
+app/plugins/ml46_dairy_fouling_clog_detection/model_loader.py                                     58     27    53%
+app/plugins/ml46_dairy_fouling_clog_detection/plugin.py                                          209    106    49%
+app/plugins/ml46_dairy_fouling_clog_detection/postprocessing.py                                   52     35    33%
+app/plugins/ml46_dairy_fouling_clog_detection/predict_dto.py                                      43      0   100%
+app/plugins/ml46_dairy_fouling_clog_detection/preprocessing.py                                    69     33    52%
+app/plugins/ml46_dairy_fouling_clog_detection/train_dto.py                                        20      0   100%
+app/plugins/ml47_dairy_dnsl_pasteurization_fault_detection/__init__.py                             0      0   100%
+app/plugins/ml47_dairy_dnsl_pasteurization_fault_detection/constants.py                           24      0   100%
+app/plugins/ml47_dairy_dnsl_pasteurization_fault_detection/mlflow_utils.py                        39      4    90%
+app/plugins/ml47_dairy_dnsl_pasteurization_fault_detection/model_loader.py                        89      7    92%
+app/plugins/ml47_dairy_dnsl_pasteurization_fault_detection/plugin.py                             145     72    50%
+app/plugins/ml47_dairy_dnsl_pasteurization_fault_detection/postprocessing.py                      46     38    17%
+app/plugins/ml47_dairy_dnsl_pasteurization_fault_detection/predict_dto.py                         41      2    95%
+app/plugins/ml47_dairy_dnsl_pasteurization_fault_detection/preprocessing.py                       79     36    54%
+app/plugins/ml47_dairy_dnsl_pasteurization_fault_detection/train_dto.py                           25      0   100%
+app/plugins/ml47_dairy_dnsl_pasteurization_fault_detection/trainer.py                            244     16    93%
+app/plugins/ml48_dairy_dnsl_critical_point_detection/__init__.py                                   0      0   100%
+app/plugins/ml48_dairy_dnsl_critical_point_detection/constants.py                                 36      0   100%
+app/plugins/ml48_dairy_dnsl_critical_point_detection/mlflow_utils.py                              50      4    92%
+app/plugins/ml48_dairy_dnsl_critical_point_detection/model_loader.py                              90     22    76%
+app/plugins/ml48_dairy_dnsl_critical_point_detection/plugin.py                                   159     22    86%
+app/plugins/ml48_dairy_dnsl_critical_point_detection/postprocessing.py                            46      3    93%
+app/plugins/ml48_dairy_dnsl_critical_point_detection/predict_dto.py                               60      1    98%
+app/plugins/ml48_dairy_dnsl_critical_point_detection/preprocessing.py                             75     24    68%
+app/plugins/ml48_dairy_dnsl_critical_point_detection/train_dto.py                                 25      0   100%
+app/plugins/ml48_dairy_dnsl_critical_point_detection/trainer.py                                  259     14    95%
+app/plugins/ml48_dairy_dnsl_critical_point_detection/xai.py                                      210     34    84%
+app/registry.py                                                                                  129      0   100%
+------------------------------------------------------------------------------------------------------------------
+TOTAL                                                                                          26593   9071    66%
+1534 passed, 44 skipped, 521 warnings in 186.76s (0:03:06)

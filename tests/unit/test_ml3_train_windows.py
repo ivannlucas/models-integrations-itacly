@@ -83,9 +83,11 @@ def test_memory_holds_each_row_once():
 
 
 @pytest.fixture(name="batches")
-def _batches(monkeypatch):
-    monkeypatch.setattr(training, "BATCH_SIZE", 4)
-    return training._window_batches
+def _batches():
+    """The batching logic in batches of 4, without Keras (see _WindowBatchesBase)."""
+    def make(windows, **kwargs):
+        return training._WindowBatchesBase(windows, 4, **kwargs)
+    return make
 
 
 def test_shuffled_epochs_cover_every_window_once_in_a_new_order(batches):

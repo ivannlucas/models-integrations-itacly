@@ -54,6 +54,18 @@ _LOAD_PATCH = "app.plugins.ml10_dairy_disease_vector_detection.plugin.load_detec
 _LOADER_MOD = "app.plugins.ml10_dairy_disease_vector_detection.model_loader"
 
 
+@pytest.fixture(autouse=True)
+def _no_base_ood_reference():
+    """These tests use mocked classifiers: keep the «desconocido» gate off (test_ml10_ood.py).
+
+    Without this, load() would pick up artifacts/…/ood_reference.npz when it exists locally and
+    run the gate's feature path on a MagicMock classifier.
+    """
+    with patch("app.plugins.ml10_dairy_disease_vector_detection.plugin.load_base_reference",
+               return_value=None):
+        yield
+
+
 def _make_mock_classifier(class_idx=0, confidence=0.9):
     """Create a mock classifier that returns the given class index with the given confidence."""
     classifier = MagicMock()
@@ -222,6 +234,8 @@ class TestBuildInlineResult:
             "prediction": "no_vectors",
             "confidence": 0.0,
             "vectors_count": 0,
+            "unknown_count": 0,
+            "es_desconocido": False,
             "detections": [],
             "species_summary": {},
         }
@@ -502,7 +516,7 @@ class TestPredictInlineWithMocks:
         user_dir.mkdir()
         download = _LOAD_PATCH.replace("load_detector_and_classifier",
                                        "download_user_classifier_from_mlflow")
-        with patch(download, return_value=(MagicMock(), ["fly"], str(user_dir))):
+        with patch(download, return_value=(MagicMock(), ["fly"], None, str(user_dir))):
             with pytest.raises(InvalidImageError):
                 plugin.predict_inline(features={"image_path": "f.gif"}, mlflow_run_id="r1")
         assert not user_dir.exists()
@@ -602,10 +616,27 @@ class TestPredictInlineWithMocks:
             assert result.vectors_count == 1
 
     def test_predict_inline_no_image_field_raises(self):
-        """Verify predict_inline raises ValueError when no image field is provided."""
+        """A request without image (tabular/JSON source) says so and what to send instead."""
         plugin = self._make_plugin()
-        with pytest.raises(ValueError, match="image_path' o 'image_base64"):
-            plugin.predict_inline(features={})
+        with pytest.raises(InvalidImageError, match="No se ha recibido ninguna imagen") as exc:
+            plugin.predict_inline(features={"rows": [{"a": 1}]})
+        assert "JPG, JPEG, PNG, BMP o TIFF" in str(exc.value)
+        assert "ZIP de imágenes" in str(exc.value)
+
+    def test_predict_inline_json_bytes_raise_readable_error(self):
+        """A JSON file sent as image_base64 is reported as not being an image, in Spanish."""
+        plugin = self._make_plugin()
+        b64 = base64.b64encode(json.dumps({"a": 1}).encode()).decode()
+        with pytest.raises(InvalidImageError, match="no es una imagen") as exc:
+            plugin.predict_inline(features={"image_base64": b64})
+        assert "JPG, JPEG, PNG, BMP o TIFF" in str(exc.value)
+        assert len(str(exc.value)) <= 300  # the platform only shows details up to 300 chars
+
+    def test_predict_inline_json_path_raises_unsupported_format(self):
+        """An image_path with a data-file extension names the extension and the valid formats."""
+        plugin = self._make_plugin()
+        with pytest.raises(InvalidImageError, match=r"no soportado \(fichero \.json\)"):
+            plugin.predict_inline(features={"image_path": "/shared/predict_1.json"})
 
     def test_predict_inline_unsupported_extension_raises(self):
         """Verify predict_inline raises on unsupported file extensions."""
@@ -730,8 +761,33 @@ class TestPredictBatchWithMocks:
             mock_load.return_value = (MagicMock(), MagicMock(), ["fly", "mos", "tick"])
             plugin = Ml10DairyDiseaseVectorDetectionPlugin()
             plugin.load()
-            with pytest.raises(ValueError, match="data_path debe ser CSV, ZIP o directorio"):
+            with pytest.raises(InvalidImageError, match="Formato de fichero no soportado"):
                 plugin.predict_batch(data_path="/fake/path/not_a_dir")
+
+    def test_predict_batch_json_file_raises_unsupported_format(self, tmp_path):
+        """A JSON file as batch input names its extension and what the model accepts."""
+        data = tmp_path / "datos.json"
+        data.write_text('{"a": 1}')
+        with patch(_LOAD_PATCH) as mock_load:
+            mock_load.return_value = (MagicMock(), MagicMock(), ["fly", "mos", "tick"])
+            plugin = Ml10DairyDiseaseVectorDetectionPlugin()
+            plugin.load()
+            with pytest.raises(InvalidImageError, match=r"\(fichero \.json\)") as exc:
+                plugin.predict_batch(data_path=str(data))
+        assert "ZIP de imágenes" in str(exc.value)
+
+    def test_predict_batch_zip_without_images_lists_what_it_holds(self, tmp_path):
+        """A ZIP of JSON files says it has no images and what it does contain."""
+        zip_path = tmp_path / "datos.zip"
+        with zipfile.ZipFile(zip_path, "w") as zf:
+            zf.writestr("a.json", "{}")
+            zf.writestr("b.json", "{}")
+        with patch(_LOAD_PATCH) as mock_load:
+            mock_load.return_value = (MagicMock(), MagicMock(), ["fly", "mos", "tick"])
+            plugin = Ml10DairyDiseaseVectorDetectionPlugin()
+            plugin.load()
+            with pytest.raises(InvalidImageError, match=r"contiene: 2 \.json"):
+                plugin.predict_batch(data_path=str(zip_path))
 
     def test_predict_batch_csv_image_not_found(self):
         """Verify predict_batch handles missing images gracefully (error entry)."""

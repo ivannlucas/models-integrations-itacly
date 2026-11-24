@@ -431,6 +431,22 @@ from app.plugins.ml24_dairy_spatial_price_forecast.train_dto import (
     TrainResponse as Ml24_TrainResp,
 )
 
+from app.plugins.ml38_wine_machinery_fault_detection.exceptions import (
+    FeatureContractError,
+    UnsupportedOperatingConfigurationError,
+)
+from app.plugins.ml38_wine_machinery_fault_detection.plugin import (
+    Ml38WineMachineryFaultDetectionPlugin,
+)
+from app.plugins.ml38_wine_machinery_fault_detection.predict_dto import (
+    PredictRequest as Ml38_Request,
+    PredictResponse as Ml38_Response,
+)
+from app.plugins.ml38_wine_machinery_fault_detection.train_dto import (
+    TrainRequest as Ml38_TrainReq,
+    TrainResponse as Ml38_TrainResp,
+)
+
 
 # ── Registry entry dataclass ──────────────────────────────────────────────────
 
@@ -473,7 +489,7 @@ REGISTRY: list[ModelEntry] = [
         plugin_class=Ml10DairyDiseaseVectorDetectionPlugin,
         predict_request_type=Ml10Dairy_Request,
         predict_response_type=Ml10Dairy_Response,
-        extra_predict_exceptions=(),
+        extra_predict_exceptions=(InvalidImageError,),
         train_request_type=Ml10Dairy_TrainReq,
         train_response_type=Ml10Dairy_TrainResp,
     ),
@@ -863,5 +879,16 @@ REGISTRY: list[ModelEntry] = [
         ),
         train_request_type=Ml24_TrainReq,
         train_response_type=Ml24_TrainResp,
+    ),
+    ModelEntry(
+        model_id="ml38-wine-machinery-fault-detection",
+        prefix="/models/ml38-wine-machinery-fault-detection",
+        version="1.0.0",
+        plugin_class=Ml38WineMachineryFaultDetectionPlugin,
+        predict_request_type=Ml38_Request,
+        predict_response_type=Ml38_Response,
+        extra_predict_exceptions=(UnsupportedOperatingConfigurationError, FeatureContractError),
+        train_request_type=Ml38_TrainReq,
+        train_response_type=Ml38_TrainResp,
     ),
 ]

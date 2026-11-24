@@ -11,14 +11,19 @@ import pandas as pd
 import pytest
 import torch
 
-from app.plugins.ml43_cereals_dnsl_anomaly_fault_detection import postprocessing
+from app.plugins.ml43_cereals_dnsl_anomaly_fault_detection import model_loader, postprocessing
+from app.plugins.ml43_cereals_dnsl_anomaly_fault_detection._vendor.xai.corrective_actions import (
+    generate_corrective_actions,
+)
 from app.plugins.ml43_cereals_dnsl_anomaly_fault_detection._vendor.xai.explainer import (
     DNFLExplainer,
 )
 from app.plugins.ml43_cereals_dnsl_anomaly_fault_detection.constants import (
+    DEFAULT_MODEL_CFG,
     SENSOR_COLUMNS,
     SEQ_LENGTH,
     SOLAPAMIENTO_BETA,
+    XAI_CORRECTIVE_ACTIONS_CFG,
 )
 from app.plugins.ml43_cereals_dnsl_anomaly_fault_detection.mlflow_utils import (
     get_calibrated_threshold,
@@ -693,3 +698,75 @@ class TestGetCalibratedThreshold:
                 "MLflow unreachable"
             )
             assert get_calibrated_threshold("run-1", default=0.41) == 0.41
+
+
+# ── CU44 interpretive-state calibration ────────────────────────────────────────
+# config.yaml::xai.corrective_actions (memoria CU44 v1.4 Sec. 9.3-9.4): strong_margin=0.25,
+# weak_margin=0.15, branch_gap_threshold=0.25, support_ratio_min=0.75. The original
+# xai_predictor.py passes them to DNFLExplainer; the plugin used to leave them out, so
+# corrective_actions.py silently fell back to its uncalibrated defaults (0.15/0.10/0.30/0.70).
+
+def _fusion_report(*, ensemble: float, branches: tuple, support: float) -> dict:
+    fuzzy, temporal = branches
+    return {
+        "prediction": {
+            "decision_threshold": 0.41,
+            "lambda_anomaly": 0.7,
+            "ensemble": {"probability": ensemble},
+            "fuzzy": {"probability": fuzzy},
+            "temporal": {"probability": temporal},
+        },
+        "fuzzy": {"support_ratio": support, "dominant_variables": [["temp_zona1", 1.0]]},
+        "temporal": {"top_variables": [{"feature": "temp_zona1", "importance": 1.0}]},
+    }
+
+
+def test_explainer_is_built_with_the_calibrated_corrective_actions_config():
+    """Both the served model and MLflow-retrained runs get the calibrated labelling."""
+    explainer = model_loader.build_explainer(
+        model_loader.build_model(DEFAULT_MODEL_CFG), DEFAULT_MODEL_CFG
+    )
+
+    assert explainer.corrective_actions_cfg == {
+        "strong_margin": 0.25,
+        "weak_margin": 0.15,
+        "branch_gap_threshold": 0.25,
+        "support_ratio_min": 0.75,
+    }
+
+
+@pytest.mark.parametrize(
+    "report, expected_state",
+    [
+        # Both branches over the threshold, margin 0.12 (< weak_margin 0.15): not confirmed.
+        (_fusion_report(ensemble=0.53, branches=(0.60, 0.50), support=0.9), "unconfirmed_alert"),
+        # Margin and agreement fine, but support 0.72 (< support_ratio_min 0.75).
+        (_fusion_report(ensemble=0.90, branches=(0.90, 0.90), support=0.72), "unconfirmed_alert"),
+        # Normal prediction only 0.20 below the threshold (< strong_margin 0.25).
+        (_fusion_report(ensemble=0.21, branches=(0.20, 0.22), support=0.9), "normal_with_signals"),
+        # Comfortably normal, but branches 0.28 apart (>= branch_gap_threshold 0.25).
+        (_fusion_report(ensemble=0.05, branches=(0.30, 0.02), support=0.9), "normal_with_signals"),
+        (_fusion_report(ensemble=0.05, branches=(0.06, 0.04), support=0.9), "normal"),
+        (_fusion_report(ensemble=0.95, branches=(0.95, 0.95), support=0.9), "confirmed_anomaly"),
+    ],
+)
+def test_interpretive_state_follows_the_calibrated_thresholds(report, expected_state):
+    """Boundary cases of memoria CU44 Sec. 9.2 under the calibrated configuration."""
+    result = generate_corrective_actions(report, corrective_actions_cfg=XAI_CORRECTIVE_ACTIONS_CFG)
+
+    assert result["state_label"] == expected_state
+
+
+@pytest.mark.parametrize(
+    "state_label",
+    ["normal", "normal_with_signals", "unconfirmed_alert", "confirmed_anomaly"],
+)
+def test_final_report_leaves_out_margin_and_dominant_evidence(state_label):
+    """Developer platform feedback (modelos 43-44, point 5): Margen_umbral and
+    Evidencia_dominante are not wanted in the output, in any state."""
+    report = _action_report(state_label)
+    report["dominant_branch"] = "fuzzy"
+
+    estado = DNFLExplainer._build_final_report(None, action_report=report)["Estado_del_sistema"]
+
+    assert set(estado) == {"Estado_interpretativo", "Probabilidad_anomalia", "Umbral_decision"}

@@ -24,6 +24,7 @@ from app.domain.services.exceptions import ModelPersistenceError
 from app.domain.services.mlflow_artifacts import removing_dir
 from app.domain.services.mlflow_tracker import BaseMLflowTracker
 from app.domain.services.plugin_runtime import PluginRuntimeMixin
+from app.domain.services.shap_background import rescale_background
 from app.infrastructure.artifact_store import local_file_path
 from app.plugins.ml45_cereals_dnsl_critical_point_detection._vendor.loss import DNFLoss
 from app.plugins.ml45_cereals_dnsl_critical_point_detection._vendor.model import (
@@ -47,6 +48,7 @@ from app.plugins.ml45_cereals_dnsl_critical_point_detection.constants import (
     NORMAL_TOKENS,
     SCALER_FILENAME,
     SENSOR_COLUMNS,
+    SENSOR_DESCRIPTIONS,
     SEQUENCE_LENGTH,
     TARGET_COLUMN,
     TEST_METRICS,
@@ -410,8 +412,14 @@ def _test_metrics(model, test_xs: tuple, y_test, calibrated_threshold: float) ->
 def _train_response(
     test: dict, calibrated_threshold: float, counts: dict, run_info: tuple
 ) -> TrainResponse:
-    """Build the TrainResponse; ``run_info`` = (epochs_run, mlflow_run_id)."""
+    """Build the TrainResponse; ``run_info`` = (epochs_run, mlflow_run_id).
+
+    The epoch count is only logged, not returned: the AI team asked for "Atributos y
+    métricas" to show the threshold, the six test metrics and the window counts/splits only
+    (feedback 16/09/2026, note 10), the same set ml43 returns.
+    """
     epochs_run, new_run_id = run_info
+    logger.info("ml45 training ran %d epochs", epochs_run)
     test_auc = test["auc"]
     split_val_pct = TRAIN_EXTERNAL_VAL_PCT
     split_test_pct = TRAIN_EXTERNAL_TEST_PCT
@@ -433,7 +441,6 @@ def _train_response(
         split_train_pct=round(split_train_pct, 1),
         split_val_pct=round(split_val_pct, 1),
         split_test_pct=round(split_test_pct, 1),
-        n_epochs=epochs_run,
         mlflow_run_id=new_run_id,
         upload_warning=None,
     )
@@ -662,8 +669,15 @@ class Ml45CerealsDnslCriticalPointDetectionPlugin(PluginRuntimeMixin, ModelPlugi
             joblib.dump(scalers, temp_dir / SCALER_FILENAME)
             _validate_saved_artifact(temp_dir / SCALER_FILENAME, joblib.load)
 
-            if self._xai_background is not None:
-                np.save(temp_dir / XAI_BACKGROUND_FILENAME, self._xai_background)
+            # The SHAP background goes up re-expressed in the retrained scaler_x's space (see
+            # app/domain/services/shap_background.py): the original pipeline rebuilds it from
+            # xai_background.csv with the current scaler (memoria CU45 Sec. 3.3 and 9.2, paso
+            # 2.1A), so the base model's copy would be on the wrong scale for this model.
+            background = rescale_background(
+                self._xai_background, self._scaler_x, scalers.get("scaler_x")
+            )
+            if background is not None:
+                np.save(temp_dir / XAI_BACKGROUND_FILENAME, background)
                 _validate_saved_artifact(temp_dir / XAI_BACKGROUND_FILENAME, np.load)
 
             try:
@@ -691,20 +705,26 @@ class Ml45CerealsDnslCriticalPointDetectionPlugin(PluginRuntimeMixin, ModelPlugi
         return new_run_id
 
     def stats(self, mlflow_run_id: str = "") -> StatsResponse:
+        # Same columns, order and wording as the platform's "Estructura esperada del CSV" table
+        # (developer feedback on modelo 45, notes 16-17): timestamp and cycle_id first, Spanish
+        # descriptions with units.
         inputs = [
-            InputField(name=col, type="float", description=f"Sensor {col} time-series (per row)")
-            for col in SENSOR_COLUMNS
-        ] + [
             InputField(
                 name="timestamp",
                 type="datetime",
-                description="Marca temporal de la lectura",
+                description="Marca de tiempo de la lectura",
             ),
             InputField(
                 name="cycle_id",
                 type="string",
-                description="Identificador del ciclo/entidad de secado",
+                description=(
+                    "Identificador del ciclo de secado (opcional — si se omite, se asume una "
+                    "única serie continua)"
+                ),
             ),
+        ] + [
+            InputField(name=col, type="float", description=SENSOR_DESCRIPTIONS[col])
+            for col in SENSOR_COLUMNS
         ]
         outputs = [
             OutputField(

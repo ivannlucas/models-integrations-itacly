@@ -186,3 +186,19 @@ bloqueantes para el wiring, sí relevantes para la revisión humana):
 
 Ningún caso del golden dataset falló tolerancia; no se silenció ni ajustó ninguna
 tolerancia para forzar un verde.
+
+## Anexo (2026-11-19): mensajes de error y detecciones «desconocido»
+
+Cambios a raíz de las pruebas del desarrollador; el detalle está en `outputs/a10/README_ood.md`.
+
+- **Ficheros no soportados.** Un JSON, un CSV, un base64 que no es imagen o un ZIP sin imágenes
+  devuelven 422 con un mensaje que dice qué ha llegado y que hay que subir una imagen (inline) o un
+  ZIP de imágenes (lote), en JPG, JPEG, PNG, BMP o TIFF.
+- **Imágenes ajenas al modelo.** Cada detección pasa por un filtro de «desconocido» sobre las
+  características del clasificador; las que no se parecen a los vectores de entrenamiento salen
+  como `desconocido` y no cuentan como vector.
+- **Golden tras el cambio.** Inline 25/25 correctos; en el batch, 0 de 25 detecciones «desconocido».
+- **Coste.** Por recorte anotado, el 6 % de las detecciones del test de detección se marca
+  «desconocido». Por imagen, el 8 % de las imágenes del test de detección y entre el 1 % y el 5 %
+  de las fotos de test de clasificación se quedan sin vector reconocido.
+- **Tests.** `tests/unit/test_ml10_ood.py` (nuevo) y los de ml10 y ml8 pasan (88).

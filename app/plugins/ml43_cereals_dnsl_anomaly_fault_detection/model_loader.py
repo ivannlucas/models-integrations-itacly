@@ -28,6 +28,7 @@ from app.plugins.ml43_cereals_dnsl_anomaly_fault_detection.constants import (
     MODEL_FILENAME,
     SCALER_FILENAME,
     XAI_BACKGROUND_FILENAME,
+    XAI_CORRECTIVE_ACTIONS_CFG,
 )
 
 logger = logging.getLogger(__name__)
@@ -50,6 +51,7 @@ def build_explainer(model: ParallelDeepNeuroFuzzyModel, model_cfg: dict) -> DNFL
         feature_names_original=SENSOR_COLUMNS,
         stats_creation=STATS_CREATION,
         model_cfg=model_cfg,
+        corrective_actions_cfg=dict(XAI_CORRECTIVE_ACTIONS_CFG),
     )
 
 

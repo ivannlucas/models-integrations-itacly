@@ -135,3 +135,29 @@ real descrito en la memoria CU43 (Sección 4.2).
    completo (`python main.py` con `MODEL=ml43-cereals-dnsl-anomaly-fault-detection`) en un
    entorno con `requirements.txt` completo instalado antes de merge, aunque el mecanismo de
    carga es idéntico y ya verificado.
+
+## Revisión de la capa XAI (2026-11-20)
+
+Contrastada con la memoria CU44 v1.4 (Sec. 9.3, 9.4 y 11.2 paso 6), `CU44.ipynb` y el
+`config/config.yaml` original:
+
+- **Etiquetado interpretativo sin calibrar (corregido).** El plugin construía el `DNFLExplainer`
+  sin `corrective_actions_cfg`, así que se aplicaban los valores por defecto de
+  `corrective_actions.py` (strong 0.15 / weak 0.10 / gap 0.30 / support 0.70) en lugar de los
+  calibrados por el equipo de IA (`xai.corrective_actions`: 0.25 / 0.15 / 0.25 / 0.75). No afecta a
+  la probabilidad ni a la etiqueta Fallo/No Fallo (los 35 golden siguen igual), pero sí al
+  `Estado_interpretativo` y al número de acciones sugeridas. Ahora en
+  `constants.py::XAI_CORRECTIVE_ACTIONS_CFG`, cableado en `model_loader.build_explainer`.
+- **Background SHAP tras reentrenar (corregido).** `train()` reajusta `scaler_x` pero subía a
+  MLflow el `xai_background.npy` del modelo base, escalado con el `scaler_x` antiguo. Ahora se
+  re-expresa en el espacio del nuevo escalador (`app/domain/services/shap_background.py`),
+  equivalente a reconstruirlo desde `xai_background.csv` como hace el pipeline original.
+- **Recalibración tras reentrenar: manual, no automatizable.** La memoria recomienda revisar
+  `xai.corrective_actions` y `xai.action_config` con `CU44.ipynb` tras cada reentrenamiento; un
+  run de MLflow reentrenado usa la calibración del modelo entregado. Documentado en las fichas.
+- **`Margen_umbral` y `Evidencia_dominante` no se devuelven.** Están en el `explainer.py` original y en la
+  memoria CU44 v1.4, pero el feedback de plataforma de los desarrolladores (modelos 43-44, punto 5) pidió
+  no incluirlos; se quitaron en Bitbucket `3c7e88d` (2026-09-02) y así se mantiene.
+
+Tests: `tests/unit/test_shap_background.py` y los nuevos casos de calibración en
+`tests/unit/test_ml43_cereals_dnsl_anomaly_fault_detection.py`; suite unitaria completa en verde.
