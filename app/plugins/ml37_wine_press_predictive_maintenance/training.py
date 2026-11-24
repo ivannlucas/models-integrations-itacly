@@ -22,7 +22,7 @@ from sklearn.model_selection import train_test_split  # noqa: E402  pylint: disa
 from sklearn.preprocessing import StandardScaler  # noqa: E402  pylint: disable=wrong-import-position
 
 from app.domain.services.exceptions import DataContractError  # noqa: E402  pylint: disable=wrong-import-position
-from app.plugins.ml37_wine_press_predictive_maintenance import preprocessing  # noqa: E402  pylint: disable=wrong-import-position
+from app.plugins.ml37_wine_press_predictive_maintenance import preprocessing, xai  # noqa: E402  pylint: disable=wrong-import-position
 from app.plugins.ml37_wine_press_predictive_maintenance.constants import (  # noqa: E402  pylint: disable=wrong-import-position
     CLASS_ORDERS,
     F_SCHEMA,
@@ -57,7 +57,8 @@ class LstmTrainResult:
 
     ``metrics`` nests accuracy/balanced_accuracy/f1_macro (each a dict per head) and
     ``split_sizes`` nests n_train/n_val/n_test — kept together rather than as ten separate
-    fields.
+    fields. ``shap_background`` is the unscaled SHAP background drawn from THIS run's train
+    split (xai.build_shap_background), so explanations of the retrained model use its own data.
     """
 
     model: "keras.Model"
@@ -66,6 +67,7 @@ class LstmTrainResult:
     metrics: dict
     split_sizes: dict
     epochs_run: int
+    shap_background: np.ndarray
 
 
 def _validate_training_frame(df: pd.DataFrame) -> None:
@@ -318,4 +320,5 @@ def train_lstm_multitask(df: pd.DataFrame) -> LstmTrainResult:
             "n_test": len(idx_splits[2]),
         },
         epochs_run=len(history.history.get("loss", [])),
+        shap_background=xai.build_shap_background(x, idx_splits[0], len(idx_splits[2])),
     )

@@ -12,6 +12,8 @@ import json
 import logging
 import os
 
+import numpy as np
+
 os.environ.setdefault("KERAS_BACKEND", "torch")
 os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
 
@@ -26,7 +28,12 @@ from app.plugins.ml37_wine_press_predictive_maintenance.constants import (  # no
     MODEL_FILENAME,
     PHYSICAL_SENSORS,
     SCALER_FILENAME,
+    SHAP_BACKGROUND_FILENAME,
     TARGET_NAMES,
+    TIMESTEPS,
+)
+from app.plugins.ml37_wine_press_predictive_maintenance.preprocessing import (  # noqa: E402  pylint: disable=wrong-import-position
+    apply_scaler,
 )
 
 logger = logging.getLogger(__name__)
@@ -78,7 +85,25 @@ def _load_scaler(path: str) -> dict:
     return scaler
 
 
-def _load_bundle(model_path: str, scaler_path: str, mappings_path: str) -> dict:
+def _load_shap_background(path: str | None, scaler: dict) -> np.ndarray | None:
+    """Unscaled (n, 600, 14) background -> scaled (n, 600, 40) schema_v1 tensors for SHAP,
+    with THIS bundle's scaler. None when the file is absent (include_shap then gives xai_error)."""
+    if path is None or not os.path.exists(path):
+        return None
+    raw = np.load(path)
+    if raw.ndim != 3 or raw.shape[1:] != (TIMESTEPS, len(PHYSICAL_SENSORS)) or len(raw) == 0:
+        raise ValueError(
+            f"{SHAP_BACKGROUND_FILENAME} inválido: se esperaba (n, {TIMESTEPS}, "
+            f"{len(PHYSICAL_SENSORS)}) sin escalar, encontrado {raw.shape}"
+        )
+    schema = np.zeros((len(raw), TIMESTEPS, F_SCHEMA), dtype=np.float32)
+    schema[:, :, : len(PHYSICAL_SENSORS)] = raw
+    return apply_scaler(schema, scaler)
+
+
+def _load_bundle(
+    model_path: str, scaler_path: str, mappings_path: str, background_path: str | None,
+) -> dict:
     class_mappings = _load_class_mappings(mappings_path)
     scaler = _load_scaler(scaler_path)
     model = keras.models.load_model(model_path, compile=False)
@@ -92,18 +117,23 @@ def _load_bundle(model_path: str, scaler_path: str, mappings_path: str) -> dict:
         "model": model,
         "scaler": scaler,
         "class_mappings": class_mappings,
+        "shap_background": _load_shap_background(background_path, scaler),
     }
 
 
 def load_model_bundle() -> dict:
     """Load the real LSTM multitask model + scaler + class mappings for no_virtual_v1__rand_scool
-    (the served base artifact, via ArtifactStore)."""
+    (the served base artifact, via ArtifactStore), plus the SHAP background if published."""
     bundle = _load_bundle(
         str(_store.path(MODEL_FILENAME)),
         str(_store.path(SCALER_FILENAME)),
         str(_store.path(CLASS_MAPPINGS_FILENAME)),
+        _optional(_store.optional_path(SHAP_BACKGROUND_FILENAME)),
     )
-    logger.info("ml37 base bundle loaded — targets=%s", TARGET_NAMES)
+    logger.info(
+        "ml37 base bundle loaded — targets=%s shap_background=%s", TARGET_NAMES,
+        "yes" if bundle["shap_background"] is not None else "no",
+    )
     return bundle
 
 
@@ -113,4 +143,9 @@ def load_model_bundle_from_dir(local_path: str) -> dict:
         os.path.join(local_path, MODEL_FILENAME),
         os.path.join(local_path, SCALER_FILENAME),
         os.path.join(local_path, CLASS_MAPPINGS_FILENAME),
+        os.path.join(local_path, SHAP_BACKGROUND_FILENAME),
     )
+
+
+def _optional(path) -> str | None:
+    return None if path is None else str(path)

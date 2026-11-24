@@ -1,7 +1,9 @@
 """MLflow helpers for ml37: download a user-retrained LSTM model from MLflow.
 
 A retrained model lives ONLY in its MLflow run, under ``model/``: ``best_model.keras``,
-``scaler.json``, ``class_mappings.json``. The base artifacts in
+``scaler.json``, ``class_mappings.json`` and ``shap_background.npy`` (the SHAP background drawn
+from that run's own train split; optional when loading — without it only SHAP is unavailable,
+Integrated Gradients still works). The base artifacts in
 artifacts/ml37_wine_press_predictive_maintenance/ are never written. Uploading a new retrain is
 done directly in plugin.py::train() via ``require_train_tracker``/``upload_model_to_mlflow``
 (app.domain.services.mlflow_artifacts), same pattern as the rest of the repo's plugins.
