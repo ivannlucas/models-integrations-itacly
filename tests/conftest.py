@@ -362,6 +362,12 @@ from app.plugins.ml28_meat_neuroevolutionary_raw_materials_prediction.predict_dt
     PredictRequest as Ml28Meat_Request,
     PredictResponse as Ml28Meat_Response,
 )
+from app.plugins.ml39_wine_predictive_maintenance_xai.predict_dto import (
+    PredictBatchResponse as Ml39WineBatchResp,
+    PredictInlineResponse as Ml39WineInlineResp,
+    PredictRequest as Ml39Wine_Request,
+    PredictResponse as Ml39Wine_Response,
+)
 from app.plugins.ml3_wine_disease_pest_forecast.predict_dto import (
     PredictBatchResponse as Ml3WineBatchResp,
     PredictInlineResponse as Ml3WineInlineResp,
@@ -2099,6 +2105,42 @@ def _ml28_meat_batch(plugin: FakePlugin, *, data_path: str) -> Ml28MeatBatchResp
     )
 
 
+# Golden case cycle_id 33 (inbox/a39/manifest.yaml) — real Integrated Gradients values.
+_ML39_PREDICTED_CLASS = {"cooler": 3, "valve": 100, "pump": 0, "accumulator": 130}
+_ML39_IG_IMPORTANCE = {
+    "cooler": {"PS6": 0.000318, "TS4": 0.000241, "TS1": 0.000224},
+    "valve": {"PS6": 0.000153, "PS5": 0.00014, "TS4": 0.000138},
+    "pump": {"FS1": 0.000153, "EPS1": 0.000095, "VS1": 0.00009},
+    "accumulator": {"PS6": 0.000229, "TS4": 0.000171, "FS1": 0.000168},
+}
+
+
+def _ml39_wine_inline(
+    plugin: FakePlugin, *, features: dict, model_key, threshold
+) -> Ml39WineInlineResp:
+    """Fake inline response for the ml39 XAI companion plugin (golden case cycle_id 33)."""
+    _ = plugin, features, model_key, threshold
+    return Ml39WineInlineResp(
+        model_id="ml39-wine-predictive-maintenance-xai",
+        predicted_class=_ML39_PREDICTED_CLASS,
+        ig_importance=_ML39_IG_IMPORTANCE,
+        shap_importance=None,
+    )
+
+
+def _ml39_wine_batch(plugin: FakePlugin, *, data_path: str) -> Ml39WineBatchResp:
+    """Fake batch response for the ml39 XAI companion plugin."""
+    _ = plugin, data_path
+    return Ml39WineBatchResp(
+        model_id="ml39-wine-predictive-maintenance-xai",
+        predictions=[{
+            "cycle_id": "33", "predicted_class": _ML39_PREDICTED_CLASS,
+            "ig_importance": _ML39_IG_IMPORTANCE, "shap_importance": None, "error": None,
+        }],
+        n_rows=1, n_predictions=1, output_path=None,
+    )
+
+
 def _ml3_wine_inline(
     plugin: FakePlugin, *, features: dict, model_key, threshold
 ) -> Ml3WineInlineResp:
@@ -2789,6 +2831,7 @@ FAKE_FACTORIES: dict[str, tuple[Callable, Callable]] = {
     "ml48-dairy-dnsl-critical-point-detection": (_ml48_inline, _ml48_batch),
     "ml45-cereals-dnsl-critical-point-detection": (_ml45_inline, _ml45_batch),
     "ml28-meat-neuroevolutionary-raw-materials-prediction": (_ml28_meat_inline, _ml28_meat_batch),
+    "ml39-wine-predictive-maintenance-xai": (_ml39_wine_inline, _ml39_wine_batch),
     "ml3-wine-disease-pest-forecast": (_ml3_wine_inline, _ml3_wine_batch),
     "ml43-cereals-dnsl-anomaly-fault-detection": (_ml43_cereals_inline, _ml43_cereals_batch),
     "ml41-meat-curing-machinery-acoustic-anomaly": (_ml41_inline, _ml41_batch),
@@ -3249,6 +3292,15 @@ TEST_REGISTRY: list[ModelEntry] = [
         predict_request_type=Ml28Meat_Request,
         predict_response_type=Ml28Meat_Response,
         extra_predict_exceptions=(),
+    ),
+    ModelEntry(
+        model_id="ml39-wine-predictive-maintenance-xai",
+        prefix="/models/ml39-wine-predictive-maintenance-xai",
+        version="1.0.0",
+        plugin_class=FakePlugin,
+        predict_request_type=Ml39Wine_Request,
+        predict_response_type=Ml39Wine_Response,
+        extra_predict_exceptions=(DataContractError,),
     ),
     ModelEntry(
         model_id="ml43-cereals-dnsl-anomaly-fault-detection",
