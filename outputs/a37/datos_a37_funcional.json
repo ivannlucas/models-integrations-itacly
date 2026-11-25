@@ -1,0 +1,131 @@
+{
+  "model_id": "a37",
+  "model_slug": "wine-press-predictive-maintenance",
+  "fecha": "Noviembre 2026",
+  "model_key": "ml37-wine-press-predictive-maintenance",
+  "version": "1.1.0",
+  "descripcion": "Herramienta que revisa un ciclo de trabajo de una prensa o de una línea de embotellado y te dice cómo están cuatro de sus componentes: el refrigerador, la válvula, la bomba y el acumulador. Combina lo que ha aprendido de datos históricos con reglas físicas de expertos para lanzar alertas, y te muestra en qué sensores se ha fijado para llegar a cada diagnóstico.",
+  "objetivo": "Ayudarte a detectar a tiempo el desgaste de los componentes críticos de prensas y embotelladoras, para planificar el mantenimiento antes de una parada no prevista, sobre todo en vendimia. Saber qué sensores han pesado en cada diagnóstico te permite contrastarlo con lo que conoces del equipo y decidir qué revisar primero.",
+  "caso_uso": "Envías las lecturas de los sensores de un ciclo de un minuto (o un fichero con muchos ciclos). Para cada ciclo obtienes el estado de los cuatro componentes, lo seguro que está el modelo de cada diagnóstico, las alertas cuando hay indicios de fallo y la lista de sensores que más influyeron en cada componente. Con esa información decides si hace falta una inspección y por dónde empezar.",
+  "que_no_responde": "No te dice cuánto falta para que un componente falle ni por qué ha fallado físicamente: describe el estado del ciclo analizado y en qué datos se ha apoyado el modelo para decirlo.",
+  "entradas_contexto": "Los datos son las lecturas de los sensores de presión, potencia del motor, caudal, temperatura y vibración del equipo durante un ciclo completo de unos 60 segundos, a diez lecturas por segundo.",
+  "inputs": [
+    {
+      "nombre": "Lecturas de presión (6 sensores)",
+      "descripcion": "Presión en distintos puntos del circuito hidráulico, en bar."
+    },
+    {
+      "nombre": "Potencia del motor",
+      "descripcion": "Consumo eléctrico del motor de la bomba, en vatios."
+    },
+    {
+      "nombre": "Caudal (2 sensores)",
+      "descripcion": "Volumen de fluido que circula por el circuito, en litros por minuto."
+    },
+    {
+      "nombre": "Temperatura (4 sensores)",
+      "descripcion": "Temperatura del fluido en distintos puntos, en grados centígrados."
+    },
+    {
+      "nombre": "Vibración",
+      "descripcion": "Vibración del equipo, en milímetros por segundo."
+    },
+    {
+      "nombre": "Identificador del ciclo y tiempo",
+      "descripcion": "Solo al enviar un fichero con varios ciclos: a qué ciclo pertenece cada lectura y en qué segundo se tomó."
+    }
+  ],
+  "outputs": [
+    {
+      "nombre": "Estado de cada componente",
+      "descripcion": "Nominal, aviso o crítico para el refrigerador, la válvula, la bomba y el acumulador, junto con el código de condición predicho.",
+      "interpretacion": "Un estado crítico o de aviso indica degradación probable; confírmalo con una inspección, sobre todo en válvula, bomba y acumulador."
+    },
+    {
+      "nombre": "Confianza del diagnóstico",
+      "descripcion": "Semáforo verde, amarillo o rojo para cada componente.",
+      "interpretacion": "Mide lo seguro que está el modelo, no el desgaste: un rojo significa que el diagnóstico es dudoso, no que el componente esté peor."
+    },
+    {
+      "nombre": "Alertas",
+      "descripcion": "Avisos por componente con su gravedad (informativa, aviso, crítica o emergencia) y si vienen de las reglas físicas, del modelo o de ambos.",
+      "interpretacion": "Cuando reglas y modelo coinciden, la alerta sube de gravedad: es la señal más fiable para priorizar."
+    },
+    {
+      "nombre": "Sensores más influyentes",
+      "descripcion": "Para cada componente, los sensores en los que más se apoyó el modelo en ese ciclo. Bajo petición, una segunda explicación independiente.",
+      "interpretacion": "Te ayuda a saber qué mirar primero. Si el sensor más influyente no tiene relación física con el componente, toma el diagnóstico con más cautela."
+    }
+  ],
+  "ejemplo_interpretacion": "En un ciclo, el refrigerador sale en estado crítico con una alerta de emergencia en la que coinciden reglas y modelo, y los sensores más influyentes son una presión y dos temperaturas: hay un problema serio de refrigeración y conviene revisarlo cuanto antes. Si en ese mismo ciclo la válvula sale en estado nominal con la confianza en rojo, no hay alerta, pero ese diagnóstico es poco fiable y no debería tranquilizarte por sí solo.",
+  "margen_error": "Con ciclos que el modelo no había visto, acertó el estado del refrigerador en cerca del 97 % de los casos, pero fue bastante menos fiable con la bomba y el acumulador (en torno al 55 %) y poco fiable con la válvula (28 %). Las explicaciones son estables en el refrigerador y el acumulador, y menos en la válvula y la bomba, donde dependen del método usado.",
+  "revisar_manualmente": [
+    "Cuando la alerta o el estado afecten a la válvula, la bomba o el acumulador: el modelo es poco fiable en estos tres componentes, confirma con una inspección antes de actuar.",
+    "Cuando la confianza salga en rojo: trata el diagnóstico como orientativo.",
+    "Cuando el sensor más influyente no tenga relación física con el componente (por ejemplo, la vibración para diagnosticar la válvula): la explicación no confirma el diagnóstico.",
+    "Cuando el ciclo tenga menos de 60 segundos de datos o huecos en las lecturas: el diagnóstico de ese ciclo no es fiable.",
+    "La primera vez que lo uses con equipos reales de bodega: valida antes con casos conocidos, porque se entrenó con un banco de pruebas de laboratorio."
+  ],
+  "que_no_hace": [
+    "No sustituye el criterio del técnico de mantenimiento ni garantiza que un componente no vaya a fallar.",
+    "No predice cuándo fallará un componente: describe el estado del ciclo analizado.",
+    "No demuestra una causa física: los sensores influyentes indican en qué se apoyó el modelo, no qué se ha roto.",
+    "No está validado con datos reales de bodega ni ha medido todavía la reducción de paradas.",
+    "No ejecuta ninguna acción de mantenimiento: es un apoyo a la decisión."
+  ],
+  "puede_equivocarse": "Sí, y de forma muy distinta según el componente: es muy fiable con el refrigerador y bastante menos con la válvula, la bomba y el acumulador, donde conviene apoyarse en las alertas de reglas físicas y en una inspección. Sus probabilidades no están ajustadas salvo en el refrigerador, y en un equipo real el rendimiento puede diferir del medido en laboratorio hasta validarlo con datos propios. Es una ayuda a la decisión, no una garantía.",
+  "kpis": [
+    {
+      "kpi": "Fiabilidad del diagnóstico del refrigerador",
+      "valor_umbral": "97 % de acierto equilibrado en ciclos de prueba",
+      "descripcion": "El componente mejor diagnosticado; es el único que cumple también los criterios de explicabilidad."
+    },
+    {
+      "kpi": "Fiabilidad de válvula, bomba y acumulador",
+      "valor_umbral": "28-57 % de acierto equilibrado en ciclos de prueba",
+      "descripcion": "Rendimiento débil: en estos componentes el valor real lo aportan sobre todo las reglas físicas."
+    },
+    {
+      "kpi": "Explicaciones estables",
+      "valor_umbral": "concordancia entre dos métodos de explicación superior a 0,70",
+      "descripcion": "Se cumple en el refrigerador (0,92) y el acumulador (0,80), no en la válvula (0,65) ni la bomba (0,60)."
+    },
+    {
+      "kpi": "Confianza bien ajustada",
+      "valor_umbral": "error de calibración (Brier) inferior a 0,10",
+      "descripcion": "Solo el refrigerador (0,018) lo cumple; en el resto no uses las probabilidades como umbral de alarma."
+    },
+    {
+      "kpi": "Acuerdo entre modelo y reglas físicas",
+      "valor_umbral": "más del 30 % de alertas del modelo confirmadas por las reglas",
+      "descripcion": "Refrigerador 99 %; válvula 1 %, bomba 16 % y acumulador 24 % no lo alcanzan."
+    },
+    {
+      "kpi": "Reducción del tiempo de inactividad no planificado",
+      "valor_umbral": "20 % (objetivo, no medido)",
+      "descripcion": "Pendiente de validación en planta: el banco de pruebas no registra paradas reales."
+    }
+  ],
+  "limitaciones": [
+    {
+      "tipo": "Banco de pruebas de laboratorio, no bodega real",
+      "descripcion": "Se entrenó y probó con un banco hidráulico de laboratorio que imita prensas, bombeo y embotellado. Antes de usarlo en tu bodega hay que validarlo con equipos reales."
+    },
+    {
+      "tipo": "Rendimiento desigual por componente",
+      "descripcion": "Muy bueno en el refrigerador y mucho más débil en la válvula, la bomba y el acumulador. No te quedes con una única cifra global."
+    },
+    {
+      "tipo": "La confianza no es riesgo físico",
+      "descripcion": "El semáforo indica lo seguro que está el modelo, no lo desgastado que está el componente."
+    },
+    {
+      "tipo": "Interpretación de las explicaciones",
+      "descripcion": "Los sensores influyentes muestran en qué se apoyó el modelo, no una causa física demostrada. Solo son estables en el refrigerador y el acumulador; en la válvula, la bomba y el acumulador el sensor que más pesa suele ser la vibración y no los propios del componente."
+    },
+    {
+      "tipo": "Sin anticipación demostrada",
+      "descripcion": "Diagnostica el ciclo que envías; no se ha demostrado que avise con antelación de un fallo futuro."
+    }
+  ]
+}
