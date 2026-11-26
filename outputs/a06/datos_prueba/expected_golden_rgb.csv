@@ -1,0 +1,6 @@
+id,filename,ruta_en_zip,json_inline,true_class,esperado_prediction,esperado_vgg19_bn,esperado_efficientnet_b7,esperado_mobilenet_v3l
+rgb_test_003,pcrcocci.11.jpg,pcrcocci/pcrcocci.11.jpg,predict_inline_rgb_test_003_cocci.json,cocci,cocci,cocci,cocci,cocci
+rgb_test_007,pcrhealthy.101.jpg,pcrhealthy/pcrhealthy.101.jpg,predict_inline_rgb_test_007_healthy.json,healthy,healthy,cocci,healthy,healthy
+rgb_test_014,pcrncd.122.jpg,pcrncd/pcrncd.122.jpg,predict_inline_rgb_test_014_ncd.json,ncd,ncd,ncd,ncd,ncd
+rgb_test_017,pcrsalmo.112.jpg,pcrsalmo/pcrsalmo.112.jpg,predict_inline_rgb_test_017_salmo.json,salmo,salmo,salmo,salmo,salmo
+rgb_tie_001,pcrcocci.138.jpg,pcrcocci/pcrcocci.138.jpg,predict_inline_rgb_tie_001_cocci.json,cocci,healthy,healthy,cocci,salmo
