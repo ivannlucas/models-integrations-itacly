@@ -219,11 +219,24 @@ def _encode_targets(y: np.ndarray, class_mappings: dict) -> np.ndarray:
     return y_idx
 
 
+# Cycles scaled per transform() call: StandardScaler.transform returns float64, so scaling the
+# whole (N, 600, 40) tensor at once briefly held a float64 copy (≈420 MB for 2205 cycles).
+_SCALE_CHUNK_CYCLES = 256
+
+
 def _fit_scaler(x: np.ndarray, idx_train: np.ndarray) -> tuple[np.ndarray, dict]:
-    """Fit a StandardScaler on the train split only, then scale every cycle with it."""
+    """Fit a StandardScaler on the train split only, then scale every cycle with it.
+
+    The transform is row-wise, so scaling in chunks of cycles into a float32 array gives exactly
+    the same values as ``scaler.transform(x.reshape(-1, F)).astype("float32")`` at once."""
     scaler = StandardScaler()
     scaler.fit(x[idx_train].reshape(-1, F_SCHEMA))
-    x_scaled = scaler.transform(x.reshape(-1, F_SCHEMA)).reshape(x.shape).astype("float32")
+    x_scaled = np.empty(x.shape, dtype=np.float32)
+    for start in range(0, len(x), _SCALE_CHUNK_CYCLES):
+        block = x[start:start + _SCALE_CHUNK_CYCLES]
+        x_scaled[start:start + len(block)] = (
+            scaler.transform(block.reshape(-1, F_SCHEMA)).reshape(block.shape)
+        )
     payload = {
         "type": "StandardScaler", "mean": scaler.mean_.tolist(), "scale": scaler.scale_.tolist(),
     }
@@ -239,11 +252,12 @@ def _build_sample_weights(y: np.ndarray) -> np.ndarray | None:
     return np.where(stable_vec == 1, TRAIN_STABLE_WEIGHT, TRAIN_UNSTABLE_WEIGHT).astype("float32")
 
 
-def _compile_and_fit(
-    model: "keras.Model", x_scaled: np.ndarray, y_oh: dict[str, np.ndarray],
+def _compile_and_fit(  # pylint: disable=too-many-arguments
+    model: "keras.Model", x_train_val: tuple[np.ndarray, np.ndarray], y_oh: dict[str, np.ndarray],
     sample_weights: np.ndarray | None, idx_train_val: tuple[np.ndarray, np.ndarray],
 ):
-    """Compile with the original's optimizer/loss/metrics and fit with both callbacks."""
+    """Compile with the original's optimizer/loss/metrics and fit with both callbacks.
+    ``x_train_val`` are the already-sliced scaled tensors of the train and val cycles."""
     idx_train, idx_val = idx_train_val
     output_names = list(model.output_names)
     losses = [keras.losses.CategoricalCrossentropy(from_logits=False) for _ in output_names]
@@ -267,10 +281,10 @@ def _compile_and_fit(
         min_delta=TRAIN_MIN_DELTA, min_lr=TRAIN_MIN_LR,
     )
     return model.fit(
-        x_scaled[idx_train], [y_oh[t][idx_train] for t in output_names],
+        x_train_val[0], [y_oh[t][idx_train] for t in output_names],
         sample_weight=[weights_for(idx_train)] * len(output_names),
         validation_data=(
-            x_scaled[idx_val], [y_oh[t][idx_val] for t in output_names],
+            x_train_val[1], [y_oh[t][idx_val] for t in output_names],
             [weights_for(idx_val)] * len(output_names),
         ),
         epochs=TRAIN_EPOCHS_MAX, batch_size=TRAIN_BATCH_SIZE,
@@ -279,10 +293,11 @@ def _compile_and_fit(
 
 
 def _evaluate_test(
-    model: "keras.Model", x_scaled: np.ndarray, y_idx: np.ndarray, idx_test: np.ndarray,
+    model: "keras.Model", x_test: np.ndarray, y_idx: np.ndarray, idx_test: np.ndarray,
 ) -> dict:
-    """Test-split accuracy/balanced_accuracy/f1_macro per head — same formulas as trainer.py."""
-    probs_test = model.predict(x_scaled[idx_test], verbose=0)
+    """Test-split accuracy/balanced_accuracy/f1_macro per head — same formulas as trainer.py.
+    ``x_test`` is the already-sliced scaled tensor of the test cycles."""
+    probs_test = model.predict(x_test, verbose=0)
     accuracy, balanced_accuracy, f1_macro = {}, {}, {}
     for k, tname in enumerate(TARGET_NAMES):
         y_true = y_idx[idx_test, k]
@@ -298,20 +313,33 @@ def train_lstm_multitask(df: pd.DataFrame) -> LstmTrainResult:
     """Validate the input table, build (N,600,40) tensors + targets, split
     random_stratified_cooler (70/15/15, stratified on cooler, seed=42), fit a fresh
     StandardScaler on train only, train a fresh LSTM from scratch with the original's exact
-    hyperparameters/callbacks, and evaluate on the held-out test split."""
+    hyperparameters/callbacks, and evaluate on the held-out test split.
+
+    Memory (the pod runs it in a child next to the serving process, 2 GiB in total): the caller
+    must not keep its own reference to ``df`` (plugin.train passes it straight from the reader),
+    so the table is freed as soon as the tensors exist; the unscaled and the full scaled tensors
+    are dropped once their slices are taken. The computation is unchanged."""
     _validate_training_frame(df)
-    x, y, _ = _build_tensors_and_targets(df)
+    x, y = _build_tensors_and_targets(df)[:2]
+    del df
     idx_splits = _split_cycle_indices(y[:, 0])
 
     class_mappings = _build_class_mappings()
     y_idx = _encode_targets(y, class_mappings)
     y_oh = _one_hot(y_idx, class_mappings)
+    shap_background = xai.build_shap_background(x, idx_splits[0], len(idx_splits[2]))
     x_scaled, scaler_payload = _fit_scaler(x, idx_splits[0])
+    del x
+    x_parts = [x_scaled[idx] for idx in idx_splits]  # train, val, test
+    del x_scaled
     sample_weights = _build_sample_weights(y)
 
     model = _build_multitask_lstm(class_mappings)
-    history = _compile_and_fit(model, x_scaled, y_oh, sample_weights, idx_splits[:2])
-    metrics = _evaluate_test(model, x_scaled, y_idx, idx_splits[2])
+    history = _compile_and_fit(
+        model, (x_parts[0], x_parts[1]), y_oh, sample_weights, idx_splits[:2],
+    )
+    del x_parts[:2]  # only the test slice is left
+    metrics = _evaluate_test(model, x_parts[0], y_idx, idx_splits[2])
 
     return LstmTrainResult(
         model=model, scaler=scaler_payload, class_mappings=class_mappings, metrics=metrics,
@@ -320,5 +348,5 @@ def train_lstm_multitask(df: pd.DataFrame) -> LstmTrainResult:
             "n_test": len(idx_splits[2]),
         },
         epochs_run=len(history.history.get("loss", [])),
-        shap_background=xai.build_shap_background(x, idx_splits[0], len(idx_splits[2])),
+        shap_background=shap_background,
     )

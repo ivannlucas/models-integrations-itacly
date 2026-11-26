@@ -350,3 +350,43 @@ def test_real_plugin_reproduces_a39_golden_case(real_plugin, cycle_id):
         assert list(got) == list(expected), f"cycle {cycle_id} head {head}: {got}"
         for sensor, value in expected.items():
             assert got[sensor] == pytest.approx(value, rel=0.01)
+
+
+def test_retrain_releases_the_input_table(monkeypatch):
+    """The training frees the table once its tensors exist (pod memory: it runs in a child next
+    to the serving process within 2 GiB), so the caller must not keep it alive either."""
+    import gc  # pylint: disable=import-outside-toplevel
+    import weakref  # pylint: disable=import-outside-toplevel
+
+    monkeypatch.setattr(training, "TRAIN_EPOCHS_MAX", 1)
+    seen = {}
+    original = training._build_tensors_and_targets
+
+    def build(df):
+        seen["ref"] = weakref.ref(df)
+        return original(df)
+
+    def fit(*args, **kwargs):
+        gc.collect()
+        seen["alive_during_fit"] = seen["ref"]() is not None
+        return fit_original(*args, **kwargs)
+
+    fit_original = training._compile_and_fit
+    monkeypatch.setattr(training, "_build_tensors_and_targets", build)
+    monkeypatch.setattr(training, "_compile_and_fit", fit)
+    training.train_lstm_multitask(_training_frame())
+    assert seen["alive_during_fit"] is False
+
+
+def test_chunked_scaling_equals_one_shot_transform():
+    """Scaling in chunks of cycles gives exactly the one-shot StandardScaler transform."""
+    from sklearn.preprocessing import StandardScaler  # pylint: disable=import-outside-toplevel
+
+    x = np.random.default_rng(3).normal(size=(300, 4, F_SCHEMA)).astype(np.float32)
+    idx_train = np.arange(0, 300, 2)
+    got, payload = training._fit_scaler(x, idx_train)
+    ref = StandardScaler().fit(x[idx_train].reshape(-1, F_SCHEMA))
+    expected = ref.transform(x.reshape(-1, F_SCHEMA)).reshape(x.shape).astype("float32")
+    assert got.dtype == np.float32
+    np.testing.assert_array_equal(got, expected)
+    assert payload["mean"] == ref.mean_.tolist()

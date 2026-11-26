@@ -177,9 +177,9 @@ class Ml37WinePressPredictiveMaintenancePlugin(PluginRuntimeMixin, ModelPluginPo
         """
         tracker = require_train_tracker(mlflow_run_id)
         self._require_loaded()
-        with local_file_path(data_path) as local_path:
-            df = _read_table(local_path)
-        result = training.train_lstm_multitask(df)
+        # Passed straight from the reader, never bound to a local name here: the training frees
+        # the table once its tensors exist (≈0.4 GiB with the full 2205-cycle dataset).
+        result = training.train_lstm_multitask(_read_training_table(data_path))
 
         def _write(model_dir: str) -> None:
             result.model.save(os.path.join(model_dir, MODEL_FILENAME))
@@ -324,6 +324,11 @@ def _read_table(path: str) -> pd.DataFrame:
     if path.lower().endswith(".parquet"):
         return pd.read_parquet(path)
     return pd.read_csv(path)
+
+
+def _read_training_table(data_path: str) -> pd.DataFrame:
+    with local_file_path(data_path) as local_path:
+        return _read_table(local_path)
 
 
 def _read_batch_table(data_path: str) -> pd.DataFrame:
