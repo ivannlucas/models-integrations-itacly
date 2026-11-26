@@ -1,0 +1,24 @@
+id,fichero_inline,origen,imagen,etiqueta_real,riesgo_real,esperado_enfermedad,esperado_confianza,esperado_riesgo,esperado_metodo,acierto_clase_modelo
+caso_01,predict_inline_caso_01_altica.json,golden_case_manifest,Mites_Disease_0069.png,ALTICA,0.071,ALTICA,0.6941,0.3263,HIBRIDO_ENSAMBLE,True
+caso_02,predict_inline_caso_02_black_rot.json,golden_case_manifest,image (795).JPG,BLACK_ROT,0.077,BLACK_ROT,0.4841,0.3423,HIBRIDO_ENSAMBLE,True
+caso_03,predict_inline_caso_03_botrytis.json,golden_case_manifest,000001415_mask_jpg.rf.d1892a5831ba709cf86c3bc0cfca4ecc.jpg,BOTRYTIS,0.016,BOTRYTIS,0.3997,0.3184,HIBRIDO_ENSAMBLE,True
+caso_04,predict_inline_caso_04_empoasca.json,golden_case_manifest,mosquito-verde-hojas02 - copia (3).jpg,EMPOASCA,0.456,EMPOASCA,0.3992,0.2237,HIBRIDO_ENSAMBLE,True
+caso_05,predict_inline_caso_05_erinosis.json,golden_case_manifest,178.JPEG,ERINOSIS,0.604,ERINOSIS,0.6675,0.3233,HIBRIDO_ENSAMBLE,True
+caso_06,predict_inline_caso_06_esca_hoja.json,golden_case_manifest,image (779).JPG,ESCA_HOJA,0.373,ESCA_HOJA,0.8752,0.0621,HIBRIDO_ENSAMBLE,True
+caso_07,predict_inline_caso_07_esca_racimo.json,golden_case_manifest,Photo-2 - copia (6) - copia - copia.jpg,ESCA_RACIMO,0.354,ESCA_RACIMO,0.3909,0.3408,HIBRIDO_ENSAMBLE,True
+caso_08,predict_inline_caso_08_healthy_hoja.json,golden_case_manifest,image (202).JPG,HEALTHY_HOJA,0.233,HEALTHY_HOJA,0.767,0.2113,HIBRIDO_ENSAMBLE,True
+caso_09,predict_inline_caso_09_healthy_racimo.json,golden_case_manifest,CFR_1623.jpg,HEALTHY_RACIMO,0.18,HEALTHY_RACIMO,0.6547,0.2785,HIBRIDO_ENSAMBLE,True
+caso_10,predict_inline_caso_10_isariopsis.json,golden_case_manifest,image (119).JPG,ISARIOPSIS,0.029,ISARIOPSIS,0.5306,0.3099,HIBRIDO_ENSAMBLE,True
+caso_11,predict_inline_caso_11_lobesia.json,golden_case_manifest,lobesia_botrana_169.jpg,LOBESIA,0.227,LOBESIA,0.3954,0.7934,HIBRIDO_ENSAMBLE,True
+caso_12,predict_inline_caso_12_mildiu.json,golden_case_manifest,Downy Mildew_436.jpg,MILDIU,0.133,MILDIU,0.6735,0.2812,HIBRIDO_ENSAMBLE,True
+caso_13,predict_inline_caso_13_oidio.json,golden_case_manifest,Powdery Mildew_374.JPG,OIDIO,0.041,HEALTHY_HOJA,0.4156,0.229,HIBRIDO_ENSAMBLE,False
+caso_14,predict_inline_caso_14_oidio_racimo.json,golden_case_manifest,6325e35b-oidio_grappolo46.jpg,OIDIO_RACIMO,0.059,OIDIO_RACIMO,0.396,0.2085,HIBRIDO_ENSAMBLE,True
+caso_15,predict_inline_caso_15_red_mite.json,golden_case_manifest,4d9645fa-c250-4224-b730-21710bf11596___Com.G_SpM_FL 8755_patch_1.jpg,RED_MITE,0.524,RED_MITE,0.3674,0.3282,HIBRIDO_ENSAMBLE,True
+caso_16,predict_inline_caso_16_mildiu.json,golden_case_manifest,Downy Mildew_112.jpg,MILDIU,0.053,MILDIU,0.6703,0.1373,HIBRIDO_ENSAMBLE,True
+caso_17,predict_inline_caso_17_oidio.json,golden_case_manifest,grapevine_powdery_mildew_leaf_29.jpg,OIDIO,0.049,OIDIO_RACIMO,0.3113,0.2773,HIBRIDO_ENSAMBLE,False
+caso_18,predict_inline_caso_18_black_rot.json,golden_case_manifest,image (122).JPG,BLACK_ROT,0.099,BLACK_ROT,0.3819,0.3399,HIBRIDO_ENSAMBLE,True
+caso_19,predict_inline_caso_19_botrytis.json,golden_case_manifest,000000723_mask_jpg.rf.6427ca9835c07de3615e55cbebf4d449.jpg,BOTRYTIS,0.013,BOTRYTIS,0.5668,0.2399,HIBRIDO_ENSAMBLE,True
+caso_20,predict_inline_caso_20_esca_hoja.json,golden_case_manifest,image (1047).JPG,ESCA_HOJA,0.246,ESCA_HOJA,0.7557,0.1318,HIBRIDO_ENSAMBLE,True
+equipo_fila_0,,data/predictions/predictions.csv,Downy Mildew_116.jpg,,,MILDIU,0.6487,0.3585,HIBRIDO_ENSAMBLE,
+equipo_fila_1,,data/predictions/predictions.csv,image (698).JPG (no viene en la entrega),,,IMAGEN_NO_DISPONIBLE,0.0,0.2985,RIESGO_TABULAR_EXPERT,
+equipo_fila_2,predict_inline_sin_imagen_input_fila_2.json,data/predictions/predictions.csv,N/A,,,IMAGEN_NO_DISPONIBLE,0.0,0.177,RIESGO_TABULAR_EXPERT,

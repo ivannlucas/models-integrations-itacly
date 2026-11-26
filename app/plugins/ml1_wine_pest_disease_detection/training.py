@@ -45,7 +45,11 @@ class TabularTrainResult:  # pylint: disable=too-many-instance-attributes  # pla
 
 
 def _validate_training_frame(df: pd.DataFrame) -> None:
-    """Reject a CSV without the required columns, with unknown labels or with < 10 rows."""
+    """Reject a CSV without the required columns, with unknown or missing labels or < 10 rows.
+
+    The 15 classes must all be present (manifest constraints_entrenamiento): the classifier
+    reports per-class metrics over the fixed 15-class contract of the served model.
+    """
     missing = [c for c in REQUIRED_COLUMNS if c not in df.columns]
     if missing:
         raise ValueError(f"Faltan columnas obligatorias en el CSV de entrenamiento: {missing}")
@@ -55,6 +59,11 @@ def _validate_training_frame(df: pd.DataFrame) -> None:
         raise ValueError(
             f"El CSV contiene etiquetas no reconocidas (no están en las 15 clases del modelo): "
             f"{unknown_labels}"
+        )
+    missing_labels = [c for c in CLASSES if c not in set(df["Etiqueta"].unique())]
+    if missing_labels:
+        raise ValueError(
+            f"El CSV debe traer las 15 clases del modelo; faltan: {missing_labels}"
         )
     if len(df) < 10:
         raise ValueError(

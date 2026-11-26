@@ -1,0 +1,22 @@
+id,sample_id,group_id,fold_oof,motor,speed,fault,true_family,true_severity,esperado_family,esperado_severity,esperado_severity_label,esperado_severity_confidence,tolerancia_severity_confidence
+caso_001,609,76,1,Motor-4,70,align angular 2,alignment,2,alignment,1,significativo,0.719050943851471,0.05
+caso_002,621,79,3,Motor-4,70,align angular 5,alignment,5,alignment,1,significativo,0.7714857459068298,0.05
+caso_003,644,83,5,Motor-4,70,align combination 4,alignment,4,alignment,1,significativo,0.9959688186645508,0.05
+caso_004,15,2,1,Motor-2,100,bearing bpfi 3,bearing,3,bearing,1,significativo,0.981412410736084,0.05
+caso_005,0,0,3,Motor-2,100,bearing bpfi 1,bearing,1,bearing,0,leve,0.0361674167215824,0.05
+caso_006,10,1,5,Motor-2,100,bearing bpfi 2,bearing,2,bearing,1,significativo,0.9745036363601683,0.05
+caso_007,678,89,1,Motor-4,70,cavitation discharge 1,cavitation,1,cavitation,0,leve,0.1247759535908699,0.05
+caso_008,683,90,3,Motor-4,70,cavitation discharge 2,cavitation,2,cavitation,1,significativo,0.7672272324562073,0.05
+caso_009,688,91,2,Motor-4,70,cavitation discharge 3,cavitation,3,cavitation,1,significativo,0.9457056522369384,0.05
+caso_010,64,11,1,Motor-2,100,broken rotor bar,electrical,-1,electrical,0,leve,0.0044495831243693,0.05
+caso_011,201,24,3,Motor-2,100,stator short 1,electrical,1,electrical,0,leve,0.033683143556118,0.05
+caso_012,601,74,5,Motor-2,75,stator short 2,electrical,2,electrical,1,significativo,0.7552488446235657,0.05
+caso_013,69,12,1,Motor-2,100,healthy 1,healthy,1,healthy,,sin fallo,,0.05
+caso_014,105,13,3,Motor-2,100,healthy 2,healthy,2,healthy,,sin fallo,,0.05
+caso_015,135,14,5,Motor-2,100,healthy 3,healthy,3,healthy,,sin fallo,,0.05
+caso_016,172,17,1,Motor-2,100,impeller 2,mechanical_other,2,mechanical_other,1,significativo,0.983081579208374,0.05
+caso_017,175,18,3,Motor-2,100,impeller 3,mechanical_other,3,mechanical_other,1,significativo,0.9373299479484558,0.05
+caso_018,179,19,5,Motor-2,100,loose foot motor,mechanical_other,-1,mechanical_other,1,significativo,0.9994754195213318,0.05
+caso_019,852,109,1,Motor-4,70,unbalance motor 5,unbalance,5,unbalance,1,significativo,0.9111899733543396,0.05
+caso_020,842,107,3,Motor-4,70,unbalance motor 3,unbalance,3,unbalance,1,significativo,0.9782146215438844,0.05
+caso_021,857,110,5,Motor-4,70,unbalance motor 6,unbalance,6,unbalance,1,significativo,0.9876866936683656,0.05

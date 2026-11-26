@@ -86,3 +86,17 @@ def test_train_tabular_experts_returns_f1_weighted():
     assert isinstance(result.rf_clase, RandomForestClassifier)
     assert isinstance(result.rf_riesgo, RandomForestRegressor)
     assert 0.0 <= result.f1_weighted <= 1.0
+
+
+def test_train_tabular_experts_rejects_csv_missing_a_class():
+    """manifest constraints_entrenamiento: the training CSV must bring all 15 classes.
+    Without one, train() fails with a ValueError (→ 400) naming the missing class instead of
+    training a classifier that silently never predicts it."""
+    rows = []
+    for i, label in enumerate(CLASSES[:-1] * 2):  # 28 rows, RED_MITE never appears
+        rows.append({**_SENSORS_OK, "Mes": (i % 12) + 1, "Etiqueta": label,
+                     "Indice_Riesgo_Cientifico": 0.1 + (i % 10) / 20})
+    df = pd.DataFrame(rows)[[*SENSOR_COLS, "Etiqueta", "Indice_Riesgo_Cientifico"]]
+
+    with pytest.raises(ValueError, match="RED_MITE"):
+        training.train_tabular_experts(df)
