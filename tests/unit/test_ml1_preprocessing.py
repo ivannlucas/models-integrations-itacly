@@ -100,3 +100,41 @@ def test_train_tabular_experts_rejects_csv_missing_a_class():
 
     with pytest.raises(ValueError, match="RED_MITE"):
         training.train_tabular_experts(df)
+
+
+def test_training_child_trains_without_loading_the_bundle(tmp_path, monkeypatch):
+    """The async training child calls load_for_training(), not load(): the bundle (YOLO, the 3
+    CNN and the ~1 GiB RandomForest risk regressor) is already held by the serving process, and
+    loading it again in the child got the pod OOMKilled at 2Gi. train() uses none of it."""
+    # pylint: disable-next=import-outside-toplevel  # heavy (keras/torch/ultralytics)
+    from app.plugins.ml1_wine_pest_disease_detection import plugin as ml1
+
+    def _no_bundle():
+        raise AssertionError("the training child must not load the bundle")
+
+    monkeypatch.setattr(ml1.model_loader, "load_model_bundle", _no_bundle)
+    monkeypatch.setattr(ml1, "require_train_tracker", lambda run_id: object())
+    monkeypatch.setattr(ml1, "log_run_metadata", lambda tracker, metrics: None)
+    written = {}
+
+    def fake_upload(tracker, write, prefix):
+        del tracker, prefix
+        write(str(tmp_path))
+        written["files"] = sorted(p.name for p in tmp_path.iterdir() if p.suffix == ".joblib")
+
+    monkeypatch.setattr(ml1, "upload_model_to_mlflow", fake_upload)
+    rows = []
+    for i, label in enumerate(CLASSES + CLASSES[:5]):  # 20 rows, every class represented
+        rows.append({**_SENSORS_OK, "Mes": (i % 12) + 1, "Etiqueta": label,
+                     "Indice_Riesgo_Cientifico": 0.1 + (i % 10) / 20})
+    csv = tmp_path / "train.csv"
+    pd.DataFrame(rows)[[*SENSOR_COLS, "Etiqueta", "Indice_Riesgo_Cientifico"]].to_csv(
+        csv, index=False)
+
+    plugin = ml1.Ml1WinePestDiseaseDetectionPlugin()
+    plugin.load_for_training(data_path=str(csv), mlflow_run_id="run-1")
+    assert not plugin.is_loaded()
+    resp = plugin.train(data_path=str(csv), mlflow_run_id="run-1")
+
+    assert resp.n_train + resp.n_test == len(rows)
+    assert written["files"] == [ml1.RF_RIESGO_MLFLOW_FILENAME]

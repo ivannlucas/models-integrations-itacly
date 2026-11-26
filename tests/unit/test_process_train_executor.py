@@ -345,3 +345,29 @@ def test_more_than_one_worker_is_warned_once(monkeypatch, caplog, workers, warns
         ProcessTrainExecutor()
     process_executor._warn_if_multiple_workers.cache_clear()
     assert caplog.text.count("1 worker and 1 replica") == (1 if warns else 0)
+
+
+class _LoadForTrainingPlugin(EchoTrainPlugin):
+    """Loads for training only through load_for_training(); load() must not run in the child."""
+
+    seen: dict = {}
+
+    def load(self) -> None:
+        raise AssertionError("the training child must call load_for_training(), not load()")
+
+    def load_for_training(self, **train_kwargs) -> None:
+        """Records the kwargs and marks the plugin ready to train."""
+        _LoadForTrainingPlugin.seen = dict(train_kwargs)
+        self.loaded = True
+
+
+def test_child_uses_load_for_training_with_the_train_kwargs(tmp_path):
+    """A plugin that loads less for training gets the same kwargs train() will receive."""
+    store = FileJobStore(str(tmp_path))
+    _queue(store, "run-lft")
+    kwargs = {"data_path": "x", "mlflow_run_id": "run-lft"}
+    run_train_job(job_id="run-lft", plugin_class=_LoadForTrainingPlugin,
+                  train_kwargs=kwargs, store=store, heartbeat_s=60)
+    record = store.get("run-lft")
+    assert record.status is TrainJobStatus.SUCCEEDED, record.error
+    assert _LoadForTrainingPlugin.seen == kwargs

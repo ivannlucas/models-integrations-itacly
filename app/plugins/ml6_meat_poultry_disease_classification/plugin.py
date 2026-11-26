@@ -234,6 +234,8 @@ class Ml6MeatPoultryDiseaseClassificationPlugin(PluginRuntimeMixin, ModelPluginP
         """Initialize an unloaded plugin (runtime counters start at the mixin defaults)."""
         self._ensembles: dict[str, dict[str, Any]] | None = None
         self._device: torch.device | None = None
+        # True only in the async training child, whose plugin is discarded after train().
+        self._train_in_place = False
 
     # ── lifecycle ──────────────────────────────────────────────────────────
 
@@ -241,6 +243,20 @@ class Ml6MeatPoultryDiseaseClassificationPlugin(PluginRuntimeMixin, ModelPluginP
         """Load the six base checkpoints (both ensembles)."""
         self._ensembles, self._device = load_ensembles()
         logger.info("Ml6MeatPoultryDiseaseClassificationPlugin loaded: %s", MODEL_ID)
+
+    def load_for_training(self, **train_kwargs) -> None:
+        """Load only the ensemble being retrained, and let train() fine-tune it in place.
+
+        The serving process in the same pod already holds both ensembles; loading them again
+        here plus a deep copy of each model doubled (thermal) or more (rgb) the pod's memory.
+        This plugin instance only lives for one train() call, so nothing else reads the models
+        it mutates. An unknown task loads nothing and train() rejects it with its usual 400.
+        """
+        task = train_kwargs.get("task", "")
+        self._train_in_place = True
+        if task in TASKS:
+            self._ensembles, self._device = load_ensembles((task,))
+        logger.info("ml6 training child loaded the '%s' ensemble only", task)
 
     def is_loaded(self) -> bool:
         """Return True if both ensembles are loaded."""
@@ -328,7 +344,9 @@ class Ml6MeatPoultryDiseaseClassificationPlugin(PluginRuntimeMixin, ModelPluginP
     ) -> TrainResponse:
         """Retrain the three base models of ``task`` on a raw dataset and save them to MLflow.
 
-        Starts from a deep copy of the served checkpoints (self._ensembles is never mutated),
+        Starts from the served checkpoints: a deep copy in the serving process (its
+        self._ensembles is never mutated), the loaded model itself in the training child (see
+        load_for_training; same weights, so the same result),
         follows src/training/trainer.py (see training.py), evaluates the test split of the user's
         data per model and for the ensemble, and uploads ``model/<name>.pt`` + metadata.json to
         ``mlflow_run_id``. A failed upload raises ModelPersistenceError (502).
@@ -381,6 +399,16 @@ class Ml6MeatPoultryDiseaseClassificationPlugin(PluginRuntimeMixin, ModelPluginP
             upload_warning=None,
         )
 
+    def _model_to_train(self, task: str, name: str) -> torch.nn.Module:
+        """The served model to fine-tune: a deep copy, except in the training child.
+
+        In the child (load_for_training) the loaded model is this throwaway instance's alone,
+        so it is trained in place instead of holding a second copy of its weights.
+        """
+        served = self._ensembles[task][name]
+        model = served if self._train_in_place else copy.deepcopy(served)
+        return model.to(self._device)
+
     def _train_ensemble(self, task: str, splits: dict, hyper: dict, tracker) -> tuple:
         """Retrain each base model of ``task`` from a copy of the served one.
 
@@ -393,7 +421,7 @@ class Ml6MeatPoultryDiseaseClassificationPlugin(PluginRuntimeMixin, ModelPluginP
         with torch.random.fork_rng(devices=_rng_devices(self._device)):
             torch.manual_seed(TRAIN_SEED)
             for name in TASK_MODELS[task]:
-                model = copy.deepcopy(self._ensembles[task][name]).to(self._device)
+                model = self._model_to_train(task, name)
                 model, best_val_acc, epochs = train_model(
                     model, loaders, hyper, self._device, _epoch_logger(tracker, name))
                 trained[name] = model

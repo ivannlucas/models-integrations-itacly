@@ -85,6 +85,15 @@ class Ml1WinePestDiseaseDetectionPlugin(PluginRuntimeMixin, ModelPluginPort):
         self._bundle = model_loader.load_model_bundle()
         logger.info("ml1 plugin loaded: %s", MODEL_ID)
 
+    def load_for_training(self, **train_kwargs) -> None:
+        """Load nothing: train() fits fresh RandomForests and never touches the bundle.
+
+        The bundle (YOLO + 3 CNN + the ~1 GiB RandomForest risk regressor) is what the serving
+        process already holds; loading it again in the training child doubled the pod's memory
+        (OOMKilled at 2Gi).
+        """
+        del train_kwargs
+
     def is_loaded(self) -> bool:
         """Return True once the full bundle is loaded."""
         return self._bundle is not None
@@ -190,7 +199,7 @@ class Ml1WinePestDiseaseDetectionPlugin(PluginRuntimeMixin, ModelPluginPort):
         ModelPersistenceError (-> 502) rather than returning 200 with a misleading warning.
         """
         tracker = require_train_tracker(mlflow_run_id)
-        self._require_loaded()
+        # No _require_loaded(): training uses none of the loaded models (see load_for_training).
         with local_file_path(data_path) as local_path:
             df = pd.read_csv(local_path)
         result = training.train_tabular_experts(df)

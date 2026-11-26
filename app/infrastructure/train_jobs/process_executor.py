@@ -1,7 +1,8 @@
 """Run plugin training in a separate process (multiprocessing ``spawn``).
 
-The child builds its own plugin (``plugin_class()`` + ``load()``) so training never shares the GIL,
-memory or in-memory model with the process serving predictions, and is discarded when it ends.
+The child builds its own plugin (``plugin_class()`` + ``load_for_training()``, i.e. ``load()``
+unless the plugin loads less for training) so training never shares the GIL, memory or in-memory
+model with the process serving predictions, and is discarded when it ends.
 It runs at a lower CPU priority (``TRAIN_JOB_NICE``) so a saturated CPU starves training, not the
 liveness probes, and a watchdog thread in the parent stops it after ``TRAIN_JOB_MAX_DURATION_S``.
 """
@@ -115,7 +116,13 @@ def run_train_job(
     beater.start()
     try:
         plugin = plugin_class()
-        plugin.load()
+        # Only what train() needs: this child shares the pod's memory limit with the serving
+        # process, which already holds the full model (ModelPluginPort.load_for_training).
+        load_for_training = getattr(plugin, "load_for_training", None)
+        if load_for_training is not None:
+            load_for_training(**train_kwargs)
+        else:
+            plugin.load()
         result = _to_jsonable(plugin.train(**train_kwargs))
         final = replace(
             record, status=TrainJobStatus.SUCCEEDED, result=result, updated_at=time.time()
