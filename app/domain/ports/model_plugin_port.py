@@ -13,6 +13,17 @@ class ModelPluginPort(ABC):
     def load(self) -> None:
         """Load model artifacts from disk."""
 
+    def load_for_training(self, **train_kwargs) -> None:
+        """Load what ``train(**train_kwargs)`` needs in the async training child process.
+
+        The child runs next to the serving process in the same pod, so whatever it loads is a
+        second copy on top of the served model. By default it loads everything (``load()``);
+        a plugin whose ``train()`` uses only part of its artifacts (or none) overrides this so
+        the pod does not hold the model twice.
+        """
+        del train_kwargs
+        self.load()
+
     @abstractmethod
     def is_loaded(self) -> bool:
         """Return True if the model is ready for inference."""

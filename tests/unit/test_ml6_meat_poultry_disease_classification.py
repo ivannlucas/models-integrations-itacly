@@ -298,6 +298,53 @@ def test_real_train_uploads_ensemble_and_never_touches_served_models(
     assert all(served[n] is m for n, m in base.items())  # served models untouched
 
 
+def test_training_child_loads_only_the_task_and_trains_in_place(ml6_train_stubbed, monkeypatch):
+    """The async training child (load_for_training) loads only the retrained ensemble and
+    fine-tunes it without a deep copy: the serving process in the same pod already holds both
+    ensembles, and loading them again plus a copy of each model got the pod OOMKilled at 2Gi."""
+    import torch  # pylint: disable=import-outside-toplevel  # heavy, as in the fixture
+
+    ml6, _, base, data_path = ml6_train_stubbed
+    loaded = []
+
+    def fake_load_ensembles(tasks=("thermal", "rgb")):
+        loaded.append(tasks)
+        return {task: base for task in tasks}, torch.device("cpu")
+
+    trained_objects = []
+
+    def fake_train_model(model, _loaders, _hp, _dev, _log):
+        trained_objects.append(model)
+        return model, 0.5, 3
+
+    monkeypatch.setattr(ml6, "load_ensembles", fake_load_ensembles)
+    monkeypatch.setattr(ml6, "train_model", fake_train_model)
+    monkeypatch.setattr(ml6, "upload_artifacts_to_mlflow", lambda *args: None)
+
+    child = ml6.Ml6MeatPoultryDiseaseClassificationPlugin()
+    child.load_for_training(data_path=data_path, mlflow_run_id="run-1", task="thermal")
+    assert loaded == [("thermal",)] and set(child._ensembles) == {"thermal"}
+
+    child.train(data_path=data_path, mlflow_run_id="run-1", task="thermal")
+    assert [id(m) for m in trained_objects] == [id(m) for m in base.values()]  # no copies
+
+
+def test_training_child_with_unknown_task_loads_nothing_and_train_rejects_it(
+    ml6_train_stubbed, monkeypatch
+):
+    """An unknown task loads no ensemble; train() still answers with its usual ValueError (400)."""
+    ml6, _, _, data_path = ml6_train_stubbed
+
+    def _no_load(tasks=("thermal", "rgb")):
+        raise AssertionError(f"nothing to load for an unknown task, got {tasks}")
+
+    monkeypatch.setattr(ml6, "load_ensembles", _no_load)
+    child = ml6.Ml6MeatPoultryDiseaseClassificationPlugin()
+    child.load_for_training(data_path=data_path, mlflow_run_id="run-1", task="infrared")
+    with pytest.raises(ValueError, match="task"):
+        child.train(data_path=data_path, mlflow_run_id="run-1", task="infrared")
+
+
 def test_real_train_fails_with_502_error_when_mlflow_upload_fails(ml6_train_stubbed, monkeypatch):
     """An MLflow upload failure in train() raises ModelPersistenceError."""
     ml6, instance, _, data_path = ml6_train_stubbed

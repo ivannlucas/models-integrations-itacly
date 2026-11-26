@@ -147,15 +147,20 @@ def build_from_checkpoint(name: str, task: str, checkpoint_path, device: torch.d
     return model
 
 
-def load_ensembles() -> tuple[dict[str, dict[str, nn.Module]], torch.device]:
-    """Load both ensembles from the base artifact folder: ``{task: {name: model}}``."""
+def load_ensembles(
+    tasks: tuple[str, ...] = tuple(TASK_MODELS),
+) -> tuple[dict[str, dict[str, nn.Module]], torch.device]:
+    """Load the ensembles of ``tasks`` (default: both) from the base artifact folder.
+
+    Returns ``{task: {name: model}}``.
+    """
     device = safe_device()
     ensembles = {
         task: {
             name: build_from_checkpoint(name, task, _store.path(MODEL_FILENAMES[name]), device)
-            for name in names
+            for name in TASK_MODELS[task]
         }
-        for task, names in TASK_MODELS.items()
+        for task in tasks
     }
-    logger.info("ml6 ensembles loaded (device=%s)", device)
+    logger.info("ml6 ensembles %s loaded (device=%s)", list(tasks), device)
     return ensembles, device
