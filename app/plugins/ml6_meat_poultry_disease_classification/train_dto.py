@@ -43,8 +43,12 @@ class TrainResponse(PluginDTO):
     precision_weighted: float
     recall_weighted: float
     f1_weighted: float
-    per_class: dict[str, dict[str, float]] = Field(
-        ..., description="Precision/recall/f1 por clase del ensemble en test (memoria Tabla 6)",
+    per_class: dict[str, dict[str, float | int]] = Field(
+        ...,
+        description=(
+            "Precision/recall/f1 (float) y support (int) por clase del ensemble en test "
+            "(memoria Tabla 6)"
+        ),
     )
     models: dict[str, dict[str, Any]] = Field(
         ...,

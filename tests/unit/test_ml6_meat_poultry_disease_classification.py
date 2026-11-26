@@ -308,3 +308,24 @@ def test_real_train_fails_with_502_error_when_mlflow_upload_fails(ml6_train_stub
     monkeypatch.setattr(ml6, "upload_artifacts_to_mlflow", broken_upload)
     with pytest.raises(ModelPersistenceError, match="mlflow down"):
         instance.train(data_path=data_path, mlflow_run_id="run-9", task="thermal")
+
+
+def test_train_response_keeps_per_class_support_as_int():
+    """classification_metrics returns support as int (like the batch metrics); TrainResponse must
+    not coerce it to float (it used to answer "support": 2.0)."""
+    from app.plugins.ml6_meat_poultry_disease_classification.postprocessing import (
+        classification_metrics,
+    )
+    from app.plugins.ml6_meat_poultry_disease_classification.train_dto import TrainResponse
+
+    report = classification_metrics([0, 1, 1, 0], [0, 1, 0, 0], "thermal")
+    resp = TrainResponse(
+        detail="ok", task="thermal", accuracy=report["accuracy"],
+        precision_weighted=report["precision_weighted"], recall_weighted=report["recall_weighted"],
+        f1_weighted=report["f1_weighted"], per_class=report["per_class"], models={},
+        n_train=1, n_val=1, n_test=4, training_time_s=0.1,
+    )
+
+    dumped = resp.model_dump(mode="json")["per_class"]
+    assert all(isinstance(v["support"], int) for v in dumped.values())
+    assert all(isinstance(v["f1"], float) for v in dumped.values())
